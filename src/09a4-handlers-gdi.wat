@@ -1099,6 +1099,18 @@
     ;; menu_set fallback is 0x00080001. Named-resource keys returned by
     ;; GetMenu are guest pointers and must remain intact.
     (local.set $menu_key (local.get $arg1))
+    ;; A bar assembled from CreateMenu/AppendMenu dynamic menus is serialized
+    ;; here, in WAT; there is no resource for $menu_load to find.
+    (if (call $menu_set_bar_from_dynamic (local.get $arg0) (local.get $menu_key))
+      (then
+        (call $host_set_menu (local.get $arg0) (local.get $menu_key))
+        (if (call $wnd_is_effectively_visible (local.get $arg0))
+          (then
+            (call $defwndproc_do_ncpaint (local.get $arg0))
+            (call $paint_flag_set_inv (local.get $arg0))))
+        (global.set $eax (i32.const 1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     (if (i32.or
           (i32.eq (local.get $menu_key) (i32.const 0x00080001))
           (i32.eq

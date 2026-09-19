@@ -5770,11 +5770,14 @@
         (call $win16_api_return (i32.const 8))
         (return (i32.const 1))))
     ;; USER.151 CreateMenu / USER.152 CreatePopupMenu — an empty menu the task
-    ;; then fills with AppendMenu. Rodent's Revenge builds its own.
+    ;; then fills with AppendMenu. Rodent's Revenge builds its own. Both are
+    ;; WAT dynamic menus, bar included: Civ2 appends its dropdowns to the bar
+    ;; and then fills each one through GetSubMenu + InsertMenu before SetMenu,
+    ;; and only a dynamic menu can answer GetSubMenu before it is attached.
     (if (i32.eq (local.get $ordinal) (i32.const 151))
       (then
         (call $win16_call32_begin (i32.const 0))
-        (call $handle_CreateMenu (i32.const 0) (i32.const 0) (i32.const 0)
+        (call $handle_CreatePopupMenu (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
         (global.set $eax (call $win16_h16 (global.get $eax)))
@@ -7273,10 +7276,17 @@
   ;; PostMessage, SendMessage, or a window procedure of ours — must hand back a
   ;; 32-bit DC, or the queue ends up holding a 16-bit handle that the next
   ;; GetMessage narrows a second time and allocates a fresh map entry for.
+  ;; WM_INITMENU and WM_INITMENUPOPUP carry an HMENU the same way, and a task
+  ;; compares it against what CreateMenu/GetSubMenu handed it.
+  (func $win16_msg_wparam_is_handle (param $message i32) (result i32)
+    (i32.or (i32.eq (local.get $message) (i32.const 0x0014))
+      (i32.or (i32.eq (local.get $message) (i32.const 0x0027))
+        (i32.or (i32.eq (local.get $message) (i32.const 0x0116))
+          (i32.eq (local.get $message) (i32.const 0x0117))))))
+
   (func $win16_msg_wparam32 (param $message i32) (param $wparam i32) (result i32)
-    (if (i32.or (i32.eq (local.get $message) (i32.const 0x0014))
-          (i32.or (i32.eq (local.get $message) (i32.const 0x0027))
-            (i32.eq (local.get $message) (i32.const 0x0030))))
+    (if (i32.or (call $win16_msg_wparam_is_handle (local.get $message))
+          (i32.eq (local.get $message) (i32.const 0x0030)))
       (then (return (call $win16_h32 (local.get $wparam)))))
     (local.get $wparam))
 
@@ -7286,8 +7296,7 @@
     (if (i32.and (i32.ge_u (local.get $message) (i32.const 0x03BB))
                  (i32.le_u (local.get $message) (i32.const 0x03BD)))
       (then (return (call $win16_h16 (local.get $wparam)))))
-    (if (i32.or (i32.eq (local.get $message) (i32.const 0x0014))
-                (i32.eq (local.get $message) (i32.const 0x0027)))
+    (if (call $win16_msg_wparam_is_handle (local.get $message))
       (then
         ;; The DC in one of these can have started life on this side of the
         ;; fence: a 16-bit task that erases its own background hands its DC to

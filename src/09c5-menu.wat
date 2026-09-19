@@ -120,13 +120,18 @@
   (global $DYNAMIC_MENU_ITEM_BYTES i32 (i32.const 20))
   (global $DYNAMIC_MENU_BYTES i32 (i32.const 1296)) ;; 16 + 64*20
 
+  ;; True unless $hmenu is a live heap_alloc block (header at hmenu-4).
+  (func $menu_handle_not_heap (param $hmenu i32) (result i32)
+    (if (i32.lt_u (local.get $hmenu) (i32.const 4)) (then (return (i32.const 1))))
+    (i32.eqz (call $heap_arena_find (i32.sub (local.get $hmenu) (i32.const 4)))))
+
   (func $dynamic_menu_state_w (param $hmenu i32) (result i32)
     (local $sw i32)
-    (if (i32.or
-          (i32.eqz (local.get $hmenu))
-          (i32.or
-            (i32.lt_u (local.get $hmenu) (global.get $heap_base))
-            (i32.ge_u (local.get $hmenu) (global.get $heap_ptr))))
+    ;; Ask the arena table, not [heap_base, heap_ptr): once the low window is
+    ;; spent heap_alloc spills to the sparse high arena, and Civ2's menus land
+    ;; at 0x7eff0704 -- every one of them read as "not a menu", so GetSubMenu
+    ;; answered 0 and the whole bar was built into nothing.
+    (if (call $menu_handle_not_heap (local.get $hmenu))
       (then (return (i32.const 0))))
     (local.set $sw (call $g2w (local.get $hmenu)))
     (if (i32.ne (i32.load (local.get $sw)) (i32.const 0x4D4E5544))
@@ -145,9 +150,7 @@
     ;; gone, the object was destroyed (or never was a menu); do not let its
     ;; pointer-shaped high/low words fall through as an encoded resource
     ;; submenu handle.
-    (if (i32.and
-          (i32.ge_u (local.get $hmenu) (global.get $heap_base))
-          (i32.lt_u (local.get $hmenu) (global.get $heap_ptr)))
+    (if (i32.eqz (call $menu_handle_not_heap (local.get $hmenu)))
       (then (return (i32.const 0))))
     (if (i32.or
           (i32.eq (local.get $hmenu) (i32.const 0x00080001))
@@ -213,12 +216,13 @@
     (i32.store offset=16 (local.get $rec)
       (select (i32.const 0) (local.get $itemData)
         (i32.ne (i32.and (local.get $flags) (i32.const 0x904)) (i32.const 0))))
+    (call $dynamic_menu_take_text (local.get $rec))
     (i32.store offset=4 (local.get $sw) (i32.add (local.get $count) (i32.const 1)))
     (call $resource_submenu_binding_refresh (local.get $hmenu))
     (i32.const 1))
 
-  ;; Release a string copied by SetMenuItemInfoA/W. Append/Insert/Modify retain
-  ;; their established caller-owned text pointers and never set this bit.
+  ;; Release an item's owned string: the copy every Append/Insert/Modify takes
+  ;; ($dynamic_menu_take_text) or the one SetMenuItemInfoA/W makes.
   (func $dynamic_menu_owned_text_release (param $rec i32)
     (local $flags i32) (local $text i32)
     (local.set $flags (i32.load (local.get $rec)))
@@ -231,6 +235,30 @@
         (i32.store offset=16 (local.get $rec) (i32.const 0))
         (i32.store (local.get $rec)
           (i32.and (local.get $flags) (i32.const 0x7FFFFFFF))))))
+
+  ;; USER copies an item's string when it is added; the caller's buffer is
+  ;; free to be reused the moment the call returns. Civ2 builds its whole menu
+  ;; bar out of one scratch buffer (every bar item's AppendMenu names
+  ;; 04ef:635a), so keeping the pointer left every title reading as whatever
+  ;; was loaded into that buffer last.
+  (func $dynamic_menu_take_text (param $rec i32)
+    (local $flags i32) (local $text i32) (local $chars i32) (local $copy i32)
+    (local.set $flags (i32.load (local.get $rec)))
+    (local.set $text (i32.load offset=16 (local.get $rec)))
+    (if (i32.or (i32.eqz (local.get $text))
+          (i32.or
+            (i32.ne (i32.and (local.get $flags) (i32.const 0x904)) (i32.const 0))
+            (i32.ne (i32.and (local.get $flags) (global.get $DYNAMIC_MENU_OWNS_TEXT))
+                    (i32.const 0))))
+      (then (return)))
+    (local.set $chars (call $guest_strlen (local.get $text)))
+    (local.set $copy (call $heap_alloc (i32.add (local.get $chars) (i32.const 1))))
+    (if (i32.eqz (local.get $copy)) (then (return)))
+    (call $guest_strncpy (local.get $copy) (local.get $text)
+      (i32.add (local.get $chars) (i32.const 1)))
+    (i32.store offset=16 (local.get $rec) (local.get $copy))
+    (i32.store (local.get $rec)
+      (i32.or (local.get $flags) (global.get $DYNAMIC_MENU_OWNS_TEXT))))
 
   (func $dynamic_menu_owned_texts_release (param $sw i32)
     (local $count i32) (local $i i32) (local $rec i32)
@@ -291,6 +319,7 @@
     (i32.store offset=16 (local.get $rec)
       (select (i32.const 0) (local.get $itemData)
         (i32.ne (i32.and (local.get $flags) (i32.const 0x904)) (i32.const 0))))
+    (call $dynamic_menu_take_text (local.get $rec))
     (call $resource_submenu_binding_refresh (local.get $hmenu))
     (i32.const 1))
 
@@ -357,6 +386,7 @@
     (i32.store offset=8  (local.get $rec) (local.get $itemData))
     (i32.store offset=12 (local.get $rec) (local.get $submenu))
     (i32.store offset=16 (local.get $rec) (local.get $text))
+    (call $dynamic_menu_take_text (local.get $rec))
     (i32.store offset=4 (local.get $sw) (i32.add (local.get $count) (i32.const 1)))
     (call $resource_submenu_binding_refresh (local.get $hmenu))
     (i32.const 1))
@@ -928,6 +958,196 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $items)))
     (local.get $blob_g))
+
+  ;; ---- A menu bar built at runtime out of MNUD menus ----
+  ;;
+  ;; CreateMenu + AppendMenu(MF_POPUP) + SetMenu, with every level a WAT
+  ;; dynamic menu, serialized into the same paint blob $menu_load makes of an
+  ;; RT_MENU resource (layout at the top of this file). The tree is live MNUD
+  ;; state until SetMenu, so GetSubMenu/InsertMenu/DeleteMenu work on it the
+  ;; way they do on real USER while the app is still assembling it -- Civ2 asks
+  ;; for each dropdown with GetSubMenu and fills it with InsertMenu before it
+  ;; ever attaches the bar. Like the resource blob, dropdowns keep one level of
+  ;; cascade below them.
+  ;;
+  ;; Two passes: $dmb_measure sizes the struct and string regions, then
+  ;; $dmb_write_block lays each child block out at the $dmb_struct cursor and
+  ;; each label at the $dmb_str cursor. Both cursors are blob-relative.
+  (global $dmb_struct (mut i32) (i32.const 0))
+  (global $dmb_str (mut i32) (i32.const 0))
+  (global $dmb_blob_w (mut i32) (i32.const 0))
+
+  (func $dmb_item_w (param $sw i32) (param $i i32) (result i32)
+    (i32.add (local.get $sw)
+      (i32.add (i32.const 16)
+        (i32.mul (local.get $i) (global.get $DYNAMIC_MENU_ITEM_BYTES)))))
+
+  ;; The MNUD submenu of a popup item, or 0 for a command or a popup whose
+  ;; child is not a dynamic menu (which then paints as a plain item).
+  (func $dmb_child_menu (param $item i32) (result i32)
+    (local $sub i32)
+    (if (i32.eqz (i32.and (i32.load (local.get $item)) (i32.const 0x10)))
+      (then (return (i32.const 0))))
+    (local.set $sub (i32.load offset=12 (local.get $item)))
+    (if (i32.eqz (call $dynamic_menu_state_w (local.get $sub)))
+      (then (return (i32.const 0))))
+    (local.get $sub))
+
+  (func $dmb_measure (param $hmenu i32) (param $depth i32)
+    (local $sw i32) (local $count i32) (local $i i32) (local $item i32)
+    (local $label i32) (local $sub i32)
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    (global.set $dmb_struct (i32.add (global.get $dmb_struct)
+      (i32.add (i32.const 4) (i32.mul (local.get $count) (i32.const 28)))))
+    (block $done (loop $items
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $item (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (local.set $label (call $dynamic_item_label_w (local.get $item)))
+      (if (local.get $label)
+        (then (global.set $dmb_str
+          (i32.add (global.get $dmb_str) (call $strlen (local.get $label))))))
+      (local.set $sub (call $dmb_child_menu (local.get $item)))
+      (if (i32.and (i32.ne (local.get $sub) (i32.const 0))
+                   (i32.lt_u (local.get $depth) (i32.const 2)))
+        (then (call $dmb_measure (local.get $sub)
+          (i32.add (local.get $depth) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $items))))
+
+  ;; Copy one label into the string region and point $rec's text fields at it.
+  ;; A dropdown item splits at the first '\t' into label and right-aligned
+  ;; shortcut; a bar record has no shortcut slot, so it keeps the label only.
+  (func $dmb_put_text (param $rec i32) (param $label i32) (param $split i32)
+    (local $chars i32) (local $tab i32) (local $label_chars i32) (local $sc_chars i32)
+    (if (i32.eqz (local.get $label)) (then (return)))
+    (local.set $chars (call $strlen (local.get $label)))
+    (local.set $tab (call $dynamic_find_tab (local.get $label) (local.get $chars)))
+    (local.set $label_chars
+      (select (local.get $tab) (local.get $chars)
+        (i32.ge_s (local.get $tab) (i32.const 0))))
+    (i32.store (local.get $rec) (global.get $dmb_str))
+    (i32.store offset=4 (local.get $rec) (local.get $label_chars))
+    (call $memcpy (i32.add (global.get $dmb_blob_w) (global.get $dmb_str))
+      (local.get $label) (local.get $label_chars))
+    (global.set $dmb_str (i32.add (global.get $dmb_str) (local.get $label_chars)))
+    (if (i32.or (i32.eqz (local.get $split)) (i32.lt_s (local.get $tab) (i32.const 0)))
+      (then (return)))
+    (local.set $sc_chars
+      (i32.sub (i32.sub (local.get $chars) (local.get $tab)) (i32.const 1)))
+    (if (i32.eqz (local.get $sc_chars)) (then (return)))
+    (i32.store offset=8 (local.get $rec) (global.get $dmb_str))
+    (i32.store offset=12 (local.get $rec) (local.get $sc_chars))
+    (call $memcpy (i32.add (global.get $dmb_blob_w) (global.get $dmb_str))
+      (i32.add (local.get $label) (i32.add (local.get $tab) (i32.const 1)))
+      (local.get $sc_chars))
+    (global.set $dmb_str (i32.add (global.get $dmb_str) (local.get $sc_chars))))
+
+  ;; Lay out $hmenu's items as one child block; returns its blob offset.
+  (func $dmb_write_block (param $hmenu i32) (param $depth i32) (result i32)
+    (local $sw i32) (local $count i32) (local $off i32) (local $i i32)
+    (local $item i32) (local $rec i32) (local $flags i32) (local $out i32)
+    (local $sub i32) (local $id i32)
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    (local.set $off (global.get $dmb_struct))
+    (global.set $dmb_struct (i32.add (global.get $dmb_struct)
+      (i32.add (i32.const 4) (i32.mul (local.get $count) (i32.const 28)))))
+    (i32.store (i32.add (global.get $dmb_blob_w) (local.get $off)) (local.get $count))
+    (block $done (loop $items
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $item (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (local.set $rec (i32.add (global.get $dmb_blob_w)
+        (i32.add (local.get $off)
+          (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 28))))))
+      (local.set $flags (i32.load (local.get $item)))
+      (local.set $id (i32.load offset=4 (local.get $item)))
+      (call $dmb_put_text (local.get $rec)
+        (call $dynamic_item_label_w (local.get $item)) (i32.const 1))
+      ;; Same bits the host serializer and $dynamic_menu_make_popup_blob write:
+      ;; separator (or a command with no id), grayed, checked.
+      (local.set $out (i32.const 0))
+      ;; USER also makes a separator of a plain string item whose string is
+      ;; NULL: Civ2 spaces its dropdowns with InsertMenu(MF_STRING, id, NULL).
+      (if (i32.or
+            (i32.or (i32.ne (i32.and (local.get $flags) (i32.const 0x0800)) (i32.const 0))
+                    (i32.and (i32.eqz (local.get $id))
+                             (i32.eqz (i32.and (local.get $flags) (i32.const 0x10)))))
+            (i32.and (i32.eqz (i32.and (local.get $flags) (i32.const 0x0914)))
+                     (i32.eqz (i32.load offset=16 (local.get $item)))))
+        (then (local.set $out (i32.or (local.get $out) (i32.const 1)))))
+      (if (i32.and (local.get $flags) (i32.const 0x0003))
+        (then (local.set $out (i32.or (local.get $out) (i32.const 2)))))
+      (if (i32.and (local.get $flags) (i32.const 0x0008))
+        (then (local.set $out (i32.or (local.get $out) (i32.const 4)))))
+      (i32.store offset=16 (local.get $rec) (local.get $out))
+      (i32.store offset=20 (local.get $rec) (local.get $id))
+      (local.set $sub (call $dmb_child_menu (local.get $item)))
+      (if (i32.and (i32.ne (local.get $sub) (i32.const 0))
+                   (i32.lt_u (local.get $depth) (i32.const 2)))
+        (then (i32.store offset=24 (local.get $rec)
+          (call $dmb_write_block (local.get $sub)
+            (i32.add (local.get $depth) (i32.const 1))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $items)))
+    (local.get $off))
+
+  ;; Install $hmenu's tree as $hwnd's menu bar. Returns 0, having done
+  ;; nothing, when $hmenu is not a dynamic menu.
+  (func $menu_set_bar_from_dynamic (param $hwnd i32) (param $hmenu i32) (result i32)
+    (local $sw i32) (local $count i32) (local $i i32) (local $item i32)
+    (local $label i32) (local $sub i32) (local $struct i32) (local $total i32)
+    (local $blob_g i32) (local $rec i32)
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (if (i32.eqz (local.get $sw)) (then (return (i32.const 0))))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    ;; Pass 1.
+    (global.set $dmb_struct
+      (i32.add (i32.const 4) (i32.mul (local.get $count) (i32.const 16))))
+    (global.set $dmb_str (i32.const 0))
+    (block $sized (loop $measure
+      (br_if $sized (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $item (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (local.set $label (call $dynamic_item_label_w (local.get $item)))
+      (if (local.get $label)
+        (then (global.set $dmb_str
+          (i32.add (global.get $dmb_str) (call $strlen (local.get $label))))))
+      (local.set $sub (call $dmb_child_menu (local.get $item)))
+      (if (local.get $sub) (then (call $dmb_measure (local.get $sub) (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $measure)))
+    (local.set $struct (global.get $dmb_struct))
+    (local.set $total (i32.add (local.get $struct) (global.get $dmb_str)))
+    (local.set $blob_g (call $heap_alloc (local.get $total)))
+    (if (i32.eqz (local.get $blob_g)) (then (return (i32.const 0))))
+    (global.set $dmb_blob_w (call $g2w (local.get $blob_g)))
+    (call $zero_memory (global.get $dmb_blob_w) (local.get $total))
+    ;; Pass 2.
+    (i32.store (global.get $dmb_blob_w) (local.get $count))
+    (global.set $dmb_struct
+      (i32.add (i32.const 4) (i32.mul (local.get $count) (i32.const 16))))
+    (global.set $dmb_str (local.get $struct))
+    (local.set $i (i32.const 0))
+    (block $done (loop $bars
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $item (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (local.set $rec (i32.add (global.get $dmb_blob_w)
+        (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 16)))))
+      (call $dmb_put_text (local.get $rec)
+        (call $dynamic_item_label_w (local.get $item)) (i32.const 0))
+      (local.set $sub (call $dmb_child_menu (local.get $item)))
+      (if (local.get $sub)
+        (then (i32.store offset=8 (local.get $rec)
+          (call $dmb_write_block (local.get $sub) (i32.const 1)))))
+      (i32.store offset=12 (local.get $rec)
+        (select (i32.const 0) (i32.load offset=4 (local.get $item))
+          (i32.ne (i32.and (i32.load (local.get $item)) (i32.const 0x10)) (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $bars)))
+    (call $menu_set_source (local.get $hwnd) (global.get $dmb_blob_w)
+      (local.get $total) (local.get $hmenu))
+    (call $heap_free (local.get $blob_g))
+    (i32.const 1))
 
   (func $resource_submenu_binding_find_key
         (param $parent_blob i32) (param $top i32) (param $child i32) (result i32)
@@ -3738,18 +3958,22 @@
   ;;
   ;; The submenu handle follows GetSubMenu's encoding, (hmenu & 0xFFFF) |
   ;; ((pos+1) << 16), so an app that stashes what GetSubMenu gave it compares
-  ;; equal to what arrives here.
+  ;; equal to what arrives here. A bar the app built from dynamic menus has
+  ;; real popup handles, and GetSubMenu returns those, so this does too.
   (func $menu_init_popup (param $hwnd i32) (param $top_idx i32)
-    (local $hmenu i32)
+    (local $hmenu i32) (local $popup i32)
     (local.set $hmenu (call $menu_source_get (local.get $hwnd)))
     (if (i32.eqz (local.get $hmenu))
       (then (local.set $hmenu (i32.const 0x80001))))
+    (local.set $popup
+      (if (result i32) (call $dynamic_menu_state_w (local.get $hmenu))
+        (then (call $menu_handle_submenu (local.get $hmenu) (local.get $top_idx)))
+        (else (i32.or (i32.and (local.get $hmenu) (i32.const 0xFFFF))
+                (i32.shl (i32.add (local.get $top_idx) (i32.const 1)) (i32.const 16))))))
     (call $menu_post (local.get $hwnd) (i32.const 0x0116)   ;; WM_INITMENU
       (local.get $hmenu) (i32.const 0))
     (call $menu_post (local.get $hwnd) (i32.const 0x0117)   ;; WM_INITMENUPOPUP
-      (i32.or (i32.and (local.get $hmenu) (i32.const 0xFFFF))
-              (i32.shl (i32.add (local.get $top_idx) (i32.const 1)) (i32.const 16)))
-      (local.get $top_idx)))
+      (local.get $popup) (local.get $top_idx)))
 
   (func $menu_open (export "menu_open") (param $hwnd i32) (param $top_idx i32)
     (if (global.get $menu_open_popup_blob)

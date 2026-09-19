@@ -85,6 +85,11 @@ function check(label, fn) {
     wat.guest_write8(p + text.length, 0);
     return p;
   };
+  const readA = p => {
+    let out = '';
+    for (let c; p && (c = wat.guest_read8(p)); p++) out += String.fromCharCode(c);
+    return out;
+  };
   // MENUITEMINFOA as Win98 defines it: cbSize, fMask, fType, fState, wID,
   // hSubMenu, hbmpChecked, hbmpUnchecked, dwItemData, dwTypeData, cch.
   const menuItemInfo = ({ mask = 0, type = 0, state = 0, id = 0, subMenu = 0,
@@ -152,13 +157,15 @@ function check(label, fn) {
     wat.test_call_DestroyMenu(h);
   });
 
-  check('the inserted item keeps its flags and label pointer', () => {
+  check('the inserted item keeps its flags and a copy of its label', () => {
     const h = popup();
     const label = strA('Checked');
     wat.test_call_AppendMenuA(h, MF_STRING, 1, strA('First'));
     wat.test_call_InsertMenuA(h, 0, MF_BYPOSITION | MF_CHECKED, 2, label);
     assert.strictEqual(wat.test_menu_item_field(h, 0, 1), 2);
-    assert.strictEqual(wat.test_menu_item_field(h, 0, 2) >>> 0, label);
+    // USER copies the string: the caller may reuse its buffer at once.
+    wat.guest_write8(label, 'X'.charCodeAt(0));
+    assert.strictEqual(readA(wat.test_menu_item_field(h, 0, 2) >>> 0), 'Checked');
     assert(wat.test_menu_item_field(h, 0, 0) & MF_CHECKED, 'MF_CHECKED should survive');
     wat.test_call_DestroyMenu(h);
   });
@@ -172,7 +179,7 @@ function check(label, fn) {
       wat.test_call_InsertMenuItemA(h, 1, 1,
         menuItemInfo({ mask: MIIM_ID | MIIM_STRING, id: 2, typeData: label })), 1);
     assert.deepStrictEqual(ids(h), [1, 2, 3]);
-    assert.strictEqual(wat.test_menu_item_field(h, 1, 2) >>> 0, label);
+    assert.strictEqual(readA(wat.test_menu_item_field(h, 1, 2) >>> 0), 'Playlist');
     wat.test_call_DestroyMenu(h);
   });
 
