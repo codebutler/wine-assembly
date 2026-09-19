@@ -29,6 +29,12 @@ const arg = (name, dflt) => {
 const flag = name => process.argv.includes(`--${name}`);
 const MILESTONE_MS = arg('milestone-timeout', 120) * 1000;
 const MENU_MS = arg('menu-wait', 20) * 1000;
+// Two people are never two identical machines. The guest's browser is slowed
+// by this factor, because the failure this test exists to catch only happens
+// when one side consumes the other's records more slowly than they arrive:
+// a phone, or simply a window that is not in front (Chrome throttles a
+// background tab's timers to about 1Hz, which is the same thing but worse).
+const THROTTLE = arg('throttle', 4);
 
 let passed = 0;
 let failed = 0;
@@ -94,6 +100,24 @@ async function snap(p, name) {
   return s;
 }
 
+// Is the picture still moving? A frozen match and a running one are the same
+// screenshot -- sand, two blobs, a ball -- so the only difference is between
+// two of them taken a moment apart. Sampling every 97th byte is enough: a
+// ball crossing the court changes thousands.
+const frameHash = () => {
+  const win = Object.values(sharedRenderer.windows || {})
+    .filter(w => w && w.visible && !w.isChild)
+    .sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  if (!win) return 0;
+  const surface = sharedRenderer.getWindowCanvas(win.hwnd);
+  if (!surface || !surface.canvas) return 0;
+  const c = surface.canvas;
+  const d = surface.ctx.getImageData(0, 0, c.width, c.height).data;
+  let h = 2166136261;
+  for (let i = 0; i < d.length; i += 97) h = Math.imul(h ^ d[i], 16777619);
+  return h >>> 0;
+};
+
 (async () => {
   const server = createServer({ quiet: true });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -125,7 +149,8 @@ async function snap(p, name) {
         document.getElementById('app-select').value = 'blobby_volley';
         window.__launching = launchApp();
       });
-      return { label, page, problems };
+      const cdp = await page.createCDPSession();
+      return { label, page, problems, cdp };
     };
 
     const host = await open('host');
@@ -182,6 +207,60 @@ async function snap(p, name) {
       && b[i].sent - a[i].sent > 10 && b[i].recv - a[i].recv > 10);
     check('game records stream both ways (the match is running)', flowing,
       JSON.stringify({ a, b }));
+
+    // ---- the two machines are not the same machine -----------------------
+    //
+    // Everything above ran two windows of one browser on one box, which is
+    // the one pairing real people never have. Slow the guest down and play
+    // on: what has to survive is not the frame rate but the match, and a
+    // side that stops consuming its peer's records as fast as they arrive is
+    // where a lockstep game stops dead with the court still on the screen.
+    if (THROTTLE > 1) {
+      await guest.cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
+    }
+    await H.sleep(5000);
+    const moving = async (p) => {
+      const seen = new Set();
+      for (let i = 0; i < 4; i++) {
+        seen.add(await p.page.evaluate(frameHash));
+        await H.sleep(4000);
+      }
+      return seen;
+    };
+    const [hostFrames, guestFrames] = await Promise.all([moving(host), moving(guest)]);
+    check(`the host's match kept moving with a ${THROTTLE}x slower peer `
+      + `(${hostFrames.size}/4 distinct frames)`, hostFrames.size >= 3);
+    check(`the slow guest's match kept moving (${guestFrames.size}/4 distinct frames)`,
+      guestFrames.size >= 3);
+    const after = [await host.page.evaluate(wireOf), await guest.page.evaluate(wireOf)];
+    check('records still crossing after the slowdown',
+      [0, 1].every(i => after[i] && after[i].recv - b[i].recv > 10),
+      JSON.stringify({ b, after }));
+
+    // ---- and one of the windows goes behind ------------------------------
+    //
+    // Two people on two devices never keep both windows in front; picking up
+    // the phone puts the other one behind by definition. A guest that stops
+    // stepping there stops sending, and its peer -- which is waiting on those
+    // records -- shows a court that never moves again. Somebody hosting a
+    // game is the plainest case of a window that should keep working while
+    // nobody is looking at it.
+    await host.page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      Object.defineProperty(document, 'visibilityState',
+        { value: 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await H.sleep(3000);
+    const [hiddenHost, watchingGuest] = await Promise.all([moving(host), moving(guest)]);
+    check(`the hidden host kept playing (${hiddenHost.size}/4 distinct frames)`,
+      hiddenHost.size >= 3);
+    check(`its peer never froze while it was behind (${watchingGuest.size}/4)`,
+      watchingGuest.size >= 3);
+    const behind = [await host.page.evaluate(wireOf), await guest.page.evaluate(wireOf)];
+    check('records still crossing with a window in the background',
+      [0, 1].every(i => behind[i] && behind[i].recv - after[i].recv > 10),
+      JSON.stringify({ after, behind }));
 
     const hp = await snap(host, 'host-match');
     const gp = await snap(guest, 'guest-match');

@@ -28,6 +28,7 @@ const fs = require('fs');
 const path = require('path');
 const { fork } = require('child_process');
 const { ProcessHub } = require('../lib/vlan-wire');
+const { colorBox } = require('../tools/png-color-box');
 
 const ROOT = path.join(__dirname, '..');
 const EXE = path.join(ROOT, 'packages', 'freeware', 'blobby-volley', 'volley.exe');
@@ -39,8 +40,31 @@ if (!fs.existsSync(EXE)) {
 }
 fs.mkdirSync(OUT, { recursive: true });
 
-const DOWN = 40, UP = 38, ENTER = 13;
+const DOWN = 40, UP = 38, ENTER = 13, LEFT = 37, RIGHT = 39;
 const key = (batch, vk) => [`${batch}:keydown:${vk}`, `${batch + 10}:keyup:${vk}`];
+
+// Finding the host's player in a screenshot. Player one is a flat saturated
+// red that nothing else on the beach comes near -- the one other red in the
+// picture is the score, which is why the band starts below it rather than at
+// the top of the window. It is deliberately not tied to the court's own
+// coordinates: the CLI renders 640x480 and the browser 800x600, and a band
+// measured off one is nowhere near the players in the other.
+// The guest is player two, the right-hand green blob, and in a NETWORK game
+// it is driven by the arrow keys, not the mouse: Instructions.txt 3.2.2 says
+// the client "always gets the keys you specified for player two", so the
+// mouse that moves player two in a local game does nothing here -- measured,
+// the commands arrive and the blob ignores them. Holding RIGHT takes green
+// from x=479 to x=626 and leaves red at 159.
+// Green is also the colour of every palm tree, so the band is the strip the
+// players stand in rather than the whole picture; the CLI renders 640x480 and
+// the blob sits at y 329..399 at rest.
+const GREEN = [30, 210, 30];
+const COURT = [0, 322, 4096, 140];
+// The blob crosses its own width in a second of held key, so a real move is
+// far larger than this; the two screens should agree to within a blob's edge.
+const MOVED_PX = 25;
+const AGREE_PX = 12;
+const fmt = v => (v === null ? 'gone' : v.toFixed(1));
 
 // Main menu -> NETZWERKSPIEL -> MULTIPLAYER-OPTIONEN, then the host or guest
 // entry, then the third entry of its settings screen (SPIEL BEGINNEN! /
@@ -164,8 +188,61 @@ async function main() {
     check('guest receives game data from the host', await waitFor(guest, 'data', 120000));
     check('host receives game data from the guest', await waitFor(host, 'data', 120000));
 
-    // A moment of play on both screens, then the pictures and a clean stop.
+    // ---- the match itself ------------------------------------------------
+    //
+    // Everything above is the wire: frames crossed, in both directions. That
+    // is not yet a game. Player two is the guest's own blob and nothing else
+    // moves it, so hold a key on the guest and photograph BOTH machines: the
+    // host never saw that key, and can only know where the blob went from the
+    // records the guest sent it. A green blob that ends up in the same new
+    // place on the host's screen is one match being played across the wire,
+    // rather than two programs each running their own.
+    //
+    // The captures are taken with the key still held, once the blob has run
+    // out of court: released, it drifts back towards its serve position and
+    // the two machines are then photographed mid-drift, milliseconds apart,
+    // which is a disagreement about time rather than about the game. Held
+    // against a wall, both screens are showing the same settled position.
     await sleep(15000);
+    const shoot = async (tag) => {
+      for (const s of [host, guest]) {
+        control(s, { action: 'png', path: path.join(OUT, `${s.name}-${tag}.png`) });
+      }
+      await sleep(4000);
+      const read = s => colorBox(path.join(OUT, `${s.name}-${tag}.png`),
+        { color: GREEN, tol: 70, rect: COURT });
+      return { host: read(host), guest: read(guest) };
+    };
+
+    // Two moves, because one is not evidence: a blob that happens to drift
+    // the right way once proves nothing, and the second move is back.
+    const hold = async (vk, tag) => {
+      control(guest, { cmd: `keydown:${vk}` });
+      await sleep(4000);
+      const shot = await shoot(tag);
+      control(guest, { cmd: `keyup:${vk}` });
+      await sleep(2000);
+      return shot;
+    };
+    const before = await shoot('before');
+    const right = await hold(RIGHT, 'right');
+    const after = await hold(LEFT, 'left');
+
+    const moved = (a, b) => (a.cx === null || b.cx === null) ? null : b.cx - a.cx;
+    const dHost = moved(before.host, right.host);
+    const dGuest = moved(before.guest, right.guest);
+    console.log(`  green blob x: host ${fmt(before.host.cx)} -> ${fmt(right.host.cx)}`
+      + ` -> ${fmt(after.host.cx)}   guest ${fmt(before.guest.cx)} -> `
+      + `${fmt(right.guest.cx)} -> ${fmt(after.guest.cx)}`);
+    check('the guest moved its own player', dGuest !== null && dGuest > MOVED_PX);
+    check('the host saw the guest\'s player move the same way',
+      dHost !== null && dHost > MOVED_PX);
+    check('and saw it come back',
+      moved(right.host, after.host) !== null && moved(right.host, after.host) < -MOVED_PX);
+    check('both screens agree where that player ended up',
+      after.host.cx !== null && after.guest.cx !== null
+        && Math.abs(after.host.cx - after.guest.cx) < AGREE_PX);
+
     for (const s of [host, guest]) {
       control(s, { action: 'png', path: path.join(OUT, `${s.name}.png`) });
       control(s, { action: 'quit' });

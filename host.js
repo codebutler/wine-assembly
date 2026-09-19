@@ -3550,6 +3550,13 @@ class WineAssembly {
       || !!(shared.directSoundLoopingVoices && shared.directSoundLoopingVoices.size);
   }
 
+  // Is this guest joined to a virtual LAN room? A wire can be attached long
+  // after launch -- the lobby opens when the guest first asks for a room --
+  // so this is asked at the moment it matters rather than latched at boot.
+  _isNetworked() {
+    return !!(this.vlanWire || (this.hostCtx && this.hostCtx.vlanWire));
+  }
+
   // Is anything audible in flight? SUPERSET of _isAudioHot(), and the two must
   // not be merged: _isAudioHot() also selects a short interpreter quantum
   // (see the audioHot branch in the run loop), which is right for a guest that
@@ -4436,8 +4443,29 @@ class WineAssembly {
     if (this._hiddenPaused || !this.running) return false;
     if (typeof document === 'undefined' || !document.hidden) return false;
     if (this._isAudioHot()) return false;
+    // A networked guest has a peer whose clock never stopped. Pausing it
+    // freezes the match on BOTH screens -- the peer is waiting on records
+    // this side is no longer producing -- and a game is lockstep enough that
+    // it never recovers by itself. Hosting a game is the ordinary reason for
+    // a window not to be in front, so this is not an edge case. The resume
+    // path would compound it: it slides the guest clock forward by the
+    // length of the pause to make the stint invisible, which is exactly the
+    // wrong thing when the other machine's clock ran the whole time.
+    //
+    // This buys "does not pause". It cannot buy full speed: a hidden page's
+    // timers are clamped to about 1Hz, so what keeps a backgrounded match
+    // actually playable is the audio scheduler above, which the browser
+    // leaves alone while sound is playing.
+    if (this._isNetworked()) return false;
     this._hiddenPaused = true;
     this._hiddenPausedAt = this._audioSchedulerNow();
+    // Rescue the continuation before cancelling the timer that holds it. The
+    // top-of-step check only ever stashes a step that got to RUN, and an idle
+    // guest spends most of its life parked in the 20Hz poll instead -- so
+    // hiding a tab at that moment used to drop the only reference to the
+    // loop. It came back visible with nothing scheduled and nothing held:
+    // running true, _hiddenPaused false, and never another instruction.
+    if (this._delayedStep && !this._pausedStep) this._pausedStep = this._delayedStep;
     this._cancelDelayedStep();
     return true;
   }
