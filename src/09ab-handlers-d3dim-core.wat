@@ -158,7 +158,21 @@
     (if (i32.gt_u (local.get $index_count) (i32.const 0x20000))
       (then (return (i32.const 0))))
     (local.set $size (i32.mul (local.get $index_count) (i32.const 32)))
-    (local.set $tmp (call $heap_alloc (local.get $size)))
+    ;; One grow-only buffer per instance. A heap_alloc/heap_free pair per draw
+    ;; sent every free through the heap's reclaim path: 630ms of a 6.6s MCM
+    ;; race window went to $heap_free_list_purge + $heap_free_impl.
+    (if (i32.gt_u (local.get $size) (global.get $d3dim_expand_cap)) (then
+      (if (global.get $d3dim_expand_buf)
+        (then (call $heap_free (global.get $d3dim_expand_buf))))
+      (global.set $d3dim_expand_cap (i32.const 0x10000))
+      (block $sized (loop $grow
+        (br_if $sized (i32.ge_u (global.get $d3dim_expand_cap) (local.get $size)))
+        (global.set $d3dim_expand_cap (i32.shl (global.get $d3dim_expand_cap) (i32.const 1)))
+        (br $grow)))
+      (global.set $d3dim_expand_buf (call $heap_alloc (global.get $d3dim_expand_cap)))
+      (if (i32.eqz (global.get $d3dim_expand_buf))
+        (then (global.set $d3dim_expand_cap (i32.const 0))))))
+    (local.set $tmp (global.get $d3dim_expand_buf))
     (if (i32.eqz (local.get $tmp)) (then (return (i32.const 0))))
     (local.set $dst (call $g2w (local.get $tmp)))
     (local.set $src (call $g2w (local.get $vertices)))
@@ -179,9 +193,13 @@
       (call $d3dim_draw_primitive
         (local.get $this) (local.get $primitive) (local.get $vertex_type)
         (local.get $tmp) (local.get $index_count))))
-    ;; The encoder copied the vertices into its ring before returning.
-    (call $heap_free (local.get $tmp))
+    ;; The encoder copied the vertices into its ring before returning, so the
+    ;; buffer is free for the next draw.
     (local.get $ok))
+  (global $d3dim_expand_buf (mut i32) (i32.const 0))
+  (global $d3dim_expand_cap (mut i32) (i32.const 0))
+  (global $d3dim_xform_buf (mut i32) (i32.const 0))
+  (global $d3dim_xform_cap (mut i32) (i32.const 0))
 
   ;; Snapshot ownership is established by the JS encoder before this returns.
   ;; Result 1 means a render Worker accepted the draw; 0 selects the existing
@@ -4222,7 +4240,21 @@
         (local.set $size (i32.mul (local.get $dwVertexCount) (i32.const 32)))
         (if (i32.or (i32.eqz (local.get $size)) (i32.gt_u (local.get $size) (i32.const 0x400000)))
           (then (return)))
-        (local.set $scratch_g (call $heap_alloc (local.get $size)))
+        ;; Grow-only per instance, like $d3dim_expand_buf: an alloc/free pair
+        ;; per draw put $heap_arena_find + $heap_alloc at ~7% of an MCM race
+        ;; window. The type-3 call below never comes back here.
+        (if (i32.gt_u (local.get $size) (global.get $d3dim_xform_cap)) (then
+          (if (global.get $d3dim_xform_buf)
+            (then (call $heap_free (global.get $d3dim_xform_buf))))
+          (global.set $d3dim_xform_cap (i32.const 0x10000))
+          (block $sized (loop $grow
+            (br_if $sized (i32.ge_u (global.get $d3dim_xform_cap) (local.get $size)))
+            (global.set $d3dim_xform_cap (i32.shl (global.get $d3dim_xform_cap) (i32.const 1)))
+            (br $grow)))
+          (global.set $d3dim_xform_buf (call $heap_alloc (global.get $d3dim_xform_cap)))
+          (if (i32.eqz (global.get $d3dim_xform_buf))
+            (then (global.set $d3dim_xform_cap (i32.const 0))))))
+        (local.set $scratch_g (global.get $d3dim_xform_buf))
         (if (i32.eqz (local.get $scratch_g)) (then (return)))
         (call $d3ddev_composite_wvp (local.get $state_guest))
         (call $d3dim_lights_refresh (local.get $state_guest))
@@ -4242,7 +4274,6 @@
         (call $d3dim_draw_primitive
           (local.get $this) (local.get $primType) (i32.const 3)
           (local.get $scratch_g) (local.get $dwVertexCount))
-        (call $heap_free (local.get $scratch_g))
         (return)))
     (if (call $d3dim_worker_route (local.get $this) (local.get $primType)
           (local.get $lpvVertices) (local.get $dwVertexCount))
