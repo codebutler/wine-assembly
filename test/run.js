@@ -30,6 +30,7 @@ const { APPS, resolveCopySuperops } = require('../lib/apps');
 const { CliVideoRecorder } = require('../lib/cli-recorder');
 const { renderTinySynthNotes } = require('../lib/tinysynth-offline');
 const { createBatchClock } = require('../lib/batch-clock');
+const { createGuestClockSource } = require('../lib/guest-clock');
 const { parseShellLaunchCommand, resolveShellLaunchPath } = require('../host.js');
 // Fixed memory-map addresses, from the map declared in src/00-regions.wat.
 const RegionMap = require('../lib/region-map.generated.js');
@@ -3460,9 +3461,19 @@ async function main() {
   // minutes pass every real second, while the client working through a dialog
   // believes far less. Anything either of them decides by elapsed time is then
   // decided against a clock the other does not share.
-  h.get_ticks = REAL_TICKS
-    ? () => ((((Date.now() - CLOCK_ORIGIN) * TIME_SCALE) | 0) & 0x7FFFFFFF)
-    : batchClock.getTicks;
+  //
+  // The choice is made ONCE, here, for every thread in the process:
+  // guestClock.ticks() is what a guest call gets and guestClock.publish() is
+  // what the batch loop hands worker-hosted threads below. Spelling the two
+  // out separately at their own call sites is what let --real-ticks reach the
+  // main thread and not the workers.
+  const guestClock = createGuestClockSource({
+    batchClock,
+    realTicks: REAL_TICKS,
+    timeScale: TIME_SCALE,
+    clockOrigin: CLOCK_ORIGIN,
+  });
+  h.get_ticks = guestClock.ticks;
   // Every OTHER import table in this process is built from `ctx` — one per
   // guest thread, in makeWorkerImports — and createHostImports derives its
   // get_ticks from ctx.guestNowMs. Overriding only `h` above therefore left
@@ -4188,7 +4199,7 @@ async function main() {
       // hard-coding 200 here made --tick-ms-per-batch silently a no-op for
       // every worker-hosted guest thread, so the threads disagreed about how
       // fast time was passing.
-      tickMs: () => tickState.batch * TICK_MS_PER_BATCH,
+      tickMs: () => guestClock.publish(),
       log: msg => console.log(msg),
     });
     await guestThreadHost.start();
@@ -9170,7 +9181,7 @@ async function main() {
       // worker reads them out of its control block without a round trip, and this
       // is the only thread that knows them.
       guestThreadHost.broker.publish({
-        tickMs: batchClock.batchTicks(),
+        tickMs: guestClock.publish(),
         inputPending: (inputQueue ? inputQueue.length : 0)
           + (renderer && renderer.inputQueue ? renderer.inputQueue.length : 0),
       });
