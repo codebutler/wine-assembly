@@ -1472,6 +1472,14 @@ async function main() {
         // B:dump-mem:0xADDR[:LEN] — hexdump guest memory at that batch.
         scheduledInput.push({ batch, action: 'dump-mem',
           arg: parts[2], arg2: parts[3] });
+      } else if (kind === 'tick-ms') {
+        // B:tick-ms:N — from this batch on, one batch is worth N ms of guest
+        // time (--tick-ms-per-batch, changed mid-run). For a run whose boot
+        // wants the fast default clock and whose later stage does not: a Bink
+        // video at 200ms/batch falls behind every frame and skips forever.
+        const ms = Number(parts[2]);
+        if (!Number.isFinite(ms) || ms <= 0) throw new Error(`tick-ms needs a positive ms value, got ${parts[2]}`);
+        scheduledInput.push({ batch, action: 'tick-ms', ms });
       } else if (kind === 'slot-count') {
         // B:slot-count[:LABEL] — log live WND_RECORDS slot count.
         scheduledInput.push({ batch, action: 'slot-count', label: parts[2] || '' });
@@ -4226,7 +4234,7 @@ async function main() {
     countAddrs: countAddrs,
     faultUnmapped: FAULT_NULL,
     inheritedWasmGlobals,
-    now: () => (tickState.batch * TICK_MS_PER_BATCH) | 0,
+    now: () => batchClock.batchTicks(),
     // For a spawned thread's io_wait park (yield 12). CLI providers usually
     // read synchronously, so this mostly matters to tests that mount an
     // async provider to mimic the browser's File-backed ISO reads.
@@ -6169,6 +6177,9 @@ async function main() {
         logs.push(`[input] dump-mem at batch ${batch}`);
         while (logs.length) console.log(logs.shift());
         hexdump(at, len);
+      } else if (ev.action === 'tick-ms') {
+        batchClock.setTickMsPerBatch(ev.ms);
+        logs.push(`[input] tick-ms ${batchClock.getTickMsPerBatch()} at batch ${batch} (guest ${batchClock.batchTicks()}ms)`);
       } else if (ev.action === 'slot-count') {
         const we = instance.exports;
         const dlg = we.get_findreplace_dlg && we.get_findreplace_dlg();
