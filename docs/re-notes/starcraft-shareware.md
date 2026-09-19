@@ -975,3 +975,36 @@ batch size 20000) — Diablo II demo 648 calls / 717 live maps and climbing
 231 / 97 (headless run is idle, unmeasured), Quake II 106 / 47, RCT,
 Heroes II, Caesar III ≤ 2 calls (not). The cost is calls × live-records², so
 only reserve-and-commit-per-block allocators with a large live set feel it.
+
+### The profile after the fix (2026-09-18)
+
+Same two points, same box, arm C (1630c665). Window 61.8 s CPU, 96.1% wasm.
+Nothing is left that stands out; the top is the interpreter's own machinery:
+
+| share | function |
+|---:|---|
+| 15.2% | `$next` |
+| 10.5% | `$read_thread_word` |
+| 6.7% | `$get_reg` |
+| 4.4% | `$set_reg` |
+| 4.2% | `$g2w` |
+| 3.7% | `$branch_end_at` |
+| 2.2% | `$gl32` |
+| 1.9% | `$page_resolve` |
+| 1.5% | `$th_test_jcc` |
+| 1.4% | `$jcc_end` |
+| 1.2% | `$decode_block` |
+
+`$virtual_backing_conflicts` is gone from the top 30. Dispatch plus register
+and memory accessors (`$next`, `$read_thread_word`, `$get_reg`, `$set_reg`,
+`$g2w`) are 41% of the window, every one of them a leaf V8 refuses to inline
+(see `tools/inline-verdicts.js`). No single handler is above 1.1%. That is the
+shape the lever study already priced: fewer dispatches did not buy anything
+here, so the next win is per-dispatch cost, not dispatch count.
+
+A census of the same `i32.and (cheap) (call expensive)` shape across all of
+`src/` (`tools/wat-eager-call-census.js --loops`, f1c68a58) found two more
+sites worth fixing, neither in StarCraft's hot path: `PeekMessageA` scanned
+the timer table on every peek and, under `PM_REMOVE`, consumed a due timer a
+filter had excluded; the colour-keyed `Blt` walked the clipper list per
+pixel before testing the key.
