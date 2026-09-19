@@ -387,3 +387,156 @@ process on a quiet host, repeat the focused protection probe, and run at least
 one deterministic game workload with load-immune work counters. Correct
 `PAGE_GUARD`/fault delivery and complete access-site coverage remain separate
 correctness gates; they must not be inferred from this performance prototype.
+
+## Access coverage audit and C1/C2 follow-up (2026-09-19)
+
+Pinned source: `094bd919`; detached test worktree:
+`/private/tmp/wa-page-perm-candidates`. The experiment compiles source transforms
+with the canonical `test/compile-src.js`; no production memory helper is edited.
+
+### Coverage and fault prerequisites
+
+The access policy cannot be implemented by changing only `gl*`/`gs*`. A
+comment-stripped call-site census of the pinned source gives:
+
+| Source | Raw `g2w` calls | Scalar `gl*`/`gs*` calls | `g2w_affine_span` calls |
+| --- | ---: | ---: | ---: |
+| `05b-string-ops.wat` | 22 | 31 | 0 |
+| `06-fpu.wat` | 24 | 7 | 0 |
+| `06c-mmx.wat` | 0 | 29 | 0 |
+| `07b-loop-match.wat` | 30 | 108 | 7 |
+| `07c-block-exec.wat` | 0 | 67 | 0 |
+
+These are syntax counts, not a claim that each call represents a distinct bug.
+The required work is:
+
+- **Scalar instructions:** validate the entire operand before mutation. A
+  helper returning a scratch pointer is not an instruction abort.
+- **FPU/MMX:** validate complete operands and save areas, including split
+  stores and FPU stack changes. Two individually checked dword stores can
+  still leave half of one instruction committed.
+- **REP and folded loops:** span contiguity does not prove permission. Check
+  every covered page and retain the architectural progress of completed
+  iterations when a later iteration faults. Current REP loops update their
+  guest index/count registers after the whole loop, so adding a trap inside
+  the loop alone is insufficient.
+- **Host APIs:** `guestToWasm` is an address translator, without access kind or
+  byte extent. Buffer reads/writes need bounded, direction-aware checks and
+  each API's failure behavior. Internal loaders/debuggers need an explicitly
+  privileged translation path rather than accidentally inheriting CPU policy.
+- **Instruction fetch/cache:** absence of DEP does not permit execution from
+  absent, no-access, or guarded pages. Permission transitions must also affect
+  previously decoded blocks, not just fresh instruction-byte reads.
+- **Direct/DIB defaults:** an override-only PTE does not define the default
+  protection or commitment of every direct/DIB page. PE section, heap, stack,
+  and mapping metadata remain part of a complete policy.
+
+`g2w_miss` explicitly allows the faulting operation to complete against
+`NULL_SENTINEL` after calling `raise_exception`; `eip_redirected` abandons the
+block but does not undo instruction side effects. Enforcement requires a
+precise fault record, original instruction context, and an abort/retry path
+before guest SEH can reliably repair a page and continue execution.
+
+Microsoft documents the access-violation record's read/write indicator and
+faulting guest address in
+[EXCEPTION_RECORD](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-exception_record).
+[Creating Guard Pages](https://learn.microsoft.com/en-us/windows/win32/memory/creating-guard-pages)
+specifies a guard violation followed by clearing the guard modifier, and
+distinguishes access during a system service. A shared implementation needs an
+atomic guard transition; a per-instance flag cannot arbitrate two Workers.
+These current documents establish the general contract; exact Win98 edge
+cases still need the project's Win98 reference tests.
+
+### Candidate definitions and focused validation
+
+- **A:** pinned translator with the same test exports as the candidates.
+- **C1:** separate read/write translation helpers preserve the original direct
+  and DIB branches, then fuse checks into a single sparse PTE load. There is
+  no runtime on/off wrapper.
+- **C2cold:** C1 plus an atomic shared-memory gate on direct accesses, before
+  the first direct protection override.
+- **C2hot:** the same binary after a real direct `VirtualProtect(..., RW)`
+  call. The gate is published before override PTEs and never cleared by a
+  later protection restore, so this arm measures the enduring cost.
+
+The prototype uses the unused word at `VIRTUAL_MAP_STATE + 28` at this pinned
+revision for the shared gate. This is experiment storage, not a proposed
+production ABI. C1/C2 deny with a WASM trap and leave guard state unchanged;
+they measure lookup cost and are deliberately not a guest-SEH implementation.
+
+Both candidates pass read-only, no-access, RW restoration and cross-page
+no-partial-scalar-write tests on the local and remote hosts. C2 also passes a
+two-instance shared-memory test: the second instance is initialized before
+the first changes protection, observes the shared gate and read-only page,
+rejects a write, and permits it after RW restoration while the gate stays set.
+
+### Measurements and negative controls
+
+On `fast-near-9tb-1`, 21 repetitions per shape rotated the four artifact arms
+within one process. The direct shapes used 16 MiB; sparse scatter used 32 MiB
+and 64 mappings. Positive values below mean **more elapsed time than A**:
+
+| Shape | C1 | C2cold | C2hot |
+| --- | ---: | ---: | ---: |
+| LUT | +0.35% | +5.70% | +7.60% |
+| Stack | +0.30% | +2.95% | +13.66% |
+| Mixed block | -2.12% | -0.39% | +8.77% |
+| Store stream | +1.18% | +1.37% | +6.85% |
+| Sparse scatter | -2.78% | +1.74% | +3.88% |
+
+The direct and sparse processes briefly overlapped; the host reported load
+around 1–2. These are initial lookup microbenchmarks, not browser/game timings.
+
+A second process measured C1 alongside **two instances of the exact same A
+artifact**, again rotating 21 repetitions. All five shapes ran sequentially
+in this process, using 16 MiB:
+
+| Shape | C1 versus A | Identical A0 versus A |
+| --- | ---: | ---: |
+| LUT | +3.56% | +2.44% |
+| Stack | +0.78% | +0.57% |
+| Mixed block | +0.91% | -0.15% |
+| Store stream | +7.41% | -0.17% |
+| Sparse scatter | +1.29% | +5.84% |
+
+This negative control retracts a stable C1 speedup/neutrality claim. Identical
+artifacts can diverge between instances and the streaming-store result also
+changed substantially. Rotating arms is necessary but does not remove all
+instance/JIT/layout effects. A follow-up needs repeated independent processes,
+identical-artifact controls, and native/inlining inspection before explaining
+the small deltas as the cost of permission checks. Guest op/block counts agree
+between arms; equal guest work does not prove equal JIT code or throughput.
+
+**Decision:** C2's shared direct gate is not a free fast path and is not ready
+to integrate. C1 remains an unproven performance candidate, not an accepted
+optimization. Do not spend another long game timing sweep on these artifacts
+until the controls and semantic coverage are resolved.
+
+### Real-game control and missing-page isolation
+
+The first C1 Heroes II gameplay attempt failed to complete the required 1,700
+batches. Its Smacker `DllMain` trapped at EIP `0x76d6bf`; a diagnostic clone
+identified access to guest `0x47240493`. The canonical A run passed the full
+adventure-map test with 1,855 presents. The prototype had made missing sparse
+PTEs trap unconditionally as well as enforcing mapped-page protection, so this
+was not a clean isolation of `PAGE_*` checks.
+
+`C1compat` preserves the original missing-PTE return to `g2w_miss` while keeping
+the checks on present PTEs. Its focused scalar protection/cross-page tests pass.
+It is a separate artifact and has **not** been timed by the tables above.
+The C1compat Heroes II gameplay run then passed all 1,700 batches with exactly
+1,855 presents and the same reported image-region statistics as A (map green
+37.3%, map black 39.4%, panel wood 69.7%, panel green 0.8%). This isolates the
+startup regression to the changed missing-page policy on this route; it does
+not establish complete enforcement or browser performance.
+
+Reproduction artifacts remain in the isolated worktree:
+
+- `tools/page-perm-experiment.js`: canonical-compiler transforms for A, C1,
+  C2, diagnostic D, and C1compat;
+- `tools/page-perm-check.js`: focused tests, including shared instances;
+- `tools/bench-loops.js --wasm-arms=...`: artifact comparison harness;
+- `build/page-perm/page-perm-{direct,sparse,repeat}.json`: measurements.
+
+Artifact SHA-256 prefixes: A `4bc97f6044ce7e5e`, C1 `6f77d5b912bd78cb`,
+C2 `1a03f7eeb5896236`, C1compat `08c7ee756ccc04af`.
