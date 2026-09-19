@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { loadImage, createCanvas } = require('../lib/canvas-compat');
+const { diffPng, readPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN  = path.join(__dirname, 'run.js');
@@ -54,27 +54,7 @@ try {
 // right-aligned in a static at roughly y=51..67 within a wide rect that ends
 // near client x=256-10. We probe a generous slab covering the right half of
 // the display row, which is where '0.' / '3.' renders.
-const DISPLAY_BBOX = { x0: 43 + 100, y0: 41, x1: 43 + 256, y1: 41 + 22 };
-
-async function readPixels(p) {
-  const img = await loadImage(p);
-  const cv = createCanvas(img.width, img.height);
-  cv.getContext('2d').drawImage(img, 0, 0);
-  return { w: img.width, h: img.height,
-           data: cv.getContext('2d').getImageData(0, 0, img.width, img.height).data };
-}
-
-function diffPixels(A, B, bbox) {
-  const w = Math.min(A.w, B.w), h = Math.min(A.h, B.h);
-  let n = 0;
-  for (let y = bbox.y0; y < Math.min(bbox.y1, h); y++) {
-    for (let x = bbox.x0; x < Math.min(bbox.x1, w); x++) {
-      const i = (y * w + x) * 4;
-      if (A.data[i] !== B.data[i] || A.data[i+1] !== B.data[i+1] || A.data[i+2] !== B.data[i+2]) n++;
-    }
-  }
-  return n;
-}
+const DISPLAY_REGION = { x: 43 + 100, y: 41, w: 156, h: 22 };
 
 (async () => {
   const checks = [];
@@ -86,8 +66,10 @@ function diffPixels(A, B, bbox) {
 
   let nDiff = -1;
   if (haveB && haveA) {
-    const [A, B] = await Promise.all([readPixels(pngBefore), readPixels(pngAfter)]);
-    nDiff = diffPixels(A, B, DISPLAY_BBOX);
+    const diff = diffPng(readPng(pngBefore), readPng(pngAfter),
+      { region: DISPLAY_REGION, includeAlpha: false });
+    checks.push({ name: 'snapshot dimensions match', pass: !diff.sizeMismatch });
+    nDiff = diff.changed;
   }
   // '0.' → '3.' dirties 8 pixels: the two glyphs share their whole outer
   // outline and differ only where 0's left column is and 3's middle bar is.

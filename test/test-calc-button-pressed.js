@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { loadImage, createCanvas } = require('../lib/canvas-compat');
+const { diffPng, readPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN  = path.join(__dirname, 'run.js');
@@ -48,27 +48,7 @@ try {
   console.log('(run.js exited non-zero — output captured)');
 }
 
-const BTN_BBOX = { x0: 98, y0: 191, x1: 133, y1: 218 };
-
-async function readPixels(p) {
-  const img = await loadImage(p);
-  const cv = createCanvas(img.width, img.height);
-  cv.getContext('2d').drawImage(img, 0, 0);
-  return { w: img.width, h: img.height,
-           data: cv.getContext('2d').getImageData(0, 0, img.width, img.height).data };
-}
-
-function diffPixels(A, B, bbox) {
-  const w = Math.min(A.w, B.w), h = Math.min(A.h, B.h);
-  let n = 0;
-  for (let y = bbox.y0; y < Math.min(bbox.y1, h); y++) {
-    for (let x = bbox.x0; x < Math.min(bbox.x1, w); x++) {
-      const i = (y * w + x) * 4;
-      if (A.data[i] !== B.data[i] || A.data[i+1] !== B.data[i+1] || A.data[i+2] !== B.data[i+2]) n++;
-    }
-  }
-  return n;
-}
+const BTN_REGION = { x: 98, y: 191, w: 35, h: 27 };
 
 (async () => {
   const checks = [];
@@ -81,12 +61,12 @@ function diffPixels(A, B, bbox) {
 
   let nHeldVsBase = -1, nHeldVsRel = -1, nBaseVsRel = -1;
   if (haveBase && haveHeld && haveRel) {
-    const [Base, Held, Rel] = await Promise.all([
-      readPixels(pngBaseline), readPixels(pngHeld), readPixels(pngReleased),
-    ]);
-    nHeldVsBase = diffPixels(Base, Held, BTN_BBOX);
-    nHeldVsRel  = diffPixels(Held, Rel,  BTN_BBOX);
-    nBaseVsRel  = diffPixels(Base, Rel,   BTN_BBOX);
+    const Base = readPng(pngBaseline), Held = readPng(pngHeld), Rel = readPng(pngReleased);
+    const options = { region: BTN_REGION, includeAlpha: false };
+    const diffs = [diffPng(Base, Held, options), diffPng(Held, Rel, options),
+      diffPng(Base, Rel, options)];
+    checks.push({ name: 'snapshot dimensions match', pass: diffs.every(d => !d.sizeMismatch) });
+    [nHeldVsBase, nHeldVsRel, nBaseVsRel] = diffs.map(d => d.changed);
   }
   // Held must differ from baseline — calc paints the button via WM_DRAWITEM
   // when we set the pressed flag (initial paint of the unclicked button is
