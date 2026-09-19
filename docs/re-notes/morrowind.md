@@ -413,3 +413,133 @@ fixed instance, since raising the count alone still leaves `image_base` 0.
 
 It reproduces only at full speed: 1300 frozen steps never trapped, and the
 first unfrozen seconds did. It is a race, so a frozen bisect will not find it.
+
+### FIXED, cf4d4000 (2026-09-19)
+
+The guess above about `image_base` was wrong, and the real cause is narrower.
+`image_base` **is** seeded on the idle instance — `loadPe` in worker mode
+already follows up with `init_thread(7, meta.get_image_base, ...)`. What is
+not carried is `$dll_count`. It is a per-instance global, `init_thread` does
+not take it, and nothing published it, so:
+
+- after the worker loads the PE, main's count is 0 while the worker's is N,
+  and the **first** `CoCreateInstance` searches zero rows whatever is mapped;
+- after the worker loads a COM server, main's count still does not move, so
+  the retry stops short of the row just written and asks for the same DLL
+  again. Forever.
+
+`a4bd125c` fixed the CLI shape of this in `ThreadManager._publishLinkLoaderState`,
+called from its own yield loop. `host.js` services the guest-main worker's COM
+and LoadLibrary yields **directly** and never enters that loop, which is why
+the browser kept the bug. It now publishes after both, and seeds the count
+once after `loadPe`.
+
+Verified in Chrome (`?frozen` + Threads, `tools/dev-server.js --isolate`):
+each of quartz.dll, devenum.dll and l3codecx.ax now loads **exactly once**
+(quartz was ~30x), no `DLL table capacity 32 exhausted`, no trap, and the
+guest gets as far as creating its `ActiveMovie Window`.
+
+## Phase-separated profiles (2026-09-19)
+
+One window is not evidence about where an app spends its time, and on this
+title it is actively misleading: the 15.33% block recorded further up came
+from a window that turned out to be a **video**. So each phase below is
+profiled on its own and labelled by its own PNG rather than by a batch number
+copied from another run.
+
+Recipe (CLI, tick 2, `--headless-gl`, `--quiet-api`, GL confirmed up —
+a `[gl] context creation FAILED` run does not count):
+
+```bash
+ESC=$(for b in $(seq 6000 1500 528000); do printf "%d:keydown:27,%d:keyup:27," $b $((b+40)); done)
+node test/run.js --exe="$I/Morrowind.exe" --dll-seed=binkw32.dll --vfs-include='**' \
+  --iso=downloads/Morrowind.iso --reg-import=.../registry.json \
+  --memory-mb=1024 --headless-gl --quiet-api --stuck-after=100000 --no-close \
+  --tick-ms-per-batch=2 --max-batches=9000000 --max-seconds=780 \
+  --handler-hist --handler-hist-thread=0,0,0,0,0,0 \
+  --handler-hist-start=380000 --handler-hist-stop=530000 --hist-json=OUT/w \
+  --input="$ESC,385000:png:OUT/p385000.png,..."
+```
+
+**The ESC pulse is load-bearing.** Without it the run never leaves phase A.
+This replaces the gitignored `drive-morrowind.js`, which is missing from the
+tree; it does not watch which files the game reads, it just pulses.
+
+Timeline at tick 2 *with* the pulses: splash from before 380k to ~515k, menu
+by 527k (cursor on New).
+
+### Phase A — Bink intro video
+
+Unskipped, this phase does not end. At batch **249k the Bethesda logo is
+still on screen** — the entire 250k-batch budget went into one logo.
+
+| window | ops | block entries | ops/block | distinct blocks |
+|---|---|---|---|---|
+| 50k-100k | 481.8M | 53.9M | 8.93 | 1514 |
+| 100k-150k | 3085.9M | 200.0M | 15.43 | 246 |
+| 150k-200k | 3614.56M | 200.0M | 18.07 | 214 |
+| 200k-250k | 3614.55M | 200.0M | 18.07 | 214 |
+
+The last two windows are the same work twice: same 214 blocks, op counts
+0.0002% apart, shares equal to 0.1pp. Every hot region is `binkw32`, and
+`binkw32+0x3000cb50..3000d306` alone is 81.4 / 76.5 / 76.5% of block entries.
+This is the one region in this app measured stable across consecutive
+windows — the opposite of `exe+0x479acd`, which is retracted above.
+
+Handlers, 200k-250k window:
+
+| handler | share of dispatches |
+|---|---|
+| `$th_fpu_mem_ro` (H190) | 37.61% |
+| `$th_fpu_reg` (H189) | 22.43% |
+| `$th_fpu_mem` (H188) | 6.51% |
+| `$th_compute_ea_sib` (H149) | 6.30% |
+
+**66.6% x87.** Adjacent pairs: H190->H190 23.63%, H189->H189 11.34%,
+H190->H189 9.72%, H189->H190 9.29% — **54% of all dispatch transitions are
+x87 to x87**. The SIB census is the same story: H188 in `[reg+reg*4+disp]`
+forms is over 70% of recorded SIB effective addresses.
+
+**Do not read that as "fuse H189/H190".** An x87 fusion was already built and
+measured on Monkey Island and gave nothing, because the cost is inside the
+helper calls, not in the dispatch between them; what paid there was moving
+the x87 registers into the per-thread FPU_FILE (-16%). The finding here is
+that the phase is x87-bound, which says to make those three handlers cheaper,
+not to glue them together.
+
+### Phase B — asset load, "Initializing Data..." (~380k-515k)
+
+Six 25k windows, all showing the splash with its progress bar. ops/block is
+**2.45-9.32** against phase A's 18.07 — this phase is block-transfer-bound,
+the opposite shape, and a fold that helps one cannot help the other.
+
+| region | w1 | w2 | w3 | w4 | w5 | w6 | mean | spread |
+|---|---|---|---|---|---|---|---|---|
+| `exe+0x4b47e0..4b48a5` | 1.0 | 0.0 | 22.4 | 51.9 | 30.3 | 0.0 | 17.6% | 51.9pp |
+| `exe+0x4db590..4db5d0` | 0.1 | 0.0 | 16.5 | 30.6 | 16.7 | 0.0 | 10.6% | 30.6pp |
+| `exe+0x4d10eb..4d1337` | 24.1 | 22.7 | 7.1 | 0.0 | 0.0 | 0.0 | 9.0% | 24.1pp |
+| `exe+0x4a45f0..4a480c` | 18.5 | 17.2 | 5.4 | 0.0 | 0.0 | 0.0 | 6.8% | 18.5pp |
+
+`0x4b47e0` is the object-name list walk already identified above as O(n^2) in
+the game's own code. It peaks at **51.9%** of block entries and is *absent*
+from two of the six windows, so even within one phase it is a sub-scene.
+`hot-loop-census.js` verdict for phase B: no region holds >=5% in every
+window.
+
+### Phase C — menu, and what is still unmeasured
+
+The menu is up at 527k. It has no window of its own yet: the last window
+(505k-530k) straddles the tail of `mw_logo.bik` and the menu, which is why
+`binkw32+0x30011d80` reappears at 25.3% there.
+
+**Gameplay is still unmeasured.** Reaching it needs the click on New that the
+missing driver performed.
+
+### So "the load" is two unrelated problems
+
+- **Phase A** is what a user actually sits through, and it is a video codec
+  being interpreted at 2/3 x87 dispatches.
+- **Phase B** is the game's own quadratic name lookup plus emulator block
+  transfer.
+
+Quoting one number for "load" hides both.
