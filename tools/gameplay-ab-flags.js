@@ -66,6 +66,11 @@ const MODE_SPLIT = parseInt(opt('mode-split', '800000'), 10);
 // come from its re-notes at that file's batch size -- Heroes II's gameplay
 // window of 1400..2600 is at 20000, not at StarCraft's 100000.
 const BATCH_SIZE = parseInt(opt('batch-size', '100000'), 10);
+// Wall-clock guard per run, in seconds per batch. The StarCraft default of
+// 0.25 s/batch is the box's measured 4 batches/s at batch size 100000; a
+// million-block Diablo II batch takes ~0.45 s on the same box, so the guard
+// must scale with the app or every run is SHORT/FAILED before its P1.
+const SECONDS_PER_BATCH = parseFloat(opt('seconds-per-batch', '0.25'));
 
 // docs/re-notes/starcraft-shareware.md, "Clicks skip the Smacker videos".
 const SC_ROUTE = [
@@ -96,7 +101,7 @@ function once(dir, batches, png, flags) {
   const r = spawnSync('/usr/bin/time', ['-p', 'node', 'test/run.js',
     `--app=${APP}`, '--no-threads', '--quiet-api',
     `--batch-size=${BATCH_SIZE}`, `--max-batches=${batches}`, '--no-close',
-    '--repaint-every=50', `--max-seconds=${Math.ceil(batches / 4)}`,
+    '--repaint-every=50', `--max-seconds=${Math.ceil(batches * SECONDS_PER_BATCH)}`,
     `--input=${input}`, ...(flags || []),
   ], { cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28 });
   const m = /^user\s+([\d.]+)$/m.exec(r.stderr || '');
