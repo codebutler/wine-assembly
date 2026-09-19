@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { createCanvas, loadImage } = require('../lib/canvas-compat');
+const { diffPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -55,20 +55,8 @@ try {
 }
 
 async function diffPngs(aPath, bPath) {
-  const a = await loadImage(aPath);
-  const b = await loadImage(bPath);
-  if (b.width !== a.width || b.height !== a.height) return -1;
-  const ca = createCanvas(a.width, a.height);
-  const cb = createCanvas(b.width, b.height);
-  ca.getContext('2d').drawImage(a, 0, 0);
-  cb.getContext('2d').drawImage(b, 0, 0);
-  const da = ca.getContext('2d').getImageData(0, 0, a.width, a.height).data;
-  const db = cb.getContext('2d').getImageData(0, 0, b.width, b.height).data;
-  let diff = 0;
-  for (let i = 0; i < da.length; i += 4) {
-    if (da[i] !== db[i] || da[i + 1] !== db[i + 1] || da[i + 2] !== db[i + 2]) diff++;
-  }
-  return diff;
+  const result = diffPng(aPath, bPath, { includeAlpha: false });
+  return result.sizeMismatch ? -1 : result.changed;
 }
 
 (async () => {

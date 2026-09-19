@@ -34,6 +34,9 @@ selection, invalid metric rejection, and existing max-mode behavior.
 | Win16 Minesweeper smiley | Exact RGB in the same grid rectangle; mismatched dimensions rejected | 3/3; play changes 194 pixels, reset differs from fresh by 0 |
 | AoE menu | Exact RGB in existing clamped regions; size mismatch remains -1 | Gameplay/menu route 18/18; synthetic old/new region and mismatch checks agree |
 | WordPad print preview | Summed RGB > 30 in the same page interior; missing/mismatched input remains 0 | Focused old/new helper checks agree; saved first/next images return 0 with both helpers. Full printing suite fails multiple print-completion/preview assertions; not a pass |
+| NetHack map | Exact RGB in the map rectangle; original dimension assertion retained | Playable-tile gameplay test passes; 3827 changed pixels |
+| Minesweeper smiley reset | Exact full-frame RGB; mismatch remains -1 | 7/7; loss changes 4440 pixels, reset matches initial exactly |
+| Paint dock-toggle | Exact RGB in status-bar rectangle; mismatched dimensions now rejected | Fails preservation assertion at 1298 pixels; old/new helpers agree on identical saved frames, and original test reproduces the same failure in a fresh run |
 
 The local-candidate suite is not fully green: CWordZap's `title initialized`
 assertion fails with both original and migrated tests. The Winamp suite is
@@ -86,8 +89,10 @@ Fresh serial verification after those corrections: dirty-document **11/11**,
 ## Remaining work
 
 This does not close the whole PNG-helper item. A broader name/body search
-still finds comparison loops in NetHack map, Pinball playable, Spider Show
-Available Move, Paint dock-toggle and Minesweeper smiley-reset probes.
+still finds comparison loops in Pinball playable and Spider Show Available
+Move probes. Spider intentionally compares the overlapping extents of
+different-sized images, which the current shared helper rejects; preserve
+that policy explicitly if extending the helper.
 Pinball combo-box `rectDiff` measures **total RGB error magnitude**, not the
 number of changed pixels; replacing it with `changed` would alter its
 contract. Its metric remains unmerged. The full-frame/subregion consumers

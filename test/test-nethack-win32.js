@@ -6,6 +6,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
@@ -44,15 +45,8 @@ function frameStats(png) {
 function mapDiff(a, b) {
   assert(a.width === b.width && a.height === b.height,
     'cannot compare differently sized NetHack frames');
-  let changed = 0;
-  for (let y = 122; y < 272; y++) {
-    for (let x = 20; x < 420; x++) {
-      const i = (y * a.width + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-          a.data[i + 2] !== b.data[i + 2]) changed++;
-    }
-  }
-  return changed;
+  return diffPng(a, b, { includeAlpha: false,
+    region: { x: 20, y: 122, w: 400, h: 150 } }).changed;
 }
 
 async function main() {

@@ -8,6 +8,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { PNG } = require('pngjs');
@@ -66,16 +67,11 @@ const images = Object.fromEntries(Object.entries(shots)
   .map(([name, file]) => [name, PNG.sync.read(fs.readFileSync(file))]));
 
 function statusDifference(a, b) {
-  let changed = 0;
   // Paint's initial 269x23 status child occupies this screen rectangle.
-  for (let y = 393; y < 416; y++) {
-    for (let x = 23; x < 292; x++) {
-      const i = (y * a.width + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-          a.data[i + 2] !== b.data[i + 2]) changed++;
-    }
-  }
-  return changed;
+  const result = diffPng(a, b, { includeAlpha: false,
+    region: { x: 23, y: 393, w: 269, h: 23 } });
+  assert(!result.sizeMismatch, 'cannot compare differently sized Paint frames');
+  return result.changed;
 }
 
 const hiddenDifference = statusDifference(images.initial, images['colors-off']);
