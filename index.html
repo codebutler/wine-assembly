@@ -1530,6 +1530,7 @@
         <label><input id="perf-hud-toggle" type="checkbox" onchange="setPerfHud(this.checked)">FPS graph</label>
         <label title="Fold Caesar III's run-length sprite blit into one dispatch (handler 424). Decode-time, so it steers blocks decoded after the toggle — relaunch for a clean A/B."><input id="rle-run-toggle" type="checkbox" checked onchange="setRleRun(this.checked)">RLE fold</label>
         <label title="Experimental: compile proven x87 expression regions and fold contiguous x87 islands. Decode-time, so relaunch for a clean A/B."><input id="x87-fold-toggle" type="checkbox" onchange="setX87Fusion(this.checked)">x87 fold</label>
+        <label title="Direct3D 8/9 renderer: the WebGL backend, or the WAT software rasterizer on a render Worker. Direct3D 2-7 (immediate mode) always rasterizes in WAT. Read when the device is created, so relaunch after changing it.">D3D: <select id="d3d-renderer-select" onchange="setD3DRenderer(this.value)"><option value="webgl">WebGL</option><option value="software">Software</option></select></label>
         <label><input id="perf-stream-toggle" type="checkbox" onchange="setPerfStream(this.checked)">Stream</label>
         <label title="Experimental: opt into real guest threads. Needs cross-origin isolation; the worker backend is still phase 1."><input id="threads-toggle" type="checkbox" onchange="setThreads(this.checked)">Threads</label>
         <span id="threads-status" style="color:#606060"></span>
@@ -2219,6 +2220,25 @@ Resource-aware Win98 emulator
         const box = document.getElementById('x87-fold-toggle');
         if (box) box.checked = true;
       });
+    }
+    // Direct3D 8/9 backend. The bridge picks it once per launch (host.js
+    // passes window.WineD3D.renderer as ctx.d3d9Backend), so like the fold
+    // switches this steers the next launch. ?d3d9-renderer=software|webgl
+    // sets the initial value.
+    window.WineD3D = window.WineD3D || {};
+    (() => {
+      const wanted = new URLSearchParams(location.search).get('d3d9-renderer');
+      window.WineD3D.renderer = wanted === 'software' ? 'software' : 'webgl';
+      window.addEventListener('load', () => {
+        const select = document.getElementById('d3d-renderer-select');
+        if (select) select.value = window.WineD3D.renderer;
+      });
+    })();
+    function setD3DRenderer(value) {
+      window.WineD3D.renderer = value === 'software' ? 'software' : 'webgl';
+      const select = document.getElementById('d3d-renderer-select');
+      if (select) select.value = window.WineD3D.renderer;
+      appendDebugLog(`[d3d] renderer ${window.WineD3D.renderer} — takes effect on the next launch`);
     }
     // Streaming can be switched on mid-session from the toolbar. Requiring a
     // URL parameter meant deciding to measure before loading the page, which
