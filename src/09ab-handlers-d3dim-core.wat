@@ -3152,6 +3152,40 @@
     (if (i32.eq (local.get $bpp) (i32.const 16)) (then
       (local.set $px (i32.load16_u
         (i32.add (local.get $ptr) (i32.shl (local.get $tx) (i32.const 1)))))
+      ;; RGB565 inline: the same bits as decode_surface_pixel_fmt's expand5/6
+      ;; path, without its three calls (V8 inlines none of them, and this is
+      ;; up to four fetches per pixel).
+      (if (i32.eq (local.get $fmt) (i32.const 1)) (then
+        (local.set $c (i32.and (local.get $px) (i32.const 0xF800)))
+        (local.set $c (i32.or
+          (i32.shl (i32.or (i32.shr_u (local.get $c) (i32.const 8)) (i32.shr_u (local.get $c) (i32.const 13)))
+            (i32.const 16))
+          (i32.or
+            (i32.shl
+              (i32.or (i32.shr_u (i32.and (local.get $px) (i32.const 0x07E0)) (i32.const 3))
+                      (i32.shr_u (i32.and (local.get $px) (i32.const 0x07E0)) (i32.const 9)))
+              (i32.const 8))
+            (i32.or (i32.shl (i32.and (local.get $px) (i32.const 31)) (i32.const 3))
+                    (i32.shr_u (i32.and (local.get $px) (i32.const 31)) (i32.const 2))))))
+        (return (i32.or (local.get $c) (i32.const 0xFF000000)))))
+      ;; X1R5G5B5 (2) and A1R5G5B5 (3), likewise.
+      (if (i32.or (i32.eq (local.get $fmt) (i32.const 2)) (i32.eq (local.get $fmt) (i32.const 3))) (then
+        (local.set $c (i32.or
+          (i32.shl
+            (i32.or (i32.shr_u (i32.and (local.get $px) (i32.const 0x7C00)) (i32.const 7))
+                    (i32.shr_u (i32.and (local.get $px) (i32.const 0x7C00)) (i32.const 12)))
+            (i32.const 16))
+          (i32.or
+            (i32.shl
+              (i32.or (i32.shr_u (i32.and (local.get $px) (i32.const 0x03E0)) (i32.const 2))
+                      (i32.shr_u (i32.and (local.get $px) (i32.const 0x03E0)) (i32.const 7)))
+              (i32.const 8))
+            (i32.or (i32.shl (i32.and (local.get $px) (i32.const 31)) (i32.const 3))
+                    (i32.shr_u (i32.and (local.get $px) (i32.const 31)) (i32.const 2))))))
+        (return (i32.or (local.get $c)
+          (select (i32.const 0xFF000000) (i32.const 0)
+            (i32.or (i32.eq (local.get $fmt) (i32.const 2))
+                    (i32.ne (i32.and (local.get $px) (i32.const 0x8000)) (i32.const 0))))))))
       (return (call $d3dim_decode_surface_pixel_fmt
         (local.get $fmt) (local.get $px) (local.get $bpp)))))
     (if (i32.eq (local.get $bpp) (i32.const 32)) (then
