@@ -24,6 +24,8 @@
 // Importers can select `metric: 'sum'` to compare the sum of absolute channel
 // differences against tolerance. The default 'max' compares each channel;
 // maxDelta always reports the worst individual channel, for either metric.
+// totalDelta sums absolute differences of all included channels in the region,
+// including differences below tolerance; it measures error magnitude, not pixels.
 
 const fs = require('fs');
 const { PNG } = require('pngjs');
@@ -54,6 +56,7 @@ function diffPng(fileA, fileB, options) {
   const y1 = Math.min(a.height, y0 + (region.h | 0));
   let changed = 0;
   let maxDelta = 0;
+  let totalDelta = 0;
   let bx0 = Infinity;
   let by0 = Infinity;
   let bx1 = -Infinity;
@@ -73,6 +76,7 @@ function diffPng(fileA, fileB, options) {
       let delta = 0;
       for (let c = 0; c < channelCount; c++) {
         const d = Math.abs(a.data[i + c] - b.data[i + c]);
+        totalDelta += d;
         if (metric === 'sum') delta += d;
         else if (d > delta) delta = d;
         if (d > maxDelta) maxDelta = d;
@@ -101,6 +105,7 @@ function diffPng(fileA, fileB, options) {
     changed,
     share: changed / area,
     maxDelta,
+    totalDelta,
     box: changed
       ? { x: bx0, y: by0, w: bx1 - bx0 + 1, h: by1 - by0 + 1 }
       : null,

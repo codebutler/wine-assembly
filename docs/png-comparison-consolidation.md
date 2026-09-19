@@ -8,6 +8,8 @@ Follow-up to the Pass-5 addendum in `fable-review.md`: tests should reuse
 - `includeAlpha: false` selects RGB; otherwise both metrics include alpha.
 - A pixel changes only when its distance is strictly greater than tolerance.
 - `maxDelta` remains the largest individual channel difference in either mode.
+- `totalDelta` sums absolute error across all included channels/pixels in the
+  region, independently of tolerance. It is not a count of changed pixels.
 
 The sum metric is necessary: RGB differences of 10, 10, 11 exceed the
 installer's threshold of 30 in sum mode, but not in max mode. Unit tests pin
@@ -38,6 +40,7 @@ selection, invalid metric rejection, and existing max-mode behavior.
 | Minesweeper smiley reset | Exact full-frame RGB; mismatch remains -1 | 7/7; loss changes 4440 pixels, reset matches initial exactly |
 | Paint dock-toggle | Exact RGB in status-bar rectangle; mismatched dimensions now rejected | Fails preservation assertion at 1298 pixels; old/new helpers agree on identical saved frames, and original test reproduces the same failure in a fresh run |
 | Pinball playable | Exact RGB in clipped flipper regions; original size-error object retained | 9/9 gameplay checks; left/right signal 904/927 pixels over 0/0 noise. Old/new results agree for flipper, full/clipped and outside-image regions |
+| Pinball combo box | Total RGB error magnitude in each region; absent/mismatched input remains 0 | Unit tests pin channel/alpha/region/tolerance behavior. Nonzero synthetic old/new total is 69; saved workflow frames give identical zero totals. Original and migrated live suites both 12/18, with the same six dropdown/selection failures |
 
 The local-candidate suite is not fully green: CWordZap's `title initialized`
 assertion fails with both original and migrated tests. The Winamp suite is
@@ -94,9 +97,9 @@ still finds a comparison loop in the Spider Show Available Move probe.
 Spider intentionally compares the overlapping extents of
 different-sized images, which the current shared helper rejects; preserve
 that policy explicitly if extending the helper.
-Pinball combo-box `rectDiff` measures **total RGB error magnitude**, not the
-number of changed pixels; replacing it with `changed` would alter its
-contract. Its metric remains unmerged. The full-frame/subregion consumers
+Pinball combo-box `rectDiff` now uses `totalDelta`, preserving its **total RGB
+error magnitude** contract rather than substituting changed-pixel count.
+The full-frame/subregion consumers
 listed above now use the shared comparator; their small local wrappers only
 adapt result shapes or combine named regions.
 Some compare masked regions or return different statistics; inspect each

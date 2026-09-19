@@ -16,6 +16,7 @@
 //   - dialog top-level hwnd has visible content (>=8 distinct colors)
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execSync } = require('child_process');
 let createCanvas, loadImage;
@@ -109,16 +110,9 @@ async function loadPixels(p) {
 // Sum |Δr|+|Δg|+|Δb| over a sub-rect between two frames.
 function rectDiff(a, b, x, y, w, h) {
   if (!a || !b || a.w !== b.w || a.h !== b.h) return 0;
-  let total = 0;
-  for (let yy = y; yy < y + h; yy++) {
-    for (let xx = x; xx < x + w; xx++) {
-      const i = (yy * a.w + xx) * 4;
-      total += Math.abs(a.data[i]   - b.data[i])
-             + Math.abs(a.data[i+1] - b.data[i+1])
-             + Math.abs(a.data[i+2] - b.data[i+2]);
-    }
-  }
-  return total;
+  return diffPng({ width: a.w, height: a.h, data: a.data },
+    { width: b.w, height: b.h, data: b.data },
+    { includeAlpha: false, region: { x, y, w, h } }).totalDelta;
 }
 
 function pixelAt(img, x, y) {

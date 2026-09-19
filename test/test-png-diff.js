@@ -24,10 +24,12 @@ let result = diffPng(base, changed);
 assert.strictEqual(result.sizeMismatch, false);
 assert.strictEqual(result.changed, 2, 'RGBA comparison must include alpha');
 assert.strictEqual(result.maxDelta, 2);
+assert.strictEqual(result.totalDelta, 3, 'total channel error includes alpha by default');
 assert.deepStrictEqual(result.box, { x: 0, y: 0, w: 2, h: 1 });
 
 result = diffPng(base, changed, { includeAlpha: false });
 assert.strictEqual(result.changed, 1, 'RGB comparison must ignore alpha');
+assert.strictEqual(result.totalDelta, 2, 'RGB total excludes alpha');
 assert.strictEqual(result.maxDelta, 2);
 assert.deepStrictEqual(result.box, { x: 1, y: 0, w: 1, h: 1 });
 
@@ -38,6 +40,7 @@ result = diffPng(base, changed, {
 });
 assert.strictEqual(result.changed, 0, 'tolerance and region must compose');
 assert.strictEqual(result.compared, 1);
+assert.strictEqual(result.totalDelta, 2, 'total is region-limited but independent of tolerance');
 
 result = diffPng(base, image(1, 1, [0, 0, 0, 0]));
 assert.strictEqual(result.sizeMismatch, true);
@@ -52,6 +55,7 @@ const distributed = image(3, 1, [10, 10, 10, 255, 10, 10, 11, 0, 0, 0, 0, 255]);
 result = diffPng(black, distributed, { metric: 'sum', includeAlpha: false, tolerance: 30 });
 assert.strictEqual(result.changed, 1);
 assert.strictEqual(result.maxDelta, 11, 'maxDelta remains a per-channel diagnostic');
+assert.strictEqual(result.totalDelta, 61, 'total sums channel error across pixels, even unchanged ones');
 assert.deepStrictEqual(result.box, { x: 1, y: 0, w: 1, h: 1 });
 assert.strictEqual(diffPng(black, distributed, { tolerance: 30, includeAlpha: false }).changed, 0);
 assert.strictEqual(diffPng(black, distributed, { metric: 'sum', tolerance: 30 }).changed, 3);
