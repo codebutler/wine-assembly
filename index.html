@@ -2276,9 +2276,10 @@ Resource-aware Win98 emulator
     window.WINE_THREADS = false;
     // D3DIM (DX2-7) software raster Worker: every draw path queues to it and
     // each surface read/write, clear and present fences first. It needs a guest
-    // instance that may Atomics.wait, so it only engages in Threads mode;
-    // ?no-d3d-worker keeps rasterization on the guest thread for A/B.
-    window.WINE_D3D_RENDER_WORKER = !new URLSearchParams(location.search).has('no-d3d-worker');
+    // instance that may Atomics.wait, so it only engages in Threads mode.
+    // Opt-in with ?d3d-worker until a fixed-work A/B shows it is a net win:
+    // overlap is measured, but per-draw copies and hand-offs are not free.
+    window.WINE_D3D_RENDER_WORKER = new URLSearchParams(location.search).has('d3d-worker');
     // Diagnostic: serialize Worker slices to distinguish shared-state races
     // from incorrect per-thread state.
     window.WINE_THREADS_SERIAL = /[?&]threads-serial\b/.test(location.search);
