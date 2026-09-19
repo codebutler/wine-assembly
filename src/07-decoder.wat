@@ -124,8 +124,18 @@
   ;; while it is being measured.
   (global $alu8_sib_enabled (mut i32) (i32.const 0))
   ;; Handler 466: PKWARE implode's two match-extension loops, folded whole.
-  ;; Grammar-matched at the loop head; see $try_emit_implode_cmp_run. Off by
-  ;; default while it is being measured.
+  ;; Grammar-matched at the loop head; see $try_emit_implode_cmp_run.
+  ;;
+  ;; Off by default DELIBERATELY, not pending a measurement. It is correct --
+  ;; the StarCraft save route is byte-reproducible with --wall-clock-ms=N and
+  ;; the fold reproduces it exactly (docs/re-notes/starcraft-shareware.md) --
+  ;; and it is worth -2.77% of that route. It stays off because it only ever
+  ;; fires while a guest is *compressing*: 6.3M runs across a save, zero on
+  ;; every non-saving route measured, and `blocks 0` for all 201 ids in a
+  ;; launch sweep. So default-on would buy ~0% in a real session while
+  ;; exposing 200 apps to a grammar matcher validated on one. Turn it on for
+  ;; compression work (--implode-cmp-run); revisit the default only if an app
+  ;; is found that compresses continuously rather than at save time.
   (global $implode_cmp_run_enabled (mut i32) (i32.const 0))
   (global $implode_cmp_run_matches (mut i32) (i32.const 0))
   (global $implode_cmp_run_runs    (mut i32) (i32.const 0))

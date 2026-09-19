@@ -129,6 +129,11 @@ const TOLERANCE = parseInt(opt('tolerance', '0'), 10) || 0;
 //   node tools/block-exec-sweep.js --all --no-build --control \
 //     --flag=implode-cmp-run --stats-flag=loopmatch-stats \
 //     --stats-line='^loopmatch: M +IMPLODE_CMP_RUN'
+// Both arms get a pinned calendar clock so they are byte-comparable; see
+// runArgs. --no-pin-clock restores the old behaviour for an A/B against it,
+// and --wall-clock-ms=N picks a different epoch.
+const PIN_CLOCK = !flag('no-pin-clock');
+const WALL_CLOCK_MS = opt('wall-clock-ms', '1789000000000');
 const FLAG = opt('flag', 'block-exec');
 const STATS_FLAG = opt('stats-flag', FLAG === 'block-exec' ? 'block-exec-stats' : '');
 const STATS_LINE = opt('stats-line', '^block-exec: ');
@@ -173,6 +178,17 @@ function runArgs(id, arm, budget, png) {
     '--quiet-api', '--quiet-blocks', '--no-close',
     `--png=${png}`,
   ];
+  // Pin the guest's CALENDAR clock in both arms. Without this, GetSystemTime /
+  // GetLocalTime / GetSystemTimeAsFileTime hand the guest the real time of day
+  // (lib/host-imports.js's wall_clock falls back to Date.now() when
+  // ctx.wallNowMs is unbound), so any app that seeds itself from the date
+  // diverges from ITSELF between two runs -- which is most of what the null
+  // band below exists to absorb. Pinned, an app that is otherwise
+  // deterministic compares as bytes and its band collapses to zero, which
+  // turns a "differs by less than the noise" verdict into a real one. Measured
+  // on the StarCraft save route: 88,435 of 98,304 bytes differed between two
+  // identical runs unpinned, and 0 pinned.
+  if (PIN_CLOCK) args.push(`--wall-clock-ms=${WALL_CLOCK_MS}`);
   if (STATS_FLAG) args.push(`--${STATS_FLAG}`);
   if (NO_BUILD) args.push('--no-build');
   if (arm === 'on') args.push(`--${FLAG}`);
