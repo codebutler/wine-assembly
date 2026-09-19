@@ -10580,6 +10580,58 @@
     (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
+  ;; D3DRMVectorRotate(r, v, axis, theta) -> r: v rotated by theta radians
+  ;; about axis, returned as a unit vector. d3drm builds it as q*v*q^-1 with
+  ;; q = (cos(theta/2), sin(theta/2)*axis/|axis|) and normalizes the product;
+  ;; Rodrigues' formula below is the same rotation. A zero-length axis or
+  ;; result normalizes to (1,0,0), as D3DRMVectorNormalize does. Motocross
+  ;; Madness imports only this and Direct3DRMCreate from d3drm.dll.
+  (func $handle_D3DRMVectorRotate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $v i32) (local $a i32) (local $r i32)
+    (local $vx f64) (local $vy f64) (local $vz f64) (local $nx f64) (local $ny f64) (local $nz f64)
+    (local $x f64) (local $y f64) (local $z f64)
+    (local $c f64) (local $s f64) (local $k f64) (local $dot f64) (local $len f64)
+    (local.set $v (call $g2w (local.get $arg1)))
+    (local.set $a (call $g2w (local.get $arg2)))
+    (local.set $r (call $g2w (local.get $arg0)))
+    (local.set $vx (f64.promote_f32 (f32.load offset=0 (local.get $v))))
+    (local.set $vy (f64.promote_f32 (f32.load offset=4 (local.get $v))))
+    (local.set $vz (f64.promote_f32 (f32.load offset=8 (local.get $v))))
+    (local.set $nx (f64.promote_f32 (f32.load offset=0 (local.get $a))))
+    (local.set $ny (f64.promote_f32 (f32.load offset=4 (local.get $a))))
+    (local.set $nz (f64.promote_f32 (f32.load offset=8 (local.get $a))))
+    (local.set $len (f64.sqrt (f64.add (f64.add (f64.mul (local.get $nx) (local.get $nx))
+      (f64.mul (local.get $ny) (local.get $ny))) (f64.mul (local.get $nz) (local.get $nz)))))
+    (if (f64.eq (local.get $len) (f64.const 0))
+      (then (local.set $nx (f64.const 1)) (local.set $len (f64.const 1))))
+    (local.set $nx (f64.div (local.get $nx) (local.get $len)))
+    (local.set $ny (f64.div (local.get $ny) (local.get $len)))
+    (local.set $nz (f64.div (local.get $nz) (local.get $len)))
+    (local.set $c (call $host_math_cos (f64.promote_f32 (f32.reinterpret_i32 (local.get $arg3)))))
+    (local.set $s (call $host_math_sin (f64.promote_f32 (f32.reinterpret_i32 (local.get $arg3)))))
+    (local.set $k (f64.sub (f64.const 1) (local.get $c)))
+    (local.set $dot (f64.add (f64.add (f64.mul (local.get $nx) (local.get $vx))
+      (f64.mul (local.get $ny) (local.get $vy))) (f64.mul (local.get $nz) (local.get $vz))))
+    ;; v' = v cos + (n x v) sin + n (n.v)(1 - cos)
+    (local.set $x (f64.add (f64.add (f64.mul (local.get $vx) (local.get $c))
+      (f64.mul (f64.sub (f64.mul (local.get $ny) (local.get $vz)) (f64.mul (local.get $nz) (local.get $vy))) (local.get $s)))
+      (f64.mul (local.get $nx) (f64.mul (local.get $dot) (local.get $k)))))
+    (local.set $y (f64.add (f64.add (f64.mul (local.get $vy) (local.get $c))
+      (f64.mul (f64.sub (f64.mul (local.get $nz) (local.get $vx)) (f64.mul (local.get $nx) (local.get $vz))) (local.get $s)))
+      (f64.mul (local.get $ny) (f64.mul (local.get $dot) (local.get $k)))))
+    (local.set $z (f64.add (f64.add (f64.mul (local.get $vz) (local.get $c))
+      (f64.mul (f64.sub (f64.mul (local.get $nx) (local.get $vy)) (f64.mul (local.get $ny) (local.get $vx))) (local.get $s)))
+      (f64.mul (local.get $nz) (f64.mul (local.get $dot) (local.get $k)))))
+    (local.set $len (f64.sqrt (f64.add (f64.add (f64.mul (local.get $x) (local.get $x))
+      (f64.mul (local.get $y) (local.get $y))) (f64.mul (local.get $z) (local.get $z)))))
+    (if (f64.eq (local.get $len) (f64.const 0))
+      (then (local.set $x (f64.const 1)) (local.set $len (f64.const 1))))
+    (f32.store offset=0 (local.get $r) (f32.demote_f64 (f64.div (local.get $x) (local.get $len))))
+    (f32.store offset=4 (local.get $r) (f32.demote_f64 (f64.div (local.get $y) (local.get $len))))
+    (f32.store offset=8 (local.get $r) (f32.demote_f64 (f64.div (local.get $z) (local.get $len))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+
   ;; ════════════════════════════════════════════════════════════
   ;; IDirect3D stub methods (9 methods)
   ;; All return E_FAIL (0x80004005) with correct stdcall stack cleanup.

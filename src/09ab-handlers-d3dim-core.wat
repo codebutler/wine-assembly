@@ -245,6 +245,176 @@
       (local.get $vertex_type) (local.get $vertices) (local.get $count))
     (global.set $d3dim_state_override (i32.const 0)))
 
+  ;; ── GPU executor seam ─────────────────────────────────────────
+  ;; With a GPU executor attached (lib/d3dim-gpu.js), the same 0x20000 draw /
+  ;; 0x20001 fence / 0x20003 flip records go to it instead of the render
+  ;; Worker, and clears go too (0x20004), because a clear the software path
+  ;; paints into the DIB is invisible to a GPU target. The executor never
+  ;; reads the 4KB state snapshot itself: it asks d3dim_gpu_describe, which
+  ;; applies the same state interpretation the software rasterizer uses, so
+  ;; the two backends differ in how they draw and never in what they draw.
+  (global $d3dim_gpu_on (mut i32) (i32.const 0))
+  (global $d3dim_gpu_desc (mut i32) (i32.const 0))
+  (global $d3dim_gpu_scratch (mut i32) (i32.const 0))
+  (global $d3dim_gpu_scratch_cap (mut i32) (i32.const 0))
+  (func (export "d3dim_gpu_enable") (param $on i32)
+    (global.set $d3dim_gpu_on (i32.ne (local.get $on) (i32.const 0))))
+
+  ;; The seam's one WAT-owned scratch: clear descriptor at +0, describe at +64.
+  (func $d3dim_gpu_buffer (result i32)
+    (if (i32.eqz (global.get $d3dim_gpu_desc)) (then
+      (global.set $d3dim_gpu_desc (call $g2w (call $heap_alloc (i32.const 192))))))
+    (global.get $d3dim_gpu_desc))
+  (func (export "d3dim_gpu_surface_fmt") (param $entry i32) (result i32)
+    (call $dx_surf_fmt_get (local.get $entry)))
+
+  ;; Result 1: the executor took the clear, and it now owes a fence.
+  (func $d3dim_gpu_try_clear
+    (param $rt i32) (param $flags i32) (param $color i32) (param $z f32)
+    (param $x i32) (param $y i32) (param $w i32) (param $h i32) (result i32)
+    (local $d i32)
+    (local.set $d (call $d3dim_gpu_buffer))
+    (i32.store offset=0 (local.get $d) (local.get $rt))
+    (i32.store offset=4 (local.get $d) (i32.and (local.get $flags) (i32.const 3)))
+    (i32.store offset=8 (local.get $d) (local.get $color))
+    (f32.store offset=12 (local.get $d) (local.get $z))
+    (i32.store offset=16 (local.get $d) (local.get $x))
+    (i32.store offset=20 (local.get $d) (local.get $y))
+    (i32.store offset=24 (local.get $d) (local.get $w))
+    (i32.store offset=28 (local.get $d) (local.get $h))
+    (if (i32.eqz (call $host_gpu_gl_call (i32.const 0x20004) (local.get $d) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (global.set $d3dim_worker_pending (i32.const 1))
+    (i32.const 1))
+
+  ;; The draw state of device $this, normalized the way
+  ;; $d3dim_draw_tl_triangle_textured reads it, into dwords in the seam
+  ;; buffer at +64. Result: that address, or 0 when there is no target or state.
+  ;;   0 rt   1 w   2 h   3 bpp   4 pitch   5 dib_wa   6 fmt
+  ;;   7 tex  8 tw  9 th  10 tbpp 11 tpitch 12 tdib_wa 13 keyed 14 key raw 15 pal
+  ;;   16 zenable 17 zfunc 18 zwrite  19 blend 20 src 21 dst
+  ;;   22 colorop 23 alphaop 24 addr u 25 addr v 26 linear 27 cull 28 shade
+  (func (export "d3dim_gpu_describe") (param $this i32) (result i32)
+    (local $out i32) (local $rt i32) (local $state i32) (local $tex i32) (local $filter i32)
+    (local $zen i32) (local $zfunc i32) (local $zwrite i32) (local $v i32)
+    (local.set $rt (call $d3ddev_rt_entry (local.get $this)))
+    (local.set $state (call $d3ddev_state (local.get $this)))
+    (if (i32.or (i32.eqz (local.get $rt)) (i32.eqz (local.get $state)))
+      (then (return (i32.const 0))))
+    (local.set $out (i32.add (call $d3dim_gpu_buffer) (i32.const 64)))
+    (call $zero_memory (local.get $out) (i32.const 116))
+    (i32.store offset=0 (local.get $out) (local.get $rt))
+    (i32.store offset=4 (local.get $out) (i32.load16_u offset=12 (local.get $rt)))
+    (i32.store offset=8 (local.get $out) (i32.load16_u offset=14 (local.get $rt)))
+    (i32.store offset=12 (local.get $out) (i32.load16_u offset=16 (local.get $rt)))
+    (i32.store offset=16 (local.get $out) (i32.load16_u offset=18 (local.get $rt)))
+    (i32.store offset=20 (local.get $out) (i32.load offset=20 (local.get $rt)))
+    (i32.store offset=24 (local.get $out) (call $dx_surf_fmt_get (local.get $rt)))
+    (local.set $tex (call $d3dim_bound_texture_entry (local.get $this)))
+    (i32.store offset=28 (local.get $out) (local.get $tex))
+    (if (local.get $tex) (then
+      (i32.store offset=32 (local.get $out) (i32.load16_u offset=12 (local.get $tex)))
+      (i32.store offset=36 (local.get $out) (i32.load16_u offset=14 (local.get $tex)))
+      (i32.store offset=40 (local.get $out) (i32.load16_u offset=16 (local.get $tex)))
+      (i32.store offset=44 (local.get $out) (i32.load16_u offset=18 (local.get $tex)))
+      (i32.store offset=48 (local.get $out) (i32.load offset=20 (local.get $tex)))
+      (i32.store offset=52 (local.get $out)
+        (i32.and
+          (i32.ne (call $gl32 (i32.add (local.get $state) (i32.const 420))) (i32.const 0))
+          (i32.ne (i32.and (i32.load offset=28 (local.get $tex)) (i32.const 0x100)) (i32.const 0))))
+      (i32.store offset=56 (local.get $out) (i32.load offset=24 (local.get $tex)))
+      (if (i32.eq (i32.load16_u offset=16 (local.get $tex)) (i32.const 8))
+        (then (i32.store offset=60 (local.get $out) (call $dx_surf_pal_get (local.get $tex)))))))
+    ;; Depth: ZENABLE, then ZFUNC (default LESSEQUAL) and ZWRITEENABLE.
+    ;; ALWAYS without a write is no depth work at all, as in the software path.
+    (local.set $zen (i32.ne (call $gl32 (i32.add (local.get $state) (i32.const 284))) (i32.const 0)))
+    (if (local.get $zen) (then
+      (local.set $zfunc (call $gl32 (i32.add (local.get $state) (i32.const 348))))
+      (local.set $zwrite (call $gl32 (i32.add (local.get $state) (i32.const 312))))))
+    (if (i32.eqz (local.get $zfunc)) (then (local.set $zfunc (i32.const 4))))
+    (if (i32.and (i32.eq (local.get $zfunc) (i32.const 8)) (i32.eqz (local.get $zwrite)))
+      (then (local.set $zen (i32.const 0))))
+    (i32.store offset=64 (local.get $out) (local.get $zen))
+    (i32.store offset=68 (local.get $out) (local.get $zfunc))
+    (i32.store offset=72 (local.get $out) (i32.ne (local.get $zwrite) (i32.const 0)))
+    (i32.store offset=76 (local.get $out)
+      (i32.ne (call $gl32 (i32.add (local.get $state) (i32.const 364))) (i32.const 0)))
+    (local.set $v (call $gl32 (i32.add (local.get $state) (i32.const 332))))
+    (i32.store offset=80 (local.get $out) (select (local.get $v) (i32.const 2) (local.get $v)))
+    (local.set $v (call $gl32 (i32.add (local.get $state) (i32.const 336))))
+    (i32.store offset=84 (local.get $out) (select (local.get $v) (i32.const 1) (local.get $v)))
+    (i32.store offset=88 (local.get $out) (call $d3dim_tss_load (local.get $state) (i32.const 0) (i32.const 1)))
+    (i32.store offset=92 (local.get $out) (call $d3dim_tss_load (local.get $state) (i32.const 0) (i32.const 4)))
+    (local.set $v (call $d3dim_tss_load (local.get $state) (i32.const 0) (i32.const 13)))
+    (i32.store offset=96 (local.get $out) (select (local.get $v) (i32.const 1) (local.get $v)))
+    (local.set $v (call $d3dim_tss_load (local.get $state) (i32.const 0) (i32.const 14)))
+    (i32.store offset=100 (local.get $out) (select (local.get $v) (i32.const 1) (local.get $v)))
+    ;; Filter: stage MAGFILTER, then MINFILTER, then DX1 TEXTUREMAG/MIN.
+    (local.set $filter (call $d3dim_tss_load (local.get $state) (i32.const 0) (i32.const 16)))
+    (if (i32.eqz (local.get $filter))
+      (then (local.set $filter (call $d3dim_tss_load (local.get $state) (i32.const 0) (i32.const 17)))))
+    (if (i32.eqz (local.get $filter))
+      (then (local.set $filter (call $gl32 (i32.add (local.get $state) (i32.const 324))))))
+    (if (i32.eqz (local.get $filter))
+      (then (local.set $filter (call $gl32 (i32.add (local.get $state) (i32.const 328))))))
+    (i32.store offset=104 (local.get $out) (i32.eq (local.get $filter) (i32.const 2)))
+    (i32.store offset=108 (local.get $out) (call $gl32 (i32.add (local.get $state) (i32.const 344))))
+    (i32.store offset=112 (local.get $out) (call $gl32 (i32.add (local.get $state) (i32.const 292))))
+    (local.get $out))
+
+  ;; Texture $tex decoded to RGBA8 bytes in a reused scratch buffer (result is
+  ;; its wasm address, 0 when the surface has no pixels). With $keyed, a texel
+  ;; whose colour is the source colour key gets alpha 0 and the executor
+  ;; discards it -- the software span's exact-match test, moved to the GPU.
+  (func (export "d3dim_gpu_decode_texture") (param $tex i32) (param $keyed i32) (result i32)
+    (local $tw i32) (local $th i32) (local $tbpp i32) (local $tpitch i32) (local $tdib i32)
+    (local $tfmt i32) (local $tpal i32) (local $bytes i32) (local $dst i32)
+    (local $x i32) (local $y i32) (local $c i32) (local $key i32)
+    (local.set $tw (i32.load16_u offset=12 (local.get $tex)))
+    (local.set $th (i32.load16_u offset=14 (local.get $tex)))
+    (local.set $tbpp (i32.load16_u offset=16 (local.get $tex)))
+    (local.set $tpitch (i32.load16_u offset=18 (local.get $tex)))
+    (local.set $tdib (i32.load offset=20 (local.get $tex)))
+    (if (i32.or (i32.or (i32.eqz (local.get $tw)) (i32.eqz (local.get $th)))
+                (i32.or (i32.eqz (local.get $tpitch)) (i32.eqz (local.get $tdib))))
+      (then (return (i32.const 0))))
+    (local.set $tfmt (call $dx_surf_fmt_get (local.get $tex)))
+    (if (i32.eq (local.get $tbpp) (i32.const 8))
+      (then (local.set $tpal (call $dx_surf_pal_get (local.get $tex)))))
+    (local.set $bytes (i32.shl (i32.mul (local.get $tw) (local.get $th)) (i32.const 2)))
+    (if (i32.gt_u (local.get $bytes) (global.get $d3dim_gpu_scratch_cap)) (then
+      (if (global.get $d3dim_gpu_scratch)
+        (then (call $heap_free (global.get $d3dim_gpu_scratch))))
+      (global.set $d3dim_gpu_scratch (call $heap_alloc (local.get $bytes)))
+      (global.set $d3dim_gpu_scratch_cap (local.get $bytes))))
+    (if (local.get $keyed) (then
+      (local.set $key (i32.and (call $d3dim_decode_surface_pixel
+        (local.get $tex) (i32.load offset=24 (local.get $tex)) (local.get $tbpp))
+        (i32.const 0x00ffffff)))))
+    (local.set $dst (call $g2w (global.get $d3dim_gpu_scratch)))
+    (block $ydone (loop $ylp
+      (br_if $ydone (i32.ge_u (local.get $y) (local.get $th)))
+      (local.set $x (i32.const 0))
+      (block $xdone (loop $xlp
+        (br_if $xdone (i32.ge_u (local.get $x) (local.get $tw)))
+        (local.set $c (call $d3dim_texture_fetch_prepared
+          (local.get $tbpp) (local.get $tpitch) (local.get $tdib) (local.get $tfmt) (local.get $tpal)
+          (local.get $x) (local.get $y)))
+        (if (i32.and (i32.ne (local.get $keyed) (i32.const 0))
+              (i32.eq (i32.and (local.get $c) (i32.const 0x00ffffff)) (local.get $key)))
+          (then (local.set $c (i32.and (local.get $c) (i32.const 0x00ffffff)))))
+        ;; ARGB value to R,G,B,A bytes.
+        (i32.store (local.get $dst)
+          (i32.or (i32.and (local.get $c) (i32.const 0xff00ff00))
+            (i32.or (i32.and (i32.shr_u (local.get $c) (i32.const 16)) (i32.const 0xff))
+                    (i32.shl (i32.and (local.get $c) (i32.const 0xff)) (i32.const 16)))))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 4)))
+        (local.set $x (i32.add (local.get $x) (i32.const 1)))
+        (br $xlp)))
+      (local.set $y (i32.add (local.get $y) (i32.const 1)))
+      (br $ylp)))
+    (call $g2w (global.get $d3dim_gpu_scratch)))
+
   ;; Crash-name strings for unimplemented D3DIM paths live in the high
   ;; WAT-private scratch area so they cannot collide with low system strings
   ;; or sparse VirtualAlloc map state.
@@ -565,7 +735,7 @@
     (local.set $rt (call $d3ddev_rt_entry (local.get $this)))
     (if (local.get $rt) (then
       (if (i32.and (i32.load (i32.add (local.get $rt) (i32.const 28))) (i32.const 1))
-        (then (call $dx_present (local.get $rt))))))
+        (then (call $d3dim_worker_fence) (call $dx_present (local.get $rt))))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; ── State-block forwarders ────────────────────────────────────
@@ -4003,7 +4173,7 @@
     (local $rt i32) (local $dev_this i32) (local $vp_entry i32)
     (local $vx i32) (local $vy i32) (local $vw i32) (local $vh i32)
     (local $zbuf i32) (local $rtw i32) (local $rth i32) (local $bgtex i32)
-    (call $d3dim_worker_fence)
+    (if (i32.eqz (global.get $d3dim_gpu_on)) (then (call $d3dim_worker_fence)))
     (if (i32.eqz (local.get $vp_this)) (then (return)))
     (local.set $vp_entry (call $dx_from_this (local.get $vp_this)))
     (if (i32.eqz (local.get $vp_entry)) (then (return)))
@@ -4021,6 +4191,16 @@
       (local.set $vy (i32.const 0))
       (local.set $vw (i32.and (i32.load (i32.add (local.get $rt) (i32.const 12))) (i32.const 0xFFFF)))
       (local.set $vh (i32.shr_u (i32.load (i32.add (local.get $rt) (i32.const 12))) (i32.const 16)))))
+    (if (global.get $d3dim_gpu_on) (then
+      ;; A background image is a textured fill the executor has no command
+      ;; for; that clear, and any the executor declines, stays in software.
+      (if (i32.or (i32.eqz (i32.and (local.get $dwFlags) (i32.const 1)))
+                  (i32.eqz (call $d3dim_viewport_background_texture (local.get $vp_this))))
+        (then (if (call $d3dim_gpu_try_clear (local.get $rt) (local.get $dwFlags)
+                    (local.get $color) (local.get $zval)
+                    (local.get $vx) (local.get $vy) (local.get $vw) (local.get $vh))
+          (then (return)))))
+      (call $d3dim_worker_fence)))
     (if (i32.and (local.get $dwFlags) (i32.const 1)) (then
       ;; A background material carrying an image wins over its (usually white)
       ;; diffuse. 8bpp targets stay on the colour path -- sampling RGB into a
@@ -4046,7 +4226,7 @@
     (local $state i32) (local $sw i32) (local $rt i32)
     (local $vx i32) (local $vy i32) (local $vw i32) (local $vh i32)
     (local $zbuf i32) (local $rtw i32) (local $rth i32)
-    (call $d3dim_worker_fence)
+    (if (i32.eqz (global.get $d3dim_gpu_on)) (then (call $d3dim_worker_fence)))
     (local.set $state (call $d3ddev_state (local.get $this)))
     (if (i32.eqz (local.get $state)) (then (return)))
     (local.set $rt (call $d3ddev_rt_entry (local.get $this)))
@@ -4062,6 +4242,12 @@
       (local.set $vy (i32.const 0))
       (local.set $vw (i32.and (i32.load (i32.add (local.get $rt) (i32.const 12))) (i32.const 0xFFFF)))
       (local.set $vh (i32.shr_u (i32.load (i32.add (local.get $rt) (i32.const 12))) (i32.const 16)))))
+    (if (global.get $d3dim_gpu_on) (then
+      (if (call $d3dim_gpu_try_clear (local.get $rt) (local.get $dwFlags)
+            (local.get $color) (local.get $zval)
+            (local.get $vx) (local.get $vy) (local.get $vw) (local.get $vh))
+        (then (return)))
+      (call $d3dim_worker_fence)))
     (if (i32.and (local.get $dwFlags) (i32.const 1)) (then
       (call $viewport_fill_rect (local.get $rt) (local.get $vx) (local.get $vy)
         (local.get $vw) (local.get $vh) (local.get $color))))

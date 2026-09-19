@@ -30804,5 +30804,13 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3062062918
+  },
+  {
+    "id": 3684,
+    "name": "D3DRMVectorRotate",
+    "nargs": 4,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1402905313
   }
 ]

@@ -130,6 +130,12 @@ const D3D9_PROGRAMMABLE = hasFlag('d3d9-programmable');
 // the shared memory, the CLI twin of the browser's render Worker. The guest's
 // main instance can Atomics.wait here, so no --threads is needed.
 const D3D_WORKER = hasFlag('d3d-worker');
+// --d3dim-gpu: rasterize D3DIM (DX2-7) triangles on WebGL instead of the
+// software rasterizer. Needs --headless-gl for a context; WAT still does all
+// transform and lighting (lib/d3dim-gpu.js).
+const D3DIM_GPU = hasFlag('d3dim-gpu');
+if (D3DIM_GPU && D3D_WORKER) { console.error('--d3dim-gpu and --d3d-worker are exclusive'); process.exit(2); }
+if (D3DIM_GPU && !hasFlag('headless-gl')) { console.error('--d3dim-gpu needs --headless-gl'); process.exit(2); }
 if (args.some(arg => arg === '--gl-encoder' || arg.startsWith('--gl-encoder='))) {
   throw new Error('--gl-encoder was removed; OpenGL encoding always runs in WAT');
 }
@@ -3850,6 +3856,15 @@ async function main() {
       guestToWasm: pointer => instance.exports.guest_to_wasm(pointer >>> 0) >>> 0,
       getImageBase: () => instance.exports.get_image_base() >>> 0,
     });
+  }
+  if (D3DIM_GPU) {
+    const {D3DIMGpu} = require('../lib/d3dim-gpu');
+    ctx.d3dCommands = new D3DIMGpu({
+      getExports: () => instance.exports,
+      getMemory: () => memory.buffer,
+      createCanvas,
+    });
+    instance.exports.d3dim_gpu_enable(1);
   }
   if (GUEST_PAGE_STATS) {
     if (!instance.exports.reset_guest_page_stats || !instance.exports.get_guest_page_stat) {
@@ -9478,6 +9493,15 @@ if (VERBOSE) {
   // reply resolved in the final batch still flush while the exit path prints.
   if (control) control.close();
   if (cpuProf && cpuProf.session) await cpuProf.stop(MAX_BATCHES);
+  if (ctx.d3dCommands && D3DIM_GPU) {
+    const d = ctx.d3dCommands.snapshot();
+    console.log(`[d3dim-gpu] draws=${d.draws} triangles=${d.triangles} clears=${d.clears} ` +
+      `fallbacks=${d.fallbacks} errors=${d.errors} fences=${d.fences} syncs=${d.syncs} ` +
+      `uploads=${d.uploads} textureUploads=${d.textureUploads} drawMs=${d.drawMs.toFixed(1)} ` +
+      `syncMs=${d.syncMs.toFixed(1)} uploadMs=${d.uploadMs.toFixed(1)} textureMs=${d.textureMs.toFixed(1)}`);
+    ctx.d3dCommands.stop();
+    ctx.d3dCommands = null;
+  }
   if (ctx.d3dCommands) {
     ctx.d3dCommands.fence();
     const d = ctx.d3dCommands.snapshot();
