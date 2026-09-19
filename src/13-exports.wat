@@ -2472,6 +2472,11 @@
     (i32.const 1))
 
   (func (export "thread_send_end") (result i32)
+    (if (i32.and (i32.ne (global.get $send_reply_depth) (i32.const 0))
+                 (i32.eq (global.get $send_reply_depth) (global.get $cross_thread_send_depth)))
+      (then
+        (global.set $eax (global.get $send_reply_value))
+        (global.set $send_reply_depth (i32.const 0))))
     (global.set $sync_msg_depth (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
     (global.set $cross_thread_send_depth
       (i32.sub (global.get $cross_thread_send_depth) (i32.const 1)))

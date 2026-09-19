@@ -167,7 +167,14 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.d3d8_identifier(p), 0);
   assert.strictEqual(e.get_esp() >>> 0, 0x074ff014);
   assert.strictEqual(e.guest_read32(p - 4) >>> 0, 0xdeadbeef);
-  assert.ok(Array.from({ length: 0x42c }, (_, i) => e.guest_read8(p + i)).every(v => v === 0));
+  // Driver[512] and Description[512] name the adapter (launchers list the
+  // Description in their picker); everything after them stays zero, so no
+  // version, PCI id or WHQL level is invented.
+  const cstr = (at) => { let s = ''; for (let c; (c = e.guest_read8(at)); at++) s += String.fromCharCode(c); return s; };
+  assert.strictEqual(cstr(p), 'wine-assembly');
+  assert.strictEqual(cstr(p + 512), 'Wine Assembly D3D8');
+  assert.ok(Array.from({ length: 512 - 14 }, (_, i) => e.guest_read8(p + 14 + i)).every(v => v === 0));
+  assert.ok(Array.from({ length: 0x42c - 1024 }, (_, i) => e.guest_read8(p + 1024 + i)).every(v => v === 0));
   assert.strictEqual(e.guest_read32(p + 0x42c) >>> 0, 0xdeadbeef);
   e.guest_write32(p - 4, 0xdeadbeef); e.guest_write32(p + 0xd4, 0xdeadbeef);
   assert.strictEqual(e.d3d8_caps(p), 0);

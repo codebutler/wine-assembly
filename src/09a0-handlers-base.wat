@@ -101,6 +101,10 @@
     (local.set $entry (global.get $STATIC_SYS_DLL_NAMES))
     (block $done (loop $skip
       (br_if $done (i32.eqz (local.get $idx)))
+      ;; Stop on the terminating empty string: any address at or above the
+      ;; handle base reaches here, and a DLL rebased into a high reservation
+      ;; is a module handle that indexes far past the list.
+      (br_if $done (i32.eqz (i32.load8_u (local.get $entry))))
       (block $adv (loop $chars
         (br_if $adv (i32.eqz (i32.load8_u (local.get $entry))))
         (local.set $entry (i32.add (local.get $entry) (i32.const 1)))

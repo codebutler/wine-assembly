@@ -1171,6 +1171,14 @@
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0032))
       (then (call $io_apc_continue) (return)))
 
+    ;; In-proc CoCreateInstance steps (see $com_activate_begin).
+    (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0033))
+      (then (call $com_activate_after_gco) (return)))
+    (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0034))
+      (then (call $com_activate_after_create) (return)))
+    (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0035))
+      (then (call $com_activate_after_release) (return)))
+
     ;; D3D EnumZBufferFormats continuation — callback returned, finish enumeration
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA000D))
       (then
@@ -1339,7 +1347,10 @@
         (call $host_log_i32 (i32.or (i32.const 0xC0DE0000) (local.get $api_id)))
         (call $host_log (local.get $name_ptr) (i32.const 5)))
       (else
-        (local.set $name_ptr (i32.add (global.get $GUEST_BASE) (i32.add (local.get $name_rva) (i32.const 2))))
+        ;; Through $g2w: a DLL rebased into a sparse reservation keeps its
+        ;; hint/name table outside the direct window.
+        (local.set $name_ptr (call $g2w (i32.add (global.get $image_base)
+          (i32.add (local.get $name_rva) (i32.const 2)))))
         (call $host_log (local.get $name_ptr) (call $strlen (local.get $name_ptr)))))
     ;; Load args from guest stack
     (local.set $arg0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))

@@ -217,7 +217,7 @@
   ;; map is the middle of $D3DIM_AUX. Nothing hand-places bytes in here and no
   ;; offset into it is ever written down — that is the entire point. Growing it
   ;; is a one-line edit and the compiler says exactly how many bytes short it is.
-  (region.declare $WATX_STRING_POOL (size 0x00000400) (align 0x00000010)
+  (region.declare $WATX_STRING_POOL (size 0x00000800) (align 0x00000010)
     (owner "01-header.wat:$WATX_STRING_POOL"))
   (region.declare $DI_DIK_VK_TABLE (size 0x00000100) (align 0x00000100)
     (owner "09a8-handlers-directx.wat:$DI_DIK_VK_TABLE"))
@@ -635,7 +635,7 @@
   ;; relations as inequalities for that reason; that is where they belong.
   (region.declare $COM_WRAPPERS_AUX (size 0x00003EFC) (align 0x00001000)
     (owner "09a8-handlers-directx.wat:$dx_get_wrapper_for_vtbl_locked"))
-  (region.declare $DX_VTBL_REGISTRY (size 0x00000114)
+  (region.declare $DX_VTBL_REGISTRY (size 0x0000011C)
     (owner "09a8-handlers-directx.wat:$dx_vtable_registry_reset"))
   (region.declare $VSOCK_TABLE (size 0x00002000) (align 0x00001000)
     (stride $VSOCK_REC_SIZE (count $VSOCK_MAX))

@@ -2552,15 +2552,26 @@
     ;; DefDlgProc and preserves its unhandled modal fallback. Half-Life
     ;; Uplink's New Game (1016) and Easy (26), plus Jardinains' IDOK-based
     ;; Next/Install pages, all enter nested native work here.
+    ;; WM_MOUSEMOVE and the left-button trio (0x200-0x203) take the same route:
+    ;; DefWindowProc does nothing with a client-area move or left click, so no
+    ;; default processing is lost, and a dialog that draws its own bitmap
+    ;; buttons opens its modals from WM_LBUTTONDOWN (Morrowind's launcher
+    ;; runs DialogBoxIndirectParam for Options there; the bounded wrapper
+    ;; abandoned the modal after 64 rounds and OK could never return).
     (if (i32.eq (local.get $wndproc) (global.get $WNDPROC_DIALOG))
       (then
         (if (i32.or
-              (i32.ge_u
-                (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))
-                (i32.const 0x0400))
-              (i32.eq
-                (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))
-                (i32.const 0x0111)))
+              (i32.or
+                (i32.ge_u
+                  (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))
+                  (i32.const 0x0400))
+                (i32.eq
+                  (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))
+                  (i32.const 0x0111)))
+              (i32.le_u
+                (i32.sub (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))
+                         (i32.const 0x0200))
+                (i32.const 3)))
           (then
             (local.set $wndproc
               (call $dialog_proc_get (call $gl32 (local.get $arg0)))))

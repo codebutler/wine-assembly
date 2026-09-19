@@ -792,6 +792,7 @@
     "10c1-truetype-hint.wat:$tth_abs",
     "12-wsprintf.wat:$fmt_get",
     "13-exports.wat:(export \"test_ole_data_count\")",
-    "13-exports.wat:(export \"test_ole_lockbytes_size\")"
+    "13-exports.wat:(export \"test_ole_lockbytes_size\")",
+    "09a7b-ole.wat:$handle_ftm_unimplemented"
   ]
 }

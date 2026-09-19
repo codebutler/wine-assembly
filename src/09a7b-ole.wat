@@ -1783,11 +1783,140 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
-  ;; Proxy registration requires interpreting the proxy table and publishing
-  ;; its registry entries. Process-local COM does not make these effects optional.
+  ;; "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}" in ANSI at $dst (39 bytes with
+  ;; the NUL), the form RPCRT4 writes into registry key names.
+  (func $ndr_put_guid (param $dst i32) (param $guid i32)
+    (local $o i32) (local $i i32) (local $b i32)
+    (call $gs8 (local.get $dst) (i32.const 0x7B))
+    (local.set $o (i32.const 1))
+    ;; Byte order of the text: Data1 (4 bytes, LE), Data2, Data3 (2 each, LE),
+    ;; then Data4 as stored.
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 16)))
+      (local.set $b (call $gl8 (i32.add (local.get $guid)
+        (if (result i32) (i32.lt_u (local.get $i) (i32.const 4))
+          (then (i32.sub (i32.const 3) (local.get $i)))
+          (else (if (result i32) (i32.lt_u (local.get $i) (i32.const 8))
+            (then (i32.xor (local.get $i) (i32.const 1)))
+            (else (local.get $i))))))))
+      (if (i32.or (i32.or (i32.eq (local.get $i) (i32.const 4)) (i32.eq (local.get $i) (i32.const 6)))
+            (i32.or (i32.eq (local.get $i) (i32.const 8)) (i32.eq (local.get $i) (i32.const 10))))
+        (then
+          (call $gs8 (i32.add (local.get $dst) (local.get $o)) (i32.const 0x2D))
+          (local.set $o (i32.add (local.get $o) (i32.const 1)))))
+      (call $gs8 (i32.add (local.get $dst) (local.get $o))
+        (call $ndr_hex_digit (i32.shr_u (local.get $b) (i32.const 4))))
+      (call $gs8 (i32.add (local.get $dst) (i32.add (local.get $o) (i32.const 1)))
+        (call $ndr_hex_digit (i32.and (local.get $b) (i32.const 15))))
+      (local.set $o (i32.add (local.get $o) (i32.const 2)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (call $gs8 (i32.add (local.get $dst) (local.get $o)) (i32.const 0x7D))
+    (call $gs8 (i32.add (local.get $dst) (i32.add (local.get $o) (i32.const 1))) (i32.const 0)))
+
+  (func $ndr_hex_digit (param $n i32) (result i32)
+    (i32.add (local.get $n) (select (i32.const 0x30) (i32.const 0x37) (i32.lt_u (local.get $n) (i32.const 10)))))
+
+  ;; Create $root\$sub (both guest ANSI strings; $sub may be 0) and set its
+  ;; default value to the ANSI string $val, or to $val_name=$val if given.
+  (func $ndr_reg_sz (param $root i32) (param $sub i32) (param $val_name i32) (param $val i32) (param $tmp i32)
+    (local $hk i32)
+    (if (call $host_reg_create_key (i32.const 0x80000000) (call $g2w (local.get $root))
+          (local.get $tmp) (i32.const 0) (i32.const 0))
+      (then (return)))
+    (local.set $hk (call $gl32 (local.get $tmp)))
+    (if (local.get $sub)
+      (then
+        (drop (call $host_reg_create_key (local.get $hk) (call $g2w (local.get $sub))
+          (local.get $tmp) (i32.const 0) (i32.const 0)))
+        (drop (call $host_reg_close_key (local.get $hk)))
+        (local.set $hk (call $gl32 (local.get $tmp)))))
+    (drop (call $reg_set_value_ex (local.get $hk) (local.get $val_name) (i32.const 1)
+      (local.get $val) (i32.add (call $guest_strlen (local.get $val)) (i32.const 1)) (i32.const 0)))
+    (drop (call $host_reg_close_key (local.get $hk))))
+
+  ;; Copy a NUL-terminated string literal (linear memory) to a guest address.
+  (func $ndr_copy_lit (param $dst i32) (param $lit i32)
+    (local $i i32) (local $ch i32)
+    (block $d (loop $l
+      (local.set $ch (i32.load8_u (i32.add (local.get $lit) (local.get $i))))
+      (call $gs8 (i32.add (local.get $dst) (local.get $i)) (local.get $ch))
+      (br_if $d (i32.eqz (local.get $ch)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))))
+
+  ;; NdrDllRegisterProxy(hDll, pProxyFileList, pclsid) publishes what a MIDL
+  ;; proxy/stub DLL serves: for every interface in every ProxyFileInfo,
+  ;; HKCR\Interface\{iid} = name, \NumMethods, \ProxyStubClsid32 = {clsid};
+  ;; then HKCR\CLSID\{clsid} = PSFactoryBuffer with InprocServer32 = the
+  ;; module path, ThreadingModel Both. A NULL pclsid means the first
+  ;; interface's IID, as in RPCRT4. ProxyFileInfo: +4 pStubVtblList, +8
+  ;; pNamesArray, +20 USHORT TableSize; each CInterfaceStubVtbl opens with
+  ;; {piid, pServerInfo, DispatchTableCount}.
   (func $handle_NdrDllRegisterProxy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (local $buf i32) (local $clsid i32) (local $f i32) (local $info i32) (local $n i32) (local $i i32)
+    (local $stub i32) (local $iid i32) (local $saved_esp i32) (local $key i32) (local $txt i32) (local $tmp i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+    (if (i32.eqz (local.get $arg1)) (then (return)))
+    ;; One scratch block: key (+0, 128), text (+128, 64), HKEY out (+192),
+    ;; module path (+256, 260).
+    (local.set $buf (call $heap_alloc (i32.const 520)))
+    (if (i32.eqz (local.get $buf)) (then (global.set $eax (i32.const 0x8007000E)) (return)))
+    (local.set $key (local.get $buf))
+    (local.set $txt (i32.add (local.get $buf) (i32.const 128)))
+    (local.set $tmp (i32.add (local.get $buf) (i32.const 192)))
+    (local.set $clsid (local.get $arg2))
+    (block $files_done (loop $files
+      (local.set $info (call $gl32 (i32.add (local.get $arg1) (i32.shl (local.get $f) (i32.const 2)))))
+      (br_if $files_done (i32.eqz (local.get $info)))
+      (local.set $n (call $gl16 (i32.add (local.get $info) (i32.const 20))))
+      (local.set $i (i32.const 0))
+      (block $ifs_done (loop $ifs
+        (br_if $ifs_done (i32.ge_u (local.get $i) (local.get $n)))
+        (local.set $stub (call $gl32 (i32.add (call $gl32 (i32.add (local.get $info) (i32.const 4)))
+          (i32.shl (local.get $i) (i32.const 2)))))
+        (local.set $iid (call $gl32 (local.get $stub)))
+        (if (i32.eqz (local.get $clsid)) (then (local.set $clsid (local.get $iid))))
+        (call $ndr_copy_lit (local.get $key) "Interface\\")
+        (call $ndr_put_guid (i32.add (local.get $key) (i32.const 10)) (local.get $iid))
+        (call $ndr_reg_sz (local.get $key) (i32.const 0) (i32.const 0)
+          (call $gl32 (i32.add (call $gl32 (i32.add (local.get $info) (i32.const 8)))
+            (i32.shl (local.get $i) (i32.const 2))))
+          (local.get $tmp))
+        (call $gs8 (i32.add (local.get $txt)
+          (call $write_uint (local.get $txt) (call $gl32 (i32.add (local.get $stub) (i32.const 8)))))
+          (i32.const 0))
+        (call $ndr_copy_lit (i32.add (local.get $buf) (i32.const 256)) "NumMethods")
+        (call $ndr_reg_sz (local.get $key) (i32.add (local.get $buf) (i32.const 256)) (i32.const 0)
+          (local.get $txt) (local.get $tmp))
+        (call $ndr_put_guid (local.get $txt) (local.get $clsid))
+        (call $ndr_copy_lit (i32.add (local.get $buf) (i32.const 256)) "ProxyStubClsid32")
+        (call $ndr_reg_sz (local.get $key) (i32.add (local.get $buf) (i32.const 256)) (i32.const 0)
+          (local.get $txt) (local.get $tmp))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $ifs)))
+      (local.set $f (i32.add (local.get $f) (i32.const 1)))
+      (br $files)))
+    (if (local.get $clsid)
+      (then
+        (call $ndr_copy_lit (local.get $key) "CLSID\\")
+        (call $ndr_put_guid (i32.add (local.get $key) (i32.const 6)) (local.get $clsid))
+        (call $ndr_copy_lit (local.get $txt) "PSFactoryBuffer")
+        (call $ndr_reg_sz (local.get $key) (i32.const 0) (i32.const 0) (local.get $txt) (local.get $tmp))
+        (local.set $saved_esp (global.get $esp))
+        (call $handle_GetModuleFileNameA (local.get $arg0) (i32.add (local.get $buf) (i32.const 256))
+          (i32.const 260) (i32.const 0) (i32.const 0) (i32.const 0))
+        (global.set $esp (local.get $saved_esp))
+        (call $ndr_copy_lit (local.get $txt) "InprocServer32")
+        (call $ndr_reg_sz (local.get $key) (local.get $txt) (i32.const 0)
+          (i32.add (local.get $buf) (i32.const 256)) (local.get $tmp))
+        (call $ndr_copy_lit (i32.add (local.get $txt) (i32.const 16)) "ThreadingModel")
+        (call $ndr_copy_lit (i32.add (local.get $buf) (i32.const 256)) "Both")
+        (call $ndr_reg_sz (local.get $key) (local.get $txt) (i32.add (local.get $txt) (i32.const 16))
+          (i32.add (local.get $buf) (i32.const 256)) (local.get $tmp))))
+    (call $heap_free (local.get $buf))
+    (global.set $eax (i32.const 0)))
 
   ;; Proxy unregistration has no implementation yet; fail explicitly.
   (func $handle_NdrDllUnregisterProxy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2822,6 +2951,112 @@
     (call $gs32 (i32.add (local.get $obj) (i32.const 8)) (i32.const 12))
     (call $gs32 (i32.add (local.get $obj) (i32.const 24)) (i32.const 2)) ;; STGM_READWRITE
     (local.get $obj))
+
+  ;; ============================================================
+  ;; Free-threaded marshaler (CoCreateFreeThreadedMarshaler)
+  ;; ============================================================
+  ;;
+  ;; Object (16 bytes): +0 non-delegating IUnknown vtable, +4 reference
+  ;; count, +8 controlling unknown (the aggregating outer object, or this
+  ;; object's own inner IUnknown when created standalone), +12 IMarshal
+  ;; vtable, so the IMarshal interface pointer is object+12. DirectShow's
+  ;; filters aggregate one in their constructors; nothing in one process
+  ;; marshals across apartments, so the IMarshal methods proper stay
+  ;; fail-fast until something does.
+  (func $handle_CoCreateFreeThreadedMarshaler (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $obj i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (if (i32.eqz (local.get $arg1))
+      (then (global.set $eax (i32.const 0x80070057)) (return))) ;; E_INVALIDARG
+    (call $gs32 (local.get $arg1) (i32.const 0))
+    (local.set $obj (call $heap_alloc (i32.const 16)))
+    (if (i32.eqz (local.get $obj))
+      (then (global.set $eax (i32.const 0x8007000E)) (return))) ;; E_OUTOFMEMORY
+    (call $gs32 (local.get $obj) (global.get $DX_VTBL_FTM_INNER))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 4)) (i32.const 1))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 8))
+      (select (local.get $arg0) (local.get $obj) (i32.ne (local.get $arg0) (i32.const 0))))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 12)) (global.get $DX_VTBL_FTM_MARSHAL))
+    (call $gs32 (local.get $arg1) (local.get $obj))
+    (global.set $eax (i32.const 0)))
+
+  ;; Non-delegating QueryInterface: IUnknown is the inner object, IMarshal
+  ;; {00000003-0000-0000-C000-000000000046} is object+12.
+  (func $ftm_query (param $obj i32) (param $riid i32) (param $ppv i32) (result i32)
+    (if (i32.eqz (local.get $ppv)) (then (return (i32.const 0x80004003))))
+    (call $gs32 (local.get $ppv) (i32.const 0))
+    (if (call $ole_iid_is_com (local.get $riid) (i32.const 0))
+      (then (call $gs32 (local.get $ppv) (local.get $obj)))
+      (else
+        (if (call $ole_iid_is_com (local.get $riid) (i32.const 3))
+          (then (call $gs32 (local.get $ppv) (i32.add (local.get $obj) (i32.const 12))))
+          (else (return (i32.const 0x80004002))))))
+    (drop (call $ftm_addref (local.get $obj)))
+    (i32.const 0))
+
+  (func $ftm_addref (param $obj i32) (result i32)
+    (local $ref i32)
+    (local.set $ref (i32.add (call $gl32 (i32.add (local.get $obj) (i32.const 4))) (i32.const 1)))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 4)) (local.get $ref))
+    (local.get $ref))
+
+  (func $ftm_release (param $obj i32) (result i32)
+    (local $ref i32)
+    (local.set $ref (call $gl32 (i32.add (local.get $obj) (i32.const 4))))
+    (if (i32.eqz (local.get $ref)) (then (return (i32.const 0))))
+    (local.set $ref (i32.sub (local.get $ref) (i32.const 1)))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 4)) (local.get $ref))
+    (if (i32.eqz (local.get $ref)) (then (call $heap_free (local.get $obj))))
+    (local.get $ref))
+
+  (func $handle_IFtmInner_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $ftm_query (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_IFtmInner_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $ftm_addref (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_IFtmInner_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $ftm_release (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; IMarshal's IUnknown methods delegate to the controlling unknown. When
+  ;; that is an aggregating guest object, replace `this` in the caller's
+  ;; frame and tail-jump into the outer's own method: the argument layout is
+  ;; identical, so the outer's stdcall epilogue returns straight to the
+  ;; caller. Returns 1 when it jumped.
+  (func $ftm_delegate (param $this i32) (param $slot i32) (result i32)
+    (local $obj i32) (local $outer i32)
+    (local.set $obj (i32.sub (local.get $this) (i32.const 12)))
+    (local.set $outer (call $gl32 (i32.add (local.get $obj) (i32.const 8))))
+    (if (i32.eq (local.get $outer) (local.get $obj)) (then (return (i32.const 0))))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $outer))
+    (global.set $eip (call $gl32 (i32.add (call $gl32 (local.get $outer))
+                                          (i32.shl (local.get $slot) (i32.const 2)))))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $steps (i32.const 0))
+    (i32.const 1))
+
+  (func $handle_IFtmMarshal_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $ftm_delegate (local.get $arg0) (i32.const 0)) (then (return)))
+    (global.set $eax (call $ftm_query (i32.sub (local.get $arg0) (i32.const 12)) (local.get $arg1) (local.get $arg2)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_IFtmMarshal_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $ftm_delegate (local.get $arg0) (i32.const 1)) (then (return)))
+    (global.set $eax (call $ftm_addref (i32.sub (local.get $arg0) (i32.const 12))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_IFtmMarshal_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $ftm_delegate (local.get $arg0) (i32.const 2)) (then (return)))
+    (global.set $eax (call $ftm_release (i32.sub (local.get $arg0) (i32.const 12))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; GetUnmarshalClass, GetMarshalSizeMax, MarshalInterface, UnmarshalInterface,
+  ;; ReleaseMarshalData and DisconnectObject all alias here (api_table.json).
+  (func $handle_ftm_unimplemented (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; ============================================================
   ;; IFont — OLE Automation font object (OleCreateFontIndirect)

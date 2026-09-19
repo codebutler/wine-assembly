@@ -286,8 +286,16 @@ const digest = crypto.createHash('sha256')
 // TrueType outline metrics and bounded name data instead of always failing.
 // 2026-09-15: 266 -> 265. D3D8/9 ValidateDevice now validates the current
 // one-pass pipeline and writes pNumPasses instead of returning false success.
-const EXPECTED_COUNT = 265;
-const EXPECTED_SHA256 = '10379259436b1407ac866ac535602fe70f508a850a16e3b65720ed1ef4250dcf';
+// 2026-09-18: 265 -> 266. SwapMouseButton records the primary-button setting,
+// returns the previous one, and SM_SWAPBUTTON reads it back. Morrowind calls
+// it twice at startup to read and restore the setting; that round trip is the
+// whole contract a guest can observe.
+// 2026-09-18: 266 -> 267. IDirect3DDevice8_SetPixelShader validates: D3D8
+// CreatePixelShader fails loudly, so 0 (fixed function) is the only handle
+// that can exist; it succeeds and every other handle is D3DERR_INVALIDCALL.
+// GetPixelShader reports that same 0. Morrowind saves and restores it.
+const EXPECTED_COUNT = 267;
+const EXPECTED_SHA256 = '09c872142087ff24efe76e843c73f4c3d20b9b3645020e6d4d8498e1980df1c0';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

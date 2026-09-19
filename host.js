@@ -3119,6 +3119,7 @@ class WineAssembly {
     for (const thread of waiting) {
       const exports = thread.instance && thread.instance.exports;
       if (!exports) continue;
+      manager.adoptMainGlobals(exports);
       await ProcessBoot.handleLoadLibraryYield({
         exports,
         memoryBuffer: this.memory.buffer,
@@ -3130,7 +3131,29 @@ class WineAssembly {
       });
       manager.publishWorkerGlobals(exports);
     }
-    return waiting.length;
+    // The COM in-proc server yield is the same shape: DirectShow creates its
+    // filters on its own worker thread.
+    const comWaiting = typeof manager.threadsAwaitingComDll === 'function'
+      ? manager.threadsAwaitingComDll() : [];
+    for (const thread of comWaiting) {
+      const exports = thread.instance && thread.instance.exports;
+      if (!exports) continue;
+      manager.adoptMainGlobals(exports);
+      await ProcessBoot.handleComDllYield({
+        exports,
+        memoryBuffer: this.memory.buffer,
+        exeBytes: this._exeBytes || null,
+        resourceHost: this,
+        log: console.log,
+        advanceGuestTime: ms => this._advanceGuestTickMs(ms,
+          this.hostCtx && this.hostCtx.sharedAudio),
+        findDll: (fileName, fullName) => this._findDllBytes(fileName, fullName, {
+          vfsPaths: [fullName.toLowerCase(), 'c:\\' + fileName, 'c:\\plugins\\' + fileName],
+        }),
+      });
+      manager.publishWorkerGlobals(exports);
+    }
+    return waiting.length + comWaiting.length;
   }
 
   // Finish (or cancel) a deferred last-window teardown. Called once per run

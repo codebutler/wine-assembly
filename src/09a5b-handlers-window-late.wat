@@ -2511,6 +2511,25 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
+  ;; ReplyMessage(lResult). Outside a SendMessage from another thread it
+  ;; returns FALSE, which is the answer DirectShow's worker windows get for
+  ;; their posted messages. Inside one it fixes the LRESULT the sender will
+  ;; receive. The sender is still released only when the WndProc returns —
+  ;; every host driver runs the receiving WndProc to completion — so a
+  ;; receiver that then waits on its sender would deadlock here where it
+  ;; would not on Windows; that has not been seen yet.
+  (func $handle_ReplyMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (if (i32.or (i32.eqz (global.get $cross_thread_send_depth))
+                (i32.eq (global.get $send_reply_depth) (global.get $cross_thread_send_depth)))
+      (then (global.set $eax (i32.const 0)) (return)))
+    ;; One slot: a nested send replying while an outer reply is pending.
+    (if (global.get $send_reply_depth)
+      (then (call $crash_unimplemented (local.get $name_ptr))))
+    (global.set $send_reply_depth (global.get $cross_thread_send_depth))
+    (global.set $send_reply_value (local.get $arg0))
+    (global.set $eax (i32.const 1)))
+
   ;; EnumWindows(lpEnumFunc, lParam) — enumerate top-level windows through the
   ;; same CACA002B suspended walk used by EnumChildWindows. A parent sentinel of
   ;; zero selects top-level records instead of descendant records.
@@ -3051,5 +3070,17 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; Returns the input unchanged (char or pointer).
   (func $handle_CharUpperA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $char_upper (local.get $arg0) (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+  )
+
+  ;; SwapMouseButton(fSwap) sets the user's primary-button setting and returns
+  ;; whether the buttons were swapped before the call. SM_SWAPBUTTON reads the
+  ;; same state. The host pointer still delivers the physical left button as
+  ;; WM_LBUTTONDOWN; games call this to read the setting (and restore it), not
+  ;; to remap a mouse the emulator's user is holding.
+  (global $mouse_buttons_swapped (mut i32) (i32.const 0))
+  (func $handle_SwapMouseButton (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (global.get $mouse_buttons_swapped))
+    (global.set $mouse_buttons_swapped (i32.ne (local.get $arg0) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )

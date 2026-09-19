@@ -72,9 +72,21 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
     (if (i32.or (local.get $arg1) (i32.eqz (local.get $arg3)))
       (then (global.set $eax (i32.const 0x8876086c)) (return)))
-    ;; D3DADAPTER_IDENTIFIER8 is 0x42c bytes.  A zeroed identifier is valid
-    ;; enough for compatibility probes and avoids inventing PCI/WHQL data.
-    (call $zero_memory (call $g2w (local.get $arg3)) (i32.const 0x42c))
+    ;; D3DADAPTER_IDENTIFIER8 is 0x42c bytes: Driver[512], Description[512],
+    ;; then version, PCI ids, GUID and WHQL level, all left zero so no vendor
+    ;; or certification is invented.  The two names match D3D9's identity;
+    ;; launchers list Description in their adapter picker.
+    (local.set $arg4 (call $g2w (local.get $arg3)))
+    (call $zero_memory (local.get $arg4) (i32.const 0x42c))
+    (i32.store (local.get $arg4) (i32.const 0x656e6977))            ;; "wine"
+    (i32.store offset=4 (local.get $arg4) (i32.const 0x7373612d))   ;; "-ass"
+    (i32.store offset=8 (local.get $arg4) (i32.const 0x6c626d65))   ;; "embl"
+    (i32.store offset=12 (local.get $arg4) (i32.const 0x00000079))  ;; "y"
+    (i32.store offset=512 (local.get $arg4) (i32.const 0x656e6957)) ;; "Wine"
+    (i32.store offset=516 (local.get $arg4) (i32.const 0x73734120)) ;; " Ass"
+    (i32.store offset=520 (local.get $arg4) (i32.const 0x6c626d65)) ;; "embl"
+    (i32.store offset=524 (local.get $arg4) (i32.const 0x33442079)) ;; "y D3"
+    (i32.store offset=528 (local.get $arg4) (i32.const 0x003844))   ;; "D8"
     (global.set $eax (i32.const 0)))
 
   (func $handle_IDirect3D8_GetAdapterModeCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -124,23 +136,48 @@
     (global.set $eax (i32.const 0)))
 
   (func $handle_IDirect3D8_CheckDeviceFormat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $rtype i32) (local $format i32)
+    (local $rtype i32) (local $format i32) (local $ok i32)
     ;; RType and CheckFormat are arguments six and seven including this.
     (local.set $rtype (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
     (local.set $format (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
     (if (i32.or (local.get $arg1) (i32.ne (local.get $arg2) (i32.const 1))) (then
       (global.set $eax (i32.const 0x8876086c)) (return))) ;; D3DERR_INVALIDCALL
-    ;; Only X8R8G8B8 is exposed as an adapter mode.  Of the D3D8 resource
-    ;; families, only ordinary 2D textures currently have a complete create,
-    ;; lock and sampling path.  Ask the same format gate CreateTexture uses so
-    ;; capability negotiation can never promise a texture it then refuses.
-    (if (i32.or (i32.ne (local.get $arg3) (i32.const 22))
-          (i32.or (local.get $arg4) (i32.ne (local.get $rtype) (i32.const 3)))) (then
-      (global.set $eax (i32.const 0x8876086a)) (return))) ;; D3DERR_NOTAVAILABLE
-    (if (i32.eqz (call $d3d9_texture_format_supported (local.get $format))) (then
-      (global.set $eax (i32.const 0x8876086a)) (return)))
-    (global.set $eax (i32.const 0)))
+    ;; Only X8R8G8B8 is exposed as an adapter mode.  Each answer below asks the
+    ;; same format gate the matching create path uses, so capability
+    ;; negotiation can never promise a resource that create then refuses.
+    ;;   Usage 0, RType TEXTURE (3): ordinary 2D textures.
+    ;;   D3DUSAGE_RENDERTARGET (1), RType SURFACE (1): the colour targets the
+    ;;     back buffer and CreateRenderTarget accept.
+    ;;   D3DUSAGE_DEPTHSTENCIL (2), RType SURFACE (1): the depth formats the
+    ;;     auto depth buffer and CreateDepthStencilSurface accept.
+    ;; NetImmerse (Morrowind) builds its frame-buffer and depth/stencil mode
+    ;; lists from the last two; refusing them left both lists empty and the
+    ;; renderer failed with "Unknown stencil mode format".
+    (if (i32.eq (local.get $arg3) (i32.const 22)) (then
+      (if (i32.and (i32.eqz (local.get $arg4)) (i32.eq (local.get $rtype) (i32.const 3)))
+        (then (local.set $ok (call $d3d9_texture_format_supported (local.get $format)))))
+      (if (i32.and (i32.eq (local.get $arg4) (i32.const 1)) (i32.eq (local.get $rtype) (i32.const 1)))
+        (then (local.set $ok (call $d3d9_color_target_format (local.get $format)))))
+      (if (i32.and (i32.eq (local.get $arg4) (i32.const 2)) (i32.eq (local.get $rtype) (i32.const 1)))
+        (then (local.set $ok (call $d3d9_depth_format (local.get $format)))))))
+    (global.set $eax (select (i32.const 0) (i32.const 0x8876086a) (local.get $ok)))) ;; D3DERR_NOTAVAILABLE
+
+  ;; IDirect3D8_CheckDepthStencilMatch(this, Adapter, DeviceType, AdapterFormat,
+  ;; RenderTargetFormat, DepthStencilFormat) -- 6 args.  Same answer as D3D9's:
+  ;; any colour target the backend presents pairs with any depth format it
+  ;; creates.
+  (func $handle_IDirect3D8_CheckDepthStencilMatch (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $depth_format i32)
+    (local.set $depth_format (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (if (i32.or (local.get $arg1) (i32.ne (local.get $arg2) (i32.const 1))) (then
+      (global.set $eax (i32.const 0x8876086c)) (return))) ;; D3DERR_INVALIDCALL
+    (global.set $eax
+      (select (i32.const 0) (i32.const 0x8876086a) ;; D3DERR_NOTAVAILABLE
+        (i32.and (i32.eq (local.get $arg3) (i32.const 22))
+          (i32.and (call $d3d9_color_target_format (local.get $arg4))
+                   (call $d3d9_depth_format (local.get $depth_format)))))))
 
   (func $handle_IDirect3D8_CheckDeviceMultiSampleType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $multisample i32)
@@ -299,7 +336,18 @@
     (call $handle_IDirect3DDevice9_GetBackBuffer
       (local.get $arg0) (i32.const 0) (local.get $arg1)
       (local.get $arg2) (local.get $arg3) (local.get $name_ptr))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4))))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $d3d8_surface_out (local.get $arg3)))
+
+  ;; D3D8's gamma ramp belongs to the device's implicit swap chain; D3D9
+  ;; added the swap-chain index as the first argument.
+  (func $handle_IDirect3DDevice8_SetGammaRamp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $d3d9_gamma_ramp (local.get $arg0) (i32.const 0) (local.get $arg2) (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_IDirect3DDevice8_GetGammaRamp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $d3d9_gamma_ramp (local.get $arg0) (i32.const 0) (local.get $arg1) (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; D3D8 overloads SetVertexShader: fixed-function declarations are passed as
   ;; an FVF DWORD, while programmable shaders use handles returned by its
@@ -315,6 +363,35 @@
     (call $handle_IDirect3DDevice9_SetFVF
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  ;; GetVertexShader returns whatever SetVertexShader last bound: an FVF code
+  ;; or a declaration handle. The backend keeps the two mutually exclusive
+  ;; (binding one zeroes the other), so the non-zero FVF wins, else the handle.
+  ;; D3D8 shader handles are not reference counted.
+  (func $handle_IDirect3DDevice8_GetVertexShader (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $state i32) (local $fvf i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (global.set $eax (i32.const 0x8876086c))
+    (local.set $state (call $d3d9_program_state (local.get $arg0)))
+    (if (i32.or (i32.eqz (local.get $state)) (i32.eqz (local.get $arg1))) (then (return)))
+    (local.set $fvf (call $gl32 (i32.add (local.get $state) (i32.const 12))))
+    (call $gs32 (local.get $arg1)
+      (select (local.get $fvf) (call $gl32 (i32.add (local.get $state) (i32.const 8)))
+        (i32.ne (local.get $fvf) (i32.const 0))))
+    (global.set $eax (i32.const 0)))
+
+  ;; CreatePixelShader fails loudly, so no D3D8 pixel-shader handle can exist:
+  ;; the device is always on the fixed-function pixel pipeline, handle 0.
+  ;; Binding 0 is therefore the only valid SetPixelShader.
+  (func $handle_IDirect3DDevice8_GetPixelShader (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (if (i32.eqz (local.get $arg1)) (then (global.set $eax (i32.const 0x8876086c)) (return)))
+    (call $gs32 (local.get $arg1) (i32.const 0))
+    (global.set $eax (i32.const 0)))
+
+  (func $handle_IDirect3DDevice8_SetPixelShader (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (global.set $eax (select (i32.const 0x8876086c) (i32.const 0) (local.get $arg1))))
 
   ;; D3D9 inserted OffsetInBytes before Stride. D3D8 streams always begin at
   ;; byte zero, so supply that field and correct the delegated stack cleanup
@@ -378,7 +455,7 @@
   ;; D3D8 exposes only render target zero and binds its color/depth pair in a
   ;; single call. D3D9 split those operations and added a target index.
   (func $handle_IDirect3DDevice8_SetRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_color_binding (local.get $arg0) (i32.const 0) (local.get $arg1))
+    (call $d3d9_color_binding (local.get $arg0) (i32.const 0) (call $d3d8_surface_in (local.get $arg1)))
     (if (i32.eqz (global.get $eax))
       (then (call $d3d9_depth_binding (local.get $arg0) (local.get $arg2) (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
@@ -387,7 +464,164 @@
     (call $handle_IDirect3DDevice9_GetRenderTarget
       (local.get $arg0) (i32.const 0) (local.get $arg1)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4))))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $d3d8_surface_out (local.get $arg1)))
+
+  ;; D3D8 surface creation has no MultisampleQuality, Discard or shared-handle
+  ;; arguments. The backend renders single-sampled only, as its D3D9 creators
+  ;; already require.
+  ;; CreateRenderTarget(this, Width, Height, Format, MultiSample, Lockable, pp)
+  (func $handle_IDirect3DDevice8_CreateRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $out i32)
+    (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $eax (i32.const 0x8876086c))
+    (if (i32.eqz (local.get $arg4)) (then
+      (call $d3d9_color_create (local.get $arg0) (local.get $arg1) (local.get $arg2)
+        (local.get $arg3) (i32.const 0) (i32.const 1)
+        (i32.ne (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 0))
+        (local.get $out))
+      (call $d3d8_surface_out (local.get $out))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+
+  ;; CreateDepthStencilSurface(this, Width, Height, Format, MultiSample, pp)
+  (func $handle_IDirect3DDevice8_CreateDepthStencilSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $out i32) (local $surface i32)
+    (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (global.set $eax (i32.const 0x8876086c))
+    (if (i32.eqz (local.get $out)) (then (return)))
+    (call $gs32 (local.get $out) (i32.const 0))
+    (if (local.get $arg4) (then (return)))
+    (local.set $surface (call $d3d9_depth_new (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (i32.const 0) (i32.const 1)))
+    (if (i32.eqz (local.get $surface)) (then (return)))
+    (call $gs32 (local.get $out) (local.get $surface))
+    (global.set $eax (i32.const 0))
+    (call $d3d8_surface_out (local.get $out)))
+
+  ;; CreateImageSurface(this, Width, Height, Format, pp): a lockable
+  ;; system-memory surface, D3D9's CreateOffscreenPlainSurface in SYSTEMMEM.
+  (func $handle_IDirect3DDevice8_CreateImageSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $d3d9_color_create (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 2) (i32.const 0) (i32.const 1) (local.get $arg4))
+    (call $d3d8_surface_out (local.get $arg4))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+
+  (func $handle_IDirect3DDevice8_GetDepthStencilSurface(param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DDevice9_GetDepthStencilSurface
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $d3d8_surface_out (local.get $arg1)))
+
+  ;; ── IDirect3DSurface8 ──────────────────────────────────────────────
+  ;; The D3D9 backend owns every surface. Heap surfaces (color, depth and
+  ;; texture levels) are recognised by the tag at +12, so a D3D8 caller can
+  ;; be handed the same object with the D3D8 vtable written in place. The
+  ;; implicit back buffer is an 8-byte COM wrapper whose identity the backend
+  ;; checks against its SURF9 wrapper, so D3D8 gets an aux wrapper on the same
+  ;; slot instead, and every D3D8 entry point maps it back before use.
+  (global $DX_VTBL_D3DSURF8 (mut i32) (i32.const 0))
+
+  (func $d3d8_surface_vtbl (result i32)
+    (if (i32.eqz (global.get $DX_VTBL_D3DSURF8)) (then
+      (global.set $DX_VTBL_D3DSURF8
+        (call $init_com_vtable (global.get $API_ID_IDirect3DSurface8_BASE) (i32.const 11)))))
+    (global.get $DX_VTBL_D3DSURF8))
+
+  (func $d3d8_is_heap_surface (param $surface i32) (result i32)
+    (i32.or (call $d3d9_is_texture_surface (local.get $surface))
+      (i32.or (call $d3d9_is_color_surface (local.get $surface))
+              (call $d3d9_is_depth_surface (local.get $surface)))))
+
+  ;; After a successful D3D9 call stored a surface at `out`, give the caller
+  ;; the D3D8 view of it.
+  (func $d3d8_surface_out (param $out i32)
+    (local $surface i32)
+    (if (i32.or (i32.ne (global.get $eax) (i32.const 0)) (i32.eqz (local.get $out))) (then (return)))
+    (local.set $surface (call $gl32 (local.get $out)))
+    (if (i32.eqz (local.get $surface)) (then (return)))
+    (if (call $d3d8_is_heap_surface (local.get $surface)) (then
+      (call $gs32 (local.get $surface) (call $d3d8_surface_vtbl))
+      (return)))
+    (call $gs32 (local.get $out)
+      (call $dx_get_wrapper_for_vtbl
+        (call $dx_slot_of (call $dx_from_this (local.get $surface)))
+        (call $d3d8_surface_vtbl))))
+
+  ;; The D3D9 identity of a surface pointer a D3D8 caller passed in. Keyed on
+  ;; "not the SURF9 wrapper" rather than on this instance's SURF8 vtable, so
+  ;; an aux wrapper made by another guest thread's instance maps back too.
+  (func $d3d8_surface_in (param $surface i32) (result i32)
+    (if (i32.eqz (local.get $surface)) (then (return (i32.const 0))))
+    (if (call $d3d8_is_heap_surface (local.get $surface)) (then (return (local.get $surface))))
+    (if (i32.eq (call $gl32 (local.get $surface)) (global.get $DX_VTBL_D3DSURF9))
+      (then (return (local.get $surface))))
+    (call $dx_get_wrapper_for_vtbl
+      (call $dx_slot_of (call $dx_from_this (local.get $surface)))
+      (global.get $DX_VTBL_D3DSURF9)))
+
+  ;; D3D9 SURFACE_DESC: Format Type Usage Pool MultiSampleType
+  ;; MultiSampleQuality Width Height. D3D8 replaces the fifth field with the
+  ;; surface's byte Size and moves MultiSampleType into the sixth.
+  (func $d3d8_desc_from_d3d9 (param $desc i32)
+    (local $wa i32) (local $format i32) (local $width i32) (local $height i32) (local $size i32)
+    (if (i32.or (i32.ne (global.get $eax) (i32.const 0)) (i32.eqz (local.get $desc))) (then (return)))
+    (local.set $wa (call $g2w (local.get $desc)))
+    (local.set $format (i32.load (local.get $wa)))
+    (local.set $width (i32.load offset=24 (local.get $wa)))
+    (local.set $height (i32.load offset=28 (local.get $wa)))
+    (local.set $size
+      (if (result i32) (i32.eq (local.get $format) (i32.const 80)) ;; D16
+        (then (i32.mul (i32.mul (local.get $width) (local.get $height)) (i32.const 2)))
+        (else (i32.mul (call $d3d9_texture_pitch (local.get $width) (local.get $format))
+                       (call $d3d9_texture_rows (local.get $height) (local.get $format))))))
+    (i32.store offset=20 (local.get $wa) (i32.load offset=16 (local.get $wa)))
+    (i32.store offset=16 (local.get $wa) (local.get $size)))
+
+  (func $handle_IDirect3DSurface8_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_QueryInterface (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_AddRef (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_Release (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_GetDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_GetDevice (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_SetPrivateData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_SetPrivateData (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_GetPrivateData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_GetPrivateData (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_FreePrivateData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_FreePrivateData (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_GetContainer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_GetContainer (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_GetDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_GetDesc (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $d3d8_desc_from_d3d9 (local.get $arg1)))
+  (func $handle_IDirect3DSurface8_LockRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_LockRect (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $handle_IDirect3DSurface8_UnlockRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DSurface9_UnlockRect (call $d3d8_surface_in (local.get $arg0))
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  (func $handle_IDirect3DTexture8_GetLevelDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DTexture9_GetLevelDesc (local.get $arg0)
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $d3d8_desc_from_d3d9 (local.get $arg2)))
+
+  (func $handle_IDirect3DTexture8_GetSurfaceLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DTexture9_GetSurfaceLevel (local.get $arg0)
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $d3d8_surface_out (local.get $arg2)))
 
   ;; D3D8 CreateTexture is D3D9 CreateTexture without the final shared-handle
   ;; parameter. Feed its otherwise identical fields to the common allocator.

@@ -189,9 +189,11 @@
             (local.set $fi (i32.add (local.get $fi) (local.get $unit)))
             (local.set $ch (call $fmt_get (i32.add (local.get $fmt) (local.get $fi)) (local.get $wide)))
             (br $pl)))))
-      ;; Length modifier: Win32 wsprintf accepts h/l/w. It only changes anything
-      ;; on the W side, where %hs names an ANSI source string (Media Player uses
-      ;; %ws); the A side has always read 8-bit sources regardless.
+      ;; Length modifier: Win32 wsprintf accepts h/l/w, and on a string it names
+      ;; the SOURCE width whichever side is formatting: %hs is ANSI and %ls/%ws
+      ;; are wide on both. wsprintfA("CLSID\\%ls", StringFromGUID2 output) is how
+      ;; quartz.dll's DllRegisterServer builds every key path (Media Player uses
+      ;; %ws on the W side).
       (if (i32.or (i32.eq (local.get $ch) (i32.const 108))
           (i32.or (i32.eq (local.get $ch) (i32.const 104)) (i32.eq (local.get $ch) (i32.const 119))))
         (then
@@ -244,9 +246,9 @@
               (select (i32.const 0xFFFF) (i32.const 0xFF) (local.get $wide))))
           (local.set $oi (i32.add (local.get $oi) (local.get $unit)))
           (br $loop)))
-      ;; 's': string. On the W side %hs reads an ANSI source; the A side always
-      ;; reads bytes.
-      (if (i32.eq (local.get $ch) (i32.const 115))
+      ;; 's'/'S': string. A bare %s matches the output width and %S is the
+      ;; other width; an h/l/w prefix overrides either.
+      (if (i32.or (i32.eq (local.get $ch) (i32.const 115)) (i32.eq (local.get $ch) (i32.const 83)))
         (then
           (if (i32.eqz (local.get $arg))
             (then
@@ -265,8 +267,12 @@
               (local.set $oi (i32.add (local.get $oi) (local.get $unit))))
             (else
               (local.set $src_wide
-                (i32.and (local.get $wide)
-                         (i32.ne (local.get $length) (i32.const 104)))) ;; 'h'
+                (if (result i32) (i32.eq (local.get $length) (i32.const 104)) ;; 'h'
+                  (then (i32.const 0))
+                  (else (if (result i32) (i32.ne (local.get $length) (i32.const 0)) ;; 'l'/'w'
+                    (then (i32.const 1))
+                    (else (i32.xor (i32.ne (local.get $wide) (i32.const 0))
+                                   (i32.eq (local.get $ch) (i32.const 83)))))))) ;; 'S'
               (local.set $src_unit (call $fmt_unit (local.get $src_wide)))
               (local.set $sptr (local.get $arg))
               (block $sd (loop $sl

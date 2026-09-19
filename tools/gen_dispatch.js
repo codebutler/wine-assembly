@@ -60,6 +60,7 @@ const namedApiIds = [
   ['IDirect3DQuery9_QueryInterface', 'API_ID_IDirect3DQuery9_BASE'],
   ['IDirect3DCubeTexture9_QueryInterface', 'API_ID_IDirect3DCubeTexture9_BASE'],
   ['IDirect3DTexture8_QueryInterface', 'API_ID_IDirect3DTexture8_BASE'],
+  ['IDirect3DSurface8_QueryInterface', 'API_ID_IDirect3DSurface8_BASE'],
 ];
 
 out.push('  ;; Named API ids consumed by hand-written dispatch fast paths.');
@@ -414,6 +415,11 @@ comInterfaces.push({ prefix: 'IDirectPlayLobby3', global: 'DX_VTBL_DPLAYLOBBY3',
 // established worker-thread vtable offset moves.
 const { vtableGlobals: d3d8Vtables } = require('./d3d8-methods');
 for (const v of d3d8Vtables) comInterfaces.push(v);
+
+// Free-threaded marshaler (CoCreateFreeThreadedMarshaler): its non-delegating
+// IUnknown and its IMarshal. Tail again, same registry-offset reason.
+comInterfaces.push({ prefix: 'IFtmInner', global: 'DX_VTBL_FTM_INNER' });
+comInterfaces.push({ prefix: 'IFtmMarshal', global: 'DX_VTBL_FTM_MARSHAL' });
 
 // Build a map of prefix → { startId, count } from the api_table
 const byName = new Map(apiTable.map(a => [a.name, a]));

@@ -2901,6 +2901,11 @@
   ;; InSendMessage is TRUE only for SendMessage from another thread; an
   ;; ordinary same-thread recursive SendMessage must still report FALSE.
   (global $cross_thread_send_depth (mut i32) (i32.const 0))
+  ;; ReplyMessage inside a cross-thread send: the depth it answered (0 = none)
+  ;; and the LRESULT it supplied, which thread_send_end hands the sender in
+  ;; place of the WndProc's own return value.
+  (global $send_reply_depth (mut i32) (i32.const 0))
+  (global $send_reply_value (mut i32) (i32.const 0))
   (global $cbt_hook_ret_thunk (mut i32) (i32.const 0)) ;; CBT hook → WM_CREATE continuation (CACA0002)
   (global $child_cbt_ret_thunk (mut i32) (i32.const 0)) ;; Child CBT hook → dispatch WM_CREATE (CACA0026)
   (global $child_create_ret_thunk (mut i32) (i32.const 0)) ;; Child WM_CREATE returned → hand hwnd back (CACA0027)
@@ -3632,6 +3637,11 @@
   (global $io_apc_head (mut i32) (i32.const 0))
   (global $io_apc_tail (mut i32) (i32.const 0))
   (global $io_apc_thunk (mut i32) (i32.const 0)) ;; CACA0032
+  ;; In-proc CoCreateInstance as guest calls: DllGetClassObject returns to
+  ;; CACA0033, IClassFactory::CreateInstance to CACA0034, Release to CACA0035.
+  (global $com_gco_thunk (mut i32) (i32.const 0))
+  (global $com_create_thunk (mut i32) (i32.const 0))
+  (global $com_release_thunk (mut i32) (i32.const 0))
   (global $enum_rsrc_module  (mut i32) (i32.const 0))
   (global $enum_rsrc_type    (mut i32) (i32.const 0))
   (global $enum_rsrc_cb      (mut i32) (i32.const 0))

@@ -9181,6 +9181,7 @@ async function main() {
       // main, because the next slice copies them the other way.
       for (const thread of threadManager.threadsAwaitingLoadLibrary()) {
         const e = thread.instance.exports;
+        threadManager.adoptMainGlobals(e);
         if (TRACE_YIELD) {
           console.log(`[yield] T${thread.tid} reason=5 (load_library) eip=${hex(e.get_eip())} esp=${hex(e.get_esp())}`);
         }
@@ -9190,6 +9191,24 @@ async function main() {
           resourceHost: ctx,
           log: console.log,
           trace: TRACE_YIELD ? console.log : null,
+          findDll: findRuntimeDllBytes,
+        });
+        threadManager.publishWorkerGlobals(e);
+      }
+      // And a worker whose CoCreateInstance needs an in-proc server: clearing
+      // the yield re-enters its handler, which then finds the class loaded.
+      for (const thread of threadManager.threadsAwaitingComDll()) {
+        const e = thread.instance.exports;
+        threadManager.adoptMainGlobals(e);
+        if (TRACE_YIELD) {
+          console.log(`[yield] T${thread.tid} reason=3 (com_load_dll) eip=${hex(e.get_eip())} esp=${hex(e.get_esp())}`);
+        }
+        await handleComDllYield({
+          exports: e,
+          memoryBuffer: memory.buffer,
+          exeBytes: new Uint8Array(exeBytes),
+          resourceHost: ctx,
+          log: console.log,
           findDll: findRuntimeDllBytes,
         });
         threadManager.publishWorkerGlobals(e);

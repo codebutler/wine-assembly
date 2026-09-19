@@ -1341,6 +1341,8 @@
       (then (return (i32.const 2))))
     (if (i32.eq (local.get $index) (i32.const 46)) ;; SM_CYEDGE
       (then (return (i32.const 2))))
+    (if (i32.eq (local.get $index) (i32.const 23)) ;; SM_SWAPBUTTON
+      (then (return (global.get $mouse_buttons_swapped))))
     ;; Native Win98 COMCTL32 uses the small-icon metrics to size image lists.
     ;; Returning zero makes ImageList_Create fail before controls can populate.
     (if (i32.eq (local.get $index) (i32.const 49)) ;; SM_CXSMICON

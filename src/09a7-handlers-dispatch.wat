@@ -2024,6 +2024,99 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
+  ;; ---- In-proc activation as guest calls ----------------------------------
+  ;; A class factory's CreateInstance is free to create threads and wait on
+  ;; them (quartz's filter graph does), which a nested host-driven run cannot
+  ;; survive: the wait yields, the nested run gives up, and the activation
+  ;; reads as E_FAIL. So CoCreateInstance calls DllGetClassObject,
+  ;; CreateInstance and Release through return thunks, with every piece of
+  ;; state in a frame on the guest stack — activations nest, since a
+  ;; constructor may itself call CoCreateInstance.
+  ;;
+  ;; E = ESP at entry: [E] return address, [E+4..E+20] rclsid, pUnkOuter,
+  ;; dwClsContext, riid, ppv. The frame F = E-20 holds the factory pointer at
+  ;; F and IID_IClassFactory at F+4 (reused for the CreateInstance HRESULT).
+  ;; Each callee is stdcall, so ESP is back at F whenever a thunk runs.
+  (func $com_cont_thunk (param $marker i32) (result i32)
+    (local $wa i32) (local $guest i32)
+    (global.set $num_thunks (call $thunk_reserve))
+    (local.set $wa (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $wa) (local.get $marker))
+    (i32.store offset=4 (local.get $wa) (i32.const 0))
+    (local.set $guest (i32.add (i32.sub (local.get $wa) (global.get $GUEST_BASE)) (global.get $image_base)))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end)
+    (local.get $guest))
+
+  (func $com_jump (param $target i32)
+    (global.set $eip (local.get $target))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $steps (i32.const 0)))
+
+  (func $com_activate_begin (param $gco i32) (param $rclsid i32) (param $ppv i32)
+    (local $f i32)
+    (if (i32.eqz (global.get $com_gco_thunk))
+      (then
+        (global.set $com_gco_thunk (call $com_cont_thunk (i32.const 0xCACA0033)))
+        (global.set $com_create_thunk (call $com_cont_thunk (i32.const 0xCACA0034)))
+        (global.set $com_release_thunk (call $com_cont_thunk (i32.const 0xCACA0035)))))
+    (call $gs32 (local.get $ppv) (i32.const 0))
+    (local.set $f (i32.sub (global.get $esp) (i32.const 20)))
+    (call $gs32 (local.get $f) (i32.const 0))
+    ;; IID_IClassFactory {00000001-0000-0000-C000-000000000046}
+    (call $gs32 (i32.add (local.get $f) (i32.const 4)) (i32.const 1))
+    (call $gs32 (i32.add (local.get $f) (i32.const 8)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $f) (i32.const 12)) (i32.const 0xC0))
+    (call $gs32 (i32.add (local.get $f) (i32.const 16)) (i32.const 0x46000000))
+    (global.set $esp (local.get $f))
+    (call $io_apc_push (local.get $f))
+    (call $io_apc_push (i32.add (local.get $f) (i32.const 4)))
+    (call $io_apc_push (local.get $rclsid))
+    (call $io_apc_push (global.get $com_gco_thunk))
+    (call $com_jump (local.get $gco)))
+
+  (func $com_activate_finish (param $hr i32)
+    (local $e i32)
+    (local.set $e (i32.add (global.get $esp) (i32.const 20)))
+    (if (i32.and (i32.lt_s (local.get $hr) (i32.const 0))
+                 (i32.ne (call $gl32 (i32.add (local.get $e) (i32.const 20))) (i32.const 0)))
+      (then (call $gs32 (call $gl32 (i32.add (local.get $e) (i32.const 20))) (i32.const 0))))
+    (global.set $eax (local.get $hr))
+    (global.set $esp (i32.add (local.get $e) (i32.const 24)))
+    (call $com_jump (call $gl32 (local.get $e))))
+
+  ;; CACA0033: DllGetClassObject returned.
+  (func $com_activate_after_gco
+    (local $f i32) (local $e i32) (local $pf i32)
+    (local.set $f (global.get $esp))
+    (local.set $e (i32.add (local.get $f) (i32.const 20)))
+    (local.set $pf (call $gl32 (local.get $f)))
+    (if (i32.lt_s (global.get $eax) (i32.const 0))
+      (then (call $com_activate_finish (global.get $eax)) (return)))
+    (if (i32.eqz (local.get $pf))
+      (then (call $com_activate_finish (i32.const 0x80004002)) (return))) ;; E_NOINTERFACE
+    (call $io_apc_push (call $gl32 (i32.add (local.get $e) (i32.const 20)))) ;; ppv
+    (call $io_apc_push (call $gl32 (i32.add (local.get $e) (i32.const 16)))) ;; riid
+    (call $io_apc_push (call $gl32 (i32.add (local.get $e) (i32.const 8))))  ;; pUnkOuter
+    (call $io_apc_push (local.get $pf))
+    (call $io_apc_push (global.get $com_create_thunk))
+    (call $com_jump (call $gl32 (i32.add (call $gl32 (local.get $pf)) (i32.const 12)))))
+
+  ;; CACA0034: IClassFactory::CreateInstance returned; release the factory.
+  (func $com_activate_after_create
+    (local $f i32) (local $pf i32)
+    (local.set $f (global.get $esp))
+    (local.set $pf (call $gl32 (local.get $f)))
+    (call $gs32 (i32.add (local.get $f) (i32.const 4)) (global.get $eax))
+    (call $io_apc_push (local.get $pf))
+    (call $io_apc_push (global.get $com_release_thunk))
+    (call $com_jump (call $gl32 (i32.add (call $gl32 (local.get $pf)) (i32.const 8)))))
+
+  ;; CACA0035: IClassFactory::Release returned; hand CreateInstance's result
+  ;; back to the CoCreateInstance caller.
+  (func $com_activate_after_release
+    (call $com_activate_finish (call $gl32 (i32.add (global.get $esp) (i32.const 4)))))
+
   ;; Park a COM activation at its import thunk while JS loads an in-proc
   ;; server. Keeping the stdcall frame untouched lets the normal handler retry
   ;; once the DLL exists, without re-executing the guest PUSH/CALL block and
@@ -2871,12 +2964,20 @@
         (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
         (return)))
+    ;; The private 0x40000000 CLSCTX bit asks the host only to resolve an
+    ;; in-proc server: it answers COM_RESOLVED_INPROC with DllGetClassObject's
+    ;; address in *ppv, and the activation then runs as ordinary guest calls
+    ;; ($com_activate_begin) instead of a nested run the guest cannot block in.
     (local.set $hr (call $host_com_create_instance
       (local.get $clsid_wa)           ;; rclsid → WASM addr
       (local.get $arg1)               ;; pUnkOuter (guest addr, usually NULL)
-      (local.get $arg2)               ;; dwClsContext
+      (i32.or (local.get $arg2) (i32.const 0x40000000)) ;; dwClsContext
       (local.get $iid_wa)             ;; riid → WASM addr
       (local.get $arg4)))             ;; ppv (guest addr)
+    (if (i32.eq (local.get $hr) (i32.const 2)) ;; COM_RESOLVED_INPROC
+      (then
+        (call $com_activate_begin (call $gl32 (local.get $arg4)) (local.get $arg0) (local.get $arg4))
+        (return)))
     ;; Check if we need async DLL load (host returns 0x800401F0 = CO_E_DLLNOTFOUND)
     (if (i32.eq (local.get $hr) (i32.const 0x800401F0))
       (then
@@ -3049,11 +3150,17 @@
 
   ;; VariantClear(pvarg: VARIANTARG*) → HRESULT. Full impl would free BSTR/dispatch
   ;; fields based on vt, but Spider stores only simple VT_I4/VT_BOOL variants, and
-  ;; any cached BSTR leaks are bounded. Zero the whole 16-byte VARIANT so callers
-  ;; don't re-read stale tagged pointers.
+  ;; any cached BSTR leaks are bounded. A by-value VT_ARRAY owns its SAFEARRAY
+  ;; (devenum's FilterData is VT_UI1|VT_ARRAY), so that one is destroyed. Zero
+  ;; the whole 16-byte VARIANT so callers don't re-read stale tagged pointers.
   (func $handle_VariantClear (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $vt i32)
     (if (local.get $arg0)
-      (then (call $zero_memory (call $g2w (local.get $arg0)) (i32.const 16))))
+      (then
+        (local.set $vt (call $gl16 (local.get $arg0)))
+        (if (i32.eq (i32.and (local.get $vt) (i32.const 0x6000)) (i32.const 0x2000)) ;; VT_ARRAY, not VT_BYREF
+          (then (drop (call $safearray_destroy (call $gl32 (i32.add (local.get $arg0) (i32.const 8)))))))
+        (call $zero_memory (call $g2w (local.get $arg0)) (i32.const 16))))
     (global.set $eax (i32.const 0))  ;; S_OK
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
@@ -3110,6 +3217,176 @@
     (global.set $eax (i32.const 0x80029C4A))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
+
+  ;; SAFEARRAY: USHORT cDims +0, USHORT fFeatures +2, ULONG cbElements +4,
+  ;; ULONG cLocks +8, PVOID pvData +12, SAFEARRAYBOUND[cDims] +16 as
+  ;; {cElements, lLbound}. OLEAUT32 keeps the VARTYPE in the dword before the
+  ;; descriptor and flags that with FADF_HAVEVARTYPE; this layout matches.
+  ;; Only element types that own nothing are supported: an array of BSTRs,
+  ;; VARIANTs or interfaces would need its elements released on destroy.
+  (func $safearray_elem_size (param $vt i32) (result i32)
+    (if (i32.or (i32.eq (local.get $vt) (i32.const 16)) (i32.eq (local.get $vt) (i32.const 17))) ;; I1 UI1
+      (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $vt) (i32.const 2))
+          (i32.or (i32.eq (local.get $vt) (i32.const 18)) (i32.eq (local.get $vt) (i32.const 11)))) ;; I2 UI2 BOOL
+      (then (return (i32.const 2))))
+    (if (i32.or (i32.or (i32.eq (local.get $vt) (i32.const 3)) (i32.eq (local.get $vt) (i32.const 4)))    ;; I4 R4
+          (i32.or (i32.or (i32.eq (local.get $vt) (i32.const 19)) (i32.eq (local.get $vt) (i32.const 10))) ;; UI4 ERROR
+                  (i32.or (i32.eq (local.get $vt) (i32.const 22)) (i32.eq (local.get $vt) (i32.const 23))))) ;; INT UINT
+      (then (return (i32.const 4))))
+    (if (i32.or (i32.or (i32.eq (local.get $vt) (i32.const 5)) (i32.eq (local.get $vt) (i32.const 6)))    ;; R8 CY
+          (i32.or (i32.eq (local.get $vt) (i32.const 7))                                                   ;; DATE
+                  (i32.or (i32.eq (local.get $vt) (i32.const 20)) (i32.eq (local.get $vt) (i32.const 21))))) ;; I8 UI8
+      (then (return (i32.const 8))))
+    (i32.const 0))
+
+  ;; SafeArrayCreate(vt, cDims, rgsabound) → SAFEARRAY*, NULL on failure.
+  (func $handle_SafeArrayCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $cb i32) (local $i i32) (local $count i64) (local $block i32) (local $sa i32) (local $data i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0))
+    (local.set $cb (call $safearray_elem_size (i32.and (local.get $arg0) (i32.const 0xFFFF))))
+    (if (i32.eqz (local.get $cb))
+      (then (call $crash_unimplemented (local.get $name_ptr))))
+    (if (i32.or (i32.eqz (local.get $arg2))
+          (i32.or (i32.eqz (local.get $arg1)) (i32.gt_u (local.get $arg1) (i32.const 64))))
+      (then (return)))
+    (local.set $count (i64.const 1))
+    (block $done (loop $dims
+      (br_if $done (i32.ge_u (local.get $i) (local.get $arg1)))
+      (local.set $count (i64.mul (local.get $count)
+        (i64.extend_i32_u (call $gl32 (i32.add (local.get $arg2) (i32.shl (local.get $i) (i32.const 3)))))))
+      (if (i64.gt_u (local.get $count) (i64.const 0x10000000)) (then (return)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $dims)))
+    (local.set $block (call $heap_alloc (i32.add (i32.const 20) (i32.shl (local.get $arg1) (i32.const 3)))))
+    (if (i32.eqz (local.get $block)) (then (return)))
+    (local.set $sa (i32.add (local.get $block) (i32.const 4)))
+    (call $gs32 (local.get $block) (i32.and (local.get $arg0) (i32.const 0xFFFF)))
+    (call $gs16 (local.get $sa) (local.get $arg1))
+    (call $gs16 (i32.add (local.get $sa) (i32.const 2)) (i32.const 0x80)) ;; FADF_HAVEVARTYPE
+    (call $gs32 (i32.add (local.get $sa) (i32.const 4)) (local.get $cb))
+    (call $gs32 (i32.add (local.get $sa) (i32.const 8)) (i32.const 0))
+    ;; OLEAUT32 stores the bounds in reverse order of the caller's array.
+    (local.set $i (i32.const 0))
+    (block $bd (loop $bl
+      (br_if $bd (i32.ge_u (local.get $i) (local.get $arg1)))
+      (call $gs32 (i32.add (local.get $sa) (i32.add (i32.const 16) (i32.shl (local.get $i) (i32.const 3))))
+        (call $gl32 (i32.add (local.get $arg2)
+          (i32.shl (i32.sub (i32.sub (local.get $arg1) (i32.const 1)) (local.get $i)) (i32.const 3)))))
+      (call $gs32 (i32.add (local.get $sa) (i32.add (i32.const 20) (i32.shl (local.get $i) (i32.const 3))))
+        (call $gl32 (i32.add (local.get $arg2)
+          (i32.add (i32.shl (i32.sub (i32.sub (local.get $arg1) (i32.const 1)) (local.get $i)) (i32.const 3))
+                   (i32.const 4)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $bl)))
+    (local.set $count (i64.mul (local.get $count) (i64.extend_i32_u (local.get $cb))))
+    (if (i64.ne (local.get $count) (i64.const 0))
+      (then
+        (local.set $data (call $heap_alloc (i32.wrap_i64 (local.get $count))))
+        (if (i32.eqz (local.get $data))
+          (then (call $heap_free (local.get $block)) (return)))
+        (call $zero_memory (call $g2w (local.get $data)) (i32.wrap_i64 (local.get $count)))))
+    (call $gs32 (i32.add (local.get $sa) (i32.const 12)) (local.get $data))
+    (global.set $eax (local.get $sa)))
+
+  ;; Shared by SafeArrayDestroy and VariantClear. A locked array is not freed.
+  (func $safearray_destroy (param $sa i32) (result i32)
+    (local $data i32)
+    (if (i32.eqz (local.get $sa)) (then (return (i32.const 0))))
+    (if (call $gl32 (i32.add (local.get $sa) (i32.const 8)))
+      (then (return (i32.const 0x8002000D)))) ;; DISP_E_ARRAYISLOCKED
+    (local.set $data (call $gl32 (i32.add (local.get $sa) (i32.const 12))))
+    (if (local.get $data) (then (call $heap_free (local.get $data))))
+    (call $heap_free (i32.sub (local.get $sa) (i32.const 4)))
+    (i32.const 0))
+
+  (func $handle_SafeArrayDestroy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (global.set $eax (call $safearray_destroy (local.get $arg0))))
+
+  ;; SafeArrayAccessData(psa, ppvData) takes a lock and hands out pvData.
+  (func $handle_SafeArrayAccessData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
+      (then (global.set $eax (i32.const 0x80070057)) (return))) ;; E_INVALIDARG
+    (call $gs32 (i32.add (local.get $arg0) (i32.const 8))
+      (i32.add (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (i32.const 1)))
+    (call $gs32 (local.get $arg1) (call $gl32 (i32.add (local.get $arg0) (i32.const 12))))
+    (global.set $eax (i32.const 0)))
+
+  (func $handle_SafeArrayUnaccessData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $locks i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (if (i32.eqz (local.get $arg0))
+      (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (local.set $locks (call $gl32 (i32.add (local.get $arg0) (i32.const 8))))
+    (if (i32.eqz (local.get $locks))
+      (then (global.set $eax (i32.const 0x8000FFFF)) (return))) ;; E_UNEXPECTED
+    (call $gs32 (i32.add (local.get $arg0) (i32.const 8)) (i32.sub (local.get $locks) (i32.const 1)))
+    (global.set $eax (i32.const 0)))
+
+  ;; VarI4FromStr(strIn, lcid, dwFlags, plOut). Surrounding blanks, a sign,
+  ;; decimal digits and an optional fraction rounded half-to-even, which is
+  ;; how OLEAUT32 coerces a numeric string. Anything else is a type mismatch;
+  ;; a value outside LONG is DISP_E_OVERFLOW.
+  (func $handle_VarI4FromStr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $p i32) (local $ch i32) (local $neg i32) (local $v i64) (local $digits i32)
+    (local $first i32) (local $sticky i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (global.set $eax (i32.const 0x80020005)) ;; DISP_E_TYPEMISMATCH
+    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg3)))
+      (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (local.set $p (local.get $arg0))
+    (block $b (loop $l
+      (local.set $ch (call $gl16 (local.get $p)))
+      (br_if $b (i32.and (i32.ne (local.get $ch) (i32.const 32)) (i32.ne (local.get $ch) (i32.const 9))))
+      (local.set $p (i32.add (local.get $p) (i32.const 2)))
+      (br $l)))
+    (if (i32.or (i32.eq (local.get $ch) (i32.const 45)) (i32.eq (local.get $ch) (i32.const 43)))
+      (then
+        (local.set $neg (i32.eq (local.get $ch) (i32.const 45)))
+        (local.set $p (i32.add (local.get $p) (i32.const 2)))
+        (local.set $ch (call $gl16 (local.get $p)))))
+    (block $b (loop $l
+      (br_if $b (i32.gt_u (i32.sub (local.get $ch) (i32.const 48)) (i32.const 9)))
+      (local.set $v (i64.add (i64.mul (local.get $v) (i64.const 10))
+        (i64.extend_i32_u (i32.sub (local.get $ch) (i32.const 48)))))
+      (if (i64.gt_u (local.get $v) (i64.const 0x80000000))
+        (then (global.set $eax (i32.const 0x8002000A)) (return))) ;; DISP_E_OVERFLOW
+      (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+      (local.set $p (i32.add (local.get $p) (i32.const 2)))
+      (local.set $ch (call $gl16 (local.get $p)))
+      (br $l)))
+    (if (i32.eq (local.get $ch) (i32.const 46))
+      (then
+        (local.set $p (i32.add (local.get $p) (i32.const 2)))
+        (local.set $ch (call $gl16 (local.get $p)))
+        (local.set $first (i32.const -1))
+        (block $b (loop $l
+          (br_if $b (i32.gt_u (i32.sub (local.get $ch) (i32.const 48)) (i32.const 9)))
+          (if (i32.lt_s (local.get $first) (i32.const 0))
+            (then (local.set $first (i32.sub (local.get $ch) (i32.const 48))))
+            (else (if (i32.ne (local.get $ch) (i32.const 48)) (then (local.set $sticky (i32.const 1))))))
+          (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+          (local.set $p (i32.add (local.get $p) (i32.const 2)))
+          (local.set $ch (call $gl16 (local.get $p)))
+          (br $l)))
+        (if (i32.or (i32.gt_s (local.get $first) (i32.const 5))
+              (i32.and (i32.eq (local.get $first) (i32.const 5))
+                (i32.or (local.get $sticky) (i32.wrap_i64 (i64.and (local.get $v) (i64.const 1))))))
+          (then (local.set $v (i64.add (local.get $v) (i64.const 1)))))))
+    (block $b (loop $l
+      (br_if $b (i32.and (i32.ne (local.get $ch) (i32.const 32)) (i32.ne (local.get $ch) (i32.const 9))))
+      (local.set $p (i32.add (local.get $p) (i32.const 2)))
+      (local.set $ch (call $gl16 (local.get $p)))
+      (br $l)))
+    (if (i32.or (i32.eqz (local.get $digits)) (i32.ne (local.get $ch) (i32.const 0))) (then (return)))
+    (if (local.get $neg) (then (local.set $v (i64.sub (i64.const 0) (local.get $v)))))
+    (if (i32.or (i64.gt_s (local.get $v) (i64.const 0x7FFFFFFF)) (i64.lt_s (local.get $v) (i64.const -0x80000000)))
+      (then (global.set $eax (i32.const 0x8002000A)) (return)))
+    (call $gs32 (local.get $arg3) (i32.wrap_i64 (local.get $v)))
+    (global.set $eax (i32.const 0)))
 
   ;; Real OLEAUT32 provides these automation helpers. Without that DLL, keep
   ;; unsupported behavior explicit rather than forging registration/results.

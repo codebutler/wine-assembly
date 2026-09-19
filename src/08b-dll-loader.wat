@@ -24,6 +24,7 @@
     (local $dll_idx i32) (local $tbl_ptr i32)
     (local $src i32) (local $dst i32) (local $header_size i32)
     (local $rsrc_rva_d i32) (local $rsrc_size_d i32) (local $rsrc_ptr i32)
+    (local $image_size i32) (local $image_end i32) (local $sparse i32)
 
     ;; Every DLL has entries in three fixed parallel tables. Refuse the load
     ;; before mapping a section when no row remains; the former unchecked 17th
@@ -44,6 +45,33 @@
     (local.set $opt_hdr_size (i32.load16_u (i32.add (local.get $pe_off) (i32.const 20))))
     (local.set $preferred_base (i32.load (i32.add (local.get $pe_off) (i32.const 52))))
     (local.set $entry_rva (i32.load (i32.add (local.get $pe_off) (i32.const 40))))
+    ;; The direct window is affine over ALL of low linear memory, emulator
+    ;; tables included, so an image is only safe inside the guest's own spans:
+    ;; the image mirror and the low heap, and not the emulator strings between
+    ;; them. The candidate follows the low-heap watermark upward, and once the
+    ;; EXE, its DLLs and the heap have used that span a late LoadLibrary lands
+    ;; on the page indexes: Morrowind's DirectShow chain put l3codecx.ax across
+    ;; PAGE_INDEX_ARENA and the main thread dispatched garbage ops. Rebase such
+    ;; an image into a committed sparse reservation instead, as a real loader
+    ;; does when the preferred range is taken.
+    (local.set $image_size (i32.load (i32.add (local.get $pe_off) (i32.const 80))))
+    (local.set $image_end (i32.add (local.get $load_addr) (local.get $image_size)))
+    (if (i32.or
+          (i32.or
+            (i32.lt_u (local.get $image_end) (local.get $load_addr))
+            (i32.gt_u (local.get $image_end) (call $w2g (region.end $GUEST_HEAP_BASE))))
+          (i32.and
+            (i32.lt_u (local.get $load_addr) (call $w2g (global.get $GUEST_HEAP_BASE)))
+            (i32.gt_u (local.get $image_end) (call $w2g (region.end $GUEST_BASE)))))
+      (then
+        (local.set $image_size
+          (i32.and (i32.add (local.get $image_size) (i32.const 0xFFFF)) (i32.const 0xFFFF0000)))
+        (local.set $load_addr (call $virtual_reserve_down (local.get $image_size)))
+        (if (i32.eqz (local.get $load_addr)) (then (return (i32.const 0))))
+        (if (i32.eqz (call $virtual_map_commit_protect
+              (local.get $load_addr) (local.get $image_size) (i32.const 0x40))) ;; PAGE_EXECUTE_READWRITE
+          (then (return (i32.const 0))))
+        (local.set $sparse (i32.const 1))))
     (local.set $delta (i32.sub (local.get $load_addr) (local.get $preferred_base)))
 
     ;; Keep the mapped DLL's DOS/PE headers just as $load_pe keeps the
@@ -135,7 +163,9 @@
         (i32.load (i32.add (local.get $pe_off) (i32.const 80)))) ;; SizeOfImage
         (i32.const 0xFFF))
       (i32.const 0xFFFFF000)))
-    (call $heap_reserve_below (local.get $dst))
+    ;; A rebased image owns its own reservation and is nowhere near the low heap.
+    (if (i32.eqz (local.get $sparse))
+      (then (call $heap_reserve_below (local.get $dst))))
 
     ;; Return DllMain entry point
     (if (result i32) (i32.ne (local.get $entry_rva) (i32.const 0))
@@ -494,6 +524,14 @@
         (if (i32.eq (local.get $ordinal) (i32.const 8))  (then (return (call $lookup_api_id "VariantInit"))))
         (if (i32.eq (local.get $ordinal) (i32.const 9))  (then (return (call $lookup_api_id "VariantClear"))))
         (if (i32.eq (local.get $ordinal) (i32.const 10)) (then (return (call $lookup_api_id "VariantCopy"))))
+        ;; DirectX 8.1 devenum.dll registers filters through these by ordinal.
+        (if (i32.eq (local.get $ordinal) (i32.const 15)) (then (return (call $lookup_api_id "SafeArrayCreate"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 16)) (then (return (call $lookup_api_id "SafeArrayDestroy"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 23)) (then (return (call $lookup_api_id "SafeArrayAccessData"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 24)) (then (return (call $lookup_api_id "SafeArrayUnaccessData"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 64)) (then (return (call $lookup_api_id "VarI4FromStr"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 161)) (then (return (call $lookup_api_id "LoadTypeLib"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 163)) (then (return (call $lookup_api_id "RegisterTypeLib"))))
         ;; InstallShield 11 imports the binary-BSTR helpers by ordinal. Keep
         ;; these in the guest resolver as well as the host fallback so loaded
         ;; DLL imports cannot depend on which resolver path reached them.

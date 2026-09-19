@@ -29070,8 +29070,7 @@
     "name": "IDirect3D8_CheckDepthStencilMatch",
     "nargs": 6,
     "convention": "stdcall",
-    "hash": 539478727,
-    "handler": "IDirect3D8_CheckDeviceType"
+    "hash": 539478727
   },
   {
     "id": 3454,
@@ -29252,16 +29251,14 @@
     "name": "IDirect3DDevice8_SetGammaRamp",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 2783148868,
-    "handler": "d3d8_unimplemented"
+    "hash": 2783148868
   },
   {
     "id": 3478,
     "name": "IDirect3DDevice8_GetGammaRamp",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 448199784,
-    "handler": "d3d8_unimplemented"
+    "hash": 448199784
   },
   {
     "id": 3479,
@@ -29303,26 +29300,23 @@
   {
     "id": 3484,
     "name": "IDirect3DDevice8_CreateRenderTarget",
-    "nargs": 8,
+    "nargs": 7,
     "convention": "stdcall",
-    "hash": 2322883540,
-    "handler": "d3d8_unimplemented"
+    "hash": 2322883540
   },
   {
     "id": 3485,
     "name": "IDirect3DDevice8_CreateDepthStencilSurface",
-    "nargs": 7,
+    "nargs": 6,
     "convention": "stdcall",
-    "hash": 3192033169,
-    "handler": "d3d8_unimplemented"
+    "hash": 3192033169
   },
   {
     "id": 3486,
     "name": "IDirect3DDevice8_CreateImageSurface",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 2873297261,
-    "handler": "d3d8_unimplemented"
+    "hash": 2873297261
   },
   {
     "id": 3487,
@@ -29367,8 +29361,7 @@
     "name": "IDirect3DDevice8_GetDepthStencilSurface",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 871659523,
-    "handler": "IDirect3DDevice9_GetDepthStencilSurface"
+    "hash": 871659523
   },
   {
     "id": 3493,
@@ -29599,16 +29592,14 @@
     "name": "IDirect3DDevice8_GetTextureStageState",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 3204463305,
-    "handler": "IDirect3DDevice8_GetTextureStageState"
+    "hash": 3204463305
   },
   {
     "id": 3522,
     "name": "IDirect3DDevice8_SetTextureStageState",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 4187755405,
-    "handler": "IDirect3DDevice8_SetTextureStageState"
+    "hash": 4187755405
   },
   {
     "id": 3523,
@@ -29716,8 +29707,7 @@
     "name": "IDirect3DDevice8_GetVertexShader",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 3813930656,
-    "handler": "d3d8_unimplemented"
+    "hash": 3813930656
   },
   {
     "id": 3537,
@@ -29801,16 +29791,14 @@
     "name": "IDirect3DDevice8_SetPixelShader",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 1547886344,
-    "handler": "d3d8_unimplemented"
+    "hash": 1547886344
   },
   {
     "id": 3548,
     "name": "IDirect3DDevice8_GetPixelShader",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 2971286924,
-    "handler": "d3d8_unimplemented"
+    "hash": 2971286924
   },
   {
     "id": 3549,
@@ -30013,16 +30001,14 @@
     "name": "IDirect3DTexture8_GetLevelDesc",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 1003565251,
-    "handler": "IDirect3DTexture9_GetLevelDesc"
+    "hash": 1003565251
   },
   {
     "id": 3575,
     "name": "IDirect3DTexture8_GetSurfaceLevel",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 3248007479,
-    "handler": "IDirect3DTexture9_GetSurfaceLevel"
+    "hash": 3248007479
   },
   {
     "id": 3576,
@@ -30595,5 +30581,228 @@
     "nargs": 0,
     "convention": "stdcall",
     "hash": 3522106387
+  },
+  {
+    "id": 3653,
+    "name": "IDirect3DSurface8_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4057870867
+  },
+  {
+    "id": 3654,
+    "name": "IDirect3DSurface8_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3050390752
+  },
+  {
+    "id": 3655,
+    "name": "IDirect3DSurface8_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 521963433
+  },
+  {
+    "id": 3656,
+    "name": "IDirect3DSurface8_GetDevice",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1378722810
+  },
+  {
+    "id": 3657,
+    "name": "IDirect3DSurface8_SetPrivateData",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3664226591
+  },
+  {
+    "id": 3658,
+    "name": "IDirect3DSurface8_GetPrivateData",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 552456451
+  },
+  {
+    "id": 3659,
+    "name": "IDirect3DSurface8_FreePrivateData",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2819193049
+  },
+  {
+    "id": 3660,
+    "name": "IDirect3DSurface8_GetContainer",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3866453399
+  },
+  {
+    "id": 3661,
+    "name": "IDirect3DSurface8_GetDesc",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3480850625
+  },
+  {
+    "id": 3662,
+    "name": "IDirect3DSurface8_LockRect",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3555980173
+  },
+  {
+    "id": 3663,
+    "name": "IDirect3DSurface8_UnlockRect",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4144319438
+  },
+  {
+    "id": 3664,
+    "name": "SwapMouseButton",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 20918849
+  },
+  {
+    "id": 3665,
+    "name": "SafeArrayCreate",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 122907277
+  },
+  {
+    "id": 3666,
+    "name": "SafeArrayDestroy",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3465002581
+  },
+  {
+    "id": 3667,
+    "name": "SafeArrayAccessData",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2729334755
+  },
+  {
+    "id": 3668,
+    "name": "SafeArrayUnaccessData",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1553123732
+  },
+  {
+    "id": 3669,
+    "name": "VarI4FromStr",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3714835990
+  },
+  {
+    "id": 3670,
+    "name": "CoCreateFreeThreadedMarshaler",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 362569673
+  },
+  {
+    "id": 3671,
+    "name": "IFtmInner_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2532713091
+  },
+  {
+    "id": 3672,
+    "name": "IFtmInner_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3476867504
+  },
+  {
+    "id": 3673,
+    "name": "IFtmInner_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3170773241
+  },
+  {
+    "id": 3674,
+    "name": "IFtmMarshal_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2107714253
+  },
+  {
+    "id": 3675,
+    "name": "IFtmMarshal_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1188772902
+  },
+  {
+    "id": 3676,
+    "name": "IFtmMarshal_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3433137051
+  },
+  {
+    "id": 3677,
+    "name": "IFtmMarshal_GetUnmarshalClass",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1905350455,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3678,
+    "name": "IFtmMarshal_GetMarshalSizeMax",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 651017541,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3679,
+    "name": "IFtmMarshal_MarshalInterface",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1273991871,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3680,
+    "name": "IFtmMarshal_UnmarshalInterface",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3084193700,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3681,
+    "name": "IFtmMarshal_ReleaseMarshalData",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1770629519,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3682,
+    "name": "IFtmMarshal_DisconnectObject",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3149842571,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3683,
+    "name": "ReplyMessage",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3062062918
   }
 ]
