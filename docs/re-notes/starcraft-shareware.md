@@ -1074,3 +1074,63 @@ route; pass a fresh profile or a distinct name when that matters. And the
 0x8000 write is a single fixed-size block — a save that "succeeded" in the trace
 has not necessarily finished, so let the run continue past the click before
 reading counters.
+
+### 2026-09-19 — five-window gameplay census: Storm's dirty-span present is 38% of block entries
+
+Measured on the quiet box with `--handler-hist --hist-json` over five
+consecutive 500-batch windows of the harness route (`--no-threads`,
+`--batch-size=100000`, batches 1750..4250, PNG at each window end confirmed
+gameplay), then `tools/hot-loop-census.js` across all five. Counts are
+load-immune. Per window: ~145M block entries, ~725M ops, **5.0 ops/block**,
+~9k distinct blocks. The binary is the **official demo** exe
+(`starcraft-demo-official/installed/starcraft.exe`, what `lib/apps.js` mounts);
+`starcraft-shareware/installed/starcraft.exe` is a different build 1 KB larger
+whose code is shifted, and disassembling that one against these addresses
+reads as self-modifying code (it is not — `dump-mem` at runtime matches the
+official exe byte for byte). `storm.dll` is byte-identical in both.
+
+| region | what | mean share of block entries | spread over 5 windows |
+|---|---|---:|---:|
+| `storm+0x15024f12..150251bd` | body of Storm **#437**: builds per-line copy/skip span lists from the 40x30 dirty-tile mask | **25.8%** | 1.7pp |
+| `storm+0x15024511..15024576` | inner span loop of Storm **#432**: copies each span (aligned head, `rep movsd`, tail) | **12.0%** | 0.7pp |
+| `exe+0x461e28..462236` | per-tile map lookup loop (`[0x6306d0+idx*4]`, 32-wide rows, writes stride 0x58) | 5.7% | 0.5pp |
+| `exe+0x40f31d..40f68e` | sprite/unit list walk | 4.4% | 0.2pp |
+| `exe+0x441d64..441de8` | dirty-tile row loop, 40 wide, calls `0x4b3f9d` per run of dirty tiles | 3.6% | 0.3pp |
+| `exe+0x4c4197..4c41ce` | dirty-tile byte scan, 40 wide (`mov bl,[ebp]; inc ebp; test bl,bl`) | 3.0% | 0.2pp |
+
+The first two are hot in **every** window at 25%+ and 11%+ and are the only
+regions above the census's 5% floor besides the map lookup. They are one
+mechanism: `0x4c4340`-ish calls Storm `#437` (thunk `0x4d0b84`, call site
+`0x4c436b`) with the dirty-tile map, then the full-surface commit helper calls
+`#350` SDrawLockSurface, Storm `#432` (thunk `0x4d0b78`, call site `0x4c3cb9`)
+with `(surface, [0x694644] back buffer, 0x280, rect, span list)`, then `#356`
+Unlock. `#431` at `0x150243f0` is `#432`'s unclipped twin. Span tokens are
+16-bit: `al` = bytes to copy, `ah` = bytes to skip; a zero token ends the line.
+
+Rates per window: `#437`'s per-line head `0x15024f12` enters 910k times
+(≈1900 commits of 480 lines, ≈3.8 per batch — at 200 ms of guest time per
+batch that is ~19 commits per guest second, i.e. the game's own frame rate,
+not a runaway); its per-tile-cell state machine `0x1502508b/97/ad/ce` enters
+6.4M/5.5M/5.0M/4.7M times; `#432`'s per-span head `0x15024511` enters 3.05M
+times (≈3.3 spans per line) and its token fetch `0x1502456a` 3.96M. Neither
+function's entry block is in the top 400, so these are few calls doing long
+loops, which is the fold shape — and both loops are multi-block diamonds
+(`find-loops.js`/`match-loops.js` only see self-loop blocks, so they are
+invisible to every existing recognizer). Storm 1.06 is specific to the
+StarCraft demo/shareware builds: the `#437` loop's bytes appear in neither
+Diablo Storm nor the Diablo II/Warcraft III Storms; the `#432` copy tail does
+appear in Diablo II's and Warcraft III's Storm.
+
+Per commit that is ≈76k block entries and ≈380k ops, of which the Storm span
+machinery is ≈29k entries. At the phone's ~18 fps the machine is retiring
+≈7M ops/s, all of it interpreter, so a fold that took the two Storm loops to
+one dispatch per span / per tile cell is worth on the order of a third of
+gameplay CPU — the only lever of that size the census found. The `0x4b48xx`
+GRP blit nest that was 30% on 2026-09-15 is not in this scene's top 20 at
+all (`0x4b43xx` blocks total under 2%): that measurement was one 100-batch
+window at supply 15-16, this is early gameplay — which is exactly why the
+census insists on several windows before naming a fold target.
+
+Repro: `$S/census.sh` on the box (five `run.js` invocations with
+`--handler-hist-start=A --handler-hist-stop=B --hist-json=census-A.json`),
+then `node tools/hot-loop-census.js census-*.json --top=20 --blocks`.
