@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { createCanvas, loadImage } = require('../lib/canvas-compat');
+const { diffPng, readPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -45,29 +45,15 @@ try {
 }
 
 async function diffPngs(aPath, bPath) {
-  const a = await loadImage(aPath);
-  const b = await loadImage(bPath);
-  const w = a.width, h = a.height;
-  if (b.width !== w || b.height !== h) return -1;
-  const ca = createCanvas(w, h), cb = createCanvas(w, h);
-  ca.getContext('2d').drawImage(a, 0, 0);
-  cb.getContext('2d').drawImage(b, 0, 0);
-  const da = ca.getContext('2d').getImageData(0, 0, w, h).data;
-  const db = cb.getContext('2d').getImageData(0, 0, w, h).data;
-  let diff = 0;
-  let clickedCellDiff = 0;
-  let wrongTopCellDiff = 0;
-  for (let i = 0; i < da.length; i += 4) {
-    if (da[i] !== db[i] || da[i + 1] !== db[i + 1] || da[i + 2] !== db[i + 2]) {
-      diff++;
-      const pixel = i >>> 2;
-      const x = pixel % w;
-      const y = Math.floor(pixel / w);
-      if (x >= 93 && x < 109 && y >= 136 && y < 152) clickedCellDiff++;
-      if (x >= 93 && x < 109 && y >= 95 && y < 111) wrongTopCellDiff++;
-    }
-  }
-  return { diff, clickedCellDiff, wrongTopCellDiff };
+  const a = readPng(aPath), b = readPng(bPath);
+  const options = { includeAlpha: false };
+  const all = diffPng(a, b, options);
+  if (all.sizeMismatch) return -1;
+  return {
+    diff: all.changed,
+    clickedCellDiff: diffPng(a, b, { ...options, region: { x: 93, y: 136, w: 16, h: 16 } }).changed,
+    wrongTopCellDiff: diffPng(a, b, { ...options, region: { x: 93, y: 95, w: 16, h: 16 } }).changed,
+  };
 }
 
 (async () => {

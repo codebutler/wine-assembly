@@ -12,6 +12,7 @@
 //   - No UNIMPLEMENTED API crash
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execSync } = require('child_process');
 let createCanvas, loadImage;
@@ -68,22 +69,12 @@ const interesting = lines.filter(l =>
 for (const l of interesting) console.log('  ' + l);
 
 async function diffPngs(aPath, bPath) {
-  const a = await loadImage(aPath);
-  const b = await loadImage(bPath);
-  if (a.width !== b.width || a.height !== b.height) {
+  const result = diffPng(aPath, bPath, { includeAlpha: false });
+  if (result.sizeMismatch) {
+    const { a, b } = result;
     return { error: `size mismatch ${a.width}x${a.height} vs ${b.width}x${b.height}` };
   }
-  const w = a.width, h = a.height;
-  const ca = createCanvas(w, h), cb = createCanvas(w, h);
-  ca.getContext('2d').drawImage(a, 0, 0);
-  cb.getContext('2d').drawImage(b, 0, 0);
-  const da = ca.getContext('2d').getImageData(0, 0, w, h).data;
-  const db = cb.getContext('2d').getImageData(0, 0, w, h).data;
-  let diff = 0;
-  for (let i = 0; i < da.length; i += 4) {
-    if (da[i] !== db[i] || da[i+1] !== db[i+1] || da[i+2] !== db[i+2]) diff++;
-  }
-  return { w, h, diff };
+  return { w: result.width, h: result.height, diff: result.changed };
 }
 
 (async () => {
