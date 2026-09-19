@@ -5020,7 +5020,7 @@
           (then
             (local.set $prev (call $wnd_table_get (local.get $hwnd)))
             (if (i32.eqz (call $win16_is_far_proc (local.get $prev)))
-              (then (local.set $prev (call $win16_builtin_wndproc))))
+              (then (local.set $prev (call $win16_builtin_wndproc_for (local.get $hwnd)))))
             (if (local.get $is_set)
               (then (call $wnd_table_set (local.get $hwnd) (local.get $val)))))
           (else
@@ -6474,7 +6474,7 @@
     ;; could call, so it is reported as the thunk that stands for it.
     (if (i32.and (i32.eq (local.get $index) (i32.const -4))
                  (i32.eqz (call $win16_is_far_proc (global.get $eax))))
-      (then (global.set $eax (call $win16_builtin_wndproc))))
+      (then (global.set $eax (call $win16_builtin_wndproc_for (local.get $hwnd)))))
     ;; A word answer is a word; a long one comes back in DX:AX like any other.
     (if (local.get $word)
       (then (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF))))
@@ -6485,6 +6485,83 @@
   (func $win16_builtin_wndproc (result i32)
     (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
             (global.get $WIN16_BUILTIN_WNDPROC)))
+
+  ;; The far pointer a task is given for the procedure of one of our windows.
+  ;; A built-in control gets the per-class slot rather than the generic one:
+  ;; Civilization II builds MSEditBoxClass by creating an EDIT, reading its
+  ;; GWL_WNDPROC and registering the new class with that value, and every
+  ;; later window of the class has to come out an edit control. The generic
+  ;; slot would make them windows nobody draws text in.
+  (func $win16_builtin_wndproc_for (param $hwnd i32) (result i32)
+    (local $class i32)
+    (local.set $class (call $ctrl_table_get_class (local.get $hwnd)))
+    (if (i32.and (i32.ne (local.get $class) (i32.const 0))
+                 (i32.lt_u (local.get $class) (i32.const 0x100)))
+      (then (return (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+                            (i32.add (global.get $WIN16_BUILTIN_CLASS_PROC)
+                                     (local.get $class))))))
+    (call $win16_builtin_wndproc))
+
+  ;; The control class a per-class built-in procedure stands for, or 0.
+  (func $win16_builtin_proc_class (param $proc i32) (result i32)
+    (local $off i32)
+    (if (i32.or (i32.eqz (global.get $WIN16_THUNK_SEL))
+                (i32.ne (i32.shr_u (local.get $proc) (i32.const 16))
+                        (global.get $WIN16_THUNK_SEL)))
+      (then (return (i32.const 0))))
+    (local.set $off (i32.and (local.get $proc) (i32.const 0xFFFF)))
+    (if (i32.and (i32.gt_u (local.get $off) (global.get $WIN16_BUILTIN_CLASS_PROC))
+                 (i32.lt_u (local.get $off) (global.get $WIN16_CONT_OFFSET)))
+      (then (return (i32.sub (local.get $off) (global.get $WIN16_BUILTIN_CLASS_PROC)))))
+    (i32.const 0))
+
+  ;; A window reached through a per-class built-in procedure but created under
+  ;; the task's own class name is not in the control table yet. Adopt it as
+  ;; that control, with the WM_CREATE its state block was never given — the
+  ;; 16-bit twin of the WNDPROC_SYSCLASS adoption in $handle_CallWindowProcA.
+  (func $win16_adopt_builtin_proc (param $hwnd i32) (param $proc i32)
+    (local $class i32) (local $slot i32)
+    (local.set $class (call $win16_builtin_proc_class (local.get $proc)))
+    (if (i32.or (i32.eqz (local.get $class))
+                (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0)))
+      (then (return)))
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.eq (local.get $slot) (i32.const -1)) (then (return)))
+    (call $ctrl_table_set (local.get $slot) (local.get $class)
+      (call $ctrl_table_get_id (local.get $hwnd)))
+    (call $sysclass_replay_create (local.get $hwnd) (local.get $slot)))
+
+  ;; A far call to a per-class built-in procedure: a window procedure's Pascal
+  ;; frame, answered by the native control. Creation messages are not passed
+  ;; on — adoption has already replayed WM_CREATE with a 32-bit CREATESTRUCT,
+  ;; and the one on this frame is the task's 16-bit layout.
+  (func $win16_builtin_class_proc (param $proc i32)
+    (local $hwnd i32) (local $message i32) (local $wparam i32) (local $lparam i32)
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 4))))
+    (local.set $message (call $win16_arg16 (i32.const 3)))
+    (local.set $wparam (call $win16_arg16 (i32.const 2)))
+    (local.set $lparam (call $win16_arg32 (i32.const 0)))
+    (call $win16_adopt_builtin_proc (local.get $hwnd) (local.get $proc))
+    (if (i32.or (i32.eq (local.get $message) (i32.const 0x0081))
+                (i32.eq (local.get $message) (i32.const 0x0001)))
+      (then
+        ;; WM_NCCREATE accepts creation; WM_CREATE reports success.
+        (global.set $eax (i32.eq (local.get $message) (i32.const 0x0081)))
+        (global.set $edx (i32.const 0))
+        (call $win16_api_return (i32.const 10))
+        (return)))
+    (local.set $lparam (call $win16_ctrl_lparam32
+      (call $ctrl_table_get_class (local.get $hwnd)) (local.get $message) (local.get $lparam)))
+    (call $win16_call32_begin (i32.const 4))
+    (global.set $eax (call $control_wndproc_dispatch
+      (local.get $hwnd)
+      (call $win16_ctrl_msg32 (local.get $hwnd) (local.get $message))
+      (call $win16_msg_wparam32 (local.get $message) (local.get $wparam))
+      (local.get $lparam)))
+    (call $win16_call32_end)
+    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
+    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 10)))
 
   ;; Is this window procedure one a 16-bit task can actually far-call? The
   ;; window table holds both kinds: a far pointer for a procedure the task
@@ -6587,6 +6664,7 @@
     (if (i32.eqz (call $win16_is_far_proc (local.get $proc)))
       (then
         (local.set $hwnd32 (call $win16_h32 (local.get $hwnd)))
+        (call $win16_adopt_builtin_proc (local.get $hwnd32) (local.get $proc))
         (local.set $class (call $ctrl_table_get_class (local.get $hwnd32)))
         (local.set $lparam (call $win16_ctrl_lparam32
           (local.get $class) (local.get $message) (local.get $lparam)))
@@ -6813,6 +6891,11 @@
       (local.get $hwnd) (local.get $menu) (local.get $title))
     (call $win16_shadow_scrollbar
       (local.get $hwnd) (local.get $menu))
+    ;; A class the task registered with a built-in control's procedure makes
+    ;; windows that are that control (Civ II's MSEditBoxClass is an EDIT).
+    (if (local.get $hwnd)
+      (then (call $win16_adopt_builtin_proc (local.get $hwnd)
+              (call $wnd_table_get (local.get $hwnd)))))
     ;; The generic child-creation path pairs its synchronous WM_CREATE with a
     ;; CACA0027 WM_SIZE continuation. That continuation uses a 32-bit frame,
     ;; which call32 must discard for a Win16 task. Move the saved size onto the
@@ -12772,6 +12855,15 @@
     ;; Pascal frame, which is DefWindowProc's frame.
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_BUILTIN_WNDPROC))
       (then (call $win16_DefWindowProc) (return)))
+    ;; The same, for one built-in control class in particular.
+    (if (call $win16_builtin_proc_class
+          (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+                  (local.get $thunk_off)))
+      (then
+        (call $win16_builtin_class_proc
+          (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+                  (local.get $thunk_off)))
+        (return)))
     ;; The dialog pump, parked in the same way as the modal one below but
     ;; driving the task's own DLGPROC. It owns its splice, so nothing here.
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_DLG_PUMP))

@@ -3975,6 +3975,12 @@
   ;; task's address space, so it gets this far pointer, which comes back through
   ;; $win16_dispatch and lands on DefWindowProc.
   (global $WIN16_BUILTIN_WNDPROC i32 (i32.const 0xFF20))
+  ;; The same far pointer for one of USER's built-in control classes, one
+  ;; offset per class: 0xFE00 + the $control_wndproc_dispatch class id. A task
+  ;; that superclasses EDIT reads it off a throwaway EDIT window and registers
+  ;; its own class with it, so the pointer is the only thing that says what the
+  ;; new class's windows are. See $win16_adopt_builtin_proc.
+  (global $WIN16_BUILTIN_CLASS_PROC i32 (i32.const 0xFE00))
   ;; A fourth, which is not called but *parked in*: a modal message box takes
   ;; over the task while it is up, and the run loop re-enters this offset every
   ;; pass until the box is dismissed. See $win16_MessageBox.
