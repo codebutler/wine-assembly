@@ -4699,9 +4699,25 @@
             (call $vblank_block)
             (return)))
         (global.set $vblank_wait_active (i32.const 0))))
-    (call $d3dim_worker_fence)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $back_guest (load.field DxObject misc0 (local.get $entry)))
+    ;; With a render Worker still drawing this frame, queue the swap behind
+    ;; those draws and return: the guest simulates the next frame while this
+    ;; one rasterizes. The present waits for the next fence, and a second
+    ;; Flip fences first, so at most one frame is ever in flight.
+    (if (local.get $back_guest)
+      (then
+        (local.set $back_entry (call $dx_from_this (local.get $back_guest)))
+        (if (call $d3dim_worker_try_flip (local.get $entry) (local.get $back_entry))
+          (then
+            (call $host_dx_trace (i32.const 6) (call $dx_slot_of (local.get $entry))
+              (call $dx_slot_of (local.get $back_entry))
+              (load.field DxObject misc1 (local.get $back_entry))
+              (load.field DxObject misc1 (local.get $entry)))
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))))
+    (call $d3dim_worker_fence)
     (if (local.get $back_guest)
       (then
         (local.set $back_entry (call $dx_from_this (local.get $back_guest)))

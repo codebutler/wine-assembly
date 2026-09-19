@@ -71,11 +71,51 @@
   ;; pixels or state the queued draws read, so this gate is what keeps those
   ;; sites free when no Worker is present or nothing is outstanding.
   (global $d3dim_worker_pending (mut i32) (i32.const 0))
+  ;; Primary surface entry whose Flip went to the render Worker and has not
+  ;; been presented yet. The Worker swaps the flip chain's DIBs in draw order,
+  ;; so the front buffer holds that frame only once a fence has waited for it;
+  ;; the fence presents it then. Zero when no present is owed.
+  (global $d3dim_present_pending (mut i32) (i32.const 0))
 
   (func $d3dim_worker_fence
+    (local $front i32)
     (if (global.get $d3dim_worker_pending) (then
       (global.set $d3dim_worker_pending (i32.const 0))
-      (drop (call $host_gpu_gl_call (i32.const 0x20001) (i32.const 0) (i32.const 0))))))
+      (drop (call $host_gpu_gl_call (i32.const 0x20001) (i32.const 0) (i32.const 0)))))
+    (if (global.get $d3dim_present_pending) (then
+      (local.set $front (global.get $d3dim_present_pending))
+      (global.set $d3dim_present_pending (i32.const 0))
+      (call $dx_present (local.get $front)))))
+
+  ;; Queue a flip-chain DIB swap behind the draws still on the render Worker,
+  ;; so the frame keeps rasterizing into the buffer it started in while the
+  ;; guest runs on. Only worth it with draws outstanding: with none, the
+  ;; caller's synchronous swap costs nothing. Result 1 means queued; the
+  ;; present is then owed to the next fence.
+  (func $d3dim_worker_try_flip (param $front i32) (param $back i32) (result i32)
+    (local $desc i32)
+    (if (i32.eqz (global.get $d3dim_worker_pending)) (then (return (i32.const 0))))
+    (if (global.get $d3dim_present_pending) (then (return (i32.const 0))))
+    (local.set $desc (global.get $d3dim_flip_desc))
+    (if (i32.eqz (local.get $desc)) (then
+      (local.set $desc (call $g2w (call $heap_alloc (i32.const 8))))
+      (global.set $d3dim_flip_desc (local.get $desc))))
+    (i32.store offset=0 (local.get $desc) (local.get $front))
+    (i32.store offset=4 (local.get $desc) (local.get $back))
+    (if (i32.eqz (call $host_gpu_gl_call (i32.const 0x20003) (local.get $desc) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (global.set $d3dim_present_pending (local.get $front))
+    (i32.const 1))
+  (global $d3dim_flip_desc (mut i32) (i32.const 0))
+
+  ;; The render Worker's half of a queued Flip: the same DIB swap
+  ;; $handle_IDirectDrawSurface_Flip does synchronously, run after every draw
+  ;; queued before it. Both arguments are DX_OBJECTS entry addresses.
+  (func (export "d3dim_worker_flip") (param $front i32) (param $back i32)
+    (local $tmp i32)
+    (local.set $tmp (load.field DxObject misc1 (local.get $front)))
+    (store.field DxObject misc1 (local.get $front) (load.field DxObject misc1 (local.get $back)))
+    (store.field DxObject misc1 (local.get $back) (local.get $tmp)))
 
   ;; Every D3DIM draw funnels through $d3dim_draw_primitive or
   ;; $d3dim_draw_indexed_primitive. The non-indexed core calls this once its

@@ -9306,6 +9306,14 @@ if (VERBOSE) {
     }
   }
   const executionElapsedSeconds = Math.max(0, (performance.now() - executionStartedAt) / 1000);
+  // A window whose stop is --max-batches (or past a crash/stop) is never
+  // closed inside the loop; report it as ending at run end, not silently.
+  for (const w of CPU_WINDOWS) {
+    if (!w.cpu || w.done) continue;
+    const d = process.cpuUsage(w.cpu);
+    w.done = true;
+    console.log(`[cpu-window] batches ${w.start}..run end (asked ${w.stop}): user ${(d.user / 1e6).toFixed(3)}s sys ${(d.system / 1e6).toFixed(3)}s wall ${((performance.now() - w.wall) / 1000).toFixed(3)}s`);
+  }
   // The control server would otherwise hold the process open; unref lets a
   // reply resolved in the final batch still flush while the exit path prints.
   if (control) control.close();
@@ -9314,7 +9322,7 @@ if (VERBOSE) {
     ctx.d3dCommands.fence();
     const d = ctx.d3dCommands.snapshot();
     console.log(`[d3d-worker] ready=${d.ready} queued=${d.queued} fallbacks=${d.fallbacks} ` +
-      `fences=${d.fences} waits=${d.waits} waitMs=${d.waitMs.toFixed(1)} ` +
+      `fences=${d.fences} flips=${d.flips || 0} waits=${d.waits} waitMs=${d.waitMs.toFixed(1)} ` +
       `submissions=${d.submissions} replayCommands=${d.replayCommands} replayMs=${d.replayMs.toFixed(1)}`);
     ctx.d3dCommands.stop();
   }
