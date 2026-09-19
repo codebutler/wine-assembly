@@ -1373,6 +1373,10 @@ class WineAssembly {
       }
     };
     h.get_ticks = () => self._guestTickMs(sharedAudio);
+    // The renderer stamps queued DirectInput edges with this same clock, so a
+    // pause -- which stops _guestTickMs but not Date.now() -- cannot make an
+    // edge queued before it look like it happened minutes ago.
+    if (self.renderer) self.renderer._guestNowMs = h.get_ticks;
     // Browser-only Open/Save common-dialog hooks. has_dom returns 1 so
     // $create_open_dialog renders the Upload / Download button.
     h.has_dom = () => 1;

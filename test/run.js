@@ -485,13 +485,19 @@ if (process.send) {
 }
 const TIME_SCALE = parseFloat(getArg('time-scale', '1')) || 1;  // --time-scale=10: guest clock runs 10x
 const REAL_TICKS = hasFlag('real-ticks'); // --real-ticks: GetTickCount from the wall clock, not the batch counter
-// --wall-clock-ms=N: pin the CALENDAR clock (GetLocalTime/GetSystemTime/
-// GetSystemTimeAsFileTime, i.e. the `wall_clock` import) to a fixed epoch
-// millisecond. The elapsed-time clock is already batch-driven and reproducible,
-// but the calendar one is deliberately real, so a guest that seeds itself from
-// the time of day makes an otherwise identical A/B pair diverge. Pin it and the
-// two arms see the same calendar, which is what an A/B needs; leave it off and
-// nothing changes. `0` is not a valid pin (it is falsy, and a 1970 calendar is
+// --wall-clock-ms=N: pin the ORIGIN of the CALENDAR clock (GetLocalTime/
+// GetSystemTime/GetSystemTimeAsFileTime, i.e. the `wall_clock` import) to a
+// fixed epoch millisecond. The elapsed-time clock is already batch-driven and
+// reproducible, but the calendar one is deliberately real, so a guest that
+// seeds itself from the time of day makes an otherwise identical A/B pair
+// diverge. Pin it and the two arms see the same calendar, which is what an A/B
+// needs; leave it off and nothing changes.
+//
+// The pin sets where the calendar STARTS, not that it stops: from there it
+// advances by guest time (batchTicks(), guest milliseconds since the run
+// began), so it is still a moving clock and still identical between two runs
+// of one --input script. See where ctx.wallNowMs is rebound, next to the
+// get_ticks choice. `0` is not a valid pin (it is falsy, and a 1970 calendar is
 // not what anyone means) — the flag takes a real epoch value.
 const WALL_CLOCK_MS_ARG = getArg('wall-clock-ms', '');
 const WALL_CLOCK_MS = WALL_CLOCK_MS_ARG === '' ? 0 : Number(WALL_CLOCK_MS_ARG);
@@ -3414,6 +3420,30 @@ async function main() {
   h.get_ticks = REAL_TICKS
     ? () => ((((Date.now() - CLOCK_ORIGIN) * TIME_SCALE) | 0) & 0x7FFFFFFF)
     : batchClock.getTicks;
+  // Every OTHER import table in this process is built from `ctx` — one per
+  // guest thread, in makeWorkerImports — and createHostImports derives its
+  // get_ticks from ctx.guestNowMs. Overriding only `h` above therefore left
+  // the main thread on the batch clock and every spawned thread on the real
+  // wall clock, so the threads did not even agree about "now". Measured on
+  // StarCraft: two identical headless runs diverged in Storm's loader thread
+  // (T2) after ~156 batches, which moved every later VirtualAlloc base and
+  // made the written save file differ byte-for-byte between runs.
+  ctx.guestNowMs = () => h.get_ticks();
+  // A queued DirectInput edge carries the moment it was queued, and the guest
+  // reads that against its own clock -- so the renderer has to stamp it with
+  // the clock chosen right above, not with the wall clock. Otherwise a run
+  // driven by a fixed --input script is only reproducible when the box is
+  // idle: the age the guest sees is real time spent between batches.
+  if (renderer) renderer._guestNowMs = h.get_ticks;
+  // --wall-clock-ms pins the calendar's ORIGIN; the calendar then advances
+  // with GUEST time. Freezing it outright was deterministic but not a clock:
+  // GetSystemTime returned one instant for the whole run, so anything that
+  // measures elapsed calendar time -- a save's timestamp, a "you have played
+  // for" counter, an expiry check, a log line -- saw zero pass no matter how
+  // far the guest got. batchTicks() is guest milliseconds since the run
+  // started, so the calendar moves at the rate the guest believes time moves
+  // and two runs of one --input script still see the identical calendar.
+  if (WALL_CLOCK_MS) ctx.wallNowMs = () => WALL_CLOCK_MS + batchClock.batchTicks();
 
   // --- Override input for test injection ---
   let lastInputEvent = null;
@@ -4116,7 +4146,11 @@ async function main() {
         })
         .filter(Boolean)) : null,
       clockIntervalMs: 0,          // the CLI clock is the batch counter, published by hand
-      tickMs: () => tickState.batch * 200,
+      // The same clock the cooperative backend publishes, not a second one:
+      // hard-coding 200 here made --tick-ms-per-batch silently a no-op for
+      // every worker-hosted guest thread, so the threads disagreed about how
+      // fast time was passing.
+      tickMs: () => tickState.batch * TICK_MS_PER_BATCH,
       log: msg => console.log(msg),
     });
     await guestThreadHost.start();

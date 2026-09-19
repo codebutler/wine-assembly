@@ -8511,10 +8511,17 @@
     (call $gs32 (i32.add (local.get $rec) (i32.const 12))
       (global.get $di_mouse_data_sequence)))
 
-  ;; dwTimeStamp for one queued ring word. A button edge carries the wall-clock
-  ;; millisecond it was queued at in its low 28 bits (lib/renderer-input.js),
-  ;; so its record is stamped with the guest tick of that moment: now, less
-  ;; the real time that has passed since. Everything drained in one poll used
+  ;; dwTimeStamp for one queued ring word. A button edge carries the GUEST
+  ;; millisecond it was queued at in its low 28 bits (lib/renderer-input.js
+  ;; stamps it with the host's own get_ticks clock), so the arithmetic below
+  ;; is one clock throughout: now, less the low-28-bit distance back to the
+  ;; stamp, which reconstructs the absolute tick the edge was queued at for
+  ;; any age under 2^28 ms. It used to subtract host_real_time_ms instead,
+  ;; mixing the wall clock into a guest-tick result -- under test/run.js's
+  ;; batch-driven clock that made a fixed --input script produce a different
+  ;; guest state on every run, according to how busy the box was, and it
+  ;; misread edges queued across a browser pause. Everything drained in one
+  ;; poll used
   ;; to carry the poll's own tick, and a game that measures a double-click by
   ;; the gap between two press records saw a gap of zero -- or, when the two
   ;; presses reached it a frame apart, a gap of one whole frame. Motion words
@@ -8527,7 +8534,7 @@
                  (i32.le_u (local.get $event_type) (i32.const 4)))
       (then
         (return (i32.sub (local.get $now)
-          (i32.and (i32.sub (call $host_real_time_ms) (local.get $event))
+          (i32.and (i32.sub (local.get $now) (local.get $event))
                    (i32.const 0x0FFFFFFF))))))
     (local.get $now))
 
