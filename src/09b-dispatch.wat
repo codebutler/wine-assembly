@@ -1248,6 +1248,14 @@
             (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
             (global.set $eax (i32.const 1))
             (return)))
+        ;; TranslateAccelerator's WM_COMMAND returned: the accelerator was
+        ;; translated, so the API reports TRUE whatever the wndproc said.
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x43434154))
+          (then
+            (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (global.set $eax (i32.const 1))
+            (return)))
         (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x434E5446))
           (then
             (call $gdi_font_enum_continue)

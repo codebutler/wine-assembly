@@ -2916,6 +2916,7 @@
     (local $msg_wa i32) (local $message i32) (local $match i32) (local $cmd i32)
     (local $command_message i32)
     (local $shift i32) (local $ctrl i32) (local $alt i32)
+    (local $wndproc i32) (local $owner_tid i32) (local $ret_addr i32)
     (global.set $eax (i32.const 0))
     (if (i32.eqz (local.get $arg2))
       (then (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
@@ -2952,6 +2953,45 @@
               (local.get $cmd)
               (i32.const 0))))
           (else
+            ;; WM_COMMAND to an x86 wndproc this thread owns is entered as a
+            ;; real guest call, the way SendMessageA does it, not through
+            ;; $wnd_send_message's nested loop: a nested run cannot block,
+            ;; so a handler that waits on another thread gets its wait
+            ;; returned early. StarCraft's F1 loads rez\helpmenu.bin through
+            ;; Storm's reader thread, saw ERROR_HANDLE_EOF and died in its
+            ;; fatal-error path. The typed "TACC" frame under the wndproc's
+            ;; arguments makes the CACA0011 continuation return TRUE, the
+            ;; accelerator's result, rather than the wndproc's LRESULT.
+            (local.set $wndproc (call $wnd_table_get (local.get $arg0)))
+            (local.set $owner_tid (call $wnd_get_thread (local.get $arg0)))
+            (if (i32.and
+                  (i32.and
+                    (i32.eq (local.get $command_message) (i32.const 0x0111))
+                    (i32.and
+                      (i32.ne (local.get $wndproc) (i32.const 0))
+                      (i32.lt_u (local.get $wndproc) (i32.const 0xFFFE0000))))
+                  (i32.and
+                    (i32.and
+                      (i32.ne (local.get $wndproc) (global.get $WNDPROC_DIALOG))
+                      (i32.ne (local.get $wndproc) (global.get $WNDPROC_BUILTIN)))
+                    (i32.or
+                      (i32.eqz (local.get $owner_tid))
+                      (i32.eq (local.get $owner_tid) (global.get $current_thread_id)))))
+              (then
+                (local.set $ret_addr (call $gl32 (global.get $esp)))
+                (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+                (global.set $esp (i32.sub (global.get $esp) (i32.const 28)))
+                (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
+                (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg0))
+                (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0x0111))
+                (call $gs32 (i32.add (global.get $esp) (i32.const 12))
+                  (i32.or (i32.const 0x00010000) (local.get $cmd)))
+                (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (i32.const 0))
+                (call $gs32 (i32.add (global.get $esp) (i32.const 20)) (i32.const 0x43434154)) ;; "TACC"
+                (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $ret_addr))
+                (global.set $eip (local.get $wndproc))
+                (global.set $steps (i32.const 0))
+                (return)))
             (drop (call $wnd_send_message
               (local.get $arg0)
               (local.get $command_message)

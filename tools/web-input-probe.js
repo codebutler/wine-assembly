@@ -21,7 +21,8 @@
 //   tap:X,Y       a touchscreen tap (needs --touch); drives the touch bridge,
 //                 which `click` never reaches
 //   down:X,Y      / up:X,Y   — the halves of a drag
-//   key:Name      keyboard press (puppeteer key name, e.g. Enter, KeyA)
+//   key:Name      keyboard press (puppeteer key name, e.g. Enter, KeyA); a
+//                 combo holds its modifiers: key:Alt+KeyS, key:Shift+F2
 //   type:TEXT     type literal text through browser key events
 //   wait:MS       idle, letting the guest run
 //   eval:EXPR     evaluate EXPR in the page and print its result
@@ -101,6 +102,10 @@ const LAN_ANSWER = opt('lan', 'solo');
 // paths instead, so bugs that only exist there (a viewport crop the shaders
 // ignore) are invisible without --gpu, which swaps in SwiftShader.
 const GPU = argv.includes('--gpu');
+// --headful opens a visible Chrome window on the real GPU. Headless Chrome has
+// no compositor or display refresh, so any duration quoted from a run (how
+// long a save takes, how fast a screen advances) needs this.
+const HEADFUL = argv.includes('--headful');
 // iPhone Safari exposes NO element Fullscreen API -- not requestFullscreen,
 // not the webkit spelling, on anything that is not a <video>. Chrome always
 // has it, so the only way to drive the fallback the page uses there is to take
@@ -231,9 +236,10 @@ async function main() {
   const base = URL_BASE || `http://127.0.0.1:${server.address().port}`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'wine-assembly-input-'));
   const browser = await puppeteer.launch({
-    headless: true,
+    headless: !HEADFUL,
     executablePath: CHROME,
     userDataDir: profile,
+    defaultViewport: HEADFUL ? null : undefined,
     // Every CDP call this tool makes lands on a page whose main thread is
     // running an x86 interpreter, and the guest slice is not preemptible. A
     // heavy app (Winamp, StarCraft, Heroes II, RollerCoaster Tycoon) on a
@@ -243,9 +249,10 @@ async function main() {
     // failing to launch, and is not. Raise it well past any wait we ask for.
     protocolTimeout: PROTOCOL_TIMEOUT_MS,
     args: ['--no-sandbox', '--no-first-run', '--no-default-browser-check'].concat(
-      GPU
-        ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
-        : ['--disable-gpu']),
+      HEADFUL ? [`--window-size=${VIEWPORT.width},${VIEWPORT.height + 120}`]
+        : GPU
+          ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+          : ['--disable-gpu']),
   });
   const problems = [];
   try {
@@ -468,7 +475,12 @@ async function main() {
         console.log(`shot ${rest}`);
         continue;
       } else if (kind === 'key') {
-        await page.keyboard.press(rest);
+        // `Alt+KeyS`, `Shift+F2`: hold the leading modifiers around the press.
+        const keys = rest.split('+');
+        const last = keys.pop();
+        for (const k of keys) await page.keyboard.down(k);
+        await page.keyboard.press(last);
+        for (const k of keys.reverse()) await page.keyboard.up(k);
       } else if (kind === 'type') {
         await page.keyboard.type(rest);
       } else if (kind === 'tap') {
