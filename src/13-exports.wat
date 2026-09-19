@@ -3494,12 +3494,17 @@
     (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))
     (local.set $guest (call $virtual_reserve_down (local.get $size)))
     (if (i32.eqz (local.get $guest)) (then (return (i32.const 0))))
-    (call $virtual_map_commit (local.get $guest) (local.get $size)))
+    (local.set $guest (call $virtual_map_commit (local.get $guest) (local.get $size)))
+    ;; Remember the range as a view, so VirtualFree can refuse it the way
+    ;; Windows does instead of treating it as VirtualAlloc'd memory.
+    (call $mapped_view_register (local.get $guest) (local.get $size))
+    (local.get $guest))
   (func (export "guest_free") (param $g i32)
     (call $heap_free (local.get $g)))
   ;; Paired with guest_map_alloc; heap_free cannot release a sparse mapping.
   (func (export "guest_map_free") (param $g i32) (result i32)
     (local $result i32)
+    (call $mapped_view_unregister (local.get $g))
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
     (local.set $result (call $virtual_map_release (local.get $g)))
     (call $lock_release (global.get $LOCK_VIRTUAL_MAP))

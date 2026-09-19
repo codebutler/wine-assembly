@@ -455,6 +455,13 @@
     (owner "10-helpers.wat:$virtual_map_commit_locked"))
   (region.declare $VIRTUAL_MAP_TABLE (size 0x00020000) (align 0x00000010)
     (owner "10-helpers.wat:$virtual_map_commit_locked"))
+  ;; Ranges handed out by guest_map_alloc, i.e. MapViewOfFile views. Slot 0 is
+  ;; the live count; slots 1.. are {guest base, size}. A view is not a
+  ;; VirtualAlloc reservation, and VirtualFree refuses to touch one -- see
+  ;; $mapped_view_contains for the app that proved this matters.
+  (region.declare $MAPPED_VIEW_TABLE (size 0x000007F8) (align 0x00000010)
+    (stride 8 (count $MAX_MAPPED_VIEWS))
+    (owner "09a0-handlers-base.wat:$mapped_view_register"))
   (region.declare $VIRTUAL_RESERVE_TABLE (size 0x00010000) (align 0x00000010)
     (stride 8 (count $MAX_VIRTUAL_RESERVES))
     (owner "10-helpers.wat:$virtual_reserve_record"))

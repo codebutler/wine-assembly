@@ -2543,6 +2543,13 @@
   (global $VIRTUAL_RESERVE_TABLE i32 (region.addr $VIRTUAL_RESERVE_TABLE 0))
   (global $VIRTUAL_RESERVE_TABLE_SIZE i32 (region.size $VIRTUAL_RESERVE_TABLE))
   (global $MAX_VIRTUAL_RESERVES i32 (i32.const 8192))
+  ;; MapViewOfFile views, as {guest base, size} pairs with the live count in
+  ;; slot 0. A view lives in the same high address space as a VirtualAlloc
+  ;; commit and gets an ordinary map record, so nothing else can tell the two
+  ;; apart — and VirtualFree must, because Windows refuses to act on a view.
+  (global $MAPPED_VIEW_TABLE i32 (region.addr $MAPPED_VIEW_TABLE 0))
+  (global $MAPPED_VIEW_TABLE_SIZE i32 (region.size $MAPPED_VIEW_TABLE))
+  (global $MAX_MAPPED_VIEWS i32 (i32.const 255))
   ;; Released backing extents below the high-water mark, as an explicit free
   ;; list. The best-fit pass used to derive them from the record table on every
   ;; commit, which is O(records^2) — 25M record pairs per commit once Warcraft

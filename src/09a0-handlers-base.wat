@@ -4007,11 +4007,97 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
+  ;; ---- MapViewOfFile views ------------------------------------------------
+  ;; guest_map_alloc puts a view in the same high address space as a
+  ;; VirtualAlloc commit, and it gets an ordinary VIRTUAL_MAP_TABLE record, so
+  ;; by the time VirtualFree sees an address there is nothing in the record to
+  ;; say which it is. Windows cares: a view is freed with UnmapViewOfFile, and
+  ;; VirtualFree on one fails with ERROR_INVALID_ADDRESS without touching a
+  ;; byte. Age of Empires leans on exactly that. Its allocator wraps a
+  ;; "decommit these bytes" helper at 0x46ef00 that calls
+  ;; VirtualFree(ptr, size, MEM_DECOMMIT) on whatever it is handed, and it
+  ;; hands it unaligned interior pointers into the memory-mapped .drs archives
+  ;; (0x7de5d197 size 0x183e, inside the guest 0x7d1b0000 view whose 0xdc3000
+  ;; is Interfac.drs rounded up to a page). On Windows those calls do nothing.
+  ;; Here they used to reach $virtual_map_decommit_zero, which cleared the
+  ;; interface shapes out of the mapped archive; the shape count then read 0
+  ;; and the game reported it as "Could not initialize graphics system", which
+  ;; is a long way from the real cause.
+  ;;
+  ;; Slot 0 of the table is the live count, slots 1.. are {guest base, size}.
+  ;; The table is small and only VirtualFree and the map alloc/free exports
+  ;; walk it, all cold paths.
+  (func $mapped_view_slot (param $i i32) (result i32)
+    (i32.add (global.get $MAPPED_VIEW_TABLE) (i32.shl (local.get $i) (i32.const 3))))
+
+  (func $mapped_view_register (param $guest i32) (param $size i32)
+    (local $count i32)
+    (if (i32.or (i32.eqz (local.get $guest)) (i32.eqz (local.get $size)))
+      (then (return)))
+    (local.set $count (i32.load (global.get $MAPPED_VIEW_TABLE)))
+    ;; A full table means later views are not recognized as views, which is the
+    ;; behaviour that shipped before this table existed. Losing the guard is
+    ;; better than dropping a live entry and mis-reporting some other view.
+    (if (i32.ge_u (local.get $count) (global.get $MAX_MAPPED_VIEWS))
+      (then (return)))
+    (i32.store (call $mapped_view_slot (i32.add (local.get $count) (i32.const 1)))
+      (local.get $guest))
+    (i32.store offset=4 (call $mapped_view_slot (i32.add (local.get $count) (i32.const 1)))
+      (local.get $size))
+    (i32.store (global.get $MAPPED_VIEW_TABLE) (i32.add (local.get $count) (i32.const 1))))
+
+  (func $mapped_view_unregister (param $guest i32)
+    (local $count i32) (local $i i32) (local $slot i32) (local $last i32)
+    (local.set $count (i32.load (global.get $MAPPED_VIEW_TABLE)))
+    (local.set $i (i32.const 1))
+    (block $done (loop $scan
+      (br_if $done (i32.gt_u (local.get $i) (local.get $count)))
+      (local.set $slot (call $mapped_view_slot (local.get $i)))
+      (if (i32.eq (i32.load (local.get $slot)) (local.get $guest))
+        (then
+          ;; Swap the last entry down; order carries no meaning here.
+          (local.set $last (call $mapped_view_slot (local.get $count)))
+          (i32.store (local.get $slot) (i32.load (local.get $last)))
+          (i32.store offset=4 (local.get $slot) (i32.load offset=4 (local.get $last)))
+          (i32.store (global.get $MAPPED_VIEW_TABLE)
+            (i32.sub (local.get $count) (i32.const 1)))
+          (return)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  ;; Is this guest address inside a live mapped view?
+  (func $mapped_view_contains (param $guest i32) (result i32)
+    (local $count i32) (local $i i32) (local $slot i32) (local $base i32)
+    (local.set $count (i32.load (global.get $MAPPED_VIEW_TABLE)))
+    (local.set $i (i32.const 1))
+    (block $done (loop $scan
+      (br_if $done (i32.gt_u (local.get $i) (local.get $count)))
+      (local.set $slot (call $mapped_view_slot (local.get $i)))
+      (local.set $base (i32.load (local.get $slot)))
+      (if (i32.and
+            (i32.ge_u (local.get $guest) (local.get $base))
+            (i32.lt_u (local.get $guest)
+              (i32.add (local.get $base) (i32.load offset=4 (local.get $slot)))))
+        (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   ;; 39: VirtualFree. A sparse MEM_RELEASE must recover its map-table slot;
   ;; otherwise allocation-heavy loaders eventually hit MAX_VIRTUAL_MAPS even
   ;; though every corresponding Windows allocation was freed successfully.
   ;; Decommit and low/direct mappings need no backing operation here.
   (func $handle_VirtualFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; A MapViewOfFile view is not VirtualAlloc'd memory: Windows fails the
+    ;; call with ERROR_INVALID_ADDRESS and leaves the view alone, whether the
+    ;; guest asked to decommit or to release. See $mapped_view_contains.
+    (if (call $mapped_view_contains (local.get $arg0))
+      (then
+        (global.set $last_error (i32.const 487))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     ;; MEM_DECOMMIT. The mapping stays -- decommit is not release, and the guest
     ;; may commit the same addresses again -- but the pages it gets back then
     ;; are zero on Windows, so the backing has to be cleared now. See
