@@ -3730,7 +3730,7 @@
               (then (return)))
             (if (call $try_emit_base_run (local.get $dst) (global.get $mr_disp))
               (then (return)))))
-        (call $te (i32.add (global.get $TH_LOAD32_RO_BASE) (global.get $mr_base)) (local.get $dst))
+        (call $te (i32.const 26) (i32.or (i32.shl (local.get $dst) (i32.const 4)) (global.get $mr_base)))
         (call $te_raw (global.get $mr_disp))
         (return)))
     ;; Indexed SIB loads dominate generated Smacker conversion loops. Encode
@@ -3766,7 +3766,7 @@
             (if (call $try_emit_store32_span
                   (local.get $src) (global.get $mr_disp) (local.get $insn_start))
               (then (return)))
-            (call $te (i32.add (global.get $TH_STORE32_RO_BASE) (global.get $mr_base)) (local.get $src))
+            (call $te (i32.const 27) (i32.or (i32.shl (local.get $src) (i32.const 4)) (global.get $mr_base)))
             (call $te_raw (global.get $mr_disp)) (return)))
     (if (call $mr_absolute)
       (then
