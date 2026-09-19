@@ -96,16 +96,36 @@ async function main() {
   try {
     await send({ action: 'ping' });
     await step(700);
-    await pressAt(400, 300, 60, 40); // dismiss title; now batch 800
-    await step(200);
-    await pressAt(400, 172);         // Start new game; now batch 1080
-    await step(370);
 
-    assert.strictEqual(await readGovernorName(), '',
-      'new-career name buffer must not retain the default governor text');
-    await typeText('Codex');         // now batch 1500
-    assert.strictEqual(await readGovernorName(), 'Codex',
-      'typing a short name must not retain a suffix from the default text');
+    // Getting to the name screen is a retry loop, not a batch schedule. Two
+    // states of the main menu swallow a click on "Start new game" and neither
+    // is visible in a capture as anything but a blank plate: the menu is drawn
+    // as a white panel until the app has finished loading (a click at batch 600
+    // does nothing at all), and an idle timer swaps in the attract title
+    // (title.565) around batch 1000, where the same click only dismisses the
+    // title. A fixed batch number therefore encodes today's load speed, which
+    // is what made this test start failing with an empty name buffer.
+    //
+    // The oracle is the buffer itself: keys only reach it on the name screen,
+    // so each attempt clicks a neutral spot (dismisses an attract frame,
+    // harmless on the menu), clicks the button, and types. If 'Codex' arrives
+    // we are there; if nothing arrives the click was swallowed, so try again.
+    let reached = false;
+    let lastName = null;
+    for (let attempt = 0; attempt < 8 && !reached; attempt++) {
+      await pressAt(400, 500, 40, 40); // neutral: below every menu plate
+      await step(150);
+      await pressAt(400, 172);         // Start new game
+      await step(300);
+      lastName = await readGovernorName();
+      if (lastName !== '') continue;   // not the empty name screen
+      await typeText('Codex');
+      lastName = await readGovernorName();
+      reached = lastName === 'Codex';
+    }
+    assert(reached,
+      'typing a short name must not retain a suffix from the default text: ' +
+      `never reached an empty name buffer accepting keys (last read ${JSON.stringify(lastName)})`);
     await send(`png:${namePath}`);
 
     await pressAt(548, 320);         // Continue; now batch 1580
