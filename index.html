@@ -2274,9 +2274,11 @@ Resource-aware Win98 emulator
     // isolation: worker startup may still fail and fall back cooperatively.
     const THREADS_KEY = 'wine-assembly.threads';
     window.WINE_THREADS = false;
-    // Experimental D3DIM software raster Worker. Keep it URL-opt-in until its
-    // ordered command/fence path has image parity across the D3D corpus.
-    window.WINE_D3D_RENDER_WORKER = new URLSearchParams(location.search).has('d3d-worker');
+    // D3DIM (DX2-7) software raster Worker: every draw path queues to it and
+    // each surface read/write, clear and present fences first. It needs a guest
+    // instance that may Atomics.wait, so it only engages in Threads mode;
+    // ?no-d3d-worker keeps rasterization on the guest thread for A/B.
+    window.WINE_D3D_RENDER_WORKER = !new URLSearchParams(location.search).has('no-d3d-worker');
     // Diagnostic: serialize Worker slices to distinguish shared-state races
     // from incorrect per-thread state.
     window.WINE_THREADS_SERIAL = /[?&]threads-serial\b/.test(location.search);

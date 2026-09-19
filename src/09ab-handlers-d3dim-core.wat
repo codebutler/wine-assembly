@@ -66,8 +66,82 @@
   ;; Producer-only descriptor scratch in the unused gap before CLIP_STATUS.
   (global $D3DIM_OFF_WORKER_DESC i32 (i32.const 3968))
 
+  ;; Nonzero while this instance has draws queued on the render Worker that
+  ;; no fence has waited for yet. Every fence site is on a path that touches
+  ;; pixels or state the queued draws read, so this gate is what keeps those
+  ;; sites free when no Worker is present or nothing is outstanding.
+  (global $d3dim_worker_pending (mut i32) (i32.const 0))
+
   (func $d3dim_worker_fence
-    (drop (call $host_gpu_gl_call (i32.const 0x20001) (i32.const 0) (i32.const 0))))
+    (if (global.get $d3dim_worker_pending) (then
+      (global.set $d3dim_worker_pending (i32.const 0))
+      (drop (call $host_gpu_gl_call (i32.const 0x20001) (i32.const 0) (i32.const 0))))))
+
+  ;; Every D3DIM draw funnels through $d3dim_draw_primitive or
+  ;; $d3dim_draw_indexed_primitive. The non-indexed core calls this once its
+  ;; vertices are transformed (type 3): lights and materials are read live
+  ;; from DX_OBJECTS, outside the state snapshot, so the Worker only ever
+  ;; rasterizes. It queues the draw when a Worker is attached and otherwise
+  ;; waits for queued work before the caller rasterizes here, so the target
+  ;; sees draws in guest order either way. The renderer instance replays with
+  ;; $d3dim_state_override set and never re-queues.
+  (func $d3dim_worker_route
+    (param $this i32) (param $primitive i32) (param $vertices i32) (param $count i32)
+    (result i32)
+    (if (global.get $d3dim_state_override) (then (return (i32.const 0))))
+    (if (call $d3dim_worker_try_draw
+          (local.get $this) (local.get $primitive) (i32.const 3)
+          (local.get $vertices) (local.get $count))
+      (then (return (i32.const 1))))
+    (call $d3dim_worker_fence)
+    (i32.const 0))
+
+  ;; The Worker consumes non-indexed vertices, so with one attached an indexed
+  ;; draw is expanded in index order -- which preserves list, strip and fan
+  ;; topology -- and handed to the non-indexed core, which transforms it here
+  ;; and queues the result. Out-of-range indices keep the draw on the
+  ;; synchronous indexed path, whose per-index validation decides what it
+  ;; skips. Result 1 means the draw was issued.
+  (func $d3dim_worker_try_draw_indexed
+    (param $this i32) (param $primitive i32) (param $vertex_type i32)
+    (param $vertices i32) (param $count i32)
+    (param $indices i32) (param $index_count i32) (result i32)
+    (local $size i32) (local $tmp i32) (local $dst i32) (local $src i32)
+    (local $idx_wa i32) (local $i i32) (local $idx i32) (local $ok i32)
+    (if (global.get $d3dim_state_override) (then (return (i32.const 0))))
+    (if (i32.ne (call $d3dim_vertex_type_stride (local.get $vertex_type)) (i32.const 32))
+      (then (return (i32.const 0))))
+    ;; 0x20002: is a render Worker attached and ready? Asked before paying for
+    ;; the expansion, which is wasted when the answer is no.
+    (if (i32.eqz (call $host_gpu_gl_call (i32.const 0x20002) (i32.const 0) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $index_count) (i32.const 0x20000))
+      (then (return (i32.const 0))))
+    (local.set $size (i32.mul (local.get $index_count) (i32.const 32)))
+    (local.set $tmp (call $heap_alloc (local.get $size)))
+    (if (i32.eqz (local.get $tmp)) (then (return (i32.const 0))))
+    (local.set $dst (call $g2w (local.get $tmp)))
+    (local.set $src (call $g2w (local.get $vertices)))
+    (local.set $idx_wa (call $g2w (local.get $indices)))
+    (local.set $ok (i32.const 1))
+    (block $done (loop $lp
+      (br_if $done (i32.ge_u (local.get $i) (local.get $index_count)))
+      (local.set $idx (i32.load16_u (i32.add (local.get $idx_wa) (i32.shl (local.get $i) (i32.const 1)))))
+      (if (i32.ge_u (local.get $idx) (local.get $count))
+        (then (local.set $ok (i32.const 0)) (br $done)))
+      (memory.copy
+        (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 5)))
+        (i32.add (local.get $src) (i32.shl (local.get $idx) (i32.const 5)))
+        (i32.const 32))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $lp)))
+    (if (local.get $ok) (then
+      (call $d3dim_draw_primitive
+        (local.get $this) (local.get $primitive) (local.get $vertex_type)
+        (local.get $tmp) (local.get $index_count))))
+    ;; The encoder copied the vertices into its ring before returning.
+    (call $heap_free (local.get $tmp))
+    (local.get $ok))
 
   ;; Snapshot ownership is established by the JS encoder before this returns.
   ;; Result 1 means a render Worker accepted the draw; 0 selects the existing
@@ -76,6 +150,7 @@
     (param $this i32) (param $primitive i32) (param $vertex_type i32)
     (param $vertices i32) (param $count i32) (result i32)
     (local $state i32) (local $desc i32)
+    (if (global.get $d3dim_state_override) (then (return (i32.const 0))))
     (local.set $state (call $d3ddev_state (local.get $this)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
     (local.set $desc (i32.add (call $g2w (local.get $state))
@@ -86,7 +161,10 @@
     (i32.store offset=12 (local.get $desc) (local.get $vertices))
     (i32.store offset=16 (local.get $desc) (local.get $count))
     (i32.store offset=20 (local.get $desc) (local.get $state))
-    (call $host_gpu_gl_call (i32.const 0x20000) (local.get $desc) (i32.const 0)))
+    (if (i32.eqz (call $host_gpu_gl_call (i32.const 0x20000) (local.get $desc) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (global.set $d3dim_worker_pending (i32.const 1))
+    (i32.const 1))
 
   ;; A renderer-only instance needs guest-address translation and a private
   ;; heap arena for its immutable command workspace, but it never decodes or
@@ -2168,6 +2246,7 @@
   ;; seeds it; SetRenderTarget updates it for apps that switch back buffers.
   (func $d3dim_set_render_target (param $this i32) (param $rt_surf i32)
     (local $entry i32) (local $rt_entry i32) (local $rt_slot i32)
+    (call $d3dim_worker_fence)
     (local.set $entry (call $dx_from_this (local.get $this)))
     (if (i32.eqz (local.get $rt_surf)) (then
       (store.field DxObject misc0 (local.get $entry) (i32.const 0))
@@ -3674,6 +3753,7 @@
     (local $rt i32) (local $dev_this i32) (local $vp_entry i32)
     (local $vx i32) (local $vy i32) (local $vw i32) (local $vh i32)
     (local $zbuf i32) (local $rtw i32) (local $rth i32) (local $bgtex i32)
+    (call $d3dim_worker_fence)
     (if (i32.eqz (local.get $vp_this)) (then (return)))
     (local.set $vp_entry (call $dx_from_this (local.get $vp_this)))
     (if (i32.eqz (local.get $vp_entry)) (then (return)))
@@ -3716,6 +3796,7 @@
     (local $state i32) (local $sw i32) (local $rt i32)
     (local $vx i32) (local $vy i32) (local $vw i32) (local $vh i32)
     (local $zbuf i32) (local $rtw i32) (local $rth i32)
+    (call $d3dim_worker_fence)
     (local.set $state (call $d3ddev_state (local.get $this)))
     (if (i32.eqz (local.get $state)) (then (return)))
     (local.set $rt (call $d3ddev_rt_entry (local.get $this)))
@@ -4123,6 +4204,9 @@
           (local.get $scratch_g) (local.get $dwVertexCount))
         (call $heap_free (local.get $scratch_g))
         (return)))
+    (if (call $d3dim_worker_route (local.get $this) (local.get $primType)
+          (local.get $lpvVertices) (local.get $dwVertexCount))
+      (then (return)))
     (local.set $rt (call $d3ddev_rt_entry (local.get $this)))
     (if (i32.eqz (local.get $rt)) (then (return)))
     (local.set $v_wa (call $g2w (local.get $lpvVertices)))
@@ -4520,6 +4604,13 @@
     (if (i32.or (i32.lt_u (local.get $vtxType) (i32.const 1))
                 (i32.gt_u (local.get $vtxType) (i32.const 3)))
       (then (return)))
+    (if (call $d3dim_worker_try_draw_indexed
+          (local.get $this) (local.get $primType) (local.get $vtxType)
+          (local.get $lpvVertices) (local.get $dwVertexCount)
+          (local.get $lpwIndices) (local.get $dwIndexCount))
+      (then (return)))
+    ;; Rasterizing here: anything still queued must land first.
+    (call $d3dim_worker_fence)
     (local.set $rt (call $d3ddev_rt_entry (local.get $this)))
     (local.set $state_guest (call $d3ddev_state (local.get $this)))
     (if (i32.or (i32.eqz (local.get $rt)) (i32.eqz (local.get $state_guest))) (then (return)))
@@ -5997,4 +6088,5 @@
     (i32.const 0))
 
   (func $d3dim_device_release (param $this i32) (result i32)
+    (call $d3dim_worker_fence)
     (call $d3dim_device_release_entry (call $dx_from_this (local.get $this))))

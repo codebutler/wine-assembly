@@ -50,6 +50,16 @@ const extraWat = String.raw`
     (call $d3dim_draw_primitive
       (local.get $device) (i32.const 4) (i32.const 3)
       (local.get $vertices) (local.get $count)))
+
+  (func (export "test_worker_draw_indexed")
+      (param $device i32) (param $vertices i32) (param $count i32)
+      (param $indices i32) (param $index_count i32)
+    (call $d3dim_draw_indexed_primitive
+      (local.get $device) (i32.const 4) (i32.const 3)
+      (local.get $vertices) (local.get $count)
+      (local.get $indices) (local.get $index_count)))
+
+  (func (export "test_worker_fence") (call $d3dim_worker_fence))
 `;
 
 function writeFloat(wat, address, value) {
@@ -134,7 +144,70 @@ function writeVertex(wat, address, x, y, color) {
   assert(actual.some(byte => byte !== 0),
     'byte equality must not pass on two blank render targets');
 
-  console.log(`PASS D3DIM second-instance worker parity (${expectedLit} lit bytes, ${pitch}B pitch)`);
+  // Routing: with an encoder attached, an indexed draw is expanded into the
+  // non-indexed vertices the transport carries and queued, not rasterized;
+  // the next fence replays it on the second instance. The stand-in below is
+  // the Encoder's contract made synchronous: snapshot the descriptor's state
+  // and vertices at queue time, replay through d3dim_worker_draw at the fence.
+  writeVertex(normal, vertices + 96, 13, 13, 0xffffffff);
+  const indices = 0x412000;
+  [0, 1, 2, 2, 1, 3].forEach((index, i) => {
+    const word = normal.guest_read32(indices + (i & ~1) * 2) >>> 0;
+    const shift = (i & 1) * 16;
+    normal.guest_write32(indices + (i & ~1) * 2, ((word & ~(0xffff << shift)) | (index << shift)) >>> 0);
+  });
+  target.fill(0);
+  normal.test_worker_draw_indexed(device, vertices, 4, indices, 6);
+  const expectedIndexed = target.slice();
+  assert(expectedIndexed.some(byte => byte !== 0), 'indexed quad drew nothing on the normal path');
+
+  const replayState = worker.guest_alloc(4096) >>> 0;
+  const replayVertices = worker.guest_alloc(0x10000) >>> 0;
+  const queued = [];
+  let fences = 0;
+  normalHarness.hostCtx.d3dCommands = {
+    call(opcode, descWa) {
+      const bytes = new Uint8Array(memory.buffer);
+      const view = new DataView(memory.buffer);
+      if (opcode === 0x20002) return 1;
+      if (opcode === 0x20000) {
+        const d = i => view.getUint32(descWa + i * 4, true);
+        const count = d(4);
+        const stateWa = normal.guest_to_wasm(d(5)) >>> 0;
+        const vertexWa = normal.guest_to_wasm(d(3)) >>> 0;
+        queued.push({ self: d(0), primitive: d(1), type: d(2), count,
+          state: bytes.slice(stateWa, stateWa + 4096),
+          vertices: bytes.slice(vertexWa, vertexWa + count * 32) });
+        return 1;
+      }
+      if (opcode === 0x20001) {
+        fences++;
+        for (const draw of queued.splice(0)) {
+          bytes.set(draw.state, worker.guest_to_wasm(replayState) >>> 0);
+          bytes.set(draw.vertices, worker.guest_to_wasm(replayVertices) >>> 0);
+          worker.d3dim_worker_draw(draw.self, draw.primitive, draw.type,
+            replayVertices, draw.count, replayState);
+        }
+        return 1;
+      }
+      return 0;
+    },
+  };
+  target.fill(0);
+  normal.test_worker_draw_indexed(device, vertices, 4, indices, 6);
+  assert.strictEqual(queued.length, 1, 'the indexed draw was not queued to the encoder');
+  assert.strictEqual(queued[0].count, 6, 'the queued draw is not the index-order expansion');
+  assert(target.every(byte => byte === 0), 'a queued draw must not also rasterize on the guest thread');
+  normal.test_worker_fence();
+  assert.strictEqual(fences, 1, 'a fence with queued work must reach the encoder');
+  normal.test_worker_fence();
+  assert.strictEqual(fences, 1, 'a fence with nothing queued must not reach the encoder');
+  assert.deepStrictEqual(target.slice(), expectedIndexed,
+    'queued indexed draw replayed on the worker differs from the direct indexed path');
+  normalHarness.hostCtx.d3dCommands = null;
+
+  console.log(`PASS D3DIM second-instance worker parity (${expectedLit} lit bytes, ${pitch}B pitch); ` +
+    'indexed draws queue, fence once, and replay pixel-identically');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

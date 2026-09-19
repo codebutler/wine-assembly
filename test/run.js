@@ -118,6 +118,10 @@ const NO_RENDERER = hasFlag('no-renderer'); // --no-renderer: skip CLI canvas/re
 // Keep capability opt-in separate: the implementation is not a full SM profile.
 const D3D9_RENDERER = getArg('d3d9-renderer', null);
 const D3D9_PROGRAMMABLE = hasFlag('d3d9-programmable');
+// --d3d-worker: rasterize D3DIM (DX2-7) draws on a render worker_thread over
+// the shared memory, the CLI twin of the browser's render Worker. The guest's
+// main instance can Atomics.wait here, so no --threads is needed.
+const D3D_WORKER = hasFlag('d3d-worker');
 if (args.some(arg => arg === '--gl-encoder' || arg.startsWith('--gl-encoder='))) {
   throw new Error('--gl-encoder was removed; OpenGL encoding always runs in WAT');
 }
@@ -679,6 +683,26 @@ const HANDLER_HIST_STOP = Math.max(HANDLER_HIST_START + 1,
 // for tools/cache-slots.js, which needs the whole set to say whether the
 // direct-mapped block cache index is aliasing them.
 const HOT_BLOCK_DUMP = getArg('hot-block-dump', null);
+// --cpu-prof-window=A:B:FILE: a V8 CPU profile of batches [A,B) only, written
+// as FILE (.cpuprofile, read with tools/cpuprof-top.js). `node --cpu-prof`
+// covers the whole process, so on an app whose load is minutes long the
+// window you asked about is a rounding error inside it.
+const CPU_PROF_WINDOW = (() => {
+  const spec = getArg('cpu-prof-window', null);
+  if (!spec) return null;
+  const m = /^(\d+):(\d+):(.+)$/.exec(spec);
+  if (!m || +m[2] <= +m[1]) throw new Error('--cpu-prof-window expects START:STOP:FILE with STOP > START');
+  return { start: +m[1], stop: +m[2], file: m[3] };
+})();
+// --cpu-window=A:B[,C:D...]: process CPU (user+sys, every thread including
+// --threads workers) and wall time spent on batches [A,B). Fixed work: the
+// guest executes the same batches in every arm, so this is the A/B number on a
+// loaded box, where wall clock is not (feedback: fixed work, user CPU).
+const CPU_WINDOWS = (getArg('cpu-window', '') || '').split(',').filter(Boolean).map(spec => {
+  const m = /^(\d+):(\d+)$/.exec(spec);
+  if (!m || +m[2] <= +m[1]) throw new Error('--cpu-window expects START:STOP with STOP > START');
+  return { start: +m[1], stop: +m[2], cpu: null, wall: 0 };
+});
 const DUMP_SPEC = getArg('dump', null);   // --dump=0xADDR:LEN: hexdump memory region
 const DUMP_SEH = hasFlag('dump-seh');     // --dump-seh: detailed SEH chain dump at end
 const DUMP_VMAP = hasFlag('dump-vmap');   // --dump-vmap: sparse VirtualAlloc map + which probes are mapped
@@ -3708,6 +3732,27 @@ async function main() {
 
   const instance = await WebAssembly.instantiate(wasmModule, imports);
   ctx.exports = instance.exports;
+  if (D3D_WORKER) {
+    const {Worker} = require('worker_threads');
+    const {Encoder} = require('../lib/d3d-command-stream');
+    const sigs = JSON.parse(fs.readFileSync(path.join(ROOT, 'lib', 'host-import-sigs.generated.json'), 'utf8')).sigs;
+    ctx.d3dCommands = new Encoder({
+      memory, module: wasmModule, sigs,
+      // The Encoder speaks the Web Worker surface; adapt a worker_thread to it.
+      workerFactory: () => {
+        const worker = new Worker(path.join(ROOT, 'lib', 'd3d-render-worker.js'));
+        const adapter = {
+          postMessage: message => worker.postMessage(message),
+          terminate: () => worker.terminate(),
+          set onerror(fn) { worker.on('error', fn); },
+          set onmessage(fn) { worker.on('message', data => fn({ data })); },
+        };
+        return adapter;
+      },
+      guestToWasm: pointer => instance.exports.guest_to_wasm(pointer >>> 0) >>> 0,
+      getImageBase: () => instance.exports.get_image_base() >>> 0,
+    });
+  }
   if (GUEST_PAGE_STATS) {
     if (!instance.exports.reset_guest_page_stats || !instance.exports.get_guest_page_stat) {
       throw new Error('--guest-page-stats requires the offline artifact from ' +
@@ -5799,11 +5844,47 @@ async function main() {
     return { close() { if (server) server.close(); } };
   })() : null;
 
+  const cpuProf = CPU_PROF_WINDOW ? {
+    session: null, startedAt: 0,
+    post(method, params) {
+      return new Promise((resolve, reject) => this.session.post(method, params || {},
+        (error, result) => error ? reject(error) : resolve(result)));
+    },
+    async start(batch) {
+      const inspector = require('inspector');
+      this.session = new inspector.Session();
+      this.session.connect();
+      await this.post('Profiler.enable');
+      await this.post('Profiler.setSamplingInterval', { interval: 100 });
+      await this.post('Profiler.start');
+      this.startedAt = batch;
+      console.log(`[cpu-prof] started at batch ${batch}`);
+    },
+    async stop(batch) {
+      const { profile } = await this.post('Profiler.stop');
+      this.session.disconnect();
+      this.session = null;
+      fs.writeFileSync(CPU_PROF_WINDOW.file, JSON.stringify(profile));
+      console.log(`[cpu-prof] batches ${this.startedAt}..${batch} -> ${CPU_PROF_WINDOW.file}`);
+    },
+  } : null;
   const executionStartedAt = performance.now();
   for (let batch = 0; batch < MAX_BATCHES && !stopped; batch++) {
     if (deadlineMs && Date.now() >= deadlineMs) {
       console.log(`[max-seconds] stopping after ${MAX_SECONDS}s at batch ${batch}`);
       break;
+    }
+    for (const w of CPU_WINDOWS) {
+      if (!w.cpu && !w.done && batch >= w.start) { w.cpu = process.cpuUsage(); w.wall = performance.now(); }
+      else if (w.cpu && !w.done && batch >= w.stop) {
+        const d = process.cpuUsage(w.cpu);
+        w.done = true;
+        console.log(`[cpu-window] batches ${w.start}..${w.stop}: user ${(d.user / 1e6).toFixed(3)}s sys ${(d.system / 1e6).toFixed(3)}s wall ${((performance.now() - w.wall) / 1000).toFixed(3)}s`);
+      }
+    }
+    if (cpuProf) {
+      if (!cpuProf.session && !cpuProf.startedAt && batch >= CPU_PROF_WINDOW.start) await cpuProf.start(batch);
+      else if (cpuProf.session && batch >= CPU_PROF_WINDOW.stop) await cpuProf.stop(batch);
     }
     // Timers cannot fire while the normal runner stays in its synchronous
     // batch loop. Poll wall time sparsely at the one safe seam and await the
@@ -9228,6 +9309,15 @@ if (VERBOSE) {
   // The control server would otherwise hold the process open; unref lets a
   // reply resolved in the final batch still flush while the exit path prints.
   if (control) control.close();
+  if (cpuProf && cpuProf.session) await cpuProf.stop(MAX_BATCHES);
+  if (ctx.d3dCommands) {
+    ctx.d3dCommands.fence();
+    const d = ctx.d3dCommands.snapshot();
+    console.log(`[d3d-worker] ready=${d.ready} queued=${d.queued} fallbacks=${d.fallbacks} ` +
+      `fences=${d.fences} waits=${d.waits} waitMs=${d.waitMs.toFixed(1)} ` +
+      `submissions=${d.submissions} replayCommands=${d.replayCommands} replayMs=${d.replayMs.toFixed(1)}`);
+    ctx.d3dCommands.stop();
+  }
 
   if (handlerHistArmed && handlerHistExports) {
     handlerHistExports.set_handler_hist_enabled(0);

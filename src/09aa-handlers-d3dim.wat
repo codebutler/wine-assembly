@@ -382,6 +382,8 @@
     (local $branch i32) (local $handled i32)
     (local $state i32) (local $vp_entry i32) (local $sw i32)
     (local $vp_x i32) (local $vp_y i32) (local $vp_w i32) (local $vp_h i32)
+    ;; Execute buffers rasterize here, never on the render Worker.
+    (call $d3dim_worker_fence)
     ;; DX1 selects the transform viewport per Execute call. It has no
     ;; Device2::SetCurrentViewport requirement, so legacy apps commonly only
     ;; AddViewport/SetViewport and pass that object here (Tunnel and Twist do).

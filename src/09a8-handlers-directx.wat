@@ -4831,6 +4831,8 @@
   ;; HDC = 0x200000 + slot_index (unique range, doesn't conflict with hwnd-based DCs)
   (func $handle_IDirectDrawSurface_GetDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $slot i32) (local $hdc i32)
+    ;; GDI reads and writes the surface bits directly.
+    (call $d3dim_worker_fence)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $slot (i32.div_u
       (i32.sub (local.get $entry) (global.get $DX_OBJECTS))
@@ -11610,20 +11612,16 @@
       (call $d3dim_pack_fvf_vertices
         (local.get $arg2) (local.get $arg3) (local.get $dwVertexCount)
         (call $d3dim_texcoord_index (local.get $arg0))))
+    ;; The core queues on the render Worker when one is attached.
     (if (local.get $packed) (then
-      (if (i32.eqz (call $d3dim_worker_try_draw
-            (local.get $arg0) (local.get $arg1) (local.get $vtxType)
-            (local.get $packed) (local.get $dwVertexCount)))
-        (then
-          (call $d3dim_draw_primitive (local.get $arg0) (local.get $arg1) (local.get $vtxType)
-            (local.get $packed) (local.get $dwVertexCount))))
+      (call $d3dim_draw_primitive (local.get $arg0) (local.get $arg1) (local.get $vtxType)
+        (local.get $packed) (local.get $dwVertexCount))
       (call $heap_free (local.get $packed))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
 
   (func $handle_IDirect3DDevice3_DrawIndexedPrimitive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dwVertexCount i32) (local $lpwIndices i32) (local $dwIndexCount i32) (local $vtxType i32) (local $packed i32)
-    (call $d3dim_worker_fence)
     (local.set $dwVertexCount (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
     (local.set $lpwIndices    (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
     (local.set $dwIndexCount  (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
@@ -11649,19 +11647,17 @@
     (call $d3dim_get_clip_status (local.get $arg0) (local.get $arg1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
+  ;; Same six-argument ABI as Device7; the core queues on the render Worker.
   (func $handle_IDirect3DDevice3_DrawPrimitiveStrided (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3dim_worker_fence)
-    (call $d3dim_draw_primitive_strided
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
-
-  (func $handle_IDirect3DDevice3_DrawIndexedPrimitiveStrided (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3dim_worker_fence)
-    (call $d3dim_draw_indexed_primitive_strided
+    (call $handle_IDirect3DDevice7_DrawPrimitiveStrided
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 20)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))))
+      (local.get $name_ptr)))
+
+  ;; Same eight-argument ABI as Device7.
+  (func $handle_IDirect3DDevice3_DrawIndexedPrimitiveStrided (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_IDirect3DDevice7_DrawIndexedPrimitiveStrided
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (local.get $name_ptr)))
 
   (func $handle_IDirect3DDevice3_DrawPrimitiveVB (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0))
