@@ -733,7 +733,8 @@
   (func $vsock_pump
     (local $wa i32) (local $n i32) (local $guard i32)
     (if (i32.and (i32.eqz (global.get $wsa_started))
-                 (i32.eqz (global.get $win16_dde_users)))
+          (i32.and (i32.eqz (global.get $win16_dde_users))
+                   (i32.eqz (global.get $dp_net_users))))
       (then (return)))
     (local.set $wa (call $vsock_frame_wa))
     (if (i32.eqz (local.get $wa)) (then (return)))
@@ -754,6 +755,14 @@
             (i32.eq (i32.load (local.get $wa)) (global.get $DDE_MAGIC)))
         (then
           (call $win16_dde_deliver (local.get $wa) (local.get $n))
+          (call $host_net_frame_commit)
+          (br $next)))
+      ;; DirectPlay sessions (09d4-dplay-net.wat) share the wire the same way.
+      (if (i32.and
+            (i32.ge_u (local.get $n) (global.get $DPL_HDR))
+            (i32.eq (i32.load (local.get $wa)) (global.get $DPL_MAGIC)))
+        (then
+          (call $dpn_deliver (local.get $n))
           (call $host_net_frame_commit)
           (br $next)))
       ;; Fail closed on anything that is not a well-formed vln/1 frame:

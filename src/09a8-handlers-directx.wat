@@ -8966,9 +8966,12 @@
   ;;   +12 create flags, +16 group-membership bitset, +20 live,
   ;;   +24 remote/shared data pointer, +28 remote size,
   ;;   +32 local-only data pointer, +36 local size,
-  ;;   +40 explicitly assigned owner player ID (-1 if not assigned).
+  ;;   +40 explicitly assigned owner player ID (-1 if not assigned),
+  ;;   +44 creator COM object, +48 borrowed receive event,
+  ;;   +52 room address of the machine a remote player lives on (0 = here;
+  ;;       see 09d4-dplay-net.wat).
   (global $DP_ENTITY_MAX i32 (i32.const 32))
-  (global $DP_ENTITY_STRIDE i32 (i32.const 52))
+  (global $DP_ENTITY_STRIDE i32 (i32.const 56))
   (global $dp_entity_table (mut i32) (i32.const 0))
   (global $dp_entity_next_id (mut i32) (i32.const 0x100))
 
@@ -9250,6 +9253,7 @@
           (call $gs32 (i32.add (local.get $entry) (i32.const 40)) (i32.const -1))
           (call $gs32 (i32.add (local.get $entry) (i32.const 44)) (i32.const 0)) ;; creator COM object
           (call $gs32 (i32.add (local.get $entry) (i32.const 48)) (i32.const 0)) ;; borrowed receive event
+          (call $gs32 (i32.add (local.get $entry) (i32.const 52)) (i32.const 0)) ;; lives here
           (return (local.get $entry))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -9364,6 +9368,11 @@
     (if (i32.eqz (local.get $entry)) (then (return (i32.const 0x88770096))))
     (if (i32.ne (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))
       (then (return (i32.const 0x88770096))))
+    ;; A recipient on another machine is one frame on the wire; a send to
+    ;; everyone goes to each peer and then on to the local players below.
+    (if (call $dpn_send_data (local.get $owner) (local.get $from) (local.get $to)
+          (local.get $data) (local.get $size))
+      (then (return (i32.const 0))))
     (if (local.get $to)
       (then
         (local.set $target (call $dp_find_entity (local.get $to) (i32.const -1)))
@@ -9382,7 +9391,8 @@
               (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (i32.const 1)))
             (i32.and
               (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))
-                (i32.ne (call $gl32 (local.get $entry)) (local.get $from)))
+                (i32.and (i32.ne (call $gl32 (local.get $entry)) (local.get $from))
+                  (i32.eqz (call $dpn_is_remote (local.get $entry)))))
               (i32.or (i32.eqz (local.get $to))
                 (i32.or (i32.eq (local.get $entry) (local.get $target))
                   (i32.ne (i32.and (call $gl32 (i32.add (local.get $entry) (i32.const 16)))
@@ -9449,6 +9459,7 @@
 
   (func $dp_close_owner (param $owner i32)
     (local $i i32) (local $entry i32)
+    (call $dpn_close (local.get $owner))
     (call $dp_messages_clear_owner (local.get $owner))
     (if (i32.eqz (global.get $dp_entity_table)) (then (return)))
     (block $done (loop $scan
@@ -9721,9 +9732,10 @@
         (call $gl32 (i32.add (local.get $entry) (i32.const 12))))
       (local.set $enum_flags
         (call $gl32 (i32.add (local.get $frame) (i32.const 28))))
-      ;; Enumeration criteria are conjunctive. This repository contains only
-      ;; local entities, so REMOTE can never match. GROUP and SESSION select
-      ;; the enumeration shape/session and are not entity properties.
+      ;; Enumeration criteria are conjunctive. REMOTE matches exactly the
+      ;; entities without LOCAL, which only the network provider creates.
+      ;; GROUP and SESSION select the enumeration shape/session and are not
+      ;; entity properties.
       (local.set $criteria
         (i32.and (local.get $enum_flags)
           (select
@@ -9741,7 +9753,9 @@
                   (i32.eq (local.get $type)
                     (call $gl32 (i32.add (local.get $frame) (i32.const 16)))))
                 (i32.and
-                  (i32.eqz (i32.and (local.get $enum_flags) (i32.const 0x00000010)))
+                  (i32.or
+                    (i32.eqz (i32.and (local.get $enum_flags) (i32.const 0x00000010)))
+                    (i32.eqz (i32.and (local.get $entity_flags) (i32.const 0x00000008))))
                   (i32.eq
                     (i32.and (local.get $entity_flags) (local.get $criteria))
                     (local.get $criteria))))
@@ -9897,6 +9911,7 @@
 
   (func $handle_IDirectPlay4_GetMessageQueue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $bytes i32) (local $kind i32)
+    (call $dpn_poll)
     (local.set $bytes (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (if (i32.gt_u (local.get $arg3) (i32.const 2))
@@ -10009,7 +10024,9 @@
         (local.get $arg1) (local.get $arg2) (local.get $arg4) (local.get $size)
         (local.get $flags) (i32.const 1)))
     (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
-      (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (local.get $arg3))))
+      (then
+        (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (local.get $arg3))
+        (call $dpn_player_created (local.get $arg0) (call $gl32 (local.get $arg1)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
   (func $handle_IDirectPlay3_DeletePlayerFromGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dp_handle_membership
@@ -10020,6 +10037,7 @@
         (call $dp_destroy_entity (local.get $arg1) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectPlay3_DestroyPlayer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $dpn_player_destroyed (local.get $arg0) (local.get $arg1))
     (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x80070057)
         (call $dp_destroy_entity (local.get $arg1) (i32.const 1))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
@@ -10045,6 +10063,7 @@
       (i32.const 0) (local.get $arg4) (i32.const 0)))
   (func $handle_IDirectPlay3_EnumPlayers (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $type i32)
+    (call $dpn_poll)
     (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.eqz (local.get $arg2))
@@ -10055,53 +10074,11 @@
     (call $dp_enum_begin
       (local.get $ret_addr) (local.get $arg2) (local.get $arg3) (local.get $type)
       (i32.const 0) (local.get $arg4) (i32.const 0)))
+  ;; Sessions are found on the virtual LAN; see 09d4-dplay-net.wat.
   (func $handle_IDirectPlay3_EnumSessions (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $ret_addr i32) (local $flags i32) (local $desc i32) (local $name i32) (local $name_wa i32) (local $timeout i32)
-    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
-    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
-    (if (i32.eqz (local.get $arg3))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (return)))
-    (local.set $name (call $heap_alloc (i32.const 16))) (local.set $name_wa (call $g2w (local.get $name)))
-    (i32.store (local.get $name_wa) (i32.const 0x61636F4C))
-    (i32.store offset=4 (local.get $name_wa) (i32.const 0x6553206C))
-    (i32.store offset=8 (local.get $name_wa) (i32.const 0x6F697373))
-    (i32.store16 offset=12 (local.get $name_wa) (i32.const 0x006E))
-    (local.set $desc (call $heap_alloc (i32.const 80)))
-    (call $zero_memory (call $g2w (local.get $desc)) (i32.const 80))
-    (call $gs32 (local.get $desc) (i32.const 80))
-    ;; guidInstance = {00000001-0000-0000-0000-000000000000}
-    (call $gs32 (i32.add (local.get $desc) (i32.const 8)) (i32.const 1))
-    ;; Preserve requested application GUID when the caller supplied one.
-    (if (local.get $arg1)
-      (then
-        (call $gs32 (i32.add (local.get $desc) (i32.const 24)) (call $gl32 (i32.add (local.get $arg1) (i32.const 24))))
-        (call $gs32 (i32.add (local.get $desc) (i32.const 28)) (call $gl32 (i32.add (local.get $arg1) (i32.const 28))))
-        (call $gs32 (i32.add (local.get $desc) (i32.const 32)) (call $gl32 (i32.add (local.get $arg1) (i32.const 32))))
-        (call $gs32 (i32.add (local.get $desc) (i32.const 36)) (call $gl32 (i32.add (local.get $arg1) (i32.const 36))))))
-    (call $gs32 (i32.add (local.get $desc) (i32.const 40)) (i32.const 8))
-    (call $gs32 (i32.add (local.get $desc) (i32.const 44)) (i32.const 1))
-    (call $gs32 (i32.add (local.get $desc) (i32.const 48)) (local.get $name))
-    (local.set $timeout (call $heap_alloc (i32.const 4)))
-    (call $gs32 (local.get $timeout) (i32.const 0))
-    ;; Push saved caller return, then callback args right-to-left:
-    ;; context, flags, timeout, session-desc.
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg4))
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $timeout))
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
-    (global.set $eip (local.get $arg3))
-    (global.set $steps (i32.const 0)))
+    (call $dpn_enum_sessions (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4)
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
   (func $handle_IDirectPlay3_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $zero_memory (call $g2w (local.get $arg1)) (i32.const 64))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
@@ -10115,6 +10092,7 @@
         (local.get $arg1) (i32.const 0) (local.get $arg2) (local.get $arg3)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_GetMessageCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $dpn_poll)
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (if (i32.eqz (local.get $arg2)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (local.get $arg1)
@@ -10144,8 +10122,14 @@
   (func $handle_IDirectPlay3_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectPlay3_Open (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+    (local $hr i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    ;; -1: a join is waiting for the host and the call has been parked.
+    (local.set $hr (call $dpn_open (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (if (i32.ne (local.get $hr) (i32.const -1))
+      (then (i32.store offset=0 (global.get $reg_base) (local.get $hr)))))
   (func $handle_IDirectPlay3_Receive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $dpn_poll)
     (i32.store offset=0 (global.get $reg_base) (call $dp_receive (local.get $arg0) (local.get $arg1)
       (local.get $arg2) (local.get $arg3) (local.get $arg4)
       (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))

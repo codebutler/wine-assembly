@@ -920,6 +920,17 @@
   (import "host" "net_frame_peek" (func $host_net_frame_peek (param i32 i32) (result i32)))
   ;; net_frame_commit() — discard the frame most recently peeked.
   (import "host" "net_frame_commit" (func $host_net_frame_commit))
+  ;; net_link_open() → 1 this process may use the room now, 0 not yet.
+  ;;
+  ;; A wire can be attached long after boot, and a browser host that asks a
+  ;; person who to play with cannot answer inside a host import — the lobby is
+  ;; a dialog and the answer is several seconds of clicking away. So the guest
+  ;; asks before its first networked act and parks on 0, which re-enters the
+  ;; same API call once the host has an answer. A host with nothing to ask
+  ;; (the CLI, or an app launched with its wire already in place) answers 1 for
+  ;; ever and no guest waits. Answering 1 with no wire at all is also correct:
+  ;; that is a machine with no cable, and the search simply finds nobody.
+  (import "host" "net_link_open" (func $host_net_link_open (result i32)))
 
   ;; Minimum 8192 pages (512MB) and maximum 32768 (2GB): a host that creates
   ;; the 512MB memory every platform has always used still satisfies this

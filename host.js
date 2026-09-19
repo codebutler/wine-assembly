@@ -1086,7 +1086,13 @@ class WineAssembly {
       // The virtual LAN segment this page is joined to, or null when it is
       // alone in its own room. A worker thread is part of the same process,
       // so it is handed the same wire rather than opening one of its own.
-      vlanWire: opts.vlanWire || self.vlanWire || null,
+      // A getter, because a wire can be joined after this context exists and
+      // after guest threads have been spawned off it (see joinVlan).
+      get vlanWire() { return opts.vlanWire || self.vlanWire || null; },
+      // Answered by net_link_open when the guest first asks for the room. A
+      // getter, not a copy: the shell installs it on the WineAssembly after
+      // this context is built, and a wire may be joined later still.
+      get openLanLink() { return self.openLanLink || null; },
       get availableDllFiles() { return opts.availableDllFiles || self._availableDllFiles || null; },
       // Live guest thread count, for HKEY_DYN_DATA\PerfStats KERNEL\Threads.
       get threadManager() { return self.threadManager; },
@@ -2154,9 +2160,14 @@ class WineAssembly {
   joinVlan(wire, ip) {
     this.vlanWire = wire || null;
     this.vlanLocalIp = WineAssembly.parseRoomAddress(ip);
-    if (this.hostCtx) this.hostCtx.vlanWire = this.vlanWire;
+    // hostCtx reads this object's wire through a getter, so every thread that
+    // already exists sees the new one; the address is a WASM global and has
+    // to be written into each instance.
     if (this.instance && this.instance.exports.set_vlan_local_ip) {
       this.instance.exports.set_vlan_local_ip(this.vlanLocalIp | 0);
+    }
+    if (this.threadManager && this.threadManager.setWasmGlobalAll) {
+      this.threadManager.setWasmGlobalAll('set_vlan_local_ip', this.vlanLocalIp | 0);
     }
     return this;
   }

@@ -1213,6 +1213,12 @@
           (then
             (call $dp_enum_continue)
             (return)))
+        ;; DirectPlay EnumSessions leaves its DPES frame after the
+        ;; four-argument callback returns (09d4-dplay-net.wat).
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x53455044))
+          (then
+            (call $dpn_enum_sessions_continue)
+            (return)))
         ;; DirectInput EnumDevices/EnumObjects callbacks leave their reentrant
         ;; stack-resident DIEN frame at ESP after stdcall pops both arguments.
         (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x4E454944))

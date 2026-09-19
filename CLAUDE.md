@@ -169,7 +169,7 @@ toolbars as they move, so a `dvh`-sized spacer grows mid-gesture and the scroll 
 from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. Size overflow in
 `svh`; test "are the bars down?" as `innerHeight >= 100lvh - 8`.
 
-## Source Parts (`src/main.watx` include order — 91 files)
+## Source Parts (`src/main.watx` include order — 92 files)
 
 | File | Purpose |
 |------|---------|
@@ -252,6 +252,7 @@ from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. 
 | `09d1-mpr.wat` | Multiple Provider Router behavior for a machine with no network provider or mapped drives |
 | `09d2-tapi.wat` | TAPI 2.0 line device API (TAPI32.DLL) for a machine with zero line devices — real init/shutdown and documented errors, not stubs |
 | `09d3-spooler.wat` | Win98 spooler surface for a machine with no installed printer |
+| `09d4-dplay-net.wat` | DirectPlay service provider over the virtual LAN: `dpl/1` frames for session discovery, join, player announce and data, joining two processes' IDirectPlay name tables |
 | `09e-win16-api.wat` | Win16 API dispatch by module and ordinal (KERNEL/USER/GDI) — the Pascal-convention twin of `$win32_dispatch` |
 | `09e2-win16-dialog.wat` | Win16 dialogs: 16-bit RT_DIALOG template rewritten into the 32-bit form, plus the Pascal modal pump |
 | `09f-win16-ddeml.wat` | Win16 DDEML: string/data handle interning, service registration and truthful "no peer" conversation results |

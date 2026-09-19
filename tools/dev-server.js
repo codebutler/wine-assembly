@@ -16,6 +16,10 @@
 //   node tools/dev-server.js                 # http://127.0.0.1:8080
 //   node tools/dev-server.js --port=9000
 //   node tools/dev-server.js --host=0.0.0.0  # other devices on your LAN
+//   node tools/dev-server.js --host=0.0.0.0 --cert=lan.pem --key=lan-key.pem
+//       # the same over https: the virtual LAN lobby needs a secure context
+//       # (crypto.subtle), which a plain-http LAN address is not. Make the pair
+//       # with `mkcert <lan-ip>`; each device must trust mkcert's root CA.
 //
 // The API surface mirrors what lives on Berrry, so the browser code that
 // talks to it does not change between local development and deployment:
@@ -870,7 +874,12 @@ function createServer(opts) {
   // Static requests are hundreds of lines of noise next to a handful of
   // signaling calls, so they are off unless asked for.
   const verbose = !!(opts && opts.verbose);
-  const server = http.createServer((req, res) => {
+  // TLS makes the page a secure context on a LAN address, which the virtual
+  // LAN lobby needs: lib/vlan-rtc.js keys everything with crypto.subtle, and
+  // a browser only offers that on https or localhost.
+  const tls = opts && opts.tls;
+  const make = tls ? handler => require('https').createServer(tls, handler) : http.createServer;
+  const server = make((req, res) => {
     // Treat every request target as an origin-form path. A browser can retain
     // a doubled leading slash while resolving `//?debug`; passing that string
     // straight to URL interprets it as a protocol-relative URL with an empty
@@ -963,6 +972,10 @@ function main() {
   const host = arg('host', '127.0.0.1');
   const perfLog = arg('perf-log', '');
   const recordDir = arg('record-dir', '');
+  const cert = arg('cert', '');
+  const key = arg('key', '');
+  const tls = cert && key ? { cert: fs.readFileSync(cert), key: fs.readFileSync(key) } : null;
+  const scheme = tls ? 'https' : 'http';
   // The agent hub carries eval into any connected page, so a bind beyond
   // localhost requires the token on every agent route.
   const agentToken = host === '127.0.0.1' ? null : crypto.randomBytes(8).toString('hex');
@@ -973,13 +986,14 @@ function main() {
     recordDir,
     agentToken,
     noAgentInject: process.argv.includes('--no-agent-inject'),
+    tls,
   });
   server.listen(port, host, () => {
-    console.log(`wine-assembly dev server: http://${host}:${port}`);
+    console.log(`wine-assembly dev server: ${scheme}://${host}:${port}`);
     console.log(`  serving ${ROOT}`);
     console.log('  signaling API at /api/data, /api/public-data (no login, in memory)');
-    console.log(`  perf stream sink at /api/perf — open http://${host}:${port}/?debug&perf&perf-stream`);
-    console.log(`  threads probe: http://${host}:${port}/threads-probe.html`
+    console.log(`  perf stream sink at /api/perf — open ${scheme}://${host}:${port}/?debug&perf&perf-stream`);
+    console.log(`  threads probe: ${scheme}://${host}:${port}/threads-probe.html`
       + (ISOLATE ? '  (COOP/COEP served: isolated)' : '  (no COOP/COEP; use --isolate or the page\'s service-worker button)'));
     if (perfLog) console.log(`  perf batches appended as NDJSON to ${perfLog}`);
     console.log(`  frozen-session recordings at /api/record -> ${recordDir || 'recordings/'}`
@@ -989,15 +1003,15 @@ function main() {
     if (injecting) {
       console.log('  agent hub at /api/agent — the emulator page auto-connects when served');
       console.log('  from here: copy the tab URL and drive it, e.g.');
-      console.log(`    node tools/ctl.js -s 'http://${host}:${port}/?debug' png out.png`);
+      console.log(`    node tools/ctl.js -s '${scheme}://${host}:${port}/?debug' png out.png`);
       console.log('  pages served elsewhere connect by console paste:');
     } else {
       console.log('  agent hub at /api/agent — connect a page by pasting into its console:');
     }
-    console.log(`    import('http://${host === '0.0.0.0' ? '<lan-ip>' : host}:${port}/lib/agent-remote.js${tokenQuery}')`
+    console.log(`    import('${scheme}://${host === '0.0.0.0' ? '<lan-ip>' : host}:${port}/lib/agent-remote.js${tokenQuery}')`
       + `.then(m => m.connect())`);
     console.log(`  then drive it: node tools/ctl.js sessions | node tools/ctl.js -s <ID> png out.png`);
-    console.log(`  many games at once: http://${host}:${port}/dashboard`
+    console.log(`  many games at once: ${scheme}://${host}:${port}/dashboard`
       + '  (one emulator per tile, each its own agent session)');
     if (agentToken) console.log(`  agent token (bound beyond localhost): ${agentToken}`);
     if (host === '0.0.0.0') {

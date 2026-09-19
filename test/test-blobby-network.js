@@ -7,7 +7,10 @@
 //   host:  MULTIPLAYER-OPTIONEN -> EIN SPIEL HOSTEN... -> SPIEL BEGINNEN!
 //          => "WARTE AUF EINEN GAST..."   (session open, waiting)
 //   guest: MULTIPLAYER-OPTIONEN -> ALS GAST SPIELEN... -> SPIELE SUCHEN
-//          => "GEFUNDENE SPIELE: LOCAL SESSION"
+//          => a search of an empty room: nothing found, nothing joined
+//
+// Each run is alone on its wire, so the join itself is not here — that takes
+// a second process, and test-blobby-vlan.js plays the whole match.
 //
 // The assertions are on the COM call sequence rather than on pixels, because
 // the screens are text on a near-black beach and a text render regression is
@@ -57,7 +60,6 @@ function key(batch, vk) {
 // MULTIPLAYER-OPTIONEN: EIN SPIEL HOSTEN... / ALS GAST SPIELEN... / ZURUECK.
 // HOST-EINSTELLUNGEN and GAST-EINSTELLUNGEN both put their go entry
 // (SPIEL BEGINNEN! / SPIELE SUCHEN) third -> Down, Down, Enter at batch 760.
-// The guest then picks the first found session (Up from ZURUECK, Enter).
 function drive(label, extra, batches) {
   const input = [
     ...key(460, DOWN), ...key(520, ENTER),
@@ -95,8 +97,7 @@ function drive(label, extra, batches) {
 const host = drive('host', key(620, ENTER), 1100);
 const guest = drive('guest', [
   ...key(600, DOWN), ...key(620, ENTER),
-  ...key(1000, UP), ...key(1040, ENTER),
-], 1300);
+], 1100);
 
 // Only the key sequence differs between the two runs, so a marker that shows
 // up before the menu is even reached would prove nothing -- look for the calls
@@ -107,7 +108,6 @@ function after(run, batch) {
 }
 const hostTail = after(host, 760);
 const guestTail = after(guest, 760);
-const joinTail = after(guest, 1040);
 
 const checks = [
   { name: 'host run exited cleanly', pass: host.exitCode === 0 },
@@ -132,17 +132,12 @@ const checks = [
   { name: 'guest: EnumSessions (discovery ran)',
     pass: guestTail.includes(marker('IDirectPlay3_EnumSessions')) },
 
-  // Picking the found session joins it and starts the game loop. Today the
-  // session is the local shim's own "Local Session", so these prove the call
-  // shape only -- nothing crosses a wire yet.
-  { name: 'guest: Open (joined the found session)',
-    pass: joinTail.includes(marker('IDirectPlay3_Open')) },
-  { name: 'guest: CreatePlayer + EnumPlayers',
-    pass: joinTail.includes(marker('IDirectPlay3_CreatePlayer'))
-       && joinTail.includes(marker('IDirectPlay3_EnumPlayers')) },
-  { name: 'guest: game loop Send / GetMessageCount',
-    pass: joinTail.includes(marker('IDirectPlay3_Send'))
-       && joinTail.includes(marker('IDirectPlay3_GetMessageCount')) },
+  // Sessions come only from the wire now (09d4-dplay-net.wat): a search of
+  // an empty room reports none, and the guest must not have joined anything.
+  // The old shim invented a "Local Session" here, which the app then joined.
+  { name: 'guest: an empty room offers no session to join',
+    pass: !guestTail.includes(marker('IDirectPlay3_Open'))
+       && !guestTail.includes(marker('IDirectPlay3_CreatePlayer')) },
 
   // The stack-discipline regression: a short pop kills the game thread a few
   // hundred batches after the call, with no error anywhere.
