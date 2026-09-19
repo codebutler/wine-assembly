@@ -43,29 +43,26 @@ function marker(name) {
   return '0x' + ((0xC0DE0000 | e.id) >>> 0).toString(16);
 }
 
-const MULTIPLAYER = 258;   // NETZWERKSPIEL, on the main menu
-const HOST_ENTRY = 290;    // EIN SPIEL HOSTEN..., on MULTIPLAYER-OPTIONEN
-const GUEST_ENTRY = 322;   // ALS GAST SPIELEN...
-const HOST_GO = 348;       // SPIEL BEGINNEN!, on HOST-EINSTELLUNGEN
-const GUEST_GO = 350;      // SPIELE SUCHEN, on GAST-EINSTELLUNGEN
-
-// The game hit-tests menu entries against its own cursor and ignores the
-// click's lParam, so every click needs a preceding move -- and a second move
-// one pixel on, because it only redraws the cursor on a delta.
-function click(batch, y) {
-  return [
-    `${batch}:mousemove:350:${y}`,
-    `${batch + 20}:mousemove:351:${y + 1}`,
-    `${batch + 60}:mousedown:351:${y + 1}`,
-    `${batch + 100}:mouseup:351:${y + 1}`,
-  ];
+// Menus are driven by keyboard. Mouse clicks used to work, but the game's
+// click hit-test drifted ~33px above its drawn cursor (a mousedown on
+// NETZWERKSPIEL started a local match), and a run stuck in gameplay at
+// ~5 batches/s outlasts any sane timeout. Arrow keys + Enter select entries
+// by position and are immune to that. The menu is up by batch ~450.
+const DOWN = 40, UP = 38, ENTER = 13;
+function key(batch, vk) {
+  return [`${batch}:keydown:${vk}`, `${batch + 10}:keyup:${vk}`];
 }
 
-function drive(label, secondY, thirdY, batches) {
+// Main menu: SPIEL STARTEN / NETZWERKSPIEL / ...  -> Down, Enter.
+// MULTIPLAYER-OPTIONEN: EIN SPIEL HOSTEN... / ALS GAST SPIELEN... / ZURUECK.
+// HOST-EINSTELLUNGEN and GAST-EINSTELLUNGEN both put their go entry
+// (SPIEL BEGINNEN! / SPIELE SUCHEN) third -> Down, Down, Enter at batch 760.
+// The guest then picks the first found session (Up from ZURUECK, Enter).
+function drive(label, extra, batches) {
   const input = [
-    ...click(500, MULTIPLAYER),
-    ...click(700, secondY),
-    ...click(900, thirdY),
+    ...key(460, DOWN), ...key(520, ENTER),
+    ...extra,
+    ...key(700, DOWN), ...key(720, DOWN), ...key(760, ENTER),
   ].join(',');
 
   const args = [
@@ -73,6 +70,8 @@ function drive(label, secondY, thirdY, batches) {
     `--exe=${EXE}`,
     `--max-batches=${batches}`,
     '--batch-size=200000',
+    // run.js stops itself; execFileSync's SIGTERM does not reliably end it.
+    '--max-seconds=150',
     '--no-close',
     '--trace-api',
     `--input=${input}`,
@@ -93,18 +92,22 @@ function drive(label, secondY, thirdY, batches) {
   return { label, out, exitCode };
 }
 
-const host = drive('host', HOST_ENTRY, HOST_GO, 2000);
-const guest = drive('guest', GUEST_ENTRY, GUEST_GO, 2200);
+const host = drive('host', key(620, ENTER), 1100);
+const guest = drive('guest', [
+  ...key(600, DOWN), ...key(620, ENTER),
+  ...key(1000, UP), ...key(1040, ENTER),
+], 1300);
 
-// Only the click sequence differs between the two runs, so a marker that shows
+// Only the key sequence differs between the two runs, so a marker that shows
 // up before the menu is even reached would prove nothing -- look for the calls
-// after the last injected click.
+// after the go entry was pressed.
 function after(run, batch) {
   const i = run.out.indexOf(`at batch ${batch}`);
   return i === -1 ? '' : run.out.slice(i);
 }
-const hostTail = after(host, 960);
-const guestTail = after(guest, 960);
+const hostTail = after(host, 760);
+const guestTail = after(guest, 760);
+const joinTail = after(guest, 1040);
 
 const checks = [
   { name: 'host run exited cleanly', pass: host.exitCode === 0 },
@@ -128,6 +131,18 @@ const checks = [
 
   { name: 'guest: EnumSessions (discovery ran)',
     pass: guestTail.includes(marker('IDirectPlay3_EnumSessions')) },
+
+  // Picking the found session joins it and starts the game loop. Today the
+  // session is the local shim's own "Local Session", so these prove the call
+  // shape only -- nothing crosses a wire yet.
+  { name: 'guest: Open (joined the found session)',
+    pass: joinTail.includes(marker('IDirectPlay3_Open')) },
+  { name: 'guest: CreatePlayer + EnumPlayers',
+    pass: joinTail.includes(marker('IDirectPlay3_CreatePlayer'))
+       && joinTail.includes(marker('IDirectPlay3_EnumPlayers')) },
+  { name: 'guest: game loop Send / GetMessageCount',
+    pass: joinTail.includes(marker('IDirectPlay3_Send'))
+       && joinTail.includes(marker('IDirectPlay3_GetMessageCount')) },
 
   // The stack-discipline regression: a short pop kills the game thread a few
   // hundred batches after the call, with no error anywhere.
