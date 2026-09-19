@@ -118,7 +118,21 @@ const SECONDS = parseInt(opt('seconds', '150'), 10) || 150;
 const TIMEOUT = parseInt(opt('timeout', '180'), 10) || 180;
 const JOBS = Math.max(1, Math.min(4, parseInt(opt('jobs', '4'), 10) || 4));
 const TOLERANCE = parseInt(opt('tolerance', '0'), 10) || 0;
-const SHOTS = opt('shots', path.join(os.tmpdir(), 'block-exec-sweep'));
+// The sweep shape -- two budgets, the off arm's own budget-to-budget diff as
+// the null band -- is not specific to --block-exec. Any flag that claims whole
+// blocks and must not change what the screen shows needs exactly this gate, so
+// the flag under test is a parameter. --flag names the run.js switch the `on`
+// arm gets, --stats-flag an extra switch BOTH arms get so the counters print,
+// and --stats-line the counter line to capture into the report. The defaults
+// are the block executor's, so every existing command line still means what it
+// meant. Example, for the implode fold:
+//   node tools/block-exec-sweep.js --all --no-build --control \
+//     --flag=implode-cmp-run --stats-flag=loopmatch-stats \
+//     --stats-line='^loopmatch: M +IMPLODE_CMP_RUN'
+const FLAG = opt('flag', 'block-exec');
+const STATS_FLAG = opt('stats-flag', FLAG === 'block-exec' ? 'block-exec-stats' : '');
+const STATS_LINE = opt('stats-line', '^block-exec: ');
+const SHOTS = opt('shots', path.join(os.tmpdir(), `${FLAG}-sweep`));
 const JSON_OUT = opt('json', null);
 const MD_OUT = opt('md', null);
 const SHEET_OUT = opt('sheet', null);
@@ -157,11 +171,11 @@ function runArgs(id, arm, budget, png) {
     // executor. See feedback_stuck_detector_ends_idle_runs.
     '--stuck-after=1000000',
     '--quiet-api', '--quiet-blocks', '--no-close',
-    '--block-exec-stats',
     `--png=${png}`,
   ];
+  if (STATS_FLAG) args.push(`--${STATS_FLAG}`);
   if (NO_BUILD) args.push('--no-build');
-  if (arm === 'on') args.push('--block-exec');
+  if (arm === 'on') args.push(`--${FLAG}`);
   return args;
 }
 
@@ -226,7 +240,7 @@ function crashLineOf(out) {
 // executor was armed and had installed nothing" and "it had installed 40000
 // descriptors" are different bugs.
 function statsOf(out) {
-  const m = /^block-exec: .*$/m.exec(out);
+  const m = new RegExp(`${STATS_LINE}.*$`, 'm').exec(out);
   const r = /^block-exec-regions: (?!.*byN|.*discovery|.*declinedBy|.*chainEndedBy|.*classifyRefused).*$/m.exec(out);
   const installs = m ? /installs (\d+)/.exec(m[0]) : null;
   const entries = m ? /entries (\d+)/.exec(m[0]) : null;
@@ -359,7 +373,7 @@ function pct(d) {
 (async () => {
   const startedLoad = loadavg();
   const t0 = Date.now();
-  console.log(`block-exec sweep: ${ids.length} apps, budgets ${BUDGETS.join('/')} `
+  console.log(`--${FLAG} sweep: ${ids.length} apps, budgets ${BUDGETS.join('/')} `
     + `at --batch-size=${BATCH_SIZE}, jobs ${JOBS}, loadavg ${startedLoad}`);
   if (skipped.length) {
     console.log(`skipping ${skipped.length}: ` + skipped.map(s => s.id).join(', '));
@@ -425,7 +439,7 @@ function pct(d) {
 function markdown(p) {
   const [b1, b2] = p.budgets;
   const L = [];
-  L.push('# `--block-exec` registry sweep');
+  L.push('# `--' + FLAG + '` registry sweep');
   L.push('');
   L.push(`Generated ${p.generated} — ${p.results.length} apps, budgets `
     + `${b1}/${b2} batches at \`--batch-size=${p.batchSize}\`, `
