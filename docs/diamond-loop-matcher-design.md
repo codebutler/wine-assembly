@@ -157,3 +157,78 @@ more valuable finding than the new fold would have been.
 Approve or decline **the census step only** (`tools/find-diamonds.js` plus a
 multi-window hotness pass). That is measurement, costs no source risk, and its
 result decides whether the rest is worth designing in detail.
+
+---
+
+# Census result, 2026-09-19 — the proposal survives, much smaller
+
+`tools/find-diamonds.js` (5134b3e0) classifies every short backward branch in a
+PE into three populations. Conflating the first two was an error in this
+document's own framing:
+
+```
+ SELF      one block, no early exit        -- $loop_match_block CAN see it
+ SELFEXIT  one block + a conditional exit  -- it CANNOT: the decoder splits the
+                                              block at the branch, so the head
+                                              stops branching to itself
+ DIAMOND   an internal branch splits the body
+```
+
+COMI's blend loop at `exe+0x40340e` is the case that exposed it: both its
+branches (`cmp dl,0xff / jz`, `cmp dl,0x8 / jnb`) target addresses *past* the
+back edge, so they are loop **exits**, internal edge count zero — which reads as
+`SELF`, "already covered". It is not covered, for the reason above.
+
+## Static reach, 1271 PEs in `test/binaries`
+
+| class | count | share of classified loops |
+|---|---|---|
+| SELF | 47,419 | 41% |
+| SELFEXIT | 22,917 | 20% |
+| DIAMOND | 44,633 | 39% |
+| COMPLEX | 8,253 | (too large to fold) |
+
+**59% of candidate loops are invisible to the current matcher**, carried by 1103
+of 1271 binaries. The top skeleton is the sentinel-terminated string copy
+(`mov al,[esi]; inc esi; mov [edi],al; inc edi; test al,al; jz`) in **378**
+binaries — a CRT idiom, unlike `RLE_RUN` (1 of 287 PEs) or the keyed LUT (297 of
+613 hits inside one DLL).
+
+## The join that matters, against `hot-idiom-census-2026-09-19.md`
+
+Static reach is not hotness. Crossing each app's measured hot region against the
+classifier is what decides this, and it is mostly a **negative**:
+
+| app | hot region | share | what the classifier sees |
+|---|---|---|---|
+| StarCraft | `storm+0x15024f12` (#437) | 25.8% | **no backward branch at all** — straight-line, branchy, with calls |
+| StarCraft | `storm+0x15024511` (#432) | 12.0% | declined: `rep` |
+| Diablo | `exe+0x45d8ef` CEL solid | 40.3% | no short back edge (unrolled; loop is elsewhere) |
+| Diablo | `exe+0x460f0b` CEL line | 36.1% | no short back edge |
+| Caesar III | `exe+0x40f6d9` RLE ladder | 19.9% | DIAMOND2 / DIAMOND4 / COMPLEX — **already folded by `RLE_RUN` H424** |
+| COMI | `exe+0x40340e` blend | 11.7% | **SELFEXIT** — invisible, unclaimed |
+
+Of six measured hot regions across five profiled apps, four are not
+backward-branch loops this matcher family can reach at any span limit (checked
+at `--max-span=1024`), one is already folded, and **one** is an unclaimed
+SELFEXIT.
+
+## Revised recommendation
+
+Do **not** build a general diamond matcher. The general version is justified by
+a static number (59%) that the hot join does not support.
+
+Build **SELFEXIT support only** — one block plus a conditional exit, which is
+the smallest possible change to `$loop_match_block`'s precondition and reuses
+its existing role analysis unchanged. It is the only invisible class with a
+demonstrated hot instance (COMI, 11.7% of block entries, spread 0.11pp across
+three windows, 35.1% for the ±0x60 region), and it is the class the 378-binary
+CRT string-copy skeleton falls into.
+
+The gate is unchanged: [fold-correctness-oracle.md](fold-correctness-oracle.md),
+extended to more apps and deeper frames.
+
+And the standing caution still applies to the CRT skeleton itself — 378 binaries
+is static reach, exactly the number that made H455/SimGolf look worth building
+before it moved the frame rate not at all. It earns a multi-window hot census,
+not an implementation.

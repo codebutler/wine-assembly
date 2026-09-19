@@ -194,7 +194,7 @@ function scanFile(file) {
   let pe;
   try { pe = readPE(file); } catch (e) { return { file, error: String(e.message || e) }; }
   const { buf, sections } = pe;
-  const counts = {}, rejects = {}, skels = new Map();
+  const counts = {}, rejects = {}, skels = new Map(), declines = [];
   // One loop HEAD is one loop. A head is commonly reached by several back
   // edges (a nested cycle, or a second `continue` path), and counting each as
   // its own hit inflates the census several-fold -- Storm's 0x150251cb alone
@@ -217,8 +217,19 @@ function scanFile(file) {
       if (!insns.length) continue;
 
       const r = classify(insns, be.headVa, be.tailVa);
-      if (r.reject) { rejects[r.reject] = (rejects[r.reject] || 0) + 1; continue; }
-      if (!r.memory) { rejects.nomemory = (rejects.nomemory || 0) + 1; continue; }
+      // Declines are recorded per HEAD, not just tallied. "The hot loop is
+      // absent from the listing" and "the hot loop was declined for `rep`" look
+      // identical in a histogram, and only the second is actionable.
+      if (r.reject) {
+        rejects[r.reject] = (rejects[r.reject] || 0) + 1;
+        declines.push({ headVa: be.headVa, tailVa: be.tailVa, why: r.reject });
+        continue;
+      }
+      if (!r.memory) {
+        rejects.nomemory = (rejects.nomemory || 0) + 1;
+        declines.push({ headVa: be.headVa, tailVa: be.tailVa, why: 'nomemory' });
+        continue;
+      }
       const prev = byHead.get(be.headVa);
       if (!prev || r.blocks > prev.blocks) {
         byHead.set(be.headVa, { headVa: be.headVa, tailVa: be.tailVa, ...r, insnsRef: insns });
@@ -229,15 +240,21 @@ function scanFile(file) {
   const hits = [];
   for (const h of byHead.values()) {
     counts[h.cls] = (counts[h.cls] || 0) + 1;
-    if (h.cls.startsWith('DIAMOND') || h.cls === 'SELFEXIT') {
+    const invisible = h.cls.startsWith('DIAMOND') || h.cls === 'SELFEXIT';
+    if (invisible) {
       const s = skeleton(h.insnsRef);
       skels.set(s, (skels.get(s) || 0) + 1);
-      const { insnsRef, ...rest } = h;
-      hits.push(rest);
     }
+    // Every class goes into --detail, not just the invisible ones. The question
+    // this census has to answer is what class the HOT blocks are, and a listing
+    // that omits SELF cannot tell "the hot loop is already foldable" from "the
+    // hot loop is not a loop this tool recognizes at all".
+    const { insnsRef, ...rest } = h;
+    hits.push(rest);
   }
   hits.sort((a, b) => a.headVa - b.headVa);
-  return { file, counts, rejects, hits, skels };
+  declines.sort((a, b) => a.headVa - b.headVa);
+  return { file, counts, rejects, hits, skels, declines };
 }
 
 const results = files.map(scanFile);
@@ -246,6 +263,7 @@ if (JSON_OUT) {
   console.log(JSON.stringify(results.map(r => ({
     file: r.file, error: r.error, counts: r.counts, rejects: r.rejects,
     hits: DETAIL ? r.hits : undefined,
+    declines: DETAIL ? r.declines : undefined,
     // Skeletons travel in the JSON because the question the census exists to
     // answer is cross-BINARY recurrence, and a corpus scan is several xargs
     // batches -- so the aggregation has to happen outside this process.
