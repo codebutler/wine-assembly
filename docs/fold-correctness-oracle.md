@@ -114,7 +114,17 @@ build rather than a sweep to run.
 
 ## Prerequisite for anything new
 
-[diamond-loop-matcher-design.md](diamond-loop-matcher-design.md) proposes a
-matcher that rewrites control-flow structure rather than one block, which is
-strictly more dangerous than anything above. This page is the gate it has to
-pass, extended to more apps and deeper frames.
+The general diamond matcher that first motivated this page was **declined** by
+its own census — see [diamond-loop-matcher-design.md](diamond-loop-matcher-design.md).
+What survives is narrower: **SELFEXIT support**, loosening
+`$loop_match_block`'s precondition so an existing fold reaches a loop whose
+conditional exit splits its block (§22 of
+[loop-idiom-superops-design.md](loop-idiom-superops-design.md)).
+
+Narrower is not safer here, and the gate does not relax. A SELFEXIT fold has to
+re-check the exit condition every iteration; getting that wrong does not shift
+a cursor by a frame, it runs the wrong number of iterations and corrupts
+memory — which a PNG at batch 150 is poorly placed to catch. So this page is
+the floor, and the **byte-exact end-state oracle** (the StarCraft save route in
+[re-notes/starcraft-shareware.md](re-notes/starcraft-shareware.md)) is the
+instrument that actually fits the failure mode.

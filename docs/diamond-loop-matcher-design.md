@@ -160,6 +160,14 @@ result decides whether the rest is worth designing in detail.
 
 ---
 
+> **Superseded below, and the conclusion has moved.** Everything above this line
+> is the original proposal for a general diamond matcher, kept for its reasoning
+> and its risk register. The census declined it. The surviving scope —
+> **SELFEXIT support only** — and the open issues that gate it now live in
+> **§22 of [loop-idiom-superops-design.md](loop-idiom-superops-design.md)**,
+> which is the doc to read when working on a fold. Do not add findings here;
+> add them to §22.
+
 # Census result, 2026-09-19 — the proposal survives, much smaller
 
 `tools/find-diamonds.js` (5134b3e0) classifies every short backward branch in a

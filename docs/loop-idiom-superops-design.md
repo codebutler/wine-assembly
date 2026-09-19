@@ -1830,6 +1830,11 @@ before any change to the precondition.
 
 ### 22.2 Left open
 
+**Take the last one first.** It is the only one that can kill SELFEXIT support
+outright, and it costs a read of `07b-loop-match.wat` rather than a profiling
+run — the other three are measurements that are worthless if the fold cannot
+express the exit edge at all.
+
 - Whether `0x49e9ca` is hot in *every* Caesar window, or only during load.
 - Whether the CRT sentinel `strcpy` skeleton — the most common SELFEXIT shape in
   the corpus, 378 of 1271 binaries — is ever hot anywhere. Static reach only.
