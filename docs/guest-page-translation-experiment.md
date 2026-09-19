@@ -647,7 +647,57 @@ context restoration. P is not integrated or a complete SEH solution.
    checks; the Heroes II startup control demonstrates why combining them
    obscures the cause of a regression.
 
-The next correctness milestone is an actual guest exception handler that
+The next correctness milestone at that point was an actual guest exception handler that
 repairs a protected page and returns to the exact instruction, with unchanged
 faulting-instruction state and retained earlier-instruction state. That is a
 better integration gate than another launch-only permission smoke test.
+
+### Guest-handler continuation prototype (2026-09-19)
+
+That narrow milestone now passes in the isolated worktree, using
+`node tools/page-seh-prototype.js` from
+`/private/tmp/wa-page-perm-candidates` (base `094bd919`). It compiles
+`build/page-perm/SEH.wasm` through the canonical compiler, layered on the P
+experiment above. Neither the prototype nor permission enforcement is merged
+into the production runtime.
+
+The ordinary decoder emits a temporary instruction-PC marker before each
+instruction. A denied access records the address/access kind and traps; a
+temporary JavaScript fault bridge catches only marked faults, constructs a
+guest EXCEPTION_RECORD and i386 CONTEXT control/integer subset, walks FS:[0],
+and runs real guest x86 registration handlers. A handler calls the actual
+VirtualProtect API thunk to make the page writable. Continuation restores
+the guest-visible context and retries at the decoder-supplied PC, rather than
+at a PC hardcoded by the test driver.
+
+| Case | Observed result |
+| --- | --- |
+| Repair read-only stack page | Fault PC `0x00600001`; prior INC leaves EAX 42; faulting PUSH leaves ESP unchanged; repair/retry completes PUSH/POP/RET |
+| Handler edits saved EAX | Restored EAX and the retried PUSH/POP result are 99 |
+| Chained handlers | First handler executes and returns continue-search; second repairs and resumes |
+| Architectural restoration | ESI survives handler scratch use; saved EFLAGS restored; registration-chain head retained on continuation |
+| Search with no accepting handler | Explicit unhandled-exception failure |
+| Invalid handler disposition | Explicit failure rather than accidental continuation |
+
+All cases pass. This is a proof of the fault/repair/retry sequence, **not a
+production SEH integration or a Win98 conformance result**. The marker adds a
+dispatch per instruction and is not the proposed low-overhead PC side table.
+Earlier whole-block/fused decode paths can bypass it; this probe establishes
+precision only for its ordinary instruction stream. The bridge runs handlers
+on a private scratch stack, not a validated Windows stack policy. It does not
+cover floating-point context, nested faults, unwind, guard-page transitions,
+concurrent threads, execute permissions, or all memory-access handlers.
+
+The pinned production `src/11-seh.wat` also contains a separate blocker: its
+scope-table path recognizes trivial filter byte patterns, then **assumes a
+nontrivial filter accepts the exception and jumps to the except body without
+executing the filter**. That shortcut cannot substitute for the general
+registration-handler invocation and context continuation exercised here.
+The prototype's JavaScript bridge deliberately substitutes for that walker;
+passing this probe does not demonstrate that the production walker works.
+
+Next: port this bounded handler-call/continue-search/context-restore contract
+into the actual exception-dispatch path with regression tests, then cover
+additional instruction commit points and fused-PC provenance. Keep the
+performance question separate: no new timing claim follows from this probe,
+and default permission enforcement remains off.
