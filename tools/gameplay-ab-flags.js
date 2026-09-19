@@ -87,6 +87,16 @@ const SC_ROUTE = [
 // and an input recipe that misses a menu silently measures the menu instead.
 const ROUTE = opt('route', SC_ROUTE);
 
+// --perf-events=branches,branch-misses,instructions,cycles wraps every run in
+// `perf stat` (Linux, needs kernel.perf_event_paranoid <= 2 or CAP_PERFMON)
+// and reports each counter the same two-point way as CPU: P2 - P1 is the
+// gameplay window's count. With branches + branch-misses present it also
+// prints the window's miss rate, which is the number a dispatch-shape change
+// (replicating $next, fusing ops) is actually about -- CPU time alone cannot
+// tell "fewer instructions" from "fewer mispredicts". Whole-process counters,
+// so the null arm's spread bounds them exactly as it bounds CPU.
+const PERF_EVENTS = opt('perf-events', '');
+
 // KEY:dir[:flags] -- flags are '+'-separated extra run.js switches, so one
 // build can carry several arms when the lever is a runtime flag (block
 // chaining / executor) rather than a different wasm.
@@ -98,12 +108,29 @@ if (arms.length < 2) { console.error('need --arms=KEY:dir,KEY:dir[,...]'); proce
 
 function once(dir, batches, png, flags) {
   const input = png ? `${ROUTE},${batches - 50}:png:${png}` : ROUTE;
-  const r = spawnSync('/usr/bin/time', ['-p', 'node', 'test/run.js',
+  const cmd = ['/usr/bin/time', '-p', 'node', 'test/run.js',
     `--app=${APP}`, '--no-threads', '--quiet-api',
     `--batch-size=${BATCH_SIZE}`, `--max-batches=${batches}`, '--no-close',
     '--repaint-every=50', `--max-seconds=${Math.ceil(batches * SECONDS_PER_BATCH)}`,
     `--input=${input}`, ...(flags || []),
-  ], { cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28 });
+  ];
+  // perf's own report goes to a file (-o), so /usr/bin/time's stderr and
+  // run.js's stdout are untouched and parse exactly as they do without it.
+  const perfOut = PERF_EVENTS
+    ? path.join(require('os').tmpdir(), `gab-perf-${process.pid}-${Date.now()}.txt`) : null;
+  if (perfOut) cmd.unshift('perf', 'stat', '-x,', '-e', PERF_EVENTS, '-o', perfOut);
+  const r = spawnSync(cmd[0], cmd.slice(1), { cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28 });
+  const perf = {};
+  if (perfOut) {
+    let txt = '';
+    try { txt = require('fs').readFileSync(perfOut, 'utf8'); require('fs').unlinkSync(perfOut); } catch (e) { /* no report: perf refused */ }
+    // CSV: value,unit,event,run-time,pct,... ; "<not counted>"/"<not supported>" become NaN.
+    for (const line of txt.split('\n')) {
+      if (!line || line.startsWith('#')) continue;
+      const [v, , ev] = line.split(',');
+      if (ev) perf[ev] = /^\d+$/.test(v) ? Number(v) : NaN;
+    }
+  }
   const m = /^user\s+([\d.]+)$/m.exec(r.stderr || '');
   // A run that stopped early on the wall-clock guard did LESS work, so its CPU
   // is not comparable. Reject it loudly rather than averaging it in.
@@ -118,8 +145,21 @@ function once(dir, batches, png, flags) {
     batches: done ? parseInt(done[1], 10) : -1,
     api: api ? parseInt(api[1], 10) : -1,
     status: r.status,
+    perf,
   };
 }
+
+// Gameplay-window counters: P2 - P1 per event, plus the derived rates.
+function perfWindow(p1, p2) {
+  const w = {};
+  for (const ev of Object.keys(p2.perf || {})) w[ev] = p2.perf[ev] - (p1.perf[ev] || 0);
+  if (w['branches'] > 0 && Number.isFinite(w['branch-misses'])) w['miss%'] = w['branch-misses'] / w['branches'] * 100;
+  if (w['cycles'] > 0 && Number.isFinite(w['instructions'])) w['ipc'] = w['instructions'] / w['cycles'];
+  return w;
+}
+const fmtCount = v => !Number.isFinite(v) ? 'n/a' : v >= 1e9 ? (v / 1e9).toFixed(2) + 'G' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : String(v);
+const perfCols = w => Object.entries(w).map(([k, v]) =>
+  `${k}=${k === 'miss%' ? v.toFixed(2) : k === 'ipc' ? v.toFixed(2) : fmtCount(v)}`).join(' ');
 
 const loadavg = () => require('os').loadavg()[0].toFixed(2);
 const got = Object.fromEntries(arms.map(a => [a.key, []]));
@@ -144,10 +184,12 @@ for (let rep = 0; rep < REPS; rep++) {
     const g = p2.user - p1.user;
     // Mode label from the end-point run: "lo" ~610k API calls, "hi" ~1.06M.
     const mode = MODE_SPLIT > 0 ? (p2.api > MODE_SPLIT ? 'hi' : 'lo') : 'one';
-    got[arm.key].push({ g, mode, api: p2.api });
+    const w = PERF_EVENTS ? perfWindow(p1, p2) : null;
+    got[arm.key].push({ g, mode, api: p2.api, w });
     console.log(`${rep + 1}    ${arm.key.padEnd(4)}  ${p1.user.toFixed(2).padStart(7)}  ` +
       `${p2.user.toFixed(2).padStart(7)}  ${g.toFixed(2).padStart(11)}  ` +
-      `${String(p2.batches).padStart(7)}  ${mode}  ${String(p2.api).padStart(9)}  ${loadavg()}`);
+      `${String(p2.batches).padStart(7)}  ${mode}  ${String(p2.api).padStart(9)}  ${loadavg()}` +
+      (w ? `  ${perfCols(w)}` : ''));
   }
 }
 
@@ -160,8 +202,9 @@ const med = xs => {
 // Report per mode. Pooling the two modes is what produced a 15% null band on
 // the first attempt; within a mode the runs are comparable.
 const base = arms[0].key, nullArm = arms[1] && arms[1].key;
-for (const mode of ['lo', 'hi']) {
-  const of = k => got[k].filter(r => r.mode === mode).map(r => r.g);
+for (const mode of ['lo', 'hi', 'one']) {
+  const rows = k => got[k].filter(r => r.mode === mode);
+  const of = k => rows(k).map(r => r.g);
   if (!arms.some(a => of(a.key).length)) continue;
   console.log(`\n=== mode "${mode}"`);
   for (const a of arms) {
@@ -170,6 +213,12 @@ for (const mode of ['lo', 'hi']) {
       ? `  ${a.key}: n=${xs.length} median gameplay CPU ${med(xs).toFixed(2)}s  ` +
         `min ${Math.min(...xs).toFixed(2)}  max ${Math.max(...xs).toFixed(2)}`
       : `  ${a.key}: no samples in this mode`);
+    if (PERF_EVENTS && xs.length) {
+      // Median of each window counter across this arm's reps in this mode.
+      const keys = Object.keys(rows(a.key)[0].w || {});
+      const medW = Object.fromEntries(keys.map(k => [k, med(rows(a.key).map(r => r.w[k]).filter(Number.isFinite))]));
+      console.log(`      window medians: ${perfCols(medW)}`);
+    }
   }
   const b = of(base), nl = nullArm ? of(nullArm) : [];
   if (!b.length || !nl.length) { console.log('  (need both baseline arms in this mode)'); continue; }
