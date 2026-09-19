@@ -69,8 +69,8 @@ assert(APPS.quake2_demo.files.some(file => file.url === 'lib/quake2-modern-contr
 assert.deepStrictEqual(APPS.quake2_demo.persistFiles, ['c:\\baseq2\\config.cfg'],
   'Quake II restores and persists later user control changes over the defaults');
 assert.deepStrictEqual(APPS.mcm.persistFiles, [
-  'c:\\ui\\uilst.ini',
-  'c:\\ui\\profile\\*\\*.prf',
+  'c:\\program files\\microsoft games\\motocross madness trial\\ui\\uilst.ini',
+  'c:\\program files\\microsoft games\\motocross madness trial\\ui\\profile\\*\\*.prf',
 ], 'Motocross Madness restores its profile index and per-player settings');
 const aoe1 = APPS.aoe1;
 const aoe1File = name => aoe1.files.find(file => file.url.endsWith('/' + name));

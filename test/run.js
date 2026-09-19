@@ -4560,11 +4560,14 @@ async function main() {
     // Apply an explicit process cwd only after every mount, including the
     // persisted writable overlay. Installer children commonly live solely in
     // that overlay and must be directly resumable on a later CLI invocation.
-    if (GUEST_CWD) {
-      const rooted = /^[a-z]:[\\/]/i.test(GUEST_CWD) ? GUEST_CWD : `c:\\${GUEST_CWD}`;
+    // A registry app's workingDirectory is the browser shell's cwd too, so
+    // the CLI takes it as the default when --cwd is not given.
+    const guestCwd = GUEST_CWD || (APP_ENTRY && APP_ENTRY.workingDirectory) || null;
+    if (guestCwd) {
+      const rooted = /^[a-z]:[\\/]/i.test(guestCwd) ? guestCwd : `c:\\${guestCwd}`;
       const cwd = path.win32.normalize(rooted.replace(/\//g, '\\'));
       if (!ctx.vfs.setCurrentDirectory(cwd)) {
-        throw new Error(`--cwd directory is not present in the guest VFS: ${GUEST_CWD}`);
+        throw new Error(`working directory is not present in the guest VFS: ${guestCwd}`);
       }
       console.log(`[vfs] working directory: ${ctx.vfs.getCurrentDirectory()}`);
     }

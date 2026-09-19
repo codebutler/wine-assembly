@@ -16,6 +16,56 @@ attached 16-bit Z surface. The Worker run was served with COOP/COEP isolation
 and reported `hasWorker:true`; its loading phase is substantially slower but is
 not stuck.
 
+### Headless route (CLI, 2026-09-18)
+
+A fresh profile reaches the race in the CLI with no browser. Batch numbers are
+at the default `--batch-size`/`--tick-ms-per-batch`:
+
+1. `200:dlg-cmd:1` answers the "test your video memory" MessageBox (it
+   appears near batch 57; a `dlg-cmd` sent earlier finds no dialog).
+2. The Enter Name box is up by batch 10000. Type with `keydown` + `keypress` +
+   `keyup` per character. `keydown` alone types nothing: `TranslateMessage`
+   does not synthesize `WM_CHAR` (the browser queues it from the keypress
+   event), and MCM's edit field reads only `WM_CHAR`.
+3. OK `(221,236)`, then Single Player Event `(445,45)`, pressed twice. Event
+   Options is up by batch 22000.
+4. Next `(338,442)` shows Select Stunt Quarry ("T-rific"), Next again shows
+   rider/bike, then Start `(338,442)`.
+5. Loading takes about 150000 batches: `quarry01.trn` (6.3 MB) is decoded in
+   4 KB reads, then a terrain-grid visibility pass at `0x48c290` runs for about
+   30000 batches with no file I/O. The race renders by batch 180000. Holding
+   Up (`keydown:38` + `di-keydown:38`) drives the bike.
+
+Use mousedown/mouseup a few dozen batches apart, and `--stuck-after` large:
+the app parks in blocking waits that the default detector reads as a hang.
+`--control=PORT --frozen` with `tools/ctl.js step N` / `png` drives it
+without re-running the long boot for every click.
+
+## File layout (why the manifest looks like this)
+
+MCM opens media two ways: relative to the working directory (`ui\cursor.tga`,
+`sbike\*.vub`, `ui\profile\*.*`) and rooted at the registry's
+`HardDriveRootPath` (`<root>\ui\global.dat`, `<root>\audio\*.wav`). A real
+install keeps the working directory and that root in one `Program Files`
+directory. The registry entry therefore mounts every asset under
+`C:\Program Files\Microsoft Games\Motocross Madness Trial\` and sets
+`workingDirectory` to that directory. `run.js` takes the same default when
+`--cwd` is absent.
+
+- The media must not also appear under `C:\`. The scene list probes the CD
+  root too, and with no CD that root is `""`, so the probe is
+  `\teraform\quarries\Quarry01.scn`, which resolves against `C:\`. A hit in
+  both places makes MCM's duplicate filter drop the only quarry, and Select
+  Stunt Quarry comes up empty and black.
+- Until 0d8d1727 (2026-09-04) the old split layout, with media at `C:\` and
+  only `.SCN` files under the root, worked only because `createFile`'s basename
+  fallback also applied to `C:` paths. Once that fallback correctly stopped
+  doing so, MCM exited with code 1 right after the video-memory box, when it
+  failed to open `<root>\ui\global.dat`.
+- The remaining misses are real: the trial media has no `click01.wav`,
+  `rand0N.wav`, `oh_01.wav`, `bonus.wav`, `ui\video\*.avi`, `unart.tga` or
+  `quarry01.aid`.
+
 ## Rendering findings
 
 - MCM submits legacy `D3DLVERTEX` records with the documented eight-DWORD,
