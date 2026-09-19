@@ -225,7 +225,29 @@ async function main() {
     assert.strictEqual(await page.evaluate(() => Object.values(sharedRenderer.windows)
       .filter(w => w && w.visible && w.className === 'SDlgDialog').length), 2,
     'Replay Intro opened duplicate dialogs');
-    await capture(page, '03b-replay-intro');
+    const replay = await capture(page, '03b-replay-intro');
+    assert(await orbColour(page, replay, 250, 427, 0) > 30 &&
+      await orbColour(page, replay, 388, 427, 0) > 30,
+    'Replay Intro is missing its OK selection markers');
+    // The notice starts at y=162. Its primary-backed popup must preserve
+    // screen coordinates or the visible OK button at y=427 is cropped away.
+    const ok = await guestPoint(page, 320, 427);
+    let gold = 0;
+    for (let y = Math.round(ok.y) - 15; y < Math.round(ok.y) + 15; y++) {
+      for (let x = Math.round(ok.x) - 30; x < Math.round(ok.x) + 30; x++) {
+        const i = (y * replay.width + x) * 4;
+        if (replay.data[i] > 90 && replay.data[i + 1] > 70 &&
+            replay.data[i + 2] < replay.data[i + 1] * 0.8) gold++;
+      }
+    }
+    assert(gold > 30, 'Replay Intro OK label did not render');
+    await clickGuest(page, 320, 427);
+    await page.waitForFunction(() => Object.values(sharedRenderer.windows)
+      .filter(w => w && w.visible && w.className === 'SDlgDialog').length === 1,
+    { timeout: 15000 });
+
+    await clickGuest(page, 320, 299);
+    await waitDialogs(page, 2);
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => Object.values(sharedRenderer.windows)
       .filter(w => w && w.visible && w.className === 'SDlgDialog').length === 1,

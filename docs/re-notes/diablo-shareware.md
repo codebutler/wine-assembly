@@ -2931,11 +2931,11 @@ exercises that return before character selection. Focused regressions extend
 `test-dialog-custom-dispatch.js` and `test-dialog-button-command-queue.js`;
 `test-button-auto-check.js` and `test-dialog-setfocus-tabstop.js` still pass.
 
-Remaining visual issue: the notice's OK label is invisible. Its dialog rectangle
+The initially remaining visual issue was an invisible OK label. Its dialog rectangle
 is (0,162), 640x318; the button is (230,244), 180x42 relative to that dialog,
 so its screen rectangle (230,406)..(410,448) fits. Clicking (320,427) dismisses
 the notice. The guest allocates the expected 180x42 button bitmap; the missing
-label still needs a palette-index/presentation trace. Screenshots:
+label needed a palette-index/presentation trace. Screenshots:
 `/private/tmp/wa-replay-fixed-before.png` and the browser test's
 `03b-replay-intro.png`.
 
@@ -2944,3 +2944,28 @@ The loading checkpoint also needs to account for its palette fade: a capture
 waits for the progress-bar border, retains the brightest loading frame over the
 following second, and excludes frames with a red gameplay HUD orb. The verified
 capture shows the village artwork and a partially filled bar before Tristram.
+
+## Replay Intro OK art: offset primary backing (2026-09-18)
+
+The button's 180x42 indexed bitmap and the 640x480 DirectDraw primary both
+contain the gold OK text and red markers at screen y=427. The missing pixels
+were introduced by `$dx_seed_overlay_surface` / `$dx_reseed_overlays`: both
+copied the primary from (0,0) into every popup, although the Replay Intro
+popup begins at (0,162) and is only 318 pixels tall. Its backing consequently
+contained the top 318 screen rows, excluding the button.
+
+Both paths now copy the primary rectangle under the popup's screen rectangle
+into window-local (0,0). Negative screen origins preserve the corresponding
+destination offset, and the shared rectangle blitter clips the right/bottom
+edges. This applies to borderless exclusive popups; the existing exclusion
+for captioned dialogs remains intact.
+
+The post-processing source independently used only the top popup's backing
+canvas, moving the repaired 318-row image to screen (0,0). It now composes the
+exclusive window stack at native screen coordinates, preserving the game above
+the popup, its offset, and the normal stale-surface/child-overlay rules. The
+native-child overlay test also covers a smaller popup at a nonzero origin.
+
+The browser regression checks both red markers and gold OK pixels, dismisses
+the notice by clicking that visible button, then reopens it and checks Escape
+before continuing through character creation and gameplay.
