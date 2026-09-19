@@ -74,10 +74,15 @@ function expandMacros(forms) {
   function substitute(template, bindings) {
     if (Array.isArray(template)) {
       if (watxValue(template[1]) === 'begin') {
-        return template.slice(2).flatMap(t => {
+        const spliced = template.slice(2).flatMap(t => {
           const r = substitute(t, bindings);
           return Array.isArray(r) && r._isBegin ? r : [r];
         });
+        // Tagged, so the caller splices it: a `(begin ...)` body used to come
+        // back as a plain array and was pushed as ONE child, which the encoder
+        // then dropped without a word (see expandForm below).
+        spliced._isBegin = true;
+        return spliced;
       }
       const result = [template[0]];
       for (let i = 1; i < template.length; i++) {
@@ -120,9 +125,20 @@ function expandMacros(forms) {
       }
       const bindings = {};
       macro.params.forEach((p, i) => { bindings[p] = args[i]; });
-      const expanded = macro.body.map(b => substitute(b, bindings));
-      if (expanded.length === 1) return expandForm(expanded[0]);
-      const result = expanded.flatMap(e => Array.isArray(e) && e._isBegin ? e : [expandForm(e)]);
+      // Expand every body form in turn, splicing at both levels: a `(begin
+      // ...)` in the template comes back from `substitute` as a tagged list
+      // of forms, and a body form that is itself a multi-form macro call
+      // comes back from `expandForm` as one. Either used to be pushed as a
+      // single element, so a multi-form macro called from inside another
+      // macro's body lost its expansion (test/watx-compiler-macro-body.test.js).
+      const result = [];
+      for (const e of macro.body.map(b => substitute(b, bindings))) {
+        for (const item of (Array.isArray(e) && e._isBegin ? e : [e])) {
+          const r = expandForm(item);
+          if (Array.isArray(r) && r._isBegin) result.push(...r); else result.push(r);
+        }
+      }
+      if (result.length === 1) return result[0];
       result._isBegin = true;
       return result;
     }
@@ -130,11 +146,21 @@ function expandMacros(forms) {
     for (let i = 1; i < form.length; i++) {
       const child = form[i];
       const expandedChild = expandForm(child);
+      // A multi-form macro expansion is an `_isBegin` array of forms, and it
+      // must be SPLICED into the parent, one child per form. Until 2026-09-19
+      // it was pushed as a single child here, and a macro with more than one
+      // body form used anywhere below module level — inside a function body —
+      // compiled to nothing: the module validated, the function ran, and the
+      // expansion's instructions were simply absent (the whole emulator's
+      // dispatch step vanished this way and every app "ran" zero ops). The
+      // module-level path in expandModule already spliced; this is the same
+      // splice for every nested position.
+      const spliceBegin = Array.isArray(expandedChild) && expandedChild._isBegin;
       if (result) {
-        result.push(expandedChild);
-      } else if (expandedChild !== child) {
+        if (spliceBegin) result.push(...expandedChild); else result.push(expandedChild);
+      } else if (spliceBegin || expandedChild !== child) {
         result = form.slice(0, i);
-        result.push(expandedChild);
+        if (spliceBegin) result.push(...expandedChild); else result.push(expandedChild);
       }
     }
     if (!result) return form;

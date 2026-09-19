@@ -1965,3 +1965,32 @@ Evidence:
   and `nan:0x20304` are all checked as "the result is a NaN".
 
 Manifest digest: `8033b7d1ed16150b1d488ddeeec81e8fdf116e3657386c9e3e8729130330815a`
+
+## 2026-09-19 — A multi-form macro inside a function body expanded to nothing
+
+- `compiler-stages.js`: `expandForm` returned a multi-form macro expansion as one
+  `_isBegin`-tagged array, and only `expandModule` spliced it — at module level.
+  Anywhere below (a function body, a `then` arm, a `block`) the parent's child
+  loop pushed the whole array as a single bogus child and the encoder dropped
+  it **without a word**: the module validated, the function ran, and the
+  macro's instructions were simply absent. Found by baking the emulator's
+  dispatch step into `(defmacro (dispatch-next) ...)` in `src/04-cache.wat`:
+  every handler expanded it, every app launched, and zero x86 ops executed.
+  A single-form body never hit it, which is why the 400+ other macro sites in
+  the tree were fine. Three splices now happen where they were missing:
+  `expandForm`'s child loop (both the "already copying" and "first change"
+  branches), `substitute`'s `(begin ...)` path (which returned the spliced forms
+  untagged, so the parent could not know to splice them), and the macro-body
+  loop itself (a body form that is another multi-form macro call came back
+  tagged and was pushed as one element, so a macro calling a macro lost the
+  inner expansion — `f() = 24` where 33 was due).
+- `test/watx-compiler-macro-body.test.js` (new): compiles and **calls** a
+  module using a two-form macro from a `then` arm, a `block` and the function
+  body, in the bare, `(begin ...)` and single-form spellings, plus a macro
+  nested in a macro, and checks that the sibling after a spliced expansion
+  survives in order. A compile-only check passed on the broken compiler.
+- The production artifact is byte-identical with the `(block ...)` workaround
+  removed from `dispatch-next`: `build/wine-assembly.wasm` matches the
+  46215810 source-transform build exactly (1435041 bytes).
+
+Manifest digest: `665ecfd1111c360f5e04ec1ef94ee29a43035c630f4e0204c0f15abf722790c4`

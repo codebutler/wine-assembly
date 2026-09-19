@@ -2067,13 +2067,14 @@
   ;; $jcc_end's fall-through nests a frame, and it is one of the three.
   ;; Because the expansion sits in tail position, its `(return)` lands
   ;; exactly where $next's would: in $run, which reads $resume_ip.
-  ;; One (block ...) around the body, deliberately: the macro expander splices
-  ;; a multi-form body only at module level, and inside a function it
-  ;; compiles to NOTHING, silently (probed 2026-09-19: a two-form macro in a
-  ;; function body yields a module that runs zero ops). A single form
-  ;; expands correctly, and a label-less block costs no machine code.
+  ;; A multi-form macro body, expanded inside a function. That used to
+  ;; compile to NOTHING, silently (the expander spliced a multi-form body
+  ;; only at module level; every app "ran" zero ops), and this landed with a
+  ;; `(block ...)` wrapper as the workaround. The compiler is fixed (see
+  ;; tools/watx-src/CHANGELOG.md, 2026-09-19) and
+  ;; test/watx-compiler-macro-body.test.js CALLS such a module, so the
+  ;; wrapper is gone; the artifact is byte-identical either way.
   (defmacro (dispatch-next)
-   (block
     (if (i32.le_s (global.get $steps) (i32.const 0))
       (then
         ;; Hand $run the op we are declining to run, so it resumes the block
@@ -2107,7 +2108,7 @@
     ;; $jcc_end stopped unwinding at block terminators, $steps is no longer a
     ;; backstop: it *is* the chain length, and the same chain is now ~1000
     ;; frames instead of ~5. See docs/interpreter-dispatch-perf.md.
-    (return_call_indirect (type $handler_t) (local.get $nx_op) (local.get $nx_fn))))
+    (return_call_indirect (type $handler_t) (local.get $nx_op) (local.get $nx_fn)))
 
   (func $next
     (local $nx_fn i32) (local $nx_op i32)
