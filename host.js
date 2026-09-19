@@ -2532,6 +2532,7 @@ class WineAssembly {
       const meta = await this.guestWorker.readExports([
         'get_image_base', 'get_code_start', 'get_code_end',
         'get_thunk_base', 'get_thunk_end', 'get_num_thunks',
+        'get_dll_count',
       ]);
       if (this.instance.exports.init_thread && meta.get_image_base) {
         // tid 7 is the last worker slot; this instance never executes guest
@@ -2540,6 +2541,15 @@ class WineAssembly {
         this.instance.exports.init_thread(7, meta.get_image_base, meta.get_code_start,
           meta.get_code_end, meta.get_thunk_base, meta.get_thunk_end, meta.get_num_thunks);
       }
+      // $dll_count is per-instance, and loading the PE in the worker walked the
+      // EXE's import table there — so main's copy is still 0 while the worker
+      // holds N. It is not cosmetic: com_create_instance walks exactly
+      // get_dll_count() rows of the shared DLL table looking for the class's
+      // server, so a zero here means the very first CoCreateInstance can never
+      // match anything, whatever is actually mapped. init_thread does not carry
+      // it, hence the separate set, and it must follow init_thread rather than
+      // precede it.
+      this._publishWorkerDllCount(meta.get_dll_count | 0);
     } else {
       ProcessBoot.setExeDrive(this.instance.exports, url);
       ProcessBoot.setExeName(this.instance.exports, this.memory.buffer, exeName);
@@ -3083,6 +3093,10 @@ class WineAssembly {
       this.registerModule(fileName, res.loadAddr);
       this._registerDllBitmapResources(fileName, dllBytes, res.loadAddr);
     }
+    // Same per-instance-counter gap as the COM path below: a module this worker
+    // just mapped is invisible to every main-thread host import that walks the
+    // DLL table until main's count catches up.
+    await this._publishLinkLoaderState(link);
   }
 
   // Remember where an image landed, and resolve an address back to it.
@@ -3150,6 +3164,52 @@ class WineAssembly {
     const res = await gw.comLoadDll(dllBytes, fileName, this._exeBytes || null, link);
     if (res && res.error) console.error('[COM] DLL load error:', res.error);
     else if (res) console.log(`[COM] DLL loaded at 0x${(res.loadAddr >>> 0).toString(16)} (worker)`);
+    // The worker appended a DLL-table row and advanced ITS OWN $dll_count. The
+    // retry that follows runs com_create_instance on this thread, against the
+    // idle main instance, whose count never moved -- so the search stops short
+    // of the row just written, returns CO_E_DLLNOTFOUND again, and the guest
+    // asks for the same server forever. Morrowind mapped quartz.dll ~30 times,
+    // each copy lower than the last, until "DLL table capacity 32 exhausted"
+    // and the thread jumped into unmapped memory.
+    //
+    // This is the browser twin of the CLI fix in a4bd125c: that one publishes
+    // from ThreadManager's own yield loop, which this path does not go through.
+    await this._publishLinkLoaderState(link);
+  }
+
+  // Copy the loader scalars a worker can advance on its own onto the idle
+  // main-thread instance. Guest memory is shared, so the DLL table's ROWS are
+  // already visible here; what is not is the count of how many of them are
+  // live, along with the thunk cursor -- those are per-instance globals.
+  //
+  // ThreadManager has the same routine for the threads it schedules itself;
+  // this exists because host.js services the COM and LoadLibrary yields of the
+  // guest-main worker directly and never enters that loop.
+  async _publishLinkLoaderState(link) {
+    const main = this.instance && this.instance.exports;
+    if (!main || !link || typeof link.callExport !== 'function') return;
+    try {
+      this._publishWorkerDllCount((await link.callExport('get_dll_count')) | 0);
+      if (main.sync_thunk_state) {
+        const thunkEnd = (await link.callExport('get_thunk_end')) >>> 0;
+        const numThunks = (await link.callExport('get_num_thunks')) >>> 0;
+        // Only ever forward: a worker that has not loaded anything since its
+        // last slice reports a stale cursor, and rewinding main's would hand
+        // out thunk slots that are already in use.
+        if (main.get_num_thunks && numThunks > (main.get_num_thunks() >>> 0)) {
+          main.sync_thunk_state(thunkEnd, numThunks);
+        }
+      }
+    } catch (_) {}
+  }
+
+  _publishWorkerDllCount(count) {
+    const main = this.instance && this.instance.exports;
+    if (!main || !main.get_dll_count) return;
+    // Monotonic for the same reason as the thunk cursor above.
+    if ((count | 0) <= (main.get_dll_count() | 0)) return;
+    const set = main.set_dll_count || main.test_set_dll_count;
+    if (set) set.call(main, count | 0);
   }
 
   async handleLoadLibrary() {
