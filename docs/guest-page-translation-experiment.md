@@ -540,3 +540,114 @@ Reproduction artifacts remain in the isolated worktree:
 
 Artifact SHA-256 prefixes: A `4bc97f6044ce7e5e`, C1 `6f77d5b912bd78cb`,
 C2 `1a03f7eeb5896236`, C1compat `08c7ee756ccc04af`.
+
+## Benchmark controls and precise retry probe (2026-09-19)
+
+The next harness audit found that the artifact arms incremented one global
+`repIndex`, so separate instances received different guest code addresses in
+the same round. Independent instances now receive address index zero for the
+census and `round + 1` for timing. Runtime-toggle arms that share one instance
+still require separate addresses to avoid reusing another arm's decoded code.
+The temporary harness also records every timing sample rather than only the
+aggregate.
+
+Three independent processes used `--no-liftoff --no-wasm-lazy-compilation`,
+confirmed in that host's `node --v8-options`, to exclude baseline-to-optimized
+tiering and lazy compilation. Each measured C1compat, A0 and A with nine
+rotated repetitions and 8 MiB shapes. Identical-artifact controls still varied
+by as much as 6.08%; matching guest addresses and removing tier-up therefore
+did **not** establish a stable C1compat performance result. These are controlled
+Node/V8 experiments, not a claim about Safari's JIT.
+
+Three further processes pinned to logical CPU 2 with `taskset -c 2` also failed
+the null control: identical A0/A differences ranged from -3.45% to +7.96%
+across shapes/runs. This host is an Intel i9-9900K (8 cores / 16 threads),
+running Node v20.11.1 on x86-64. CPU migration alone does not explain the
+variance. These controls are retained as
+`build/page-perm/page-perm-{controlled,affinity}-{1,2,3}.json` in the temporary
+worktree; each file includes the individual timing samples.
+
+A final three-process control cached `WebAssembly.Module` objects by artifact
+SHA-256 and instantiated identical A/A0 arms from the **same compiled module**,
+with eager optimization, matching guest addresses and CPU 2 affinity retained.
+Positive percentages again mean slower than A:
+
+| Shape | C1compat runs 1 / 2 / 3 | Identical A0 runs 1 / 2 / 3 |
+| --- | --- | --- |
+| LUT | -0.09 / +1.30 / +2.96% | -0.42 / +0.04 / +2.58% |
+| Stack | -5.12 / -0.12 / -0.01% | -5.04 / -0.51 / +1.21% |
+| Mixed block | -1.03 / -0.74 / -0.72% | -0.10 / +0.02 / -0.31% |
+| Store stream | +3.76 / -0.79 / +3.25% | +3.07 / +6.51 / -0.48% |
+| Sparse scatter | -0.23 / +2.82 / +2.71% | -1.79 / +0.36 / +1.46% |
+
+Results: `build/page-perm/page-perm-module-{1,2,3}.json`. The board also reported
+another agent's remote benchmarks during this work; the machine was not
+exclusively reserved, despite sampled load around 0.6–1.6. Do not attribute
+these variations to one cause: the controls rule out guest code-address
+differences, tier-up, CPU migration, and separate module compilation as a
+complete explanation, but do not isolate cache/memory placement or contention.
+There is still no reliable small-effect permission-cost estimate. The mixed
+block result is repeatable in these three runs but does not establish neutral
+cost across the memory paths. Nine controlled processes have supplied enough
+negative evidence to stop repeating this harness until a better isolation or
+cycle-level explanation is available.
+
+### Fault/retry probe
+
+`tools/page-fault-retry-probe.js` in the isolated worktree executes real x86:
+
+```text
+0x00600000  INC EAX       ; EAX 41 -> 42, must remain completed
+0x00600001  PUSH EAX      ; stack page read-only: fault here
+0x00600002  POP EBX
+0x00600003  RET
+```
+
+The protected stack pointer starts at `0x7eff0800`. C1compat traps with ESP
+already decremented to `0x7eff07fc`, EAX correctly at 42, and the stack bytes
+unchanged. `get_eip()` reports `0x00600000`, the block start, rather than the
+faulting `PUSH` at `0x00600001`.
+
+A temporary **P** artifact changes only `th_push_r` on top of C1compat:
+calculate the prospective stack address in a local, perform the checked store,
+then publish ESP. It traps with the original ESP intact. The probe repairs
+the page through `VirtualProtect`, restores the saved EAX/ESP (the API call
+itself changes them), explicitly supplies the exact fault PC, and retries.
+`PUSH/POP/RET` then completes with EAX still 42 and the expected stack contents.
+The test passes and deliberately exposes its limitation: the test driver,
+not the emulator's current exception machinery, supplies precise fault PC and
+context restoration. P is not integrated or a complete SEH solution.
+
+### Proposed enforcement sequence
+
+1. **Instruction identity:** retain a decoder-owned mapping from emitted
+   threaded-op ranges to original x86 instruction PCs. Fused handlers need
+   sub-operation PCs or must decline fusion in checked mode. Resolve fault
+   provenance from that mapping; a block-entry EIP cannot support retry.
+2. **Preflight and commit:** compute addresses/operands without publishing
+   architectural mutations, validate every page touched by one instruction,
+   then commit its stores/registers/flags. The PUSH probe is the first concrete
+   example. POP-to-memory, RMW flags, MMX/FPU split accesses, and stack calls
+   need the same review. REP preserves each completed iteration's progress;
+   it cannot roll the entire instruction back after copying several elements.
+3. **Fault transport:** carry `{code, guestAddress, accessKind, instructionPC}`
+   per thread and abort the instruction before any further dispatch. Select
+   and test an unwind mechanism supported by the canonical compiler and all
+   target engines; returning `NULL_SENTINEL` is insufficient. Enter guest SEH
+   only after the failed instruction has stopped, with a saved CONTEXT, and
+   honor the handler's restored context on continuation.
+4. **Shared transitions:** clear a guard with an atomic compare/exchange on
+   the current PTE so one accessor claims that guard transition without losing
+   concurrent protection changes. Fault retry must reload current metadata.
+   Executable-page permission changes must invalidate or revalidate decoded
+   execution across instances; a per-instance flag is insufficient.
+5. **Boundary behavior:** CPU access faults, Win32 buffer-validation failures,
+   and privileged loader/debugger access need explicit separate entry points.
+   Keep legacy missing-page compatibility separate while testing mapped-page
+   checks; the Heroes II startup control demonstrates why combining them
+   obscures the cause of a regression.
+
+The next correctness milestone is an actual guest exception handler that
+repairs a protected page and returns to the exact instruction, with unchanged
+faulting-instruction state and retained earlier-instruction state. That is a
+better integration gate than another launch-only permission smoke test.
