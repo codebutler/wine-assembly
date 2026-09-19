@@ -120,6 +120,16 @@ function classify(insns) {
       if (loadedFrom.has(m[1])) keyTests++;
       continue;
     }
+    // `or al,al` / `test al,al` -- the key test against ZERO, which is how a
+    // blitter whose transparent index is 0 writes it. No immediate appears in
+    // the encoding at all, so the two `cmp ..., imm` patterns above cannot see
+    // it, and a loop keyed on 0 read as unkeyed. StarCraft's dominant sprite
+    // blitter is this shape.
+    if ((m = text.match(/^(?:or|test) ([a-z]{2}), ([a-z]{2})$/))
+        && m[1] === m[2] && (R8.has(m[1]) || R16.has(m[1]))) {
+      if (loadedFrom.has(m[1])) keyTests++;
+      continue;
+    }
     if ((m = text.match(/^dec (e[a-z]{2})$/))) { counter = m[1]; continue; }
     if ((m = text.match(/^sub (e[a-z]{2}), 0x1$/))) { counter = m[1]; continue; }
     // A scaled table load: `mov bx, [ecx+eax*2]` or `mov al, [eax+ecx]`.
@@ -166,9 +176,41 @@ function classify(insns) {
   // The stored value must be the value the table produced, and the destination
   // stream must actually move -- without both, a loop that merely contains a
   // scaled load and an unrelated store reads as a blit.
-  if (!lutSize || !storeBase || !counter) return null;
-  if (storeReg !== lutDstReg) return null;
+  if (!storeBase || !counter) return null;
   if (!advanced.has(storeBase)) return null;
+
+  // A keyed blit does not have to go through a table. The plainest form loads
+  // a byte, tests it against the key, and stores THAT SAME BYTE -- a masked
+  // copy rather than a remap. Requiring a table made this whole family
+  // invisible, and it is not a rare one: it is the single hottest loop in
+  // StarCraft (0x004c7a68, 24.6M block entries, 10.8% of the route's), and
+  // src/07b-loop-match.wat already carries a hand-written fold for its
+  // dest-keyed mirror (Alpha Centauri, $try_emit_colorkey8_run). The self-loop
+  // matcher cannot see either, because the conditional store splits the body
+  // into two blocks and Design A only ever matches a block that branches to
+  // itself.
+  if (!lutSize) {
+    if (!keyTests) return null;                       // an unkeyed copy is not this
+    // The key test must branch BACK INTO the loop, i.e. skip the store and
+    // keep going. Without this the family swallows strncpy/strcpy, which is
+    // the same load-test-store-advance shape and differs only in that its
+    // test EXITS: msvcrt.dll scored 14 "keyed blits" before this line, and
+    // every one was a string routine.
+    if (!intraBranch) return null;
+    if (!storeReg || !loadedFrom.has(storeReg)) return null;
+    const from = loadedFrom.get(storeReg);            // where the stored byte came from
+    if (!advanced.has(from)) return null;             // the source must stream too
+    const size = R16.has(storeReg) ? 16 : 8;
+    const dst = from === storeBase;
+    return {
+      cls: `CK_COPY${size}_${dst ? 'DST' : 'SRC'}`,
+      keyTests, intraBranch, lutSize: 0, dest: dst, dstArm: false, arms: 0,
+      table: '-', index: '-', store: storeBase, counter,
+      insns: body.length + 1,
+    };
+  }
+
+  if (storeReg !== lutDstReg) return null;
   if (tail.text.startsWith('jnz') && !counter) return null;
 
   // Dest-indexed when the index register's byte/word came out of the same base

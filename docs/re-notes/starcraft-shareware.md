@@ -1075,6 +1075,33 @@ route; pass a fresh profile or a distinct name when that matters. And the
 has not necessarily finished, so let the run continue past the click before
 reading counters.
 
+**The save is a byte-exact A/B oracle, but only with `--wall-clock-ms=N`.**
+Without it the same command line twice produces saves differing in 88,435 of
+98,304 bytes, which reads convincingly as a nondeterministic emulator and is
+not: `lib/host-imports.js`'s `wall_clock` falls back to `Date.now()` unless
+`ctx.wallNowMs` is bound, so `GetSystemTime`/`GetLocalTime`/
+`GetSystemTimeAsFileTime` return the real calendar and the guest seeds itself
+from the time of day. Pin it and the route is reproducible to the byte:
+
+```sh
+# add to the command above
+--wall-clock-ms=1789000000000
+```
+
+Measured 2026-09-19, three runs of the route (two off, one `--implode-cmp-run`):
+`ab.sng` sha256 `41a21727…` on all three, the whole exported VFS tree
+`eb00de6d…`, 1804 of 1804 log lines identical apart from the wall clock, and
+2,235,672 API calls identical between the two off arms. **H466 therefore passes
+the oracle** — the implode fold is correct, not merely −2.77%. Note the
+DirectInput clock seam closed in `01b81f21` was *not* what made this route
+diverge; any new clock has to be closed on `ctx`, not on `h`.
+
+The two **off** arms — byte-identical output, identical API-call count, so
+provably identical work — took **201.6s and 158.7s** of wall clock, a 27%
+spread. (The fold arm's 94.0s is not comparable: it did less work.) Cross-run
+wall time on the shared box is not a measurement; use `--slice-split` for
+within-run phase shares and the load-immune counters for A/B.
+
 ### 2026-09-19 — five-window gameplay census: Storm's dirty-span present is 38% of block entries
 
 Measured on the quiet box with `--handler-hist --hist-json` over five
@@ -1134,3 +1161,38 @@ census insists on several windows before naming a fold target.
 Repro: `$S/census.sh` on the box (five `run.js` invocations with
 `--handler-hist-start=A --handler-hist-stop=B --hist-json=census-A.json`),
 then `node tools/hot-loop-census.js census-*.json --top=20 --blocks`.
+
+**Independently reproduced**, different machine, different window, different
+harness: one 500-batch gameplay window (1750..2250, `--hot-block-dump`) on the
+shared box gives 140,680,127 block entries, of which the `storm.dll` span
+machinery (runtime `0x007bf5xx`/`0x007c00xx`, the same code as the table above)
+is **35.8%**. Two boxes agreeing to within 2pp on a load-immune counter is as
+solid as this measurement gets, and it is the largest single lever named for
+this app.
+
+#### Negative: the colour-keyed blit at `0x004c7a68` is NOT a gameplay loop
+
+Worth recording because it is the H455/SimGolf trap repeating almost
+exactly. Profiling batches 0..2090 makes `0x004c7a68` (a keyed byte blit, key 0,
+8 instructions) look like the app's hottest loop at **10.8%** of block entries,
+with `0x004c788f` (a LUT blit) another 5.4% — 16.2% between them, and a
+plausible story attached (124,377 rows × ~198px, only 3.7M of 24.6M pixels
+opaque). It is also invisible to all three recognizers, which makes it look
+like a discovery.
+
+In the pure gameplay window above those two blocks total **17,280 entries —
+0.0123%**, a factor of ~880 lower. The batches 0..2090 window is mostly boot,
+intro and menu; the blit is menu//intro compositing that stops almost entirely
+once the game is running. A fold built on that 10.8% would have moved gameplay
+by nothing, exactly as H455 did on SimGolf.
+
+The rule this keeps re-teaching: a single profiling window that spans a phase
+change is not evidence about where an app spends its time, however large the
+share and however good the story. Run
+[`tools/hot-loop-census.js`](../../tools/hot-loop-census.js) over several
+windows and build only against the "hot in EVERY window" list.
+
+(The static shape itself is real and reasonably common — `tools/find-ck-lut-nests.js`
+finds 516 `CK_COPY8_SRC` matches across 224 of 1271 PEs, unlike `RLE_RUN`'s 1 of
+287. So the family may still be worth a fold on *some* app's evidence. It is
+just not StarCraft's.)
