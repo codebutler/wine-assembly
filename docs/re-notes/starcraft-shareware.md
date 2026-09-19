@@ -518,6 +518,11 @@ state without the critical-error modal:
 
 Two pause-oracle attempts are not usable as proof. Injecting F10 at batch 4550
 made a byte-identical batch-4690 screenshot and nearly identical counters.
+**(Corrected 2026-09-19: F10 itself works — it opens the Game Menu, confirmed
+by screenshot. What failed here was F10 *on the escape route*, which at 4550 is
+not yet in the state that accepts it. On the click route below, F10 at batch
+1750 opens the menu immediately. Read this row as "the escape route was not
+where we thought it was", not as "F10 is not delivered".)**
 Injecting VK_PAUSE at batch 4550 changed only 335 pixels in an 18x32 box
 against the unpaused capture, while the timer/display counters stayed within
 normal run-to-run noise (`0x0049cc90` 2149 vs 2150, `0x004cc049` 10865 vs
@@ -1008,3 +1013,64 @@ sites worth fixing, neither in StarCraft's hot path: `PeekMessageA` scanned
 the timer table on every peek and, under `PM_REMOVE`, consumed a due timer a
 filter had excluded; the colour-keyed `Blt` walked the clipper list per
 pixel before testing the key.
+
+## Driving a real save, headless (2026-09-19)
+
+The in-game menu is reachable and the game will write a save file with no
+browser and no hand-driven control session. This matters beyond StarCraft: the
+PKWARE-DCL implode fold (H466, `--implode-cmp-run`) only executes while a guest
+is *compressing*, so a save is the only route on which it can be measured at
+all — a launch sweep over the whole registry reports `blocks 0` for all 201
+apps and proves nothing about it.
+
+Built on the **click** route (gameplay at ~1690), not the escape route:
+
+```sh
+node test/run.js --app=starcraft_shareware --no-build --no-threads \
+  --quiet-api --no-close --repaint-every=50 --batch-size=100000 \
+  --stuck-after=100000000 --max-batches=2400 --max-seconds=340 \
+  --export-saves=/tmp/saves \
+  --input=100:focus-main-window,120:keydown:27,125:keyup:27,\
+670:mousemove:320:240,680:mousedown:320:240,690:mouseup:320:240,\
+990:mousemove:320:240,1000:mousedown:320:240,1010:mouseup:320:240,\
+1140:mousemove:545:393,1150:mousedown:545:393,1160:mouseup:545:393,\
+1540:mousemove:198:261,1550:mousedown:198:261,1560:mouseup:198:261,\
+1750:keydown:121,1760:keyup:121,\
+1850:mousemove:316:82,1860:mousedown:316:82,1870:mouseup:316:82,\
+1980:keydown:65,1982:keypress:65,1985:keyup:65,\
+1990:keydown:66,1992:keypress:66,1995:keyup:66,\
+2100:mousemove:200:261,2110:mousedown:200:261,2120:mouseup:200:261
+```
+
+| Batch | State |
+|---:|---|
+| ~1690 | Unobstructed gameplay (250 min / 200 gas / 12/42 supply). |
+| 1750 | **F10** opens the Game Menu: Save Game / Load Game / Options / Help / Mission Objectives / End Mission / Return to Game (Esc). |
+| 1850-1870 | Click **Save Game** at `(316,82)`. Dialog: name field (focused, empty), Save / Delete / Cancel. Save is greyed until a name is typed. |
+| 1980-1995 | Type the name. The field needs the **`keypress`** char event, not `keydown` alone — `keydown` moves focus/selection but does not enter a character. |
+| 2100-2120 | Click **Save** at `(200,261)`. |
+
+`--trace-fs` confirms the write rather than inferring it from pixels:
+
+```text
+[fs] FindFirstFile("C:\save\Anonymous\*.sng") → FAIL
+[fs] CreateDirectory("C:\save\") → created
+[fs] CreateDirectory("C:\save\Anonymous\") → created
+[fs] CreateFile("C:\save\Anonymous\AB.sng", creation=2) → 0x70000032
+[fs] WriteFile(h=0x70000032, n=0x8000, wrote=0x8000, pos=0x0, size=0x8000)
+```
+
+Saves land under `C:\save\<player>\<name>.sng`, one directory deeper than the
+`c:\save\*` glob in `lib/apps.js` suggests. The player directory is `Anonymous`
+on a fresh profile.
+
+**The save is a compression workload, which is the point.** On this route H466
+matches 68 blocks and runs 6,255,490 times over 17,082,465 iterations — versus
+zero on every non-saving route measured.
+
+Two traps. The registry persists `c:\save\*`, so a second run can start with the
+first run's save already present, which changes the dialog contents and the
+route; pass a fresh profile or a distinct name when that matters. And the
+0x8000 write is a single fixed-size block — a save that "succeeded" in the trace
+has not necessarily finished, so let the run continue past the click before
+reading counters.

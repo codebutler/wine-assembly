@@ -660,9 +660,26 @@ const TRACE_BATCH_TIMING = hasFlag('trace-batch-timing'); // --trace-batch-timin
 const BATCH_STATS_ARG = getArg('batch-stats', null);
 const BATCH_STATS = BATCH_STATS_ARG !== null || hasFlag('batch-stats');
 const BATCH_STATS_FROM = Math.max(0, parseInt(BATCH_STATS_ARG, 10) || 0);
+// --slice-split=B1[,B2,...]: cut the run into phases at those batch numbers and
+// report each phase's total guest-slice wall time, printed at exit.
+//
+// A run is rarely one workload. StarCraft's save route is a boot, then
+// gameplay, then the save itself, and "how long does the save take" cannot be
+// answered by timing two runs with different --max-batches: this box sits at
+// load 10-40, so the two runs are measured against different machines and the
+// subtraction carries both runs' noise. Splitting one run's own per-batch slice
+// times shares the load across every phase, so the phases are comparable to
+// each other even when the absolute numbers are not comparable to yesterday's.
+//
+// It reuses the per-batch series --decode-stats already collects, and turns
+// that collection on from batch 0 by itself, since a phase split is meaningless
+// over a truncated series.
+const SLICE_SPLIT = (getArg('slice-split', '') || '')
+  .split(',').map(s => parseInt(s, 10)).filter(n => Number.isFinite(n) && n > 0)
+  .sort((a, b) => a - b);
 const DECODE_STATS_ARG = getArg('decode-stats', null);
-const DECODE_STATS = DECODE_STATS_ARG !== null || hasFlag('decode-stats');
-const DECODE_STATS_FROM = Math.max(0, parseInt(DECODE_STATS_ARG, 10) || 0);
+const DECODE_STATS = DECODE_STATS_ARG !== null || hasFlag('decode-stats') || SLICE_SPLIT.length > 0;
+const DECODE_STATS_FROM = SLICE_SPLIT.length ? 0 : Math.max(0, parseInt(DECODE_STATS_ARG, 10) || 0);
 const AUDIO_STATS_RAW = args.find(a => a === '--audio-stats' || a.startsWith('--audio-stats=')); // --audio-stats[=N]: heartbeat every N waveOutWrites
 const AUDIO_STATS = !!AUDIO_STATS_RAW;
 const AUDIO_STATS_STRIDE = (AUDIO_STATS_RAW && AUDIO_STATS_RAW.includes('=')) ? parseInt(AUDIO_STATS_RAW.split('=')[1]) || 50 : 50;
@@ -10479,6 +10496,32 @@ if (VERBOSE) {
       console.log('      wall clock — load-sensitive. Read it only against the decode series above,'
         + ' and only within one interleaved run.');
     }
+  }
+
+  if (SLICE_SPLIT.length && decodeStatsSliceUs.length) {
+    // Phase boundaries are batch numbers; the series starts at batch 0 because
+    // --slice-split forces DECODE_STATS_FROM to 0.
+    const bounds = [0, ...SLICE_SPLIT, Infinity];
+    const grand = decodeStatsSliceUs.reduce((a, b) => a + b, 0);
+    console.log('\nPhase split (guest slice wall time, one run, so load is shared across phases):');
+    for (let p = 0; p + 1 < bounds.length; p++) {
+      const lo = bounds[p], hi = bounds[p + 1];
+      let us = 0, decodes = 0, n = 0;
+      for (let i = 0; i < decodeStatsSliceUs.length; i++) {
+        if (i < lo || i >= hi) continue;
+        us += decodeStatsSliceUs[i];
+        decodes += decodeStatsDecodes[i] || 0;
+        n++;
+      }
+      if (!n) continue;
+      const end = Number.isFinite(hi) ? hi : decodeStatsSliceUs.length;
+      // decodeStatsSliceUs is MICROseconds (hrtime ns / 1000), so seconds is /1e6.
+      console.log(`  batches ${lo}..${end}  ${n} batches  guest ${(us / 1e6).toFixed(1)}s`
+        + `  (${grand ? (100 * us / grand).toFixed(1) : '0.0'}% of guest time)`
+        + `  mean ${(us / n / 1000).toFixed(2)}ms/batch  decodes ${decodes}`);
+    }
+    console.log(`  total guest slice ${(grand / 1e6).toFixed(1)}s over ${decodeStatsSliceUs.length} batches`);
+    console.log('      Phase SHARES are the durable number here; the absolute seconds move with box load.');
   }
 
   if (threadManager && threadManager.threads && threadManager.threads.size) {
