@@ -85,6 +85,63 @@ const extraWat = String.raw`
     (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_CTRL_NATIVE))
     (local.get $hwnd))
 
+  ;; A top-level window whose wndproc is x86 guest code, owned by no thread.
+  (func (export "test_accel_x86_window") (param $wndproc i32) (result i32)
+    (local $hwnd i32)
+    (local.set $hwnd (global.get $next_hwnd))
+    (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
+    (call $wnd_table_set (local.get $hwnd) (local.get $wndproc))
+    (local.get $hwnd))
+
+  ;; TranslateAcceleratorA entered the way the guest calls it: a live stdcall
+  ;; frame [ret][hwnd][haccel][lpMsg] at ESP. Leaves EIP/ESP as the handler
+  ;; set them so the test can read the frame it built.
+  (func (export "test_accel_translate_frame")
+      (param $hwnd i32) (param $handle i32) (param $msg i32) (param $ret i32)
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 16)))
+    (call $gs32 (global.get $esp) (local.get $ret))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $hwnd))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (local.get $handle))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $msg))
+    (global.set $eax (i32.const 0x55555555))
+    (global.set $eip (i32.const 0))
+    (call $handle_TranslateAcceleratorA
+      (local.get $hwnd) (local.get $handle) (local.get $msg)
+      (i32.const 0) (i32.const 0) (i32.const 0)))
+
+  ;; The wndproc's stdcall RET 16 lands on the return thunk (CACA0011).
+  (func (export "test_accel_wndproc_return") (param $lresult i32)
+    (local $thunk i32)
+    (local.set $thunk (call $gl32 (global.get $esp)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (global.set $eax (local.get $lresult))
+    (call $win32_dispatch
+      (i32.shr_u (i32.sub (local.get $thunk) (global.get $thunk_guest_base))
+                 (i32.const 3))))
+
+  ;; No PE is loaded here, so allocate the one CACA0011 thunk the way
+  ;; $load_pe does, unless a loader already has.
+  (func (export "test_accel_ret_thunk") (result i32)
+    (if (i32.eqz (global.get $font_enum_ret_thunk))
+      (then
+        (global.set $thunk_guest_base
+          (i32.add (i32.sub (global.get $THUNK_BASE) (global.get $GUEST_BASE))
+                   (global.get $image_base)))
+        (global.set $font_enum_ret_thunk
+          (i32.add (global.get $thunk_guest_base)
+                   (i32.mul (global.get $num_thunks) (i32.const 8))))
+        (i32.store (i32.add (global.get $THUNK_BASE)
+                            (i32.mul (global.get $num_thunks) (i32.const 8)))
+          (i32.const 0xCACA0011))
+        (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))))
+    (global.get $font_enum_ret_thunk))
+  (func (export "test_accel_eip") (result i32) (global.get $eip))
+  (func (export "test_accel_esp") (result i32) (global.get $esp))
+  (func (export "test_accel_eax") (result i32) (global.get $eax))
+  (func (export "test_accel_set_esp") (param $v i32) (global.set $esp (local.get $v)))
+  (func (export "test_accel_read32") (param $guest i32) (result i32)
+    (call $gl32 (local.get $guest)))
+
   (func (export "test_accel_post_count") (result i32)
     (global.get $post_queue_count))
 
@@ -210,6 +267,42 @@ function readAccel(wat, base, index) {
   assert.strictEqual(wat.test_accel_translate(hwnd, first, msg), 0);
   assert.strictEqual(wat.test_accel_translate(hwnd, 0x7fffffff, msg), 0,
     'TranslateAccelerator rejects an unknown HACCEL');
+
+  // An x86 wndproc gets WM_COMMAND as a real guest call, not a nested run:
+  // a nested run cannot block, so a handler that waits on another thread
+  // (StarCraft's F1 Help, reading rez\helpmenu.bin through Storm's reader
+  // thread) had its wait return early and took the game's fatal-error exit.
+  const thunk = wat.test_accel_ret_thunk() >>> 0;
+  assert(thunk, 'the accelerator continuation thunk is allocated');
+  const WNDPROC = 0x00401234;
+  const RET = 0x00405678;
+  const x86Hwnd = wat.test_accel_x86_window(WNDPROC) >>> 0;
+  wat.guest_write32(msg, x86Hwnd);
+  wat.guest_write32(msg + 4, 0x0100); // WM_KEYDOWN
+  wat.guest_write32(msg + 8, 0x42);   // Ctrl+B -> 0x1234
+  renderer.pokeKeyDownState(0x11, true);
+  const espBefore = wat.test_accel_esp() >>> 0;
+  wat.test_accel_translate_frame(x86Hwnd, first, msg, RET);
+  renderer.pokeKeyDownState(0x11, false);
+  assert.strictEqual(wat.test_accel_eip() >>> 0, WNDPROC,
+    'TranslateAccelerator enters the x86 wndproc directly');
+  const esp = wat.test_accel_esp() >>> 0;
+  assert.strictEqual(esp, (espBefore - 16 + 16 - 28) >>> 0,
+    'the API frame is replaced by the wndproc call and its TACC context');
+  assert.deepStrictEqual(
+    [0, 4, 8, 12, 16, 20, 24].map(o => wat.test_accel_read32(esp + o) >>> 0),
+    [thunk, x86Hwnd, 0x0111, 0x00011234, 0, 0x43434154, RET],
+    'wndproc(hwnd, WM_COMMAND, MAKEWPARAM(id, 1), 0) returns into TACC');
+  assert.strictEqual(wat.test_accel_post_count(), queuedBefore,
+    'nothing is queued for the x86 path either');
+  wat.test_accel_wndproc_return(0);
+  assert.strictEqual(wat.test_accel_eip() >>> 0, RET,
+    'the continuation resumes the TranslateAccelerator caller');
+  assert.strictEqual(wat.test_accel_esp() >>> 0, espBefore,
+    'the caller sees its three stdcall arguments popped');
+  assert.strictEqual(wat.test_accel_eax(), 1,
+    'TranslateAccelerator returns TRUE whatever LRESULT the wndproc gave');
+  wat.test_accel_set_esp(espBefore);
 
   assert.strictEqual(wat.test_accel_destroy(0x7fffffff), 0,
     'DestroyAcceleratorTable rejects an unknown handle');

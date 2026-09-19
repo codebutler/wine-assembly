@@ -3,6 +3,7 @@
 //   - typed characters reach the EDIT control
 //   - Ctrl+A selects text
 //   - typing over a selection replaces it, and Backspace edits it
+//   - the F5 Time/Date accelerator reaches the app past the focused edit
 //   - long multiline content can scroll and mouse-select after scrolling
 
 const fs = require('fs');
@@ -48,6 +49,16 @@ push('dump-main-edit-state:selected', 8);
 typeText('gammax');
 keydown(8);               // Backspace removes the extra character.
 push('dump-main-edit-state:edited', 8);
+
+// F5 is Notepad's Time/Date accelerator. The renderer used to hand every
+// key-down straight to the focused edit, so TranslateAccelerator never saw
+// it; after the insert, typing and Backspace must still land in order.
+keydown(116, 1);
+keyup(116, 8);
+push('dump-main-edit-state:time-date', 8);
+typeText('!');
+keydown(8);
+push('dump-main-edit-state:time-date-edited', 8);
 
 keydown(17);
 keydown(65);
@@ -120,6 +131,8 @@ const typed = state('typed');
 const mouseSelected = state('mouse-selected');
 const selected = state('selected');
 const edited = state('edited');
+const timeDate = state('time-date');
+const timeDateEdited = state('time-date-edited');
 const longBefore = state('long-before-scroll');
 const longAfterDrag = state('long-after-drag-scroll');
 const longAfter = state('long-after-scroll');
@@ -131,6 +144,8 @@ const checks = [
   { name: 'Ctrl+A selected typed text', pass: selected && selected.text === 'alpha beta' && selected.sel === 0 && selected.cursor === selected.len },
   // "gammax" replaces the selection, then one Backspace takes the x back off.
   { name: 'typing over selection and Backspace edited text', pass: edited && edited.text === 'gamma' },
+  { name: 'F5 accelerator inserted the time and date', pass: timeDate && /^gamma\d{1,2}:\d{2}(:\d{2})? [AP]M \d{1,2}\/\d{1,2}\/\d{2,4}$/.test(timeDate.text) },
+  { name: 'typing and Backspace after F5 stay in order', pass: timeDate && timeDateEdited && timeDateEdited.text === timeDate.text },
   { name: 'long multiline content inserted', pass: longBefore && longBefore.text.includes('line00\nline01') && longBefore.lineCount >= 60 },
   { name: 'scrollbar thumb drag scrolled long edit', pass: longAfterDrag && longBefore && longAfterDrag.firstVisible > longBefore.firstVisible },
   // The wheel is measured against where the drag left the view, not against
