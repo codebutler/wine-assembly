@@ -378,3 +378,90 @@ unsignalled finite wait still times out after the poll ceiling. The focused
 regression advances the guest clock by 1000ms during a 255ms wait, proves it
 does not complete after the second Worker slice, then signals the event and
 proves normal completion.
+
+## The Direct3D renderer (2026-09-19)
+
+The demo ships four renderer back ends beside the executable — `d2ddraw.dll`,
+`d2direct3d.dll`, `d2glide.dll`, `d2gdi.dll` — and picks one from
+`HK{CU,LM}\Software\Blizzard Entertainment\Diablo II\VideoConfig`. `d2ddraw.dll`
+is in the app's static import set, so watching *that* load says nothing about
+the choice; the selection shows up as a runtime `[LoadLibrary]` line. Measured,
+one headless run per value:
+
+| `Render` | runtime `LoadLibrary` |
+|---|---|
+| 0 | none (DirectDraw) |
+| **1** | **`d2direct3d.dll`** |
+| 2 | none (DirectDraw) |
+| 3 | `d2glide.dll` — then `UNIMPLEMENTED API: _grGet@12` |
+| 4 | `d2gdi.dll` |
+
+`DeviceName` (`"Direct3D HAL"`) and `dwFlags` do not select anything on their
+own; `Render` does. The `-d3d` command-line switch does **not** reach the D3D
+path — with `-d3d -w` the game loads `d2gdi.dll`. Repro:
+
+```
+node test/run.js --app=diablo2_demo --no-build --quiet-api \
+  --max-batches=20000 --max-seconds=150 --reg-import=<seed>.json
+```
+
+where the seed sets `Render` = DWORD 1 under both the HKCU and HKLM key.
+
+**The renderer is not seeded by default, and should not be**: the DirectDraw
+path is what the app uses today and it works. Both failures below are on the
+`Render=1` route only.
+
+### Our 8 MB video-memory report makes the game wipe its own code
+
+With the stock report, `Render=1` dies at ~batch 3380 executing zeros at
+`d2direct3d+0x929b`, with every register zero. The image is *not* corrupt when
+that batch begins — a `dump-mem` of the same address at batches 3000/3100/3200/
+3300 shows the real instructions — and `--fault-null` names the culprit in one
+line: **561,098,735 unmapped guest accesses from one EIP**, sweeping
+`0x0`–`0xfffffffc`. It is a `rep stosd` clearing the whole address space, and it
+reaches `d2direct3d`'s own `.text` on the way.
+
+The count comes from a **signed** divide, at `d2direct3d.dll+0x9260`
+(original base `0x10000000`):
+
+```
+mov  ebx, [0x1001aa88]      ; bytes per pixel
+imul ebx, [esp+0x10]        ; * width
+imul ebx, [esp+0x14]        ; * height      -> texture size in bytes
+mov  eax, [esp+0xc]
+sub  eax, edx               ; a video-memory budget, minus a reserve
+cdq
+idiv ebx                    ; slots = budget / texture size   (SIGNED)
+...
+shl  eax, 5
+mov  ebp, eax
+call <alloc>                ; ebp bytes
+mov  edi, eax
+shr  ecx, 2
+rep  stosd                  ; memset of ebp bytes
+```
+
+`--trace-at=d2direct3d+0x1000929b` catches it with `EBP=0xfff5c200` — a
+negative byte count, i.e. a negative slot count, i.e. the budget came out
+below the reserve. `$handle_IDirectDraw2_GetAvailableVidMem` and the two
+`GetCaps` sites in `src/09a8-handlers-directx.wat` all report a **8 MB** card
+(`0x00800000`), and that is the number feeding this divide.
+
+### Raising it trades the wipe for a texture-slot ceiling
+
+Rebuilt with 64 MB in those five constants, the wipe is gone — and the game
+then creates **4094 surfaces against 1 release** before
+`IDirectDraw_CreateSurface` fails and it asserts
+`C:\D2\Source\D2Direct3D\Src\d3dSprite.cpp, line #85, Expression: success`.
+4096 is our DX object-table size, so the cache D2 sizes from the report simply
+does not fit. 52 MB asserts in the same place, so this is not a matter of
+finding a number between the two failures; the slot table is the next wall.
+
+Nothing else in the corpus is sensitive to the constant: MechCommander — the
+app whose `GetCaps` budget comment the 8 MB figure was written for — renders
+**pixel-identical** (0 of 307200 pixels differ) at 8 MB and at 64 MB.
+
+So the D3D route needs two things, in this order: a video-memory report that is
+not a lie about a 1998 card, and a DX object table that can hold the cache that
+report implies. Neither is worth landing until both are done, because each one
+alone only moves the crash.
