@@ -8668,9 +8668,22 @@ async function main() {
       console.log(`\n*** CRASH at batch ${batch}: ${e.message}`);
       console.log('  Full stack:', e.stack.split('\n').slice(0, 15).join('\n    '));
       console.log('  EIP before batch: ' + hex(eipBefore));
+      // eipBefore is only where the BATCH entered; hundreds of blocks may run
+      // after it, so on its own it routinely names an innocent function. When
+      // the guest transfers into blank memory the trap EIP is garbage too, and
+      // prev_eip is already inside the blank run -- the block that jumped is
+      // one further back. Both globals are exported; the dump just never
+      // printed them, which cost a session chasing the wrong function.
+      let prev2Eip = 0;
+      try {
+        const prevEip = instance.exports.get_dbg_prev_eip() >>> 0;
+        prev2Eip = instance.exports.get_dbg_prev2_eip() >>> 0;
+        console.log('  prev_eip: ' + hex(prevEip) + '   prev2_eip: ' + hex(prev2Eip));
+      } catch (_) {}
       try { console.log('  thread_alloc: ' + hex(instance.exports.get_thread_alloc())); } catch (_) {}
       console.log('  ' + regs());
       disasmAt(eipBefore);
+      if (prev2Eip && prev2Eip !== eipBefore) disasmAt(prev2Eip);
       disasmAt(instance.exports.get_eip());
       dumpStack();
       if (TRACE_SEH) dumpSEH();

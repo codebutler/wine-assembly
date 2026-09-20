@@ -701,7 +701,12 @@ Two notes for anyone working near this:
 
 * **`$dx_free` is not a surface teardown** and never was. Any other view that
   retires a type-2 slot through it leaks the same way; the texture views were
-  the two that a shipping app actually took.
+  the two that a shipping app actually took. The rest of that class was
+  audited after the fix: of the 25 `$dx_free` call sites, the only shared one
+  is `$dx_com_release_basic`, and the 14 APIs routed to it are all DirectDraw,
+  DirectSound, DirectInput, material and D3D-root objects — no type 2 among
+  them. The measurement agrees: orphan runs fell to 10 and stayed there, which
+  they could not do if another path were still leaking.
 * **`DxObject.misc2` was a union of two things with different lifetimes** —
   the billed byte count written at creation, and the colour key that
   `SetColorKey` writes over it while the surface is alive. The refund read
@@ -713,3 +718,36 @@ Two notes for anyone working near this:
 `test/test-d3dim-texture-release-arena.js` covers both, and carries its own
 negative control: a bare `$dx_free` must still strand the pages, or the other
 assertions stop being evidence.
+
+**Retracted:** the `lpDDSCaps` pool-split lead in the section above — that
+`$handle_IDirectDraw2_GetAvailableVidMem` answers local and AGP from one pool,
+so D2's `max(localFree, min(agpFree, 32 MB))` defeats its own clamp. That is
+still true and still worth fixing one day, but it was **not** why the figure
+was 558 KB, and implementing it would have moved the number without touching
+the leak underneath. Splitting the pools would have made the black screen go
+away far enough to look fixed, which is the worse outcome.
+
+### 2026-09-20: a crash dump that named the wrong function
+
+With the spin gone the route reaches the Act I load — it renders, in D3D — and
+then traps: control transfers into blank low memory (`0x140` on one run,
+`0x280` on another; the batch differs too, 1560 vs 1637, so this is one of the
+nondeterministic paths) and `$decode_block` hits `unreachable` on a run of
+zeros.
+
+The dump's `EIP before batch` pointed at `storm+0x19319`, and an hour went into
+disassembling that function — a linked-list teardown walk — on the strength of
+it. It was innocent. **`eipBefore` is where the *batch* entered**, and a batch
+retires up to a million blocks after that, so on any crash that is not in the
+first block it names a bystander. The proof was cheap once asked for: a
+`--trace-at` on that address shows the function's real live context is
+`EBX=0` (a NULL sentinel) with `EDI=0x7e1x007c` (Storm heap headers), while
+the trap had `EBX=0x01bb576c, EDI=0x1653`. Different registers, different
+function, no relation.
+
+`src/13-exports.wat` has exported `get_dbg_prev_eip` and `get_dbg_prev2_eip`
+all along, the second with a comment describing this exact case: when a thread
+jumps into blank memory, `prev_eip` is *already inside* the blank run and the
+block that jumped is one further back. The crash dump simply never printed
+them. It does now, and disassembles `prev2_eip` too, so the next trap into
+nothing names its own caller instead of costing a session.
