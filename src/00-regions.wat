@@ -650,14 +650,14 @@
     (owner "09a8-handlers-directx.wat:$D3DIM_MATRICES"))
   ;; NO (stride) LAW ON THE NEXT TWO, and both declines are structural, not
   ;; laziness. COM_WRAPPERS_AUX is $COM_WRAPPERS_AUX_MAX x 8 bytes ROUNDED UP
-  ;; to a whole region (0x3EFC vs 2015*8 = 0x3EF8): the tail is four bytes of
+  ;; to a whole region (0x10004 vs 8192*8 = 0x10000): the tail is four bytes of
   ;; padding, so stride x count is deliberately less than the size, which is
   ;; exactly the shape a law refuses. DX_VTBL_REGISTRY carries a HEADER — its
   ;; size is ($DX_VTBL_REGISTRY_COUNT + 1) * 4, the +1 being the live count
   ;; stored at +0 — and a law over a headered table would have to lie about
   ;; either the stride or the count. test/test-wat-memory-map.js states both
   ;; relations as inequalities for that reason; that is where they belong.
-  (region.declare $COM_WRAPPERS_AUX (size 0x00003EFC) (align 0x00001000)
+  (region.declare $COM_WRAPPERS_AUX (size 0x00010004) (align 0x00001000)
     (owner "09a8-handlers-directx.wat:$dx_get_wrapper_for_vtbl_locked"))
   (region.declare $DX_VTBL_REGISTRY (size 0x0000011C)
     (owner "09a8-handlers-directx.wat:$dx_vtable_registry_reset"))

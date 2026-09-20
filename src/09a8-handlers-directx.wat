@@ -166,7 +166,16 @@
   ;; by (slot, vtbl) via linear scan.
   (global $COM_WRAPPERS_AUX  i32 (region.addr $COM_WRAPPERS_AUX 0))
   (global $COM_WRAPPERS_AUX_SIZE i32 (region.size $COM_WRAPPERS_AUX))
-  (global $COM_WRAPPERS_AUX_MAX i32 (i32.const 2015))
+  ;; One per live DX object, because an app may hold an alternate view of every
+  ;; object it owns at once and exhaustion is not a graceful degradation here:
+  ;; the miss path below rewrites the PRIMARY wrapper's vtbl in place, so the
+  ;; pointer the app already holds silently changes interface. Diablo II's
+  ;; Render=1 path QueryInterfaces all 5434 of its surfaces for
+  ;; IID_IDirect3DTexture2; past the old 2015 the surface it kept using came
+  ;; back carrying the 6-slot texture vtable, and its next Lock (slot 25) read
+  ;; past the end of that vtable into the next heap block's thunks and
+  ;; dispatched IFont_get_Charset.
+  (global $COM_WRAPPERS_AUX_MAX i32 (i32.const 8192))
   ;; The aux-wrapper cursor lives at $COM_AUX_NEXT_SHARED, not in a global: a
   ;; mutable global is per-instance, and every guest thread is its own instance
   ;; over this one memory, so two threads would hand out the same aux slot. Same
