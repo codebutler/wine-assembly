@@ -31,13 +31,11 @@ not the clipping intersection. These contracts follow Microsoft's
 and [MonitorEnumProc](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nc-winuser-monitorenumproc)
 documentation. This is not a fresh native Win98 capture comparison.
 
-**Remaining:** non-NULL HDC requires a monitor-specific DC with the documented
-visible-region/clip intersection and coordinate mapping. Until implemented,
-the API returns FALSE / ERROR_NOT_SUPPORTED (50) instead of falsely succeeding
-with a NULL callback DC. NULL callbacks fail with ERROR_INVALID_PARAMETER (87).
-These error choices describe the emulator's explicit unsupported/invalid
-contract, not measured native last-error values. Multiple monitors are not
-modeled. The API is therefore not claimed fully implemented.
+The initial correction explicitly rejected non-NULL HDC. The subsequent DC
+implementation below removes that limitation. NULL callbacks fail with
+ERROR_INVALID_PARAMETER (87); invalid/non-display DCs fail with
+ERROR_INVALID_HANDLE (6). These error choices are not measured native
+last-error values. Multiple monitors are not modeled.
 
 ## Verification
 
@@ -55,3 +53,37 @@ The raw-region bucket ratchets from six to four; the four remaining style
 flags are not memory-map debt. Local logs:
 `/private/tmp/wa-enum-monitor-test2.log`, `wa-enum-monitor-baseline.log`,
 `wa-enum-monitor-selection.log`, `wa-enum-monitor-build.log`.
+
+## Display-DC follow-up — 2026-09-19
+
+Non-NULL screen/window DCs now use the existing effective clip region, not
+just its bounding box. The monitor bounds are translated into DC coordinates
+using the window/client screen origin, then intersected with that region and
+the caller's optional device-coordinate selection. Empty intersections do not
+invoke the callback. Region holes remain holes during actual drawing.
+
+For the single modeled monitor, the callback receives the same display DC
+with its clipping narrowed for the enumeration. Its color attributes and
+logical drawing mapping are retained. SaveDC/RestoreDC brackets each callback;
+the saved level and HDC live in the invocation's 32-byte guest-stack frame.
+Return (including FALSE) restores the caller's state. Nested enumeration on
+the same HDC restores the outer selection before the original caller state.
+This uses existing GDI primitives and does not edit the concurrently owned DC
+implementation file.
+
+Added checks cover complex clip holes, callback RECT bounds, actual mapped
+SetPixel acceptance/rejection, attribute/mapping restoration, empty/reversed
+selections, nested clipping on one HDC, and a partially off-screen window DC.
+Three hundred repeated enumerations still invoke the callback and leave the
+next SaveDC level at one, checking temporary-region and saved-frame cleanup.
+Monitor-selection and all seven SelectClipPath regressions pass as well.
+The prior implementation fails at `nonempty DC selection invokes callback`;
+its different private RECT frame offset is adjusted only for that baseline
+test. Both canonical and compatibility full builds pass all gates.
+
+Local evidence: `/private/tmp/wa-monitor-dc-test7.log`,
+`wa-monitor-dc-baseline.log`, `wa-monitor-dc-build3.log`,
+`wa-monitor-dc-selection.log`, `wa-monitor-dc-path.log`.
+Remaining limitations include the runtime's single-monitor model and the
+underlying GDI visible-region model; this is not evidence of complete native
+Win98 multi-monitor or cross-thread shared-HDC conformance.
