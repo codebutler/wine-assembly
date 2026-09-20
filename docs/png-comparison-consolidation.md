@@ -117,9 +117,24 @@ empty regions), and both reject dimension mismatch. The real gameplay test
 passes Pipe Dream first-tile placement and Chrome Blackjack disabled-button
 input. Log: `/private/tmp/wa-win16-png-gameplay.log` (local evidence).
 
-This does not close the whole PNG-helper item. A broader name/body search
-also finds `changedPixels` copies in the Win16 WEP1, WEP2, WEP4 and VB gameplay
-tests; these remain to be reviewed and migrated with their own contracts.
+The subsequent WEP1, WEP2, WEP4 and VB gameplay migration removes four more
+exact RGBA loops. Their regions and thresholds are unchanged; app-specific
+color/content scans remain separate. WEP4 now explicitly rejects dimension
+mismatch instead of silently indexing image B with image A's row stride.
+The other three already rejected different dimensions.
+
+Validation: all 64 old/new synthetic channel/region cases agree, all four
+new wrappers reject dimension mismatch, and the shared helper suite passes.
+Real gameplay: **18 pass, 2 fail** across these four suites, including separate
+runs of cases skipped after the first failure. Original HEAD tests run from
+memory against the same runtime reproduce both failures: Tetris's active
+title-bar assertion and Chip's Challenge's Lesson 1 movement assertion.
+Neither assertion was weakened; these runtime/test-workflow gaps remain open.
+Local logs: `/private/tmp/wa-png-wep1.log`, `wa-png-wep2.log`,
+`wa-png-wep4.log`, `wa-png-vb.log`, `wa-png-idlewild.log`,
+`wa-png-wep4-remaining.log`, and `wa-png-wep{1,4}-baseline.log`.
+
+This does not close the whole PNG-helper item.
 The named Node comparator inventory above is migrated, including Spider's
 different-sized-image overlap policy. This is not a proof that every pixel
 loop in the repository is redundant or removed: Icewind Dale combines frame

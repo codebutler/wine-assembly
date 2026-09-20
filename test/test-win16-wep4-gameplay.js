@@ -9,25 +9,16 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(ROOT, 'test', 'run.js');
 const OPTIONAL_WASM = process.env.WINE_ASSEMBLY_WASM || '';
 
 function changedPixels(beforePath, afterPath, rect) {
-  const before = PNG.sync.read(fs.readFileSync(beforePath));
-  const after = PNG.sync.read(fs.readFileSync(afterPath));
-  let changed = 0;
-  for (let y = rect.y; y < rect.y + rect.h; y++) {
-    for (let x = rect.x; x < rect.x + rect.w; x++) {
-      const i = (y * before.width + x) * 4;
-      if (before.data[i] !== after.data[i] || before.data[i + 1] !== after.data[i + 1] ||
-          before.data[i + 2] !== after.data[i + 2] || before.data[i + 3] !== after.data[i + 3]) {
-        changed++;
-      }
-    }
-  }
-  return changed;
+  const diff = diffPng(beforePath, afterPath, { includeAlpha: true, region: rect });
+  assert.strictEqual(diff.sizeMismatch, false, 'gameplay capture dimensions must match');
+  return diff.changed;
 }
 
 function matchingPixels(file, rect, predicate) {

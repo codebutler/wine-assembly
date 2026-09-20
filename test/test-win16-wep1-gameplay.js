@@ -11,6 +11,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(ROOT, 'test', 'run.js');
@@ -21,21 +22,9 @@ function readPng(file) {
 }
 
 function changedPixels(beforePath, afterPath, rect) {
-  const before = readPng(beforePath);
-  const after = readPng(afterPath);
-  assert.strictEqual(after.width, before.width);
-  assert.strictEqual(after.height, before.height);
-  let changed = 0;
-  for (let y = rect.y; y < rect.y + rect.h; y++) {
-    for (let x = rect.x; x < rect.x + rect.w; x++) {
-      const i = (y * before.width + x) * 4;
-      if (before.data[i] !== after.data[i] || before.data[i + 1] !== after.data[i + 1] ||
-          before.data[i + 2] !== after.data[i + 2] || before.data[i + 3] !== after.data[i + 3]) {
-        changed++;
-      }
-    }
-  }
-  return changed;
+  const diff = diffPng(beforePath, afterPath, { includeAlpha: true, region: rect });
+  assert.strictEqual(diff.sizeMismatch, false, 'gameplay capture dimensions must match');
+  return diff.changed;
 }
 
 function matchingPixels(png, rect, predicate) {
