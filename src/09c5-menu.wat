@@ -3665,6 +3665,167 @@
       (br $scan)))
     (i32.const -1))
 
+  ;; ============================================================
+  ;; Detached LoadMenu handles.
+  ;;
+  ;; Every menu above belongs to a window: the blob lives in
+  ;; MENU_DATA_TABLE[slot] and $menu_hwnd_from_handle finds it by walking the
+  ;; window table. A menu that LoadMenu returned and nobody has attached yet
+  ;; has no window, so those queries answered "invalid menu" — and that is a
+  ;; real handle on Win32, not an invalid one. MFC keeps
+  ;; CMultiDocTemplate::m_hMenuShared exactly that way and walks it with
+  ;; GetMenuItemCount/GetSubMenu/GetMenuItemID hunting for the MRU id block,
+  ;; and -1 from GetMenuItemCount turns its `for (i = count - 1; i; i--)` into
+  ;; a loop that counts down from -2 through four billion iterations. That is
+  ;; SimCity 2000's "Load Demo City" hang: 21.3M block entries, 93% of all the
+  ;; work in the run, in the three blocks at simdemo+0x4a4993.
+  ;;
+  ;; Materialize such a handle on first query as an ordinary dynamic (MNUD)
+  ;; menu built from its RT_MENU template, and cache it so the identity is
+  ;; stable across calls. Every existing dynamic-menu query then answers it,
+  ;; including GetSubMenu handing back a real child HMENU. Attaching the menu
+  ;; later is unaffected: $menu_hwnd_from_handle finds the window first, and
+  ;; $menu_load still builds the paint blob from the same resource.
+  ;;
+  ;; Only an integer resource id can be resolved back this way — LoadMenu
+  ;; returns the caller's pointer for a named resource, which carries no tag —
+  ;; and only the classic MENUITEMTEMPLATE, not MENUEX.
+  ;; ============================================================
+
+  ;; Guest-heap list of {next, resource id, dynamic HMENU}.
+  (global $detached_menus (mut i32) (i32.const 0))
+
+  ;; Resolve the RT_MENU bytes for $menu_id and return the WASM address of its
+  ;; first item, with $ml_end and $ml_char_stride set for the walkers below.
+  ;; 0 when the resource is missing, truncated, or MENUEX.
+  (func $menu_detached_items (param $menu_id i32) (result i32)
+    (local $bytes_w i32) (local $size i32) (local $entry i32) (local $pushed i32)
+    (if (global.get $code16)
+      (then
+        (global.set $ml_char_stride (i32.const 1))
+        (local.set $bytes_w
+          (call $win16_find_resource (i32.const 4) (local.get $menu_id)))
+        (if (i32.eqz (local.get $bytes_w)) (then (return (i32.const 0))))
+        (local.set $size (global.get $win16_res_len)))
+      (else
+        (global.set $ml_char_stride (i32.const 2))
+        ;; LoadMenu can name a DLL. The only module recorded per call is the
+        ;; most recent one, so use it when this is that same id and fall back
+        ;; to the current resource context otherwise.
+        (if (i32.and
+              (i32.ne (global.get $last_load_menu_hinst) (i32.const 0))
+              (i32.eq (local.get $menu_id) (global.get $last_load_menu_id)))
+          (then
+            (call $push_rsrc_ctx (global.get $last_load_menu_hinst))
+            (local.set $pushed (i32.const 1))))
+        (local.set $entry (call $find_resource (i32.const 4) (local.get $menu_id)))
+        (if (i32.eqz (local.get $entry))
+          (then
+            (if (local.get $pushed) (then (call $pop_rsrc_ctx)))
+            (return (i32.const 0))))
+        ;; data entry: i32 RVA, i32 size — both relative to the module the
+        ;; lookup ran in, so resolve the bytes before popping the context.
+        (local.set $bytes_w (call $g2w (i32.add (call $r_base)
+          (i32.load (call $g2w (i32.add (call $r_base) (local.get $entry)))))))
+        (local.set $size (i32.load (call $g2w (i32.add (call $r_base)
+          (i32.add (local.get $entry) (i32.const 4))))))
+        (if (local.get $pushed) (then (call $pop_rsrc_ctx)))))
+    (if (i32.lt_u (local.get $size) (i32.const 8)) (then (return (i32.const 0))))
+    (if (i32.ne (i32.load16_u (local.get $bytes_w)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (global.set $ml_end (i32.add (local.get $bytes_w) (local.get $size)))
+    (i32.add (local.get $bytes_w)
+      (i32.add (i32.const 4)
+        (i32.load16_u (i32.add (local.get $bytes_w) (i32.const 2))))))
+
+  ;; Append one sibling level of the template at $ml_pos into $hmenu, nesting
+  ;; into a fresh child menu for every MF_POPUP. Stops after the MF_END item.
+  (func $menu_detached_level (param $hmenu i32)
+    (local $flags i32) (local $id i32) (local $child i32) (local $lab i32)
+    (local $chars i32) (local $txt_g i32) (local $txt_w i32) (local $i i32)
+    (block $done (loop $items
+      (br_if $done (i32.ge_u (global.get $ml_pos) (global.get $ml_end)))
+      (local.set $flags (i32.load16_u (global.get $ml_pos)))
+      (global.set $ml_pos (i32.add (global.get $ml_pos) (i32.const 2)))
+      (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x10)))
+        (then
+          (local.set $id (i32.load16_u (global.get $ml_pos)))
+          (global.set $ml_pos (i32.add (global.get $ml_pos) (i32.const 2))))
+        (else (local.set $id (i32.const 0))))
+      (local.set $lab (call $ml_load_label))
+      (local.set $chars (global.get $ml_label_chars))
+      ;; The dynamic menu keeps canonical ANSI text; a PE template is UTF-16.
+      (local.set $txt_g (call $heap_alloc (i32.add (local.get $chars) (i32.const 1))))
+      (if (local.get $txt_g)
+        (then
+          (local.set $txt_w (call $g2w (local.get $txt_g)))
+          (local.set $i (i32.const 0))
+          (block $copied (loop $chs
+            (br_if $copied (i32.ge_u (local.get $i) (local.get $chars)))
+            (i32.store8 (i32.add (local.get $txt_w) (local.get $i))
+              (call $ml_char_at (local.get $lab) (local.get $i)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $chs)))
+          (i32.store8 (i32.add (local.get $txt_w) (local.get $chars)) (i32.const 0))))
+      ;; A popup's children follow its label immediately, so consume them
+      ;; before the parent item is appended.
+      (local.set $child (i32.const 0))
+      (if (i32.and (local.get $flags) (i32.const 0x10))
+        (then
+          (local.set $child (call $dynamic_menu_create))
+          (if (local.get $child)
+            (then (call $menu_detached_level (local.get $child))))))
+      ;; MF_END is a template terminator, never a state Win32 reports back.
+      (drop (call $dynamic_menu_append (local.get $hmenu)
+        (i32.and (local.get $flags) (i32.const 0xFFFFFF7F))
+        (select (local.get $child) (local.get $id)
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x10)) (i32.const 0)))
+        (local.get $txt_g)))
+      (if (local.get $txt_g) (then (call $heap_free (local.get $txt_g))))
+      (br_if $done (i32.and (local.get $flags) (i32.const 0x80)))
+      (br $items))))
+
+  (func $menu_detached_build (param $menu_id i32) (result i32)
+    (local $items_w i32) (local $hmenu i32)
+    (local.set $items_w (call $menu_detached_items (local.get $menu_id)))
+    (if (i32.eqz (local.get $items_w)) (then (return (i32.const 0))))
+    (local.set $hmenu (call $dynamic_menu_create))
+    (if (i32.eqz (local.get $hmenu)) (then (return (i32.const 0))))
+    (global.set $ml_pos (local.get $items_w))
+    (call $menu_detached_level (local.get $hmenu))
+    (local.get $hmenu))
+
+  ;; The dynamic HMENU standing in for an unattached LoadMenu handle, built on
+  ;; first use. 0 when $hmenu is not an integer-resource menu handle or its
+  ;; template cannot be read — the callers keep answering "invalid menu" then,
+  ;; which is what Win32 says about a handle that really is invalid.
+  (func $menu_detached_handle (param $hmenu i32) (result i32)
+    (local $id i32) (local $node i32) (local $nw i32) (local $built i32)
+    (if (i32.ne (i32.and (local.get $hmenu) (i32.const 0x00FF0000))
+                (i32.const 0x00BE0000))
+      (then (return (i32.const 0))))
+    (local.set $id (i32.and (local.get $hmenu) (i32.const 0xFFFF)))
+    (if (i32.eqz (local.get $id)) (then (return (i32.const 0))))
+    (local.set $node (global.get $detached_menus))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $node)))
+      (local.set $nw (call $g2w (local.get $node)))
+      (if (i32.eq (i32.load offset=4 (local.get $nw)) (local.get $id))
+        (then (return (i32.load offset=8 (local.get $nw)))))
+      (local.set $node (i32.load (local.get $nw)))
+      (br $scan)))
+    (local.set $built (call $menu_detached_build (local.get $id)))
+    (if (i32.eqz (local.get $built)) (then (return (i32.const 0))))
+    (local.set $node (call $heap_alloc (i32.const 12)))
+    (if (local.get $node)
+      (then
+        (local.set $nw (call $g2w (local.get $node)))
+        (i32.store         (local.get $nw) (global.get $detached_menus))
+        (i32.store offset=4 (local.get $nw) (local.get $id))
+        (i32.store offset=8 (local.get $nw) (local.get $built))
+        (global.set $detached_menus (local.get $node))))
+    (local.get $built))
+
   ;; ---- Menu handle queries (GetMenuItemCount / GetMenuItemID / GetMenuState)
   ;;
   ;; A menu handle here is the window's own menu id, and GetSubMenu turns that
@@ -3726,7 +3887,12 @@
           (then (return (i32.const 0))))
         (return (i32.load offset=12 (local.get $rec)))))
     (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
-    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $hwnd))
+      (then
+        (local.set $dyn (call $menu_detached_handle (local.get $hmenu)))
+        (if (local.get $dyn)
+          (then (return (call $menu_handle_submenu (local.get $dyn) (local.get $pos)))))
+        (return (i32.const 0))))
     (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
     ;; A direct dropdown can itself own a cascade. Its immutable resource blob
     ;; is bridged to an MNUD handle so DeleteMenu/InsertMenuItem/SetMenuItemInfo
@@ -3767,7 +3933,12 @@
     (if (local.get $dyn)
       (then (return (i32.load offset=4 (local.get $dyn)))))
     (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
-    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
+    (if (i32.eqz (local.get $hwnd))
+      (then
+        (local.set $dyn (call $menu_detached_handle (local.get $hmenu)))
+        (if (local.get $dyn)
+          (then (return (call $menu_handle_item_count (local.get $dyn)))))
+        (return (i32.const -1))))
     (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
     (if (i32.lt_s (local.get $top) (i32.const 0))
       (then (return (call $menu_bar_count (local.get $hwnd)))))
@@ -3794,7 +3965,12 @@
           (then (return (i32.const -1))))
         (return (i32.load offset=4 (local.get $rec)))))
     (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
-    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
+    (if (i32.eqz (local.get $hwnd))
+      (then
+        (local.set $dyn (call $menu_detached_handle (local.get $hmenu)))
+        (if (local.get $dyn)
+          (then (return (call $menu_handle_item_id (local.get $dyn) (local.get $pos)))))
+        (return (i32.const -1))))
     (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
     (if (i32.lt_s (local.get $top) (i32.const 0))
       (then
