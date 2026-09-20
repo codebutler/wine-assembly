@@ -1289,3 +1289,60 @@ gameplay 7/7 against the completed artifact
 (`/private/tmp/wa-query-open-wep3-final.log`), and actual Notepad taskbar
 minimize/restore in cooperative and Worker Chrome, with guest iconic state
 assertions (`/private/tmp/wa-query-open-browser-final.log`). All pass.
+
+### Mouse-activation integration audit (2026-09-20)
+
+The next change is a guest input transaction, not a call to SetActiveWindow
+inserted in the renderer. Inspection of the current fetch/dispatch paths
+establishes these constraints:
+
+| Path | Current behavior | Required integration |
+| --- | --- | --- |
+| Renderer mouse-down | Raises the group and may change focus before guest input | Defer those effects until the guest's mouse-activation answer |
+| GetMessage hardware branch | Consumes the pending event and formats MSG immediately | Run activation processing before returning the button message |
+| PeekMessage hardware branch | Retains input for PM_NOREMOVE; migrates filter misses to the posted queue | Preserve an event's processing state across peeks and filtering; avoid repeated query side effects |
+| `$input_route_to_owner` | Forwards a wrong-thread input event through ordinary `$post_queue_push` | Preserve hardware provenance so the owner processes activation and explicit PostMessage does not masquerade as a physical click |
+| Win16 Get/Peek adapters | Call shared Win32 fetch using a temporary MSG, then narrow it | Suspend/resume through a far-safe invocation frame, preserving the pending event and caller's output pointer |
+| Taskbar foreground raise | Raises renderer order only | Queue an owning-guest activation request; do not fabricate a mouse click |
+
+Relevant code is `$input_route_to_owner`, `$handle_GetMessageA`, and
+`$handle_PeekMessageA` in `09a5-handlers-window.wat`, plus
+`$win16_GetMessage`/`$win16_PeekMessage` in `09e-win16-api.wat`. A query added
+only after the hardware fetch misses events routed through the owner's posted
+queue. A query placed before owner routing runs on the wrong thread. A query
+implemented with `$wnd_send_message` alone posts a Win16 far callback and
+mistakes its immediate zero for an answer. These are source-derived failure
+cases, not hypothetical reasons to leave the renderer shortcut in place.
+
+The [Microsoft WM_MOUSEACTIVATE contract](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mouseactivate)
+separates activation and click delivery:
+
+```text
+answer                 activate   deliver button message
+MA_ACTIVATE               yes             yes
+MA_ACTIVATEANDEAT         yes              no
+MA_NOACTIVATE              no             yes
+MA_NOACTIVATEANDEAT        no              no
+```
+
+The Windows 3.1 SDK Volume 3, printed pages 156–157 (local
+`/private/tmp/wa-win31-messages.pdf`), additionally states that child default
+processing first asks the parent and stops if the parent returns nonzero.
+The current shared default procedure has no WM_MOUSEACTIVATE branch. Parent
+forwarding/default response must therefore be implemented alongside input
+delivery; a hook that treats zero as acceptance would conceal that missing
+default behavior.
+
+Required regression matrix: all four answers; child-to-parent forwarding and
+unchanged top-level HWND/hit-test/message parameters; repeated PM_NOREMOVE;
+filtered input; wrong-thread routing; explicit posted clicks; callback
+destruction and nested input; Win16 far stack/return preservation; and actual
+cooperative/Worker browser clicks across two app instances. Do not infer
+success from the already-passing API activation tests or a renderer-only
+frontmost-window check. Native caption hit-test/default response details still
+need reference verification before specifying the default fallback.
+
+Baseline `test/test-peek-message-filter.js` passes
+(`/private/tmp/wa-mouse-pump-baseline.log`). It covers filter retention,
+PM_NOREMOVE, owner-thread keyboard delivery and queue growth, but does not
+exercise WM_MOUSEACTIVATE. This audit changes no runtime behavior.
