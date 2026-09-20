@@ -106,6 +106,8 @@ function makeWndProc(observed, changedFlags = SWP_NOZORDER | SWP_NOREDRAW) {
 }
 
 const extraWat = String.raw`
+  (func (export "test_retire") (param $hwnd i32) (call $wnd_table_remove (local.get $hwnd)))
+  (func (export "test_last_error") (result i32) (global.get $last_error))
   (func (export "test_make_window") (param $proc i32) (result i32)
     (local $hwnd i32)
     (local.set $hwnd (global.get $next_hwnd))
@@ -352,6 +354,20 @@ const extraWat = String.raw`
   assert.deepStrictEqual(zorders, [{ hwnd: zhwnd, after: 0 }],
     'NOSENDCHANGING commits the original insertion target');
   assert.strictEqual(read(INSERT_AFTER), 0);
+
+  const retired = e.test_make_window(proc) >>> 0;
+  e.test_retire(retired);
+  for (const invalid of [0, 0x76543210, retired]) {
+    clearObserved();
+    moves.length = 0;
+    zorders.length = 0;
+    assert.strictEqual(e.test_call_SetWindowPos(invalid, 1, 2, 30, 40, 0x18), 0,
+      `invalid target ${invalid} fails instead of reporting success`);
+    assert.strictEqual(e.test_last_error(), 1400);
+    assert.deepStrictEqual(moves, [], 'invalid target never reaches host geometry');
+    assert.deepStrictEqual(zorders, [], 'invalid target never reaches host Z-order');
+    assert.deepStrictEqual(messages(), [], 'invalid target receives no notification');
+  }
 
   console.log('PASS  WINDOWPOS changing/changed mutation and DefWindowProc geometry semantics');
 })().catch(error => {

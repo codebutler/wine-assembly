@@ -3,6 +3,8 @@
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 const extraWat = `
+  (func (export "test_result") (result i32) (i32.load (global.get $reg_base)))
+  (func (export "test_retire") (param $h i32) (call $wnd_table_remove (local.get $h)))
   (func (export "test_window") (result i32)
     (local $h i32)
     (local.set $h (global.get $next_hwnd))
@@ -50,8 +52,10 @@ const extraWat = `
 `;
 (async () => {
   const order = [];
+  const moves = [];
   const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none', extraHostOverrides: {
     set_window_zorder: (hwnd, after) => order.push([hwnd >>> 0, after | 0]),
+    move_window: (...args) => moves.push(args),
   }});
   const parent = e.test_window();
   const position = (defer, target, after, flags) => {
@@ -79,6 +83,17 @@ const extraWat = `
     position(defer, target, 0xeeee, 0x17);
     assert.deepStrictEqual(order, [], 'NOZORDER ignores even an unmapped insert-after value');
   }
+  }
+  const retired = e.test_window();
+  e.test_narrow(retired);
+  e.test_retire(retired);
+  for (const invalid of [0, 0x76543210, retired]) {
+    order.length = 0;
+    moves.length = 0;
+    position(0, invalid, 0, 0x18);
+    assert.strictEqual(e.test_result(), 0, 'Pascal SetWindowPos preserves invalid-target failure');
+    assert.deepStrictEqual(order, [], 'failed Win16 positioning does not reorder');
+    assert.deepStrictEqual(moves, [], 'failed Win16 positioning does not move');
   }
   console.log('PASS Win16 positioning widens insert-after before host dispatch, preserves sentinels and NOZORDER');
 })().catch(error => { console.error(error); process.exit(1); });

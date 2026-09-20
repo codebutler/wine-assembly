@@ -34,3 +34,36 @@ passes all gates and builds both normal and compatibility artifacts. Logs:
 Remaining scope: full Win16 WINDOWPOS/WM_MOVE notification fidelity, native
 Win98 comparison, and broader child/owner/topmost Z-order semantics are not
 established by this focused host-boundary test.
+
+## Invalid targets and Win16 failure propagation
+
+The next audit found that a null, unknown, or retired target bypassed the
+notification allocation and still reached host geometry/Z-order calls before
+returning success. SetWindowPos now rejects those targets before querying or
+changing geometry, returning zero with ERROR_INVALID_WINDOW_HANDLE (1400).
+The null check is explicit: `wnd_table_find(0)` means the first empty slot,
+not a live desktop window.
+
+The Pascal Win16 wrapper also used to overwrite the shared result with 1
+and perform its own post-call Z-order work. It now returns immediately on
+shared failure, preserving zero and the normal far-return/14-byte argument
+cleanup without a Z-order update or size callback.
+
+Both existing regressions now cover null, unknown, and retired targets.
+The Win16 retired case retains an existing handle mapping while removing
+the window, so a translatable stale handle is not mistaken for a live one.
+Each test failed with `1 !== 0` before the fixes and passes afterward;
+host geometry and Z-order logs must both remain empty. The Win32 test also
+requires error 1400 and no guest notification. Evidence:
+`/private/tmp/wa-windowpos-invalid-{before,after}.log` and
+`/private/tmp/wa-windowpos-invalid16-{before,after}.log`.
+
+The [SetWindowPos contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos)
+requires a window handle and reports failures as zero; modern documentation
+is not a substitute for the still-open native Win98 notification comparison.
+
+Also passing after this change: actual WINDOWPOSCHANGED resize delivery,
+deferred visibility/paint state, Win16 deferred transactions (including real
+far callbacks and nested/busy commits), and Rodent/Rattler gameplay input.
+Full normal/compatibility builds pass. Logs:
+`/private/tmp/wa-windowpos-invalid-{changed,visible,defer16,vb,build}.log`.

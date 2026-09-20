@@ -244,6 +244,15 @@
     (local $uFlags i32) (local $original_flags i32) (local $dlg_rec i32)
     (local $screen i32) (local $insert_after i32) (local $windowpos i32)
     (local $old_wh i32) (local $new_wh i32) (local $old_xy i32) (local $new_xy i32)
+    ;; A missing target is not a successful host no-op. Reject it before
+    ;; looking up geometry or sending notifications (NULL is an empty slot).
+    (if (i32.or (i32.eqz (local.get $arg0))
+          (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)))
+      (then
+        (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
+        (return)))
     (local.set $insert_after (local.get $arg1))
     (local.set $x (local.get $arg2))
     (local.set $y (local.get $arg3))

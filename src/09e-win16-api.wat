@@ -8518,6 +8518,10 @@
     (call $handle_SetWindowPos (local.get $hwnd) (local.get $after)
       (local.get $x) (local.get $y) (local.get $cx) (i32.const 0))
     (call $win16_call32_end)
+    ;; Preserve shared validation failures, without a second z-order commit
+    ;; or a far size callback after the rejected operation.
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+      (then (call $win16_api_return (i32.const 14)) (return)))
     (call $win16_position_zorder (local.get $hwnd) (local.get $after) (local.get $flags))
     (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
     (if (i32.and
