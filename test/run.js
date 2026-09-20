@@ -2611,7 +2611,17 @@ async function main() {
   // initial === maximum so the buffer is never detached, so one decode per
   // distinct pointer is enough.
   const apiNameCache = new Map();
+  // Experimental A/B: retain API totals but avoid decoding names no consumer
+  // needs. Explicit diagnostics always keep the original logging path.
+  const fastQuietApi = hasFlag('quiet-api-fast') && QUIET_API &&
+    !TRACE_API && !TRACE_API_COUNTS && !TRACE_CRITICAL &&
+    !TRACE_INPUT_DISPATCH && !ESP_DELTA && !breakApis.length;
   h.log = (ptr, len) => {
+    if (fastQuietApi) {
+      apiCount++;
+      pendingComApiId = -1;
+      return;
+    }
     let t = apiNameCache.get(ptr);
     if (t === undefined) {
       const b = new Uint8Array(memory.buffer, ptr, Math.min(len, 256));

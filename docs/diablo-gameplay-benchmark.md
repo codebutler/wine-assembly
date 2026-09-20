@@ -286,3 +286,8 @@ The runner now accepts `--reference=path/to/results.json` to check an older
 oracle as well as its own first run, and refuses existing result files.
 Use a fresh `BENCH_OUT` for every suite. The cross-suite checks above were
 also performed directly against every stored result after completion.
+
+Integration note: current main already caches decoded API names. That cache
+is preserved on the fallback path; the opt-in fast path returns before it.
+The measurements above used the older uncached baseline, not current main.
+They do not establish a gain over the integrated default logger.
