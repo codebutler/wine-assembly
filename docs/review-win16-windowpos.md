@@ -1525,3 +1525,53 @@ path makes the corresponding stream assertion fail (the two
 gameplay cases pass (`wa-click-reason-wep3.log`), and completed-artifact
 Notepad minimize/restore checks pass in cooperative and Worker Chrome
 (`wa-click-reason-browser.log`).
+
+### Native activation reentrancy measured (2026-09-20)
+
+The extended mouse probe now creates C and runs seven SetActiveWindow(B)
+cases from active/focused A. IDs in the trace are A=1, B=2, child=3, C=4.
+Callbacks log GetActiveWindow before invoking a one-shot nested action.
+The hook disarms **before** reentry, since native USER can synchronously
+send A a second WA_INACTIVE while its first deactivation callback is live.
+Full output: [reference-activation-reentry-win98.txt](reference-activation-reentry-win98.txt).
+
+| Case | Callback action | Final active/focus |
+| --- | --- | --- |
+| 0 | none, normal default processing | B/B |
+| 1 | A deactivation calls SetActiveWindow(C) | C/C |
+| 2 | A deactivation calls SetActiveWindow(A) | B/B |
+| 3 | A deactivation activates C, then A | A/A |
+| 4 | B activation activates C, then calls DefWindowProc | B/B |
+| 5 | B activation activates C, then consumes WM_ACTIVATE | C/C |
+| 6 | B consumes WM_ACTIVATE, no nested activation | B/B |
+
+All outer SetActiveWindow calls return the original A. In cases 0–3,
+A's deactivation sees A active, confirming that early publication is wrong
+for API activation as well as mouse activation. Case 2 does not emit a
+nested notification or cancel the outer switch. Case 3 does cancel it even
+though the active HWND returns to A: equality alone cannot distinguish the
+completed nested transitions from case 2. A transition-generation check
+must not advance merely for a same-active reassertion.
+
+Cases 4/5 disprove a blanket "nested activation always wins" rule. Actual
+default processing after the nested call matters: in case 4 the trace shows
+C deactivating, B activating again, then focus messages (including a final
+B-to-B focus pair). Case 6 shows that simply consuming the original
+WM_ACTIVATE does **not** suppress the ordinary focus transfer; do not remove
+the transaction's focus assignment based on an untested assumption that
+only DefWindowProc can perform it. Exact focus reentry and default-procedure
+integration still need implementation; the existing synthetic callbacks
+mostly consume messages and cannot prove case 4.
+
+Reproduction uses the same command above with `--wait-ms 45000` and
+`/private/tmp/wa-activation-reentry-final.{png,json,serial}` outputs. Same
+pinned v86/Win98 profile; executable SHA-256
+`a98732a56ee5b5cb1e8a498513a1150dee97724d6ebe453af9a3d22ed0819859`.
+Both completion markers are present. The first five cases are byte-identical
+to the preceding successful run (`wa-activation-reentry-retry.serial`),
+before cases 5/6 were added. The first launch attempt produced zero serial
+bytes and a screenshot of an unrelated shell dialog; it is explicitly
+discarded, not scored as success. Local load average exceeded 130 during
+the attempts; these are ordering observations, not performance results.
+The reference-harness source checks pass. No production runtime change in
+this measurement step.

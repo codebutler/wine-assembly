@@ -2,15 +2,16 @@
 #include <windows.h>
 unsigned long _tls_index = 0;
 static HANDLE serial;
-static HWND a, b, child;
+static HWND a, b, child, c;
 static int answer = -1, queries, recording;
+static int hook_mode, hook_armed;
 
 static void emit(const char *s) {
   DWORD written;
   if (serial != INVALID_HANDLE_VALUE)
     WriteFile(serial, s, lstrlenA(s), &written, NULL);
 }
-static int id(HWND h) { return h == a ? 1 : h == b ? 2 : h == child ? 3 : 0; }
+static int id(HWND h) { return h == a ? 1 : h == b ? 2 : h == child ? 3 : h == c ? 4 : 0; }
 static void row(const char *label, int x, int y, int z, int w) {
   char buf[160];
   wsprintfA(buf, "%s %d %d %d %d\r\n", label, x, y, z, w);
@@ -25,6 +26,21 @@ static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (recording && (m == WM_ACTIVATE || m == WM_SETFOCUS ||
                     m == WM_KILLFOCUS || m == WM_LBUTTONDOWN || m == WM_LBUTTONUP))
     row("DISPATCH hwnd/msg/wp/active", id(h), m, (int)w, id(GetActiveWindow()));
+  if (hook_armed && m == WM_ACTIVATE &&
+      ((hook_mode <= 3 && h == a && LOWORD(w) == WA_INACTIVE) ||
+       ((hook_mode == 4 || hook_mode == 5) && h == b && LOWORD(w) != WA_INACTIVE))) {
+    HWND old;
+    hook_armed = 0;
+    old = SetActiveWindow(hook_mode == 2 ? a : c);
+    row("NEST return/active/focus", id(old), id(GetActiveWindow()), id(GetFocus()), 0);
+    if (hook_mode == 3) {
+      old = SetActiveWindow(a);
+      row("BACK return/active/focus", id(old), id(GetActiveWindow()), id(GetFocus()), 0);
+    }
+  }
+  /* Isolate USER's activation from focus assigned by default processing. */
+  if (recording && (hook_mode == 5 || hook_mode == 6) && h == b && m == WM_ACTIVATE)
+    return 0;
   return DefWindowProcA(h, m, w, l);
 }
 static void drain(void) {
@@ -100,6 +116,28 @@ void WINAPI WinMainCRTStartup(void) {
     PostMessageA(b, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 50));
     peek("POST got/msg/queries/active", PM_REMOVE);
   }
+  recording = 0;
+  c = CreateWindowA(wc.lpszClassName, "C", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                    100, 260, 240, 150, NULL, NULL, wc.hInstance, NULL);
+  if (!c) { emit("FAIL window C\r\n"); ExitProcess(1); }
+  answer = -1;
+  emit("ACTIVATION_REENTRY_V1\r\n");
+  for (mode = 0; mode <= 6; mode++) {
+    HWND old;
+    recording = 0;
+    hook_armed = 0;
+    SetActiveWindow(a);
+    drain();
+    hook_mode = mode;
+    hook_armed = mode != 0;
+    recording = 1;
+    row("API_CASE mode/active/focus", mode, id(GetActiveWindow()), id(GetFocus()), 0);
+    old = SetActiveWindow(b);
+    row("OUTER return/active/focus", id(old), id(GetActiveWindow()), id(GetFocus()), 0);
+    hook_armed = 0;
+    drain();
+  }
+  emit("ACTIVATION_REENTRY_DONE\r\n");
   emit("MOUSE_ACTIVATE_DONE\r\n");
   CloseHandle(serial);
   ExitProcess(0);
