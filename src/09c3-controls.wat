@@ -1544,6 +1544,18 @@
             (call $ctrl_paint_trace_emit
               (local.get $hwnd) (local.get $class) (i32.const 2))
             (return (i32.const 0))))
+        ;; Native control procedures paint without calling BeginPaint. Own
+        ;; the corresponding update consumption here, regardless of whether
+        ;; dispatch came from the pump, UpdateWindow or a subclass chaining
+        ;; through CallWindowProc. Consume BEFORE painting so invalidation
+        ;; during an owner callback survives for the next paint.
+        ;; A supplied DC is a drawing request, not a BeginPaint transaction.
+        (if (i32.eqz (local.get $wParam))
+          (then
+            (drop (call $paint_seed_child_paints (local.get $hwnd)))
+            (call $paint_flag_clear_hwnd (local.get $hwnd))
+            (call $update_clear_hwnd (local.get $hwnd))
+            (call $nc_flags_clear (local.get $hwnd) (i32.const 2))))
         (call $ctrl_paint_trace_emit
           (local.get $hwnd) (local.get $class) (i32.const 0))))
     ;; Class 1 = Button

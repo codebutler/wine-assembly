@@ -222,3 +222,41 @@ suite is not green and is not counted as an acceptance pass. Candidate and
 baseline logs for this session are `/private/tmp/wa-subclass-nsis.log` and
 `/private/tmp/wa-subclass-nsis-suite-baseline.log`. CreateWindowEx creation
 failure/subclass transaction tests also pass.
+
+## Native paint owns update consumption
+
+The subclass regression exposed a second bug: CallWindowProc reached the
+native painter but left the native control's update region nonempty. A
+second UpdateWindow therefore sent the same paint again. Validation had
+been copied into UpdateWindow, DispatchMessage, the native queue drain and
+selected individual controls, rather than owned by the common procedure
+boundary. This is the review's duplicated-state-transition problem in a
+concrete USER path.
+
+The ordinary native-control dispatcher now propagates the existing damage
+to descendants, consumes the target's update/queue state and clears its
+native background-erase obligation before painting. The three public/pump
+callers no longer duplicate that policy. Status bars retain their separate
+queue-drain handling because they bypass the ordinary control dispatcher.
+Individual direct-to-class painter paths are not claimed consolidated.
+
+The regression fails before the change (update region still present after
+forwarded paint) and passes afterward. It also verifies that the next
+UpdateWindow does not enter the subclass again, while a subclass that does
+not validate retains its damage. A nonzero supplied DC does not trigger the
+new dispatch-level consumption. This distinction is documented in the
+[WM_PAINT remarks](https://learn.microsoft.com/en-us/windows/win32/gdi/wm-paint):
+some controls accept an explicit DC; the ordinary paint path uses the
+BeginPaint/validation transaction. This is not a claim that every native
+control already implements supplied-DC drawing correctly.
+
+Validation: full canonical/compat build, parent/child paint regression,
+MoveWindow and automatic-button tests pass. Paint dock status and scrollbar
+comparisons remain 0/0. The real Chrome Paint test passes drawing, flood
+fill, airbrush, tool visibility, exact brush endpoints, and its existing
+Win98 line-bound/mask assertions on a 1260x764 canvas. Its first attempt
+failed before launch with CDP `Execution context was destroyed`; an unchanged
+retry passed. Load averaged about 44 during the build, so no performance
+conclusion is drawn. Logs: `/private/tmp/wa-native-validation-build.log`,
+`/private/tmp/wa-native-validation-browser.log` and
+`/private/tmp/wa-native-validation-browser-retry.log`.

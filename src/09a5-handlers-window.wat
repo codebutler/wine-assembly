@@ -1582,12 +1582,6 @@
             (i32.eqz (call $ctrl_is_subclassed (local.get $arg0))))
           (call $wnd_is_effectively_visible (local.get $arg0)))
       (then
-        (drop (call $paint_seed_child_paints (local.get $arg0)))
-        (call $paint_flag_clear_hwnd (local.get $arg0))
-        (call $update_clear_hwnd (local.get $arg0))
-        ;; Native painters own their background fill; do not leave an erase
-        ;; queued to overwrite the freshly completed paint afterward.
-        (call $nc_flags_clear (local.get $arg0) (i32.const 2))
         (drop (call $control_wndproc_dispatch
           (local.get $arg0) (i32.const 0x000F) (i32.const 0) (i32.const 0)))
         (return)))
@@ -2548,11 +2542,8 @@
           ;; unless the app owns the proc -- see $ctrl_is_subclassed
           (i32.eqz (call $ctrl_is_subclassed (call $gl32 (local.get $arg0)))))
       (then
-        ;; WAT-native controls paint without BeginPaint/EndPaint. Validate at
-        ;; dispatch so PM_NOREMOVE + DispatchMessage loops cannot keep
-        ;; redispatching the same synthetic WM_PAINT forever.
-        (call $update_clear_hwnd (call $gl32 (local.get $arg0)))
-        (call $paint_flag_clear_hwnd (call $gl32 (local.get $arg0)))
+        ;; The native procedure owns validation, including descendant damage
+        ;; propagation before the target's update region is consumed.
         (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
           (call $gl32 (local.get $arg0))
           (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))

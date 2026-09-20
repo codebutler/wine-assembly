@@ -4183,14 +4183,12 @@
                     (br $found)))
                 (if (call $update_get_rect (local.get $hwnd) (call $paint_scratch_take))
                   (then
-                    ;; Descendants inherit this update before it is consumed.
-                    ;; Clearing first loses the geometry needed to intersect
-                    ;; nested controls such as toolbar-hosted combo boxes.
-                    (drop (call $paint_seed_child_paints (local.get $hwnd)))
-                    (call $paint_flag_clear_hwnd (local.get $hwnd))
-                    (call $update_clear_hwnd (local.get $hwnd))
                     (if (local.get $native_status)
                       (then
+                        ;; Status bars bypass the ordinary control dispatcher.
+                        (drop (call $paint_seed_child_paints (local.get $hwnd)))
+                        (call $paint_flag_clear_hwnd (local.get $hwnd))
+                        (call $update_clear_hwnd (local.get $hwnd))
                         (drop (call $statusbar_wndproc
                           (local.get $hwnd) (i32.const 0x000F)
                           (i32.const 0) (i32.const 0))))

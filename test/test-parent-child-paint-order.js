@@ -155,6 +155,11 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_order_first_pending(), 0,
     'native paint must not remain queued after UpdateWindow returns');
   e.test_order_clear();
+  e.test_order_partial_child();
+  e.send_message(child, 0x000f, child + 0x40000, 0);
+  assert.strictEqual(e.test_order_update_rect(rect), 1,
+    'painting into a supplied DC must not consume the window update region');
+  e.test_order_clear();
 
   // A real guest callback proves the clean-window case sends no message,
   // while an existing update still follows the synchronous guest path.
@@ -232,6 +237,8 @@ const extraWat = String.raw`
   assert.strictEqual(e.guest_read32(calls), 2,
     'dirty subclass UpdateWindow must finish before returning');
   assert.deepStrictEqual(painted, [], 'UpdateWindow must not bypass the subclass');
+  assert.strictEqual(e.test_order_update_rect(rect), 1,
+    'a subclass that never validates must retain its update region');
 
   // Forward all four incoming arguments to the original native procedure.
   // Each push shifts the next original argument to [esp+16].
@@ -255,6 +262,12 @@ const extraWat = String.raw`
     e.test_order_update(child);
     assert.strictEqual(e.guest_read32(calls), 1, 'forwarding subclass runs once');
     assert.deepStrictEqual(painted, [child], 'CallWindowProc reaches the native painter exactly once');
+    assert.strictEqual(e.test_order_update_rect(rect), 0,
+      'forwarding to native WM_PAINT must validate the update region');
+    const completedCalls = e.guest_read32(calls);
+    e.test_order_update(child);
+    assert.strictEqual(e.guest_read32(calls), completedCalls,
+      'a second UpdateWindow must not repaint already-validated native damage');
     assert.strictEqual(e.get_esp(), beforeChainEsp, 'native chaining restores the guest stack');
     assert.strictEqual(e.get_sync_msg_depth(), 0, 'native chaining unwinds synchronous depth');
   }
