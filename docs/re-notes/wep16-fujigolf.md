@@ -99,3 +99,21 @@ Official documentation says [SW_MAXIMIZE activates the window](https://learn.mic
 and [GetActiveWindow reads the calling queue's active window](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getactivewindow).
 These support the state contract, not an exact Win98 notification-order
 claim; that order still requires dedicated far regression/native evidence.
+
+## 2026-09-20: activation implementation verified
+
+The main-source implementation now uses the FFB4 stack-owned activation
+continuation, not the diagnostic assignment. Activating show modes publish
+queue state, notify old/new windows with Win16 argument packing, and complete
+focus processing before the synchronous show-size callback. Nested activation
+and destruction are covered by the real far regression, including calling
+GetActiveWindow from WM_SIZE. Nonactivating modes and child shows retain the
+previous active window.
+
+Fuji's full gate passes with the completed normal build, including the
+unchanged native-depth check and first-tee transition. Full verification and
+the related Klotski EnableWindow repaint-loop correction are recorded in
+[the review findings](../review-win16-windowpos.md). This supersedes the
+earlier shipping-red status above; it does not close the remaining ShowWindow
+hide/minimize selection, application-activation scheduling or return-value
+gaps.

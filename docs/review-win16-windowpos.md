@@ -806,3 +806,64 @@ a bare global assignment omits activation notifications/focus/reentrancy.
 Implement a proper Win16-safe activation transition next; details and probe
 paths are in the app note. No bitmap or system-metric correction is indicated
 by this evidence.
+
+## 2026-09-20: Win16 activation transaction and EnableWindow repaint loop
+
+The activation implementation adds an invocation-owned far continuation,
+`WIN16_CONT_ACTIVATE` (FFB4), with `{target, previous, phase, old-focus}` on
+the guest stack. Activating top-level ShowWindow modes 1/2/3/5/9 publish
+`active_hwnd` before sending old/new WM_ACTIVATE, then complete focus
+notifications before the show-size callback. Modes 4/7/8 and child shows do
+not activate. Each phase advances before callback entry; a nested activation
+supersedes the outer target, and target destruction ends the transaction.
+Win16 activation packs the other HWND into LOWORD(lParam) and minimized
+state into HIWORD(lParam), unlike Win32's wParam packing. Old queued
+WM_ACTIVATE/WM_SETFOCUS duplicates are removed.
+
+The expanded far matrix checks exact notification order, narrowed handles,
+nonactivating modes/children, nested activation/focus preservation, actual
+GetActiveWindow from SIZE_MAXIMIZED, minimized packing and destruction.
+The final matrix passes (`/private/tmp/wa-win16-activation-final-contract.log`).
+
+The initial completed build passes Fuji Golf, WEP1 8/8, WEP4 7/7 and VB
+Rodent/Rattler, but **regresses Klotski**: closing Welcome enters repeated
+WM_PAINT / WM_ENABLE / WM_CAPTURECHANGED cycles. This is not a modal hang.
+Trace `wa-activation-klotski-messages.log` shows its painter calling
+EnableWindow(FALSE), drawing, then EnableWindow(TRUE) before EndPaint.
+The shared EnableWindow handler unconditionally invalidated the window on
+both state changes, perpetually recreating the paint damage. Correct active
+state exposes this branch; suppressing activation would conceal the problem.
+
+The EnableWindow change removes that API-level repaint shortcut. Disabled
+appearance is now requested by native control WM_ENABLE processing, including
+a guest subclass that chains to the native procedure. Other windows own their
+repaint decisions. `test-enable-window.js` retains prior-state/owner tests and
+adds no-invented-damage and native-button repaint assertions; it passes
+(`wa-enable-repaint-contract.log`). These are independent API ownership
+corrections, not Klotski-specific conditions.
+
+Remaining scope: application-activation/restored-size scheduling, activation
+selection on hide/minimize, ShowWindow prior-visibility return, and other
+Win16 activation entry points are not claimed complete by this transaction.
+
+Completed combined-build verification (`wa-win16-activation-enable-*` in
+`/private/tmp/`): normal/compatibility builds pass (`build`), WEP1 8/8
+(`wep1`), WEP4 7/7 (`wep4`), VB Rodent/Rattler (`vb`), and six WEP3 games
+including Klotski and Fuji (`wep3`). Diablo's six-stage browser/gameplay flow
+also passes (`diablo`), launched after build completion. The first browser
+attempt could not bind its local server under sandbox restrictions; the
+approved rerun completed successfully.
+
+WordZap remains red at its splash-width check (600), identically on the
+earlier pre-activation isolated artifact
+`wa-gofigure-no-class-erase.wasm` (`wa-activation-wordzap-baseline.log`).
+The current splash screenshot `wa-activation-wordzap.png` was inspected and
+is entirely black: this assertion does not establish a font-width bug.
+Do not call the full 24-game sweep green (23 pass, 1 red), or weaken the
+visual gate. Investigate WordZap's capture/startup separately.
+
+A stricter baseline restores all three edited runtime fragments to their
+pre-change HEAD versions while keeping the rest of the current source/host:
+`/private/tmp/wa-activation-before-three.wasm`. WordZap fails identically at
+width 600 (`wa-activation-wordzap-three-baseline.log`). This rules out this
+turn's runtime delta as the sole cause, not every earlier paint change.

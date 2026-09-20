@@ -9,6 +9,13 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_clear_damage") (param $h i32)
+    (call $update_clear_hwnd (local.get $h))
+    (call $paint_flag_clear_hwnd (local.get $h)))
+  (func (export "test_damage") (param $h i32) (result i32)
+    (call $update_get_rect (local.get $h) (i32.const 0)))
+  (func (export "test_button_class") (param $h i32)
+    (call $ctrl_table_set (call $wnd_table_find (local.get $h)) (i32.const 1) (i32.const 1)))
   (func (export "test_create_dialog") (param $owner i32) (result i32)
     (local $hwnd i32)
     (local.set $hwnd (global.get $next_hwnd))
@@ -53,6 +60,18 @@ const extraWat = String.raw`
     'enabling clears WS_DISABLED');
   assert.strictEqual(e.test_call_EnableWindow(owner, 1), 0,
     'enabling an already-enabled window reports that it was not disabled');
+
+  e.test_clear_damage(owner);
+  e.test_call_EnableWindow(owner, 0);
+  e.test_call_EnableWindow(owner, 1);
+  assert.strictEqual(e.test_damage(owner), 0,
+    'EnableWindow does not invent client damage for a window that does not request repaint');
+  const button = e.test_create_dialog(0) >>> 0;
+  e.test_button_class(button);
+  e.test_clear_damage(button);
+  e.control_wndproc_dispatch(button, 0x0a, 0, 0);
+  assert.strictEqual(e.test_damage(button), 1,
+    'native button WM_ENABLE owns disabled-appearance repaint');
 
   e.test_call_EnableWindow(owner, 0);
   const modeless = e.test_create_dialog(owner) >>> 0;

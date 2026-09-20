@@ -7344,8 +7344,9 @@
   ;;
   ;; Deliberately not $handle_ShowWindow: that one hands WM_ACTIVATEAPP to the
   ;; window procedure by redirecting EIP into a 32-bit frame, which is the one
-  ;; thing a 16-bit task cannot survive. Activation/restored-size delivery
-  ;; still uses the queue; maximize and initial erase use a far continuation.
+  ;; thing a 16-bit task cannot survive. Application-activation/restored-size
+  ;; delivery still uses the queue; window activation, maximize and initial
+  ;; erase use invocation-owned far continuations.
   ;;
   ;; Note on ordering: Windows sends WM_SIZE from inside ShowWindow, so
   ;; anything WinMain posts afterwards arrives behind it, while here it waits
@@ -7379,18 +7380,16 @@
         ;; never reached one. An app that pauses while it is not the active
         ;; window simply stayed paused: Solitaire deals its rows on this.
         (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x001C)
-          (i32.const 1) (i32.const 0)))                    ;; WM_ACTIVATEAPP
-        (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x0006)
-          (i32.const 1) (i32.const 0)))                    ;; WM_ACTIVATE, WA_ACTIVE
-        (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x0007)
-          (i32.const 0) (i32.const 0)))))                  ;; WM_SETFOCUS
+          (i32.const 1) (i32.const 0)))))                 ;; WM_ACTIVATEAPP
+    ;; WM_ACTIVATE/WM_SETFOCUS belong to the synchronous transaction below,
+    ;; not a second queued notification after guest layout/painting.
     (drop (call $host_show_window (local.get $hwnd) (local.get $show)))
     (call $wnd_apply_show_state (local.get $hwnd) (local.get $show))
     ;; A Win16 runtime can create a hidden helper before its real top-level
     ;; form. Match the 32-bit ShowWindow path by promoting the first shown,
     ;; unowned top-level guest window while the recorded main hwnd is still
-    ;; effectively invisible. Fuji Golf asks GetActiveWindow from its
-    ;; synchronous maximize handler and lays out the wrong helper otherwise.
+    ;; effectively invisible. This identifies the main window only; queue
+    ;; activation is a separate transaction below.
     (if (i32.and
           (i32.and
             (i32.and
@@ -7461,7 +7460,108 @@
       (i32.or (i32.eq (local.get $show) (i32.const 3))
         (select (i32.const 2) (i32.const 0)
           (i32.and (i32.ne (local.get $show) (i32.const 0)) (i32.eqz (local.get $was_visible))))))
-    (call $win16_show_continue))
+    ;; Activating show modes must expose queue state before the synchronous
+    ;; size callback. A main-window designation is not an active-window state.
+    (if (i32.and (i32.eqz (call $wnd_get_parent (local.get $hwnd)))
+          (i32.or
+            (i32.and (i32.ge_u (local.get $show) (i32.const 1))
+                     (i32.le_u (local.get $show) (i32.const 3)))
+            (i32.or (i32.eq (local.get $show) (i32.const 5))
+                    (i32.eq (local.get $show) (i32.const 9)))))
+      (then
+        (call $win16_cont_push
+          (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+                  (global.get $WIN16_CONT_SHOW)) (i32.const 0))
+        (call $win16_activate_start (local.get $hwnd)))
+      (else (call $win16_show_continue))))
+
+  ;; Far twin of the active-window notification transaction. The invocation
+  ;; owns {target, previous, phase, old-focus}; no callback scratch is global.
+  (global $WIN16_CONT_ACTIVATE i32 (i32.const 0xFFB4))
+  (func $win16_activate_start (param $target i32)
+    (local $sp i32) (local $previous i32)
+    (local.set $previous (global.get $active_hwnd))
+    (if (i32.lt_s (call $wnd_table_find (local.get $previous)) (i32.const 0))
+      (then (local.set $previous (i32.const 0))))
+    (if (i32.eq (local.get $previous) (local.get $target))
+      (then (call $win16_cont_resume) (return)))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $target))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $previous))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (i32.const 0))
+    (global.set $active_hwnd (local.get $target))
+    (call $wnd_note_active_popup (local.get $target))
+    (call $win16_activate_continue))
+
+  (func $win16_activate_continue
+    (local $sp i32) (local $target i32) (local $previous i32) (local $phase i32)
+    (local $hwnd i32) (local $msg i32) (local $wp i32) (local $lp i32) (local $proc i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $target (call $gl32 (local.get $sp)))
+    (local.set $previous (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+    (block $done (loop $next
+      ;; A nested activation owns its choice; an outer callback must not
+      ;; reactivate or refocus its now superseded target.
+      (br_if $done (i32.ne (global.get $active_hwnd) (local.get $target)))
+      (if (i32.lt_s (call $wnd_table_find (local.get $target)) (i32.const 0))
+        (then (global.set $active_hwnd (i32.const 0)) (br $done)))
+      (local.set $phase (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
+      (br_if $done (i32.ge_u (local.get $phase) (i32.const 4)))
+      (call $gs32 (i32.add (local.get $sp) (i32.const 8))
+        (i32.add (local.get $phase) (i32.const 1)))
+      (local.set $lp (i32.const 0))
+      (if (i32.lt_u (local.get $phase) (i32.const 2))
+        (then
+          (local.set $hwnd (select (local.get $previous) (local.get $target)
+            (i32.eqz (local.get $phase))))
+          (local.set $msg (i32.const 6))
+          (local.set $wp (local.get $phase))
+          (local.set $lp (select (local.get $target) (local.get $previous)
+            (i32.eqz (local.get $phase)))))
+        (else
+          (if (i32.eq (local.get $phase) (i32.const 2))
+            (then
+              (br_if $done (call $wnd_min_get (local.get $target)))
+              (local.set $hwnd (global.get $focus_hwnd))
+              (br_if $done (i32.eq (call $wnd_top_level (local.get $hwnd)) (local.get $target)))
+              (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (local.get $hwnd))
+              (global.set $focus_hwnd (local.get $target))
+              (local.set $msg (i32.const 8))
+              (local.set $wp (local.get $target)))
+            (else
+              (br_if $done (i32.ne (global.get $focus_hwnd) (local.get $target)))
+              (local.set $hwnd (local.get $target))
+              (local.set $msg (i32.const 7))
+              (local.set $wp (call $gl32 (i32.add (local.get $sp) (i32.const 12))))))))
+      (if (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+        (then
+          (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+          (if (i32.eq (local.get $msg) (i32.const 6))
+            (then (call $host_invalidate_frame (local.get $hwnd))))
+          (if (call $win16_is_far_proc (local.get $proc))
+            (then
+              ;; Win16 WM_ACTIVATE: wParam=WA_*, LOWORD(lParam)=other
+              ;; HWND, HIWORD(lParam)=minimized (unlike Win32's wParam).
+              (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+                (local.get $msg)
+                (if (result i32) (i32.eq (local.get $msg) (i32.const 6))
+                  (then (local.get $wp)) (else (call $win16_h16 (local.get $wp))))
+                (if (result i32) (i32.eq (local.get $msg) (i32.const 6))
+                  (then (i32.or (call $win16_h16 (local.get $lp))
+                    (i32.shl (call $wnd_min_get (local.get $hwnd)) (i32.const 16))))
+                  (else (i32.const 0)))
+                (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_ACTIVATE))
+              (return)))
+          (drop (call $wnd_send_message (local.get $hwnd) (local.get $msg)
+            (if (result i32) (i32.eq (local.get $msg) (i32.const 6))
+              (then (i32.or (local.get $wp)
+                (i32.shl (call $wnd_min_get (local.get $hwnd)) (i32.const 16))))
+              (else (local.get $wp))) (local.get $lp)))))
+      (br $next)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 16)))
+    (call $win16_cont_resume))
 
   ;; Invocation-owned {hwnd, client-size, pending-bits} across far callbacks.
   ;; Clear each bit before entry so nested ShowWindow/UpdateWindow is safe.
@@ -13668,6 +13768,8 @@
       (then (call $win16_update_window_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_SHOW))
       (then (call $win16_show_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_ACTIVATE))
+      (then (call $win16_activate_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_BEGINPAINT))
       (then (call $win16_beginpaint_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took

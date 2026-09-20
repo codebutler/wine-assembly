@@ -1516,6 +1516,13 @@
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $class i32)
     (local.set $class (call $ctrl_table_get_class (local.get $hwnd)))
+    ;; Disabled appearance belongs to the control procedure, not EnableWindow
+    ;; itself. Guest windows may disable/re-enable themselves while painting
+    ;; without requesting another WM_PAINT (Klotski does exactly that).
+    (if (i32.and (i32.eq (local.get $msg) (i32.const 0x000A))
+          (i32.and (i32.ne (local.get $class) (i32.const 0))
+                   (i32.ne (local.get $class) (i32.const 16))))
+      (then (call $invalidate_hwnd (local.get $hwnd))))
     (if (i32.and (i32.eq (local.get $msg) (i32.const 0x000F))
           (i32.ne (local.get $class) (i32.const 0)))
       (then

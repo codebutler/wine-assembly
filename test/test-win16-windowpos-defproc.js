@@ -42,6 +42,10 @@ const extraWat = `
     (call $gs16 (i32.const 0x11080c) (call $win16_h16 (local.get $h)))
     (call $win16_DefWindowProc))
   (func (export "test_result") (result i32) (i32.load (global.get $reg_base)))
+  (func (export "test_active") (result i32) (global.get $active_hwnd))
+  (func (export "test_focus") (result i32) (global.get $focus_hwnd))
+  (func (export "test_reset_activation")
+    (global.set $active_hwnd (i32.const 0)) (global.set $focus_hwnd (i32.const 0)))
   (func (export "test_set") (param $h i32) (param $flags i32) (param $caller i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
     (call $gs16 (i32.const 0x110800) (local.get $caller))
@@ -356,7 +360,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     'destruction from the BeginPaint erase callback returns through both nested frames');
   assert.strictEqual(e.test_alive(eraseDoomed), 0);
   assert.strictEqual(e.test_erase_pending(eraseDoomed), 0, 'declined erase cannot rearm a destroyed window');
-  const runShow = (target, cmd, caller) => {
+  const runShow = (target, cmd, caller, includeActivation = false) => {
     e.guest_write32(0x110900, 0);
     writeCode(caller, [0xeb, 0xfe]);
     e.test_show(target, cmd, caller);
@@ -367,7 +371,10 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     assert.strictEqual(e.get_esp(), 0x110808, 'ShowWindow restores its Pascal and nested callback frames');
     assert(!Array.from({length: e.test_post_count()}, (_, i) => e.test_post_msg(i)).includes(0x14),
       'ShowWindow must not leave a posted erase to overwrite later UpdateWindow painting');
-    return Array.from({length: e.guest_read32(0x110900)}, (_, i) => e.guest_read32(0x110904 + i * 8) & 0xffff);
+    const messages = Array.from({length: e.guest_read32(0x110900)}, (_, i) => e.guest_read32(0x110904 + i * 8) & 0xffff);
+    // The original cases below assert paint ordering; the activation matrix
+    // checks the complete notification stream separately.
+    return includeActivation ? messages : messages.filter(m => ![6, 7, 8].includes(m));
   };
   const showing = e.test_window(0x900);
   e.test_visible(showing, 0);
@@ -537,5 +544,57 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   e.test_expose_children(exposedParent);
   assert.strictEqual(e.test_erase_pending(exposedChild), 2,
     'exposure retains erasing for the guest callback even with a class brush');
+
+  // Full activation stream: old/new handles are narrowed in Win16 lParam,
+  // and focus notifications complete before ShowWindow returns.
+  writeCode(0x5000, recorder([]));
+  e.test_reset_activation();
+  const activeA = e.test_window(0x5000), activeB = e.test_window(0x5000);
+  assert.deepStrictEqual(runShow(activeA, 5, 0x90, true), [6, 7]);
+  assert.strictEqual(e.test_active(), activeA);
+  assert.strictEqual(e.test_focus(), activeA);
+  assert.deepStrictEqual(runShow(activeB, 5, 0x90, true), [6, 6, 8, 7]);
+  assert.strictEqual(e.guest_read32(0x110908), e.test_narrow(activeB));
+  assert.strictEqual(e.guest_read32(0x110910), e.test_narrow(activeA));
+  assert.strictEqual(e.test_active(), activeB);
+  assert.strictEqual(e.test_focus(), activeB);
+  for (const mode of [4, 7, 8]) {
+    runShow(activeA, mode, 0x90, true);
+    assert.strictEqual(e.test_active(), activeB, `show mode ${mode} must not activate`);
+    assert.strictEqual(e.test_focus(), activeB);
+  }
+  const childShow = e.test_window(0x5000);
+  e.test_as_child(childShow, activeA);
+  runShow(childShow, 5, 0x90, true);
+  assert.strictEqual(e.test_active(), activeB, 'showing a child does not activate it');
+
+  const nestedActive = e.test_window(0x5000);
+  const activateNested = [0x68, ...word(e.test_narrow(nestedActive)), 0x6a, 5,
+    0x9a, ...word(show), 0x1f, 0];
+  writeCode(0x5100, recorder([0x83, 0x7e, 0x0c, 6, 0x75, activateNested.length,
+    ...activateNested]));
+  const superseded = e.test_window(0x5100);
+  runShow(superseded, 5, 0x90, true);
+  assert.strictEqual(e.test_active(), nestedActive, 'nested activation wins');
+  assert.strictEqual(e.test_focus(), nestedActive, 'outer activation cannot steal focus back');
+  const getActive = e.test_user_thunk(60);
+  const observeActive = [0x9a, ...word(getActive), 0x1f, 0, 0x36, 0xa3, 0x00, 0x0f];
+  writeCode(0x5200, recorder([0x83, 0x7e, 0x0c, 5, 0x75, observeActive.length,
+    ...observeActive]));
+  const maximizeActive = e.test_window(0x5200);
+  runShow(maximizeActive, 3, 0x90, true);
+  assert.strictEqual(e.guest_read32(0x110f00) & 0xffff, e.test_narrow(maximizeActive),
+    'GetActiveWindow inside SIZE_MAXIMIZED sees the activated window');
+  const minimizedActive = e.test_window(0x5000);
+  assert.deepStrictEqual(runShow(minimizedActive, 2, 0x90, true), [6, 6]);
+  assert.strictEqual(e.guest_read32(0x110910), (0x10000 | e.test_narrow(maximizeActive)) >>> 0,
+    'Win16 minimized flag is HIWORD(lParam), not wParam');
+  const destroyOnActivate = destroy;
+  writeCode(0x5300, recorder([0x83, 0x7e, 0x0c, 6, 0x75, destroyOnActivate.length,
+    ...destroyOnActivate]));
+  const destroyedActive = e.test_window(0x5300);
+  runShow(destroyedActive, 5, 0x90, true);
+  assert.strictEqual(e.test_alive(destroyedActive), 0);
+  assert.strictEqual(e.test_active(), 0, 'activation must not retain a retired HWND');
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });
