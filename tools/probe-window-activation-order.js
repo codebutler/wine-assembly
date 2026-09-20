@@ -29,6 +29,10 @@ const extraWat = String.raw`
     (call $wnd_set_owner (local.get $h) (local.get $owner))
     (drop (call $wnd_set_style (local.get $h)
       (select (i32.const 0x10CF0000) (i32.const 0x00CF0000) (local.get $visible)))))
+  (func (export "probe_default") (param $h i32) (param $msg i32) (param $wp i32) (param $lp i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+    (call $handle_DefWindowProcA (local.get $h) (local.get $msg) (local.get $wp)
+      (local.get $lp) (i32.const 0) (i32.const 0)))
   (func (export "probe_api") (param $kind i32) (param $h i32) (param $cmd i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
     (if (i32.eqz (local.get $kind))
@@ -106,7 +110,7 @@ const extraWat = String.raw`
     assert.deepStrictEqual(snapshots.at(-1).watTopFirst.slice(0, 4), ['N', 'Q', 'P', 'A'],
       'visible owned levels remain above owner, preserving sibling order');
   }
-  if (process.argv.includes('--input-paths')) {
+  if (process.argv.includes('--input-paths') || process.argv.includes('--check-taskbar')) {
     // Exercise actual input and taskbar handlers. Only the DOM button sink is
     // synthetic; no USER exports, renderer state transitions or onclick bodies
     // are replaced. Keep these observations separate from --check-order until
@@ -136,7 +140,30 @@ const extraWat = String.raw`
         renderer.updateTaskbar();
         const button = buttons.find(button => button.textContent === 'B');
         assert(button, 'B taskbar button exists');
+        const beforeMinimized = renderer.windows[b]._minimized;
+        const beforeVisible = renderer.windows[b].visible;
         button.onclick();
+        if (action !== 'raise') {
+          if (process.argv.includes('--check-taskbar')) {
+            assert.strictEqual(renderer.windows[b]._minimized, beforeMinimized,
+              'taskbar must not commit minimized state before guest handling');
+            assert.strictEqual(renderer.windows[b].visible, beforeVisible,
+              'taskbar must not commit visibility before guest handling');
+          }
+          const event = renderer.takeInput(event => event.hwnd === b && event.msg === 0x0112);
+          if (process.argv.includes('--check-taskbar')) {
+            assert(event, 'taskbar queues a system command for the owning HWND');
+            assert.strictEqual(event.wParam, action === 'minimize' ? 0xF020 : 0xF120);
+          }
+          // This fixture has no application wndproc; explicitly exercise
+          // default processing after checking the queued delivery contract.
+          if (event) e.probe_default(event.hwnd, event.msg, event.wParam, event.lParam);
+          if (process.argv.includes('--check-taskbar')) {
+            assert.strictEqual(!!e.probe_min(b), action === 'minimize', 'guest commits show state');
+            assert.strictEqual(!!renderer.windows[b]._minimized, !!e.probe_min(b),
+              'renderer follows guest command handling');
+          }
+        }
         record(`taskbar B ${action}`);
       }
       assert(renderer.windows[b], 'taskbar retains the target window');

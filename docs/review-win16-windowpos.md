@@ -1176,3 +1176,38 @@ arithmetic; the activation transaction is not. Verify both cooperative and
 Worker delivery, including keyboard routing across app instances, before
 claiming the input paths closed. The current probe covers one process in
 the headless renderer, not native Win98 or concurrent Worker input.
+
+### Taskbar minimize/restore delivery (2026-09-20)
+
+The taskbar now enqueues HWND-targeted `WM_SYSCOMMAND` (`SC_MINIMIZE` or
+`SC_RESTORE`) and wakes the input pump. It no longer changes visibility or
+minimized state before guest handling. Ordinary application handling can
+consume the command; default handling commits the existing shared show-state
+fold and host presentation. This follows the documented
+[WM_SYSCOMMAND contract](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-syscommand),
+without calling callback-bearing exports on a Worker shadow instance.
+
+`--check-taskbar` on the activation-order probe asserts the queued HWND and
+command, unchanged pre-delivery state, and agreement after explicit native
+default processing. Its builtin fixture has no application wndproc: it does
+not pretend that calling the default handler tests a real application's pump.
+
+A separate local Chrome check drove Notepad's actual taskbar buttons in both
+cooperative and Worker modes. Both minimized with guest `wnd_is_minimized=1`
+and renderer minimized/hidden, then restored with guest state 0 and renderer
+visible (`/private/tmp/wa-taskbar-browser-final.log`, harness
+`/private/tmp/wa-taskbar-browser.js`). The first browser run used an incorrect
+optional getter and is not evidence for guest state; the corrected run uses
+the required export and asserts the result. This is functional browser
+coverage, not a performance measurement.
+
+Still open: taskbar foreground raising and mouse activation, restoring active
+state/focus, hide/minimize successor selection, and default-processing gaps
+such as `WM_QUERYOPEN` on restore. This change fixes command delivery, not all
+semantics of the existing default handler.
+
+Final probe passes (`/private/tmp/wa-taskbar-final.log`); substituting the
+prior renderer fails the pre-delivery state assertion
+(`/private/tmp/wa-taskbar-negative.log`). The desktop-plane Z-order test and
+JavaScript syntax/diff checks also pass. No WAT changes or rebuild are needed
+for this delivery correction.
