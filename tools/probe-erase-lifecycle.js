@@ -2,42 +2,26 @@
 'use strict';
 
 // Diagnostic-only builds; never modifies src/ or the shipping artifact.
-// Usage: node tools/probe-erase-lifecycle.js [--candidate] <test/run.js args>
-// --candidate applies the explicitly rejected BeginPaint experiment in memory.
+// Usage: node tools/probe-erase-lifecycle.js <test/run.js args>
+// The former BeginPaint candidate is now integrated; trace current sources.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { compileSrcWasm } = require('../test/compile-src');
-const { sourceTextFromBytes } = require('./watx');
 const imports = require('../lib/host-imports');
 const args = process.argv.slice(2);
 if (args.some(a => /^--wasm(?:=|$)/.test(a))) {
   throw Error('This probe owns --wasm; pass ordinary app/input/budget arguments only.');
 }
 if (args.includes('--threads')) throw Error('Use cooperative mode: real Worker imports are not instrumented by this probe.');
-const candidate = args.includes('--candidate');
-const patch = candidate ? sourceTextFromBytes(fs.readFileSync(path.join(__dirname,
-  '../docs/experiments/beginpaint-erase-candidate.patch'))) : '';
+if (args.includes('--candidate')) throw Error('BeginPaint callbacks are now integrated; omit --candidate.');
 
 function replaceOnce(source, from, to, label) {
   if (source.split(from).length !== 2) throw Error(`ambiguous/missing probe anchor: ${label}`);
   return source.replace(from, to);
 }
 
-function applyCandidate(file, source) {
-  const section = patch.split('diff --git ').find(s => s.startsWith(`a/src/${file} b/`));
-  if (!section) return source;
-  for (const hunk of section.split(/^@@[^\n]*\n/m).slice(1)) {
-    const lines = hunk.trimEnd().split('\n');
-    const before = lines.filter(l => l[0] === ' ' || l[0] === '-').map(l => l.slice(1)).join('\n');
-    const after = lines.filter(l => l[0] === ' ' || l[0] === '+').map(l => l.slice(1)).join('\n');
-    source = replaceOnce(source, before, after, `candidate ${file}`);
-  }
-  return source;
-}
-
 function instrument(file, source) {
-  source = applyCandidate(file, source);
   if (file === '10-helpers.wat') {
     for (const [name, event, store] of [
       ['set', -1001, '(i32.store (local.get $addr) (i32.or (local.get $old) (local.get $bits)))'],
@@ -73,8 +57,8 @@ function instrument(file, source) {
       (call $gl32 (i32.add (local.get $arg1) (i32.const 4)))
       (i32.const -1004) (call $nc_flags_test (local.get $arg0)))`;
     body = replaceOnce(body, '    (local.get $hdc))', `    ${trace}\n    (local.get $hdc))`, 'begin result');
-    if (candidate) body = replaceOnce(body, '(return (local.get $hdc))))',
-      `${trace}\n        (return (local.get $hdc))))`, 'candidate result');
+    body = replaceOnce(body, '(return (local.get $hdc))))',
+      `${trace}\n        (return (local.get $hdc))))`, 'Win32 result');
     source = source.slice(0, start) + body + source.slice(end);
   }
   return source;
@@ -83,7 +67,7 @@ function instrument(file, source) {
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-erase-lifecycle-'));
 const wasm = path.join(dir, 'probe.wasm');
 fs.writeFileSync(wasm, compileSrcWasm(instrument));
-console.log(`[erase-state] artifact=${wasm} candidate=${candidate}`);
+console.log(`[erase-state] artifact=${wasm}`);
 console.log('[erase-state] value=set/clear mask, begin brush, result fErase; flags=pre-transition NC_FLAGS');
 const create = imports.createHostImports;
 imports.createHostImports = ctx => {
@@ -101,5 +85,5 @@ imports.createHostImports = ctx => {
   return result;
 };
 process.argv = [process.argv[0], require.resolve('../test/run'),
-  ...args.filter(a => a !== '--candidate'), '--no-build', `--wasm=${wasm}`, '--quiet-api', '--quiet-blocks'];
+  ...args, '--no-build', `--wasm=${wasm}`, '--quiet-api', '--quiet-blocks'];
 require('../test/run');

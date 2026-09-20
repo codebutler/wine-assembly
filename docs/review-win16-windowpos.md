@@ -572,3 +572,57 @@ retain the failure rather than claiming that the earlier Rodent pass still
 applies to today's shared worktree.
 The final pinned shipping artifact repeats the same Rodent failure
 (`vb-final`), consistent with that baseline comparison.
+
+## 2026-09-20: Win32 BeginPaint callback integration after lifecycle fixes
+
+Retested the archived candidate **after** hidden-scan preservation (`7471c624`)
+and removal of the queued-erase consumer (`80f6174c`). Unlike the earlier
+rejected attempts, the completed-build browser test now passes all six Diablo
+stages through gameplay, including both menu selection markers. The runtime
+change is now integrated, not merely an isolated passing experiment:
+
+- Win32 BeginPaint sends pending WM_ERASEBKGND after installing its paint DC's
+  update/system clip; the callback receives the same HDC returned to the caller.
+- fErase reflects whether erasing was requested and whether the callback
+  handled it, not whether the window happens to have a class brush.
+- The in-flight request is consumed before callback entry, preventing a
+  same-window nested BeginPaint from redispatching it recursively. A declined
+  erase is rearmed on a still-live window; a newly requested erase during a
+  successful callback is not cleared on return.
+- Win32 UpdateWindow sends WM_PAINT without its former early erase callback.
+  The application can arrange its brush/background before calling BeginPaint.
+
+These are the documented [BeginPaint](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-beginpaint)
+and [WM_ERASEBKGND](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd)
+contracts. They do not establish exact native-Win98 event parity for all paths.
+
+The former red manual probe is now `test/test-beginpaint-erase-callback.js`.
+It covers real x86 callbacks, no-erase damage, NULL/non-NULL brushes,
+zero/one/other-nonzero callback results, repeated declined cycles, partial
+rcPaint, UpdateWindow -> WM_PAINT -> BeginPaint -> erase nesting, recursive
+same-window BeginPaint, callback reinvalidation, guest stack and synchronous
+message depth. The old tools command forwards to the regression test.
+`tools/probe-erase-lifecycle.js` now instruments current sources; `--candidate`
+is retired with an explicit error. The patch under `docs/experiments/` remains
+historical evidence of the previously rejected attempt, not a patch to apply
+to current main.
+
+Verification: `/private/tmp/wa-beginpaint-retry-{contract,nested,promoted,order,default,wake,winrar,wep1,far,build,diablo}.log`.
+Both WASM builds, focused paint tests, WinRAR installer/installed GUI,
+WEP1 8/8 and Win16 callback tests pass. The browser run began only after the
+build process completed; screenshots are in
+`/private/tmp/wa-beginpaint-retry-diablo/`. Rodent's baseline-red status from
+the preceding section remains unresolved, not claimed green here.
+
+Negative control: compiling the new regression with both runtime fragments
+from `80f6174c` fails its no-erase/NULL-brush fErase assertion
+(`/private/tmp/wa-beginpaint-retry-red.log`). The promoted test passes current
+source. The updated current-source lifecycle probe completes the same 1100-
+batch Diablo trace (`wa-beginpaint-retry-trace.log`) without applying an
+experiment patch.
+
+Remaining paint work: connect Win16 BeginPaint's far callback continuation
+and remove its legacy class-brush policy; audit modal/default-dialog erase
+consumers; move damage validation to the correct lifecycle point and test
+callback reinvalidation through EndPaint. Empty-update rcPaint fallback and
+the global last-registered redraw-class style are separate known shortcuts.

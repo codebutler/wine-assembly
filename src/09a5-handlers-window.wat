@@ -1635,14 +1635,9 @@
               (i32.lt_u (local.get $wp) (i32.const 0xFFFE0000)))
             (call $wnd_is_effectively_visible (local.get $arg0))))
       (then
-        ;; Erase first — this is BeginPaint's half of the sequence, and the
-        ;; queued NC_FLAGS bit is where the pump would otherwise have found it.
-        (if (i32.and (call $nc_flags_test (local.get $arg0)) (i32.const 2))
-          (then
-            (call $nc_flags_clear (local.get $arg0) (i32.const 2))
-            (drop (call $wnd_send_message
-              (local.get $arg0) (i32.const 0x0014)
-              (i32.add (local.get $arg0) (i32.const 0x40000)) (i32.const 0)))))
+        ;; BeginPaint owns any erase callback, using its clipped paint DC.
+        ;; A wndproc may change its class brush before calling BeginPaint or
+        ;; decline to call it; UpdateWindow must not erase ahead of either.
         (call $paint_flag_clear_hwnd (local.get $arg0))
         (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
           (then (global.set $paint_pending (i32.const 0))))

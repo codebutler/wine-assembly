@@ -750,7 +750,7 @@
   ;; changing a global mode while another ABI handler runs.
   (func $begin_paint_core (param $arg0 i32) (param $arg1 i32) (param $win16_bridge i32) (result i32)
     (local $cs i32) (local $brush i32) (local $hdc i32) (local $wa i32) (local $partial i32) (local $desc i32)
-    (local $erase_pending i32)
+    (local $erase_pending i32) (local $erase_result i32)
     ;; Win98: BeginPaint sends WM_ERASEBKGND before returning. The default
     ;; handler fills the client area with this hwnd's registered class
     ;; hbrBackground. A NULL hbrBackground means no default erase; the app owns
@@ -834,6 +834,29 @@
           (i32.load offset=8 (local.get $wa))
           (i32.load offset=12 (local.get $wa))
           (i32.const 1))))) ;; RGN_AND
+    ;; Win32 can enter a guest wndproc synchronously here, after the paint
+    ;; DC's update/system clip is installed. The callback, not the presence
+    ;; of a class brush, decides whether the application still owes erasing.
+    ;; Consume this cycle's erase request before entry so nested BeginPaint
+    ;; cannot recursively redispatch the same request. Reinvalidations made
+    ;; by the callback retain their newly set erase bit.
+    ;; Win16 still uses the legacy block below until its far continuation is
+    ;; connected; a 32-bit synchronous sender cannot enter a far procedure.
+    (if (i32.and (i32.eqz (local.get $win16_bridge)) (i32.eqz (global.get $code16)))
+      (then
+        (if (local.get $erase_pending)
+          (then
+            (call $nc_flags_clear (local.get $arg0) (i32.const 2))
+            (local.set $erase_result (call $wnd_send_message (local.get $arg0) (i32.const 0x14)
+              (local.get $hdc) (i32.const 0)))
+            (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (i32.eqz (local.get $erase_result)))
+            ;; Returning zero explicitly leaves the window marked for erase.
+            ;; Do not discard that state when the current paint completes.
+            (if (i32.and (i32.eqz (local.get $erase_result))
+                  (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)))
+              (then (call $nc_flags_set (local.get $arg0) (i32.const 2))))))
+        (return (local.get $hdc))))
+    ;; Legacy Win16 policy only: replace with a far-callback continuation.
     ;; Erase through the same clipped paint HDC. Win98's BeginPaint/WM_ERASEBKGND
     ;; is constrained by the update/visible region; erasing before the clip is
     ;; installed wipes too much during small invalidations (Spider card drags).
