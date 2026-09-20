@@ -1577,6 +1577,27 @@
         (return)))
     (call $paint_flag_set (local.get $arg0))
     (call $defwndproc_do_ncpaint (local.get $arg0))
+    ;; Built-in controls do not need a guest callback trampoline. Complete
+    ;; this target's paint now, just as the native queue drain would, without
+    ;; draining unrelated windows or deferring until the next message poll.
+    (if (i32.and
+          (i32.and
+            (i32.ne (call $ctrl_table_get_class (local.get $arg0)) (i32.const 0))
+            (i32.eqz (call $ctrl_is_subclassed (local.get $arg0))))
+          (call $wnd_is_effectively_visible (local.get $arg0)))
+      (then
+        (drop (call $paint_seed_child_paints (local.get $arg0)))
+        (call $paint_flag_clear_hwnd (local.get $arg0))
+        (call $update_clear_hwnd (local.get $arg0))
+        ;; Native painters own their background fill; do not leave an erase
+        ;; queued to overwrite the freshly completed paint afterward.
+        (call $nc_flags_clear (local.get $arg0) (i32.const 2))
+        (drop (call $control_wndproc_dispatch
+          (local.get $arg0) (i32.const 0x000F) (i32.const 0) (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
     ;; UpdateWindow does not return until WM_PAINT has been handled, and
     ;; BeginPaint runs the window's pending WM_ERASEBKGND on the way in.
     ;; Apps depend on that ordering: Taipei paints its splash screen through

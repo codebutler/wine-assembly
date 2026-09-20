@@ -87,7 +87,14 @@ const extraWat = String.raw`
 `;
 
 (async () => {
-  const { exports: e } = await bootRenderHarness({ extraWat });
+  const painted = [];
+  const { exports: e } = await bootRenderHarness({ extraWat,
+    extraHostOverrides: {
+      ctrl_paint_trace(hwnd, classAndReason) {
+        if ((classAndReason >>> 8) === 0) painted.push(hwnd >>> 0);
+      },
+    },
+  });
   const parent = e.test_order_create() >>> 0;
   const child = e.test_order_child() >>> 0;
   assert(parent && child, 'parent/child window tree should exist');
@@ -113,10 +120,20 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_order_update_rect(rect), 0,
     'UpdateWindow on a clean window must leave its update region empty');
   e.test_order_partial_child();
+  e.wnd_set_style_export(child, e.wnd_get_style_export(child) & ~0x10000000);
   e.test_order_update(child);
   assert.strictEqual(e.test_order_update_rect(rect), 1);
   assert.deepStrictEqual([0, 4, 8, 12].map(o => e.guest_read32(rect + o)),
-    [3, 4, 12, 15], 'deferred native UpdateWindow must not expand a partial update');
+    [3, 4, 12, 15], 'hidden UpdateWindow must not expand a partial update');
+  e.wnd_set_style_export(child, e.wnd_get_style_export(child) | 0x10000000);
+  painted.length = 0;
+  e.test_order_update(child);
+  assert.deepStrictEqual(painted, [child],
+    'UpdateWindow must run exactly the target native painter before returning');
+  assert.strictEqual(e.test_order_update_rect(rect), 0,
+    'visible native UpdateWindow must consume its update before returning');
+  assert.strictEqual(e.test_order_first_pending(), 0,
+    'native paint must not remain queued after UpdateWindow returns');
   e.test_order_clear();
 
   // A real guest callback proves the clean-window case sends no message,

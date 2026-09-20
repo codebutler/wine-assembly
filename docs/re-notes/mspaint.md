@@ -128,3 +128,19 @@ status and scrollbar toggle comparisons remain 0/0.
 Remaining: the existing synchronous-send depth/Win16/native restrictions in
 UpdateWindow and MoveWindow's missing synchronous call are unchanged. Do not
 equate the existing-damage fix with complete repaint/reentrancy semantics.
+
+## Native UpdateWindow completion
+
+Unsubclassed WAT-native controls now dispatch their target WM_PAINT
+synchronously when effectively visible. The implementation propagates the
+existing update to descendants, consumes its queue/update state, clears the
+native background erase obligation, and invokes the normal native painter.
+It does not drain other dirty windows. This supersedes the native deferral
+noted above, but leaves subclassed/guest and Win16 restrictions unchanged.
+
+The test failed before the fix because native update damage remained pending
+after return. It now observes exactly one target paint through the existing
+control trace import before UpdateWindow returns, plus empty update and paint
+state afterward. Hidden partial damage is preserved without expansion.
+Full build, guest callback/paint-order checks, Paint status/scrollbar 0/0, and
+Calculator pressed-button 8/8 pass. MoveWindow's synchronous call remains open.
