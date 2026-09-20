@@ -17,7 +17,9 @@
 // picks the executable, runs it headless with a PNG capture, and classifies:
 //
 //   DRAWS     the capture has real content
-//   BLANK     it ran without crashing and drew nothing
+//   BLANK     it ran without crashing and drew nothing (the desktop composited)
+//   NOPIC     no capture, or a fully transparent one: nothing composited at
+//             all, which is a harness/timing answer rather than an app one
 //   MODAL     it stopped on its own message box (the text is reported)
 //   CRASH     an unimplemented API or a trap (the blocker is reported)
 //   INSTALLER the directory holds only a setup stub, so there is nothing to run
@@ -164,15 +166,25 @@ function run(cmd, args, timeoutMs) {
 }
 
 function pngVerdict(file) {
-  if (!fs.existsSync(file)) return { drew: false, note: 'no capture' };
-  const { counts, total } = histogram(loadPng(file));
+  if (!fs.existsSync(file)) return { drew: false, blank: false, note: 'no capture' };
+  const { counts, total, transparent } = histogram(loadPng(file));
   const colors = [...counts.values()].sort((a, b) => b - a);
   const top = total ? colors[0] / total : 1;
+  // A fully transparent capture and a flat desktop-teal one are different
+  // failures and must not both read as "drew nothing": transparent means
+  // nothing was composited at all (a capture taken before the first paint, or
+  // on a box loaded enough that the run never got there), while teal means the
+  // desktop composited and the app put no window on it. The byte count does
+  // not separate them -- both are a couple of KB of PNG.
+  if (total && transparent / total >= 0.99) {
+    return { drew: false, blank: false, note: 'fully transparent — nothing composited' };
+  }
   // A window frame alone already carries the Win98 greys, the caption blue and
   // its text, so "more than a flat fill" is the honest bar here; the report
   // prints the numbers so a borderline tile can be looked at.
   return {
     drew: colors.length >= 4 && top < 0.995,
+    blank: true,
     note: `${colors.length} colors, top ${(top * 100).toFixed(1)}%`,
   };
 }
@@ -225,6 +237,7 @@ async function sweepOne(title, opts) {
   if (blocker) { row.verdict = blocker.kind; row.blocker = blocker.detail; }
   else if (killed) { row.verdict = 'TIMEOUT'; row.blocker = `no exit within ${opts.seconds + 25}s`; }
   else if (png.drew) row.verdict = 'DRAWS';
+  else if (!png.blank) { row.verdict = 'NOPIC'; row.blocker = row.blocker || png.note; }
   else row.verdict = boxes.length ? 'MODAL' : 'BLANK';
   if (boxes.length) row.blocker = row.blocker || boxes[0].slice(0, 120);
   if (boxes.length) row.boxes = boxes;
@@ -277,4 +290,10 @@ async function main() {
   console.log(`captures and logs in ${opts.work}`);
 }
 
-main().catch(error => { console.error(error && error.stack || error); process.exit(1); });
+// The capture classifier is the part with a wrong answer worth regressing
+// against, so it is importable rather than only reachable through a CD mount.
+module.exports = { pngVerdict };
+
+if (require.main === module) {
+  main().catch(error => { console.error(error && error.stack || error); process.exit(1); });
+}
