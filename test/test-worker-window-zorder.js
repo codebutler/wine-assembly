@@ -40,7 +40,11 @@ function check(ok, label, detail) {
 
 // One module, N instances, one memory — exactly how a guest thread is born.
 async function boot(count) {
-  const wasmBytes = compileSrcWasm();
+  const wasmBytes = compileSrcWasm((file, source) => file === '13-exports.wat' ? source + `
+    (func (export "test_raise_group") (param $h i32) (call $wnd_z_raise_owner_group (local.get $h)))
+    (func (export "test_owner") (param $h i32) (param $owner i32)
+      (call $wnd_set_owner (local.get $h) (local.get $owner)))
+  ` : source);
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const instances = [];
   for (let i = 0; i < count; i++) {
@@ -106,6 +110,21 @@ async function boot(count) {
     `0x${MAIN_A.toString(16)}=${raised}`);
   check(main.wnd_z_is_above_sibling(WORK_B, MAIN_A) === 1,
     'and the raised window reads as covering the newest worker window');
+
+  main.test_owner(MAIN_B, MAIN_A);
+  worker.test_owner(WORK_A, MAIN_A);
+  worker.test_owner(WORK_B, WORK_A);
+  worker.test_raise_group(MAIN_A);
+  const groupRanks = hwnds.map(h => main.wnd_z_get(h));
+  check(groupRanks.every((rank, i) => !i || rank > groupRanks[i - 1]),
+    'worker group raise keeps root, sibling palettes, then nested popup in order', groupRanks.join(','));
+  check(hwnds.every((h, i) => worker.wnd_z_get(h) === groupRanks[i]),
+    'both instances observe exactly the same group ranks');
+  main.wnd_set_style_export(WORK_B, 0);
+  const hiddenRank = main.wnd_z_get(WORK_B);
+  main.test_raise_group(MAIN_A);
+  check(worker.wnd_z_get(WORK_B) === hiddenRank,
+    'hidden owned window retains its rank across a group raise');
 
   console.log(`\n${passed}/${passed + failed} checks passed`);
   if (failed) process.exit(1);

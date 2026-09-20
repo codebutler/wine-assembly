@@ -1050,3 +1050,71 @@ disabled/hidden candidates, no candidate and callback reentrancy. Do not use
 allocation-slot order or a hardcoded fallback to the main HWND. The probe is
 an emulator diagnosis, not native Win98 selection evidence; these production
 defects remain open.
+
+## 2026-09-20: activation updates guest owner-group ranks
+
+The shared Win32 activation transition now raises its target's guest-side owner
+group, including when reasserting an already-active HWND. The latter matters
+when a new window has appeared above the active group since the previous
+activation. Notifications and the previous-HWND return remain unchanged.
+
+`wnd_z_raise_owner_group` walks to the root owner, raises that root, then raises
+visible non-iconic owned windows in stable sibling order, level by level.
+Hidden owned windows retain their rank. The window lock covers the complete
+operation; nested calls to the existing rank allocator use its recursive lock.
+There are no host imports, guest callbacks, scratch allocations or private
+per-instance rank counters while locked. The pre-raise maximum and per-level
+rank boundaries distinguish old members from already-raised members. Owner
+cycles are bounded by MAX_WINDOWS rather than looping forever.
+
+`node tools/probe-window-activation-order.js --check-order` checks relative WAT
+and renderer ordering after activation. Its owned fixture deliberately creates
+a nested window between two sibling palettes, so allocation order cannot pass
+as ownership-level order. Results (`/private/tmp/wa-owner-rank-final.log`):
+
+- Unowned activation: both report A C B, replacing the earlier C B A / A C B
+  disagreement.
+- Owner activation: both report N Q P A above unrelated windows; N belongs to
+  P, and P/Q belong to A. The hidden owned window remains outside the raised
+  group.
+- Reasserting A after creating unrelated D also preserves that relative order.
+
+The prior activation body, compiled in isolation against the same probe,
+fails the unowned comparison (`wa-owner-rank-before.log`). The activation
+callback matrix and existing two-instance shared-rank checks pass
+(`wa-owner-rank-active.log`, `wa-owner-rank-worker.log`). These checks do not
+claim native Win98 reference traces or simultaneous contended group raises.
+
+This is an incremental ordering correction, not the elimination of the second
+owner. The renderer still owns desktop-wide ordering and still has its group
+walk. Direct renderer input/taskbar raises and Win16's separate activation
+continuation need integration; same-process comparisons are not a global
+cross-app rank comparison. Hide/minimize successor selection is still open.
+
+The first full build stopped on a stale generated mirror after a concurrent
+DirectX change expanded DX_SURF_META. The mirror was regenerated for that
+change (layout `e6a915eaedf6cf03`), left outside this change's commit, and the
+shipping artifact is being rebuilt against the matching map. This is not a
+rank-helper layout change; the helper adds no region.
+
+The extended two-instance test now calls the group operation itself from the
+worker instance: all ten checks pass, including root/sibling/nested order,
+identical ranks seen by both instances and unchanged hidden-member rank
+(`wa-owner-rank-worker-group.log`). This is sequential access through two
+instances, not a simultaneous contention benchmark.
+
+The matching-mirror full build then stops at the unrelated DxObject field
+gate: the parallel `$d3dim_texture_view_release` uses a raw type load in
+`src/09aa-handlers-d3dim.wat` (`wa-owner-rank-build-final.log`). The owner was
+notified; that source is untouched by this change. A compile-only run pairs
+the local artifact with the regenerated mirror, but is **not** a passing full
+build. Do not conflate focused test success with the shared-tree build gate.
+
+Compile-only completed for both normal and compatibility artifacts, using
+layout `e6a915eaedf6cf03` (`wa-owner-rank-compile.log`). The generated mirror and
+the unrelated DirectX schema changes are not part of the rank-helper commit.
+
+The paired artifact passes WinRAR's Worker browser file-drop test
+(`wa-owner-rank-browser.log`). The DirectX owner subsequently reported fixing
+the field access and a full build passing at 14:26 in the messageboard. That
+is the other agent's build report, not a rerun of the failed build logged here.

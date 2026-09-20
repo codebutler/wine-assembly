@@ -1403,6 +1403,9 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
       (then
         (local.set $previous (i32.const 0))
         (global.set $active_hwnd (i32.const 0))))
+    ;; Reasserting the active HWND can still bring its group above windows
+    ;; created/positioned since the last transition, without new notifications.
+    (call $wnd_z_raise_owner_group (local.get $target))
     (if (i32.eq (local.get $previous) (local.get $target))
       (then (return (local.get $previous))))
 

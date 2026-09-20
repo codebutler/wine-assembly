@@ -5,6 +5,7 @@
 // exports, then exercises the real host and USER entry points in one process.
 // No success assertion pins today's bugs; compare the returned state/order.
 const fs = require('fs');
+const assert = require('assert');
 const path = require('path');
 const { bootRenderHarness } = require('../test/render-helper');
 
@@ -24,6 +25,10 @@ const extraWat = String.raw`
     (call $wnd_get_style (local.get $h)))
   (func (export "probe_min") (param $h i32) (result i32)
     (call $wnd_min_get (local.get $h)))
+  (func (export "probe_owner") (param $h i32) (param $owner i32) (param $visible i32)
+    (call $wnd_set_owner (local.get $h) (local.get $owner))
+    (drop (call $wnd_set_style (local.get $h)
+      (select (i32.const 0x10CF0000) (i32.const 0x00CF0000) (local.get $visible)))))
   (func (export "probe_api") (param $kind i32) (param $h i32) (param $cmd i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
     (if (i32.eqz (local.get $kind))
@@ -73,5 +78,32 @@ const extraWat = String.raw`
   e.probe_api(1, a, 6); record('ShowWindow(A, SW_MINIMIZE)');
   e.probe_api(1, a, 9); record('ShowWindow(A, SW_RESTORE)');
   e.probe_api(2, a, 0); record('CloseWindow(A)');
-  console.log(JSON.stringify({ fixture: 'three same-thread unowned top-level windows', snapshots }, null, 2));
+  // Different creation and ownership order catches a bare target-only raise
+  // and a slot-order walk. Hidden owned windows must retain their old rank.
+  const addOwned = (name, owner, visible = true) => {
+    const hwnd = e.probe_create() >>> 0;
+    e.probe_owner(hwnd, owner, Number(visible));
+    renderer.createWindow(hwnd, visible ? 0x10cf0000 : 0x00cf0000, 50, 50, 100, 80,
+      name, 0, instance, memory);
+    renderer.windows[hwnd].ownerHwnd = owner;
+    windows.push({ name, hwnd });
+    return hwnd;
+  };
+  const palette = addOwned('P', a);
+  addOwned('N', palette);
+  addOwned('Q', a);
+  addOwned('H-hidden', a, false);
+  e.probe_api(1, a, 9);
+  e.probe_api(0, windows[1].hwnd, 0); record('SetActiveWindow(B), with A owner group');
+  e.probe_api(0, a, 0); record('SetActiveWindow(A), with owner group');
+  addOwned('D-unowned', 0);
+  e.probe_api(0, a, 0); record('SetActiveWindow(A), already active after new window');
+  if (process.argv.includes('--check-order')) {
+    for (const s of snapshots.filter(s => s.stage.startsWith('SetActiveWindow'))) {
+      assert.deepStrictEqual(s.watTopFirst, s.rendererTopFirst, `${s.stage}: local order matches host`);
+    }
+    assert.deepStrictEqual(snapshots.at(-1).watTopFirst.slice(0, 4), ['N', 'Q', 'P', 'A'],
+      'visible owned levels remain above owner, preserving sibling order');
+  }
+  console.log(JSON.stringify({ fixture: 'same-thread top-level and owned-window activation', snapshots }, null, 2));
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

@@ -99,6 +99,72 @@
     (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return)))
     (call $wnd_z_assign_top (local.get $slot)))
 
+  ;; Raise a top-level owner group without putting an owner over its palettes.
+  ;; Old ranks order each ownership level; new ranks identify already raised
+  ;; members, so no scratch array or per-instance sequence is needed. Keep the
+  ;; entire table operation under LOCK_WND, with no callbacks/host imports.
+  (func $wnd_z_raise_owner_group (param $hwnd i32)
+    (local $root i32) (local $owner i32) (local $walk i32)
+    (local $i i32) (local $h i32) (local $rank i32) (local $owner_rank i32)
+    (local $ceiling i32) (local $level i32) (local $next_level i32)
+    (local $best i32) (local $best_rank i32)
+    (call $lock_wnd_acquire)
+    (block $done
+      (br_if $done (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      (br_if $done (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)))
+      (local.set $root (local.get $hwnd))
+      (block $root_done (loop $owners
+        (local.set $owner (call $wnd_get_owner (local.get $root)))
+        (br_if $root_done (i32.eqz (local.get $owner)))
+        (br_if $root_done (i32.lt_s (call $wnd_table_find (local.get $owner)) (i32.const 0)))
+        (br_if $root_done (i32.and (call $wnd_get_style (local.get $owner)) (i32.const 0x40000000)))
+        (local.set $walk (i32.add (local.get $walk) (i32.const 1)))
+        (br_if $done (i32.ge_u (local.get $walk) (global.get $MAX_WINDOWS)))
+        (local.set $root (local.get $owner))
+        (br $owners)))
+      (loop $maximum
+        (local.set $rank (i32.load (call $wnd_z_addr_for_slot (local.get $i))))
+        (if (i32.gt_s (local.get $rank) (local.get $ceiling))
+          (then (local.set $ceiling (local.get $rank))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $maximum (i32.lt_u (local.get $i) (global.get $MAX_WINDOWS))))
+      (call $wnd_z_raise (local.get $root))
+      (local.set $level (call $wnd_z_get (local.get $root)))
+      (loop $levels
+        (local.set $next_level (local.get $level))
+        (block $level_done (loop $members
+          (local.set $best (i32.const 0))
+          (local.set $i (i32.const 0))
+          (loop $scan
+            (local.set $h (i32.atomic.load (call $wnd_record_addr (local.get $i))))
+            (local.set $rank (i32.load (call $wnd_z_addr_for_slot (local.get $i))))
+            (if (i32.and
+                  (i32.and (i32.ne (local.get $h) (i32.const 0))
+                    (i32.le_s (local.get $rank) (local.get $ceiling)))
+                  (i32.eqz (call $wnd_min_get (local.get $h))))
+              (then
+                (local.set $owner_rank (call $wnd_z_get (call $wnd_get_owner (local.get $h))))
+                (if (i32.and
+                      (i32.eq (i32.and (call $wnd_get_style (local.get $h)) (i32.const 0x50000000))
+                        (i32.const 0x10000000))
+                      (i32.and (i32.gt_s (local.get $owner_rank) (local.get $ceiling))
+                               (i32.le_s (local.get $owner_rank) (local.get $level))))
+                  (then
+                    (if (i32.or (i32.eqz (local.get $best))
+                          (i32.lt_s (local.get $rank) (local.get $best_rank)))
+                      (then (local.set $best (local.get $h))
+                            (local.set $best_rank (local.get $rank))))))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br_if $scan (i32.lt_u (local.get $i) (global.get $MAX_WINDOWS))))
+          (br_if $level_done (i32.eqz (local.get $best)))
+          (call $wnd_z_raise (local.get $best))
+          (local.set $next_level (call $wnd_z_get (local.get $best)))
+          (br $members)))
+        (br_if $done (i32.eq (local.get $next_level) (local.get $level)))
+        (local.set $level (local.get $next_level))
+        (br $levels)))
+    (call $lock_wnd_release))
+
   (func $wnd_z_is_above_sibling (param $hwnd i32) (param $sibling i32) (result i32)
     (i32.and
       (i32.and (i32.ne (local.get $sibling) (i32.const 0))
