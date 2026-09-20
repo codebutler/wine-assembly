@@ -917,3 +917,48 @@ Completed-artifact gameplay also passes: WEP1 8/8, WEP3 7/7, and VB Rodent/
 Rattler 2/2 (`wa-show-result-wep1.log`, `wa-show-result-wep3.log`,
 `wa-show-result-vb.log`). These runs used `WINE_ASSEMBLY_WASM=build/wine-assembly.wasm`
 after the build completed, not a stale pre-fix artifact.
+
+## 2026-09-20: shared activation must respect callback reentrancy
+
+The hide/minimize audit found a prerequisite discrepancy: Win16's activation
+continuation stops after a callback chooses another active window, but the
+shared Win32 `$active_window_transition` did not. It could send WA_ACTIVE to
+the superseded target after the old window's callback had activated a third
+window, or send stale WM_SETFOCUS after a nested focus transition. Furthermore,
+SetActiveWindow unconditionally called the browser activation import on unwind,
+undoing the nested browser selection even when guest active state was correct.
+
+The shared transition now checks ownership after the deactivation, activation
+and kill-focus callbacks. SetActiveWindow requests browser activation only if
+its target is still active. The outer invocation retains its original previous
+HWND return and stack cleanup. This is consistent with the synchronous
+same-queue callbacks documented by Microsoft in
+[WM_ACTIVATE](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-activate)
+and the previous-window return in
+[SetActiveWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setactivewindow);
+exact nested Win98 notification traces have not been independently captured.
+
+The expanded `test/test-active-window.js` uses actual guest x86 and a public
+SetActiveWindow thunk. It activates a third window from each of the old
+window's WA_INACTIVE, the target's WA_ACTIVE, WM_KILLFOCUS and WM_SETFOCUS.
+It checks final active/focus state, absence of stale notifications, the outer
+return and stack, and host activation targets. Its recorder now has 64 entries
+and traps before overflow; the old 16-entry storage could overwrite fixture
+code during the expanded sequence. An isolated prior-runtime test fails on
+stale activation after WA_INACTIVE (`wa-active-reentrant-before.log`); the
+corrected transition passes all four cases (`wa-active-reentrant-after.log`).
+Popup-history and owned-form ShowWindow activation tests also pass.
+
+This does not finish the activation audit: ShowWindow, SetForegroundWindow,
+SwitchToThisWindow and OpenIcon still need their post-callback host activation
+reviewed. Hide/minimize successor selection has no shared WAT implementation
+yet. Exact native default-procedure focus ownership and same-target nested
+activation generations are not established by this regression.
+
+The final bounds-checked recorder passes (`wa-active-reentrant-final.log`).
+Normal and compatibility builds pass (`wa-active-reentrant-build.log`, layout
+hash `494e011486f18808`), with no data-segment overlaps. All named logs are in
+`/private/tmp/`.
+The completed artifact also passes the WinRAR Worker browser file-drop test
+(`wa-active-reentrant-winrar-web.log`). This is a browser integration check,
+not an exhaustive native activation-order comparison.

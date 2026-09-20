@@ -9,21 +9,23 @@ const apiTable = require('../src/api_table.json');
 const { bootRenderHarness } = require('./render-helper');
 
 const ROOT = path.join(__dirname, '..');
+const CAPACITY = 64;
 const COUNT = 0;
 const HNDS = 4;
-const MSGS = 68;
-const WPARAMS = 132;
-const LPARAMS = 196;
-const RECORD_BYTES = 260;
+const MSGS = HNDS + CAPACITY * 4;
+const WPARAMS = MSGS + CAPACITY * 4;
+const LPARAMS = WPARAMS + CAPACITY * 4;
+const RECORD_BYTES = LPARAMS + CAPACITY * 4;
 
 const u32 = value => [value, value >>> 8, value >>> 16, value >>> 24]
   .map(byte => byte & 0xff);
 
-function makeWndProc(observed) {
+function makeWndProc(observed, callback = []) {
   const out = [];
   const emit = (...bytes) => out.push(...bytes.map(byte => byte & 0xff));
   const storeIndexedEax = address => emit(0x89, 0x04, 0x8d, ...u32(address));
   emit(0x8b, 0x0d, ...u32(observed + COUNT)); // mov ecx,[count]
+  emit(0x83, 0xf9, CAPACITY, 0x72, 0x02, 0x0f, 0x0b); // trap instead of overflowing records
   for (const [stackOffset, recordOffset] of [
     [4, HNDS], [8, MSGS], [12, WPARAMS], [16, LPARAMS],
   ]) {
@@ -32,12 +34,22 @@ function makeWndProc(observed) {
   }
   emit(0x41); // inc ecx
   emit(0x89, 0x0d, ...u32(observed + COUNT)); // mov [count],ecx
+  emit(...callback);
   emit(0x31, 0xc0); // xor eax,eax
   emit(0xc2, 0x10, 0x00); // ret 16
   return Uint8Array.from(out);
 }
 
 const extraWat = String.raw`
+  (func (export "test_thunk") (param $id i32) (result i32)
+    (local $p i32)
+    (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
+    (local.set $p (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $p) (i32.const 0))
+    (i32.store offset=4 (local.get $p) (local.get $id))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end)
+    (call $w2g (local.get $p)))
   (func (export "test_make_window")
       (param $proc i32) (param $style i32) (param $parent i32)
       (param $tid i32) (result i32)
@@ -217,6 +229,48 @@ const extraWat = String.raw`
   e.test_destroy(first);
   assert.strictEqual(e.test_get_active(), 0,
     'destroying the active top-level clears GetActiveWindow state');
+
+  const setActiveThunk = e.test_thunk(apiTable.find(api => api.name === 'SetActiveWindow').id);
+  const armed = e.guest_alloc(4) >>> 0;
+  const resetRecords = () => view.setUint32(toWasm(observed + COUNT), 0, true);
+  // Reenter from every synchronous notification boundary, using real guest
+  // x86 and the public SetActiveWindow thunk, not a host state assignment.
+  for (const [where, message, wp] of [
+    ['old', 6, 0], ['target', 6, 1], ['old', 8, null], ['target', 7, null],
+  ]) {
+    resetRecords();
+    const hookProc = e.guest_alloc(256) >>> 0;
+    const old = e.test_make_window(where === 'old' ? hookProc : proc, WS_VISIBLE, 0, 1) >>> 0;
+    const target = e.test_make_window(where === 'target' ? hookProc : proc, WS_VISIBLE, 0, 1) >>> 0;
+    const chosen = e.test_make_window(proc, WS_VISIBLE, 0, 1) >>> 0;
+    const action = [0xc7, 0x05, ...u32(armed), ...u32(0), // disarm before recursion
+      0x68, ...u32(chosen), 0xb8, ...u32(setActiveThunk), 0xff, 0xd0];
+    const conditionalWp = wp === null ? action :
+      [0x83, 0x7c, 0x24, 12, wp, 0x75, action.length, ...action];
+    const conditionalMsg = [0x83, 0x7c, 0x24, 8, message,
+      0x75, conditionalWp.length, ...conditionalWp];
+    bytes.set(makeWndProc(observed, [0x83, 0x3d, ...u32(armed), 0,
+      0x74, conditionalMsg.length, ...conditionalMsg]), toWasm(hookProc));
+    view.setUint32(toWasm(armed), 0, true);
+    e.test_set_active(old, stack);
+    resetRecords();
+    hostCalls.length = 0;
+    view.setUint32(toWasm(armed), 1, true);
+    packed = e.test_set_active(target, stack);
+    assert.strictEqual(result(packed), old, 'outer return retains its original previous HWND');
+    assert.strictEqual(finalEsp(packed), stack + 8, 'nested activation preserves stdcall stack');
+    assert.strictEqual(e.test_get_active() >>> 0, chosen);
+    assert.strictEqual(e.test_focus() >>> 0, chosen, `${where}/${message}: nested focus survives`);
+    const events = records();
+    const choice = events.findIndex(r => r.hwnd === chosen && r.msg === 6 && r.wParam === 1);
+    assert(count() <= CAPACITY, 'notification recorder stays within its allocation');
+    assert(choice >= 0, `${where}/${message}: nested target receives activation: ${JSON.stringify(events)}`);
+    assert(!events.slice(choice + 1).some(r => r.hwnd === target &&
+      ((r.msg === 6 && r.wParam === 1) || r.msg === 7)),
+    `${where}/${message}: superseded target gets no stale activation/focus`);
+    assert.deepStrictEqual(hostCalls, [['activate', chosen]],
+      `${where}/${message}: outer host activation must not undo the nested choice`);
+  }
 
   console.log('PASS Set/GetActiveWindow retain per-thread USER activation state');
 })().catch(error => {

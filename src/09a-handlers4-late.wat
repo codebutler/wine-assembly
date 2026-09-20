@@ -1414,6 +1414,11 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
           (i32.shl (call $wnd_min_get (local.get $previous)) (i32.const 16)) ;; WA_INACTIVE
           (local.get $target)))
         (call $host_invalidate_frame (local.get $previous))))
+    ;; Synchronous callbacks may activate a different window. That nested
+    ;; transition owns its state; do not send the superseded target a later
+    ;; activation or clear the focus it just selected.
+    (if (i32.ne (global.get $active_hwnd) (local.get $target))
+      (then (return (local.get $previous))))
     (if (i32.and
           (i32.ne (local.get $target) (i32.const 0))
           (i32.ge_s (call $wnd_table_find (local.get $target)) (i32.const 0)))
@@ -1424,6 +1429,8 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
             (i32.shl (call $wnd_min_get (local.get $target)) (i32.const 16)))
           (local.get $previous)))
         (call $host_invalidate_frame (local.get $target))))
+    (if (i32.ne (global.get $active_hwnd) (local.get $target))
+      (then (return (local.get $previous))))
 
     ;; WM_ACTIVATE's default procedure assigns focus only when the window is
     ;; not minimized. Respect an application-selected child focus established
@@ -1449,6 +1456,10 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
                 (drop (call $wnd_send_message
                   (local.get $old_focus) (i32.const 0x0008) ;; WM_KILLFOCUS
                   (local.get $target) (i32.const 0)))))
+            (if (i32.or
+                  (i32.ne (global.get $active_hwnd) (local.get $target))
+                  (i32.ne (global.get $focus_hwnd) (local.get $target)))
+              (then (return (local.get $previous))))
             (drop (call $wnd_send_message
               (local.get $target) (i32.const 0x0007) ;; WM_SETFOCUS
               (local.get $old_focus) (i32.const 0))))))
@@ -1488,7 +1499,10 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
         (i32.store offset=0 (global.get $reg_base) (call $active_window_transition (i32.const 0))))
       (else
         (i32.store offset=0 (global.get $reg_base) (call $active_window_transition (local.get $arg0)))
-        (drop (call $host_activate_window (local.get $arg0)))))
+        ;; The callback may have completed another SetActiveWindow, including
+        ;; its browser activation. Do not undo it after unwinding this call.
+        (if (i32.eq (global.get $active_hwnd) (local.get $arg0))
+          (then (drop (call $host_activate_window (local.get $arg0)))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
