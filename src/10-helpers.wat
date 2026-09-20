@@ -7298,6 +7298,18 @@
     (i32.store offset=20 (local.get $dlg_rec) (local.get $title_ptr))
     (i32.store offset=24 (local.get $dlg_rec) (local.get $menu_key))
     (i32.store offset=28 (local.get $dlg_rec) (local.get $ctrl_count))
+    ;; A DLGTEMPLATE may name a menu, and a top-level dialog then owns a real
+    ;; menu bar. The geometry below already reserves the 18px row for it; the
+    ;; menu itself was never loaded, so the row rendered as a bare grey strip
+    ;; and none of its commands existed (Moraff's Jiggler puts its entire
+    ;; game menu on such a dialog). Load it here on the same terms SetMenu
+    ;; uses. A child dialog page has no chrome of its own and keeps none.
+    (if (i32.and
+          (i32.ne (local.get $menu_key) (i32.const 0))
+          (i32.eqz (i32.and (local.get $style) (i32.const 0x40000000))))
+      (then
+        (call $menu_load (local.get $dlg_hwnd) (local.get $menu_key))
+        (call $host_set_menu (local.get $dlg_hwnd) (local.get $menu_key))))
     ;; Dialog HWNDs are real windows too. DLGTEMPLATE cx/cy describe the
     ;; client area for top-level dialogs, while CONTROL_GEOM describes the
     ;; whole window. Add the same approximate non-client extents used by the

@@ -8838,6 +8838,18 @@
   (func $win16_LoadMenu
     (local $id i32)
     (local.set $id (call $win16_res_arg (i32.const 0)))
+    ;; lpMenuName is either MAKEINTRESOURCE (a bare ordinal in the offset with
+    ;; a zero selector) or a far pointer to a name. Only the ordinal was ever
+    ;; forwarded: a named menu reached $handle_LoadMenuA as -1, came back as
+    ;; 0xFFFF, and the app's own SetMenu then read that as "no menu". Moraff's
+    ;; Jiggler puts its whole game menu on a MENUDIALOG that loads "MainMenu"
+    ;; by name, so its menu strip painted empty. Widen the far pointer to its
+    ;; linear guest address instead — which is exactly the form the 32-bit
+    ;; handler and $menu_load already take for a named menu.
+    (if (i32.eq (local.get $id) (i32.const -1))
+      (then
+        (local.set $id (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))))
     (call $win16_call32_begin (i32.const 2))
     (call $handle_LoadMenuA (i32.const 0) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
