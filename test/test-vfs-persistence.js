@@ -169,7 +169,80 @@ async function run() {
     if (oldWindow === undefined) delete global.window; else global.window = oldWindow;
   }
 
+  await resetToken();
+
   console.log('PASS  Browser VFS persistence restores only bounded opt-in app files');
+}
+
+// A shipped asset an app persists is shadowed by the saved copy forever, so a
+// fix to it never reaches anyone who has already played. `resetToken` drops
+// the saved copies once. What has to hold: it clears, it does not keep
+// clearing (otherwise nobody could ever save anything again), a new token
+// clears again, and an app that asks for no reset is untouched.
+async function resetToken() {
+  const storage = new MemoryStorage();
+  const patterns = ['c:\\settings.dat'];
+  const write = (vfs, bytes) => {
+    const handle = vfs.createFile('C:\\settings.dat', 0x40000000, 2);
+    vfs.writeFile(handle, Uint8Array.from(bytes), bytes.length);
+  };
+
+  const played = new VirtualFS();
+  VfsPersistence.attach(played, { appId: 'blobby_volley', patterns, storage });
+  write(played, [1, 1]);                       // their own copy: p2 on the mouse
+  await Promise.resolve();
+  assert.strictEqual(storage.length, 1);
+
+  const shipped = new VirtualFS();
+  write(shipped, [1, 0]);                      // what we now mount
+  const first = VfsPersistence.attach(shipped, {
+    appId: 'blobby_volley', patterns, storage, resetToken: 'p2-keyboard',
+  });
+  assert.strictEqual(first.reset.cleared, 1, 'the stale saved copy is dropped');
+  assert.strictEqual(first.restored, 0, 'and is not hydrated on the run that drops it');
+  assert.deepStrictEqual(Array.from(shipped.files.get('c:\\settings.dat').data), [1, 0],
+    'the mounted file survives the reset');
+
+  write(shipped, [1, 0, 7]);                   // they set their preferences again
+  await Promise.resolve();
+
+  const later = new VirtualFS();
+  const second = VfsPersistence.attach(later, {
+    appId: 'blobby_volley', patterns, storage, resetToken: 'p2-keyboard',
+  });
+  assert.strictEqual(second.reset, null, 'the same token does not reset twice');
+  assert.strictEqual(second.restored, 1, 'so what they saved after the reset is kept');
+  assert.deepStrictEqual(Array.from(later.files.get('c:\\settings.dat').data), [1, 0, 7]);
+
+  const bumped = new VirtualFS();
+  const third = VfsPersistence.attach(bumped, {
+    appId: 'blobby_volley', patterns, storage, resetToken: 'something-else',
+  });
+  assert.strictEqual(third.reset.cleared, 1, 'a new token resets again');
+  assert.strictEqual(third.reset.previous, 'p2-keyboard');
+
+  write(bumped, [4]);
+  await Promise.resolve();
+  const untouched = new VirtualFS();
+  const fourth = VfsPersistence.attach(untouched, { appId: 'blobby_volley', patterns, storage });
+  assert.strictEqual(fourth.reset, null, 'an app that asks for no reset never clears anything');
+  assert.strictEqual(fourth.restored, 1);
+
+  // One app's reset is not another's: the stamp and the files are per appId.
+  const other = new VirtualFS();
+  VfsPersistence.attach(other, { appId: 'quake2', patterns, storage });
+  write(other, [9]);
+  await Promise.resolve();
+  const mine = new VirtualFS();
+  VfsPersistence.attach(mine, {
+    appId: 'blobby_volley', patterns, storage, resetToken: 'third-token',
+  });
+  const survivor = new VirtualFS();
+  const kept = VfsPersistence.attach(survivor, { appId: 'quake2', patterns, storage });
+  assert.strictEqual(kept.restored, 1, 'resetting one app leaves another app\'s saves alone');
+  assert.deepStrictEqual(Array.from(survivor.files.get('c:\\settings.dat').data), [9]);
+
+  console.log('PASS  A persistReset token drops stale saved files exactly once');
 }
 
 run().catch(error => {

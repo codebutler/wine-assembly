@@ -28,17 +28,44 @@ with `--save-vfs`; where we now ship something different, both are given.
 | off  | len   | global      | meaning                                   | stock value |
 |------|-------|-------------|-------------------------------------------|---------------|
 | 0x00 | 0x18  | `+0x978208` | 6 dwords: p1 left/right/jump, p2 same     | `A D W  ← → ↑` (we ship `← → ↑` twice) |
-| 0x18 | 0x04  | `+0x978204` | dword, unidentified                       | 1 |
+| 0x18 | 0x04  | `+0x978204` | **language index**                        | 1 |
 | 0x1c | 0x08  | `+0x978220` | **CONTROL, one dword per player**         | `0, 1` (we ship `0, 0`) |
-| 0x24 | 0x01  | `+0x978228` | byte, unidentified                        | 1 |
+| 0x24 | 0x01  | `+0x978228` | **sound on/off**                          | 1 = on |
 | 0x25 | 0x0d  | `+0x978234` | ShortString[12] player 1 name             | `09 "Spieler 1"` |
 | 0x32 | 0x0d  | `+0x978288` | ShortString[12] player 2 name             | `09 "Spieler 2"` |
-| 0x3f | 0x04  | via `0x43e83c([this+0x30])` | unidentified              | 0 |
-| 0x43 | 0x0d  | `+0x97cdcd` | ShortString[12], unidentified             | empty |
-| 0x50 | 0x04  | `+0x97cddc` | dword, unidentified                       | 0 |
-| 0x54 | 0x1f  | `+0x97cde0` | ShortString[30], unidentified             | empty |
+| 0x3f | 0x04 **+ N×0x3c** | `[this+0x30]+0x1774` | **result-table count, then N records** | 0 |
+| 0x43 | 0x0d  | `+0x97cdcd` | ShortString[12] **network session name**  | empty → `game <0..99>` |
+| 0x50 | 0x04  | `+0x97cddc` | **network connection (provider) index**   | 0 |
+| 0x54 | 0x1f  | `+0x97cde0` | ShortString[30] **host IP address**       | empty → `0.0.0.0` |
 | 0x73 | 0x01  | `+0x978287` | **player 1 colour index**                 | `00` = red |
 | 0x74 | 0x01  | `+0x9782db` | **player 2 colour index**                 | `03` = green |
+
+**`0x3f` is a count, not a dword, and it is the one field that makes the file
+variable-length.** `0x43e83c` (load) and `0x43e88c` (save) are a
+`TStream.Read`/`Write` pair over a fixed array of **100 records of 0x3c
+bytes** at `[this+0x30]+0x04`, with the live count at `+0x1774` (which is
+exactly `4 + 100*0x3c`). The loop is `for i := 1 to count` reading `0x3c`
+bytes at `+ i*0x3c - 0x38`. The count is 0 in the stock file, so every offset
+after it is fixed *only* for a file that has none — **anything seeking past
+`0x3f` by a literal offset is wrong the moment a player has results saved.**
+The record layout itself is not decoded; we never write one.
+
+Evidence for the three renamed fields, none of it inference:
+
+- **`0x978204` is the language.** Every use is an index into a table of text
+  objects: `mov eax,[0x978204]` / `mov eax,[eax*4+0x9781fc]` / `mov esi,[eax]`
+  / `call [esi+0xc]` — a virtual `GetString`, at `0x44a49a`, `0x44a500`,
+  `0x44a8e5` and more. That is the main menu's `ENGLISH PLEASE` entry.
+- **`0x978228` is sound.** `0x4424ce` is `cmp byte [0x978228], 1` / `jnz` over
+  a `PlaySoundA(buf, 0, 7)` — winmm IAT slot 1 at `0x44f6f8`, flags
+  `SND_ASYNC|SND_NODEFAULT|SND_MEMORY`. 36 call sites reach that gate.
+- **The `0x97cd…` trio is the network screen**, matching Instructions.txt
+  §3.2.2 field for field. `0x97cde0` is seeded at `0x44a46e` from the literal
+  `07 "0.0.0.0"` at `0x44a6dc` when its length byte is zero — an IP address.
+  `0x97cdcd` is seeded from `"game "` (`0x44abe4`) + `Random(100)`, a session
+  name. `0x97cddc` is not a value but a **label selector**: `0x44a8dc` adds it
+  to a string-table base (`[0x97cd8c] + it + 7`) before the same `GetString`,
+  which is how a DirectPlay provider row gets its text.
 
 **A truncated file is legal.** The reader re-checks `Position < Size`
 (`0x40ece8` = Position, `0x40eccc` = Size) before four of the groups — after
