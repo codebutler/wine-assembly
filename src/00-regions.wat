@@ -457,7 +457,7 @@
   (region.declare $CURSOR_COLOR_DESC (size 0x00000050) (align 0x00000010)
     (owner "09a4b-handlers-cursor-icon.wat:$cursor_scale_bitmap"))
   (region.declare $EDIT_LAYOUT_SCRATCH (size 0x00000C00) (align 0x00000100)
-    (owner "09c3-wndprocs.wat:$edit_layout_len"))
+    (owner "09c3-wndprocs5-edit.wat:$edit_layout_len"))
   (region.declare $VIRTUAL_MAP_STATE (size 0x00000020) (align 0x00000100)
     (owner "10-helpers.wat:$virtual_map_commit_locked"))
   (region.declare $VIRTUAL_MAP_TABLE (size 0x00020000) (align 0x00000010)

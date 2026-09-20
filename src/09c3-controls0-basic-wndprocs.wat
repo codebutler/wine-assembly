@@ -6,7 +6,7 @@
   ;; top-level form order (and therefore function indices); shared state
   ;; layouts/accessors remain in 09c3-controls.wat, while the larger Edit,
   ;; ListBox, ComboBox, ListView, TrackBar, Tooltip, and Toolbar wndprocs remain
-  ;; in 09c3-wndprocs.wat.
+  ;; in the 09c3-wndprocs*.wat fragments.
 
   ;; ---- Shared text-buffer helper for state structs ----
   ;;

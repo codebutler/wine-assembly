@@ -239,7 +239,12 @@ from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. 
 | `09c3-controls2-open-save-dialog.wat` | Open/Save common-dialog controls and behavior |
 | `09c3-controls3-color-dialog.wat` | ColorGrid and ChooseColor dialog implementation |
 | `09c3-controls4-shell-dialogs.wat` | Run and Shut Down shell-owned dialogs |
-| `09c3-wndprocs.wat` | Larger common-control wndprocs such as ListView |
+| `09c3-wndprocs.wat` | ListView state, messages and painting |
+| `09c3-wndprocs1-toolbar.wat` | Toolbar state, sizing, messages and painting |
+| `09c3-wndprocs2-tooltip-trackbar.wat` | Tooltip/TrackBar wndprocs and owner-draw helpers |
+| `09c3-wndprocs3-listbox.wat` | ListBox storage, selection, scrolling and painting |
+| `09c3-wndprocs4-combobox.wat` | ComboBox and its dropdown popup shell |
+| `09c3-wndprocs5-edit.wat` | Edit wndproc and multiline helpers |
 | `09c3a-dialog-runtime.wat` | Native dialog runtime and find/replace helpers |
 | `09c3b-scrollbar.wat` | Shared Win98 scrollbar rendering and interaction helpers |
 | `09c4-defwndproc.wat` | DefWindowProc non-client paint: 3D outset frame, caption gradient and text, sysmenu buttons, as a callable entry point |
