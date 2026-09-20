@@ -234,3 +234,48 @@ Logs: `/private/tmp/wa-setpos16-before.log`, `wa-setpos16-final.log`,
 Still open: MoveWindow's separate Win16 direct-size path, default CHANGING
 min/max validation, minimized/maximized WM_SIZE classifications, and native
 Win98 event-order comparison. This transaction change does not establish those.
+
+## 2026-09-20: MoveWindow joins the far transaction
+
+Win16 MoveWindow now enters the same stack-owned CHANGING/CHANGED continuation
+as SetWindowPos, with six Pascal arguments and MoveWindow's initial
+NOACTIVATE/NOZORDER and bRepaint-derived NOREDRAW flags. It no longer sends a
+direct WM_SIZE when an app consumes CHANGED. The private frame's formerly
+reserved word records the operation, so nested SetWindowPos and MoveWindow
+calls cannot select each other's commit/finish path.
+
+Its existing geometry/retained-DC logic is now `move_window_core`, shared by
+both ABI front doors. `move_window_finish` retains non-client invalidation,
+dialog erase, startup pending-size refresh, resize invalidation and the call
+to UpdateWindow after CHANGED returns. It uses the commit's normalized NOSIZE
+flag to distinguish a resize and reads the current client size for pending
+startup notification, including geometry changed by a nested callback.
+
+The shared core also rejects missing targets before host mutation, and the
+Win16 native bridge now preserves failure instead of overwriting it with 1.
+Callback-enabled Z-order was another silent discrepancy: MoveWindow reported
+the mutated insertion target but never sent it to the host. The top-level
+commit now forwards it when the callback clears NOZORDER; the existing Win16
+child-order bridge remains shared with SetWindowPos.
+
+Tests cover consuming versus default-processing CHANGED, mutable geometry and
+Z-order, TRUE/FALSE repaint flags, no update region under NOREDRAW, mixed nested
+MoveWindow/SetWindowPos calls, destruction during CHANGING, invalid targets,
+and exact Pascal frame cleanup. The Win32 regression checks callback-enabled
+Z-order and invalid targets too. Restoring the old Win16 source fails because
+host geometry is already committed when the test expects to enter CHANGING.
+
+The [Microsoft MoveWindow contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-movewindow)
+also requires immediate repaint through UpdateWindow when bRepaint is TRUE.
+**That Win16 far-paint behavior remains incomplete:** `update_window_now`
+still defers far-procedure painting. The test checks flags but deliberately
+does not require deferred paint as the expected native behavior. This is the
+next fidelity gap, not a completed repaint claim.
+
+Evidence: `/private/tmp/wa-movepos16-before.log`, `wa-movepos16-final.log`,
+`wa-movepos32-final.log`, `wa-movepos16-defer.log`, `wa-movepos16-paint.log`,
+`wa-movepos16-vb.log`, `wa-movepos16-build.log`. Notifications, Win32 mutation,
+Win16 deferred callbacks, parent/child paint ordering, Rodent/Rattler gameplay
+and normal/compatibility builds pass. Default CHANGING min/max behavior,
+minimized/maximized size classifications and native Win98 event comparison
+remain open alongside far synchronous paint.

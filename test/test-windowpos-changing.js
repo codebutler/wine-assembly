@@ -355,6 +355,12 @@ const extraWat = String.raw`
     'NOSENDCHANGING commits the original insertion target');
   assert.strictEqual(read(INSERT_AFTER), 0);
 
+  clearObserved();
+  zorders.length = 0;
+  assert.strictEqual(e.test_call_MoveWindow(zhwnd, 3, 4, 50, 60, 1), 1);
+  assert.deepStrictEqual(zorders, [{ hwnd: zhwnd, after: 1 }],
+    'MoveWindow also honors callback-enabled Z-order and the replacement target');
+
   const retired = e.test_make_window(proc) >>> 0;
   e.test_retire(retired);
   for (const invalid of [0, 0x76543210, retired]) {
@@ -367,6 +373,11 @@ const extraWat = String.raw`
     assert.deepStrictEqual(moves, [], 'invalid target never reaches host geometry');
     assert.deepStrictEqual(zorders, [], 'invalid target never reaches host Z-order');
     assert.deepStrictEqual(messages(), [], 'invalid target receives no notification');
+    assert.strictEqual(e.test_call_MoveWindow(invalid, 1, 2, 30, 40, 1), 0);
+    assert.strictEqual(e.test_last_error(), 1400);
+    assert.deepStrictEqual(moves, [], 'invalid MoveWindow target never reaches geometry');
+    assert.deepStrictEqual(zorders, [], 'invalid MoveWindow target never reaches Z-order');
+    assert.deepStrictEqual(messages(), []);
   }
 
   console.log('PASS  WINDOWPOS changing/changed mutation and DefWindowProc geometry semantics');

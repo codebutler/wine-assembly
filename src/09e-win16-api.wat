@@ -8592,7 +8592,7 @@
 
   ;; Far WINDOWPOS transaction: 60 bytes on the task stack, followed by the
   ;; ordinary six-byte return continuation. Private header {hwnd,flags,stage,
-  ;; reserved} is followed by WINDOWPOS16 at +16 and result WINDOWPOS32 at +32.
+  ;; is_move} is followed by WINDOWPOS16 at +16 and result WINDOWPOS32 at +32.
   ;; The callback only owns the 14-byte structure, never our target or stage.
   (global $WIN16_CONT_WINDOWPOS i32 (i32.const 0xFFA4))
   (func $win16_windowpos_pointer (param $sp i32) (result i32)
@@ -8603,6 +8603,7 @@
   (func $win16_windowpos_continue
     (local $sp i32) (local $hwnd i32) (local $flags i32) (local $after i32)
     (local $ok i32) (local $proc i32) (local $i i32)
+    (local $x i32) (local $y i32) (local $cx i32) (local $cy i32)
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (local.set $hwnd (call $gl32 (local.get $sp)))
     (if (i32.eqz (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
@@ -8612,13 +8613,18 @@
           (i32.and (call $gl32 (i32.add (local.get $sp) (i32.const 4))) (i32.const 0x0210))))
         (local.set $after (call $win16_position_insert_after
           (call $gl16 (i32.add (local.get $sp) (i32.const 18))) (local.get $flags)))
+        (local.set $x (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 20)))))
+        (local.set $y (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 22)))))
+        (local.set $cx (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 24)))))
+        (local.set $cy (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 26)))))
         (call $win16_call32_begin (i32.const 0))
-        (local.set $ok (call $set_window_pos_core (local.get $hwnd) (local.get $after)
-          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 20))))
-          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 22))))
-          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 24))))
-          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 26))))
-          (local.get $flags) (i32.add (local.get $sp) (i32.const 32))))
+        (local.set $ok (if (result i32) (call $gl32 (i32.add (local.get $sp) (i32.const 12)))
+          (then (call $move_window_core (local.get $hwnd) (local.get $after)
+            (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
+            (local.get $flags) (i32.add (local.get $sp) (i32.const 32))))
+          (else (call $set_window_pos_core (local.get $hwnd) (local.get $after)
+            (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
+            (local.get $flags) (i32.add (local.get $sp) (i32.const 32))))))
         (call $win16_call32_end)
         (call $gs16 (i32.add (local.get $sp) (i32.const 60)) (local.get $ok))
         (if (local.get $ok)
@@ -8646,22 +8652,27 @@
             (drop (call $wnd_send_message (local.get $hwnd) (i32.const 0x47)
               (i32.const 0) (i32.add (local.get $sp) (i32.const 32))))))))
     (if (call $gl16 (i32.add (local.get $sp) (i32.const 60)))
-      (then (call $windowpos_finish_paint (local.get $hwnd)
-        (call $gl32 (i32.add (local.get $sp) (i32.const 56))))))
+      (then
+        (local.set $flags (call $gl32 (i32.add (local.get $sp) (i32.const 56))))
+        (if (call $gl32 (i32.add (local.get $sp) (i32.const 12)))
+          (then (call $move_window_finish (local.get $hwnd) (local.get $flags)))
+          (else (call $windowpos_finish_paint (local.get $hwnd) (local.get $flags))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 60)))
     (call $win16_cont_resume))
 
   (func $win16_windowpos_begin
     (param $hwnd16 i32) (param $after i32) (param $x i32) (param $y i32)
-    (param $cx i32) (param $cy i32) (param $flags i32)
+    (param $cx i32) (param $cy i32) (param $flags i32) (param $is_move i32)
     (local $sp i32) (local $hwnd i32)
     (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
-    (call $win16_cont_push (call $win16_take_return (i32.const 14)) (i32.const 1))
+    (call $win16_cont_push
+      (call $win16_take_return (select (i32.const 12) (i32.const 14) (local.get $is_move))) (i32.const 1))
     (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 60)))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (call $gs32 (local.get $sp) (local.get $hwnd))
     (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $flags))
     (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (local.get $is_move))
     (call $gs16 (i32.add (local.get $sp) (i32.const 16)) (local.get $hwnd16))
     (call $gs16 (i32.add (local.get $sp) (i32.const 18)) (local.get $after))
     (call $gs16 (i32.add (local.get $sp) (i32.const 20)) (local.get $x))
@@ -8700,7 +8711,7 @@
     (if (call $win16_is_far_proc (call $wnd_table_get (local.get $hwnd)))
       (then
         (call $win16_windowpos_begin (local.get $hwnd16) (local.get $after)
-          (local.get $x) (local.get $y) (local.get $cx) (local.get $cy) (local.get $flags))
+          (local.get $x) (local.get $y) (local.get $cx) (local.get $cy) (local.get $flags) (i32.const 0))
         (return)))
     (local.set $after (call $win16_position_insert_after (local.get $after) (local.get $flags)))
     (call $win16_call32_begin (i32.const 7))
@@ -9415,16 +9426,11 @@
   ;; 1x1 -- which is exactly what every VB1 game did here: sixty-two windows
   ;; built, a form shown, and nothing on screen.
   ;;
-  ;; The delivery uses the same continuation the create path uses: this frame
-  ;; goes now, the result and the caller's return address go on the stack in
-  ;; its place, and the procedure's RETF 10 lands on the continuation thunk,
-  ;; which puts the 1 back in AX and returns where MoveWindow was going to.
-  ;; $handle_MoveWindow leaves the queue alone for these windows (see the
-  ;; $code16 arm there) so the procedure hears about the size exactly once.
+  ;; Share the SetWindowPos far transaction, with MoveWindow's initial flags,
+  ;; six Pascal arguments, and its own post-CHANGED repaint completion.
   (func $win16_MoveWindow
     (local $hwnd i32) (local $x i32) (local $y i32) (local $w i32)
     (local $h i32) (local $repaint i32) (local $hwnd16 i32)
-    (local $proc i32) (local $cs i32) (local $old_cs i32)
     (local.set $hwnd16 (call $win16_arg16 (i32.const 5)))
     (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
     (local.set $x (call $win16_coord (call $win16_arg16 (i32.const 4))))
@@ -9432,25 +9438,17 @@
     (local.set $w (call $win16_coord (call $win16_arg16 (i32.const 2))))
     (local.set $h (call $win16_coord (call $win16_arg16 (i32.const 1))))
     (local.set $repaint (call $win16_arg16 (i32.const 0)))
-    (local.set $proc (call $wnd_table_get (local.get $hwnd)))
-    (local.set $old_cs (call $host_get_window_client_size (local.get $hwnd)))
+    (if (call $win16_is_far_proc (call $wnd_table_get (local.get $hwnd)))
+      (then
+        (call $win16_windowpos_begin (local.get $hwnd16) (i32.const 0)
+          (local.get $x) (local.get $y) (local.get $w) (local.get $h)
+          (select (i32.const 0x14) (i32.const 0x1c) (local.get $repaint)) (i32.const 1))
+        (return)))
     (call $win16_call32_begin (i32.const 6))
     (call $win16_call32_arg (i32.const 5) (local.get $repaint))
     (call $handle_MoveWindow (local.get $hwnd) (local.get $x) (local.get $y)
       (local.get $w) (local.get $h) (i32.const 0))
     (call $win16_call32_end)
-    (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
-    (if (i32.and
-          (call $win16_is_far_proc (local.get $proc))
-          (i32.ne (local.get $cs) (local.get $old_cs)))
-      (then
-        (call $win16_cont_push
-          (call $win16_take_return (i32.const 12)) (i32.const 1))
-        (call $win16_enter_wndproc (local.get $proc) (local.get $hwnd16)
-          (i32.const 0x0005) (i32.const 0) (local.get $cs)
-          (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_OFFSET))
-        (return)))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; USER.85 DrawText(hDC, lpString, nCount, lpRect, wFormat).

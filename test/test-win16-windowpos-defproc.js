@@ -54,6 +54,19 @@ const extraWat = `
     (call $gs16 (i32.const 0x11080e) (i32.const 0))
     (call $gs16 (i32.const 0x110810) (call $win16_h16 (local.get $h)))
     (call $win16_SetWindowPos))
+  (func (export "test_move") (param $h i32) (param $repaint i32) (param $caller i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (local.get $caller))
+    (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
+    (call $gs16 (i32.const 0x110804) (local.get $repaint))
+    (call $gs16 (i32.const 0x110806) (i32.const 40))
+    (call $gs16 (i32.const 0x110808) (i32.const 30))
+    (call $gs16 (i32.const 0x11080a) (i32.const 2))
+    (call $gs16 (i32.const 0x11080c) (i32.const 1))
+    (call $gs16 (i32.const 0x11080e) (call $win16_h16 (local.get $h)))
+    (call $win16_MoveWindow))
+  (func (export "test_dirty") (param $h i32) (result i32)
+    (call $update_get_rect (local.get $h) (i32.const 0)))
 `;
 
 // Pascal far wndproc, recording {message,wParam,lParam} into SS:0904.
@@ -84,6 +97,10 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
       moves.push({ hwnd, x, y, w, h, flags });
     },
     set_window_zorder: (hwnd, after) => orders.push([hwnd, after]),
+    get_window_client_size: hwnd => {
+      const r = rectangles.get(hwnd) || [-20, -30, 200, 300];
+      return pack(r[2] - r[0], r[3] - r[1]);
+    },
   }});
   const view = new DataView(memory.buffer);
   e.test_init();
@@ -146,16 +163,16 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   writeCode(0x400, recorder(mutateChanging));
   writeCode(0x500, recorder([...mutateChanging, ...chainChanged]));
   const consuming = e.test_window(0x400), chaining = e.test_window(0x500);
-  const runSet = (target, flags, caller, result = 1) => {
+  const runSet = (target, flags, caller, result = 1, isMove = false) => {
     e.guest_write32(0x110900, 0); moves.length = 0; orders.length = 0;
     writeCode(caller, [0xeb, 0xfe]);
-    e.test_set(target, flags, caller);
-    if (!(flags & 0x400)) assert.deepStrictEqual(moves, [], 'changing runs before any geometry is committed');
+    (isMove ? e.test_move : e.test_set)(target, flags, caller);
+    if (isMove || !(flags & 0x400)) assert.deepStrictEqual(moves, [], 'changing runs before any geometry is committed');
     e.set_bp(0x100000 + caller);
     for (let i = 0; e.get_eip() !== 0x100000 + caller && i < 30; i++) e.run(100);
     e.set_bp(0);
     assert.strictEqual(e.get_eip(), 0x100000 + caller);
-    assert.strictEqual(e.get_esp(), 0x110812, 'SetWindowPos continuation and Pascal frame restored');
+    assert.strictEqual(e.get_esp(), isMove ? 0x110810 : 0x110812, 'positioning continuation and Pascal frame restored');
     assert.strictEqual(e.test_result(), result);
     return Array.from({ length: e.guest_read32(0x110900) }, (_, i) => e.guest_read32(0x110904 + i * 8) & 0xffff);
   };
@@ -197,5 +214,30 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert(!destroyedMessages.includes(0x47), 'destroying the target during changing cancels changed');
   assert.deepStrictEqual(moves, [], 'destroyed target is never moved');
   assert.deepStrictEqual(orders, [], 'destroyed target is never reordered');
+  const moveConsuming = e.test_window(0x400), moveChaining = e.test_window(0x500);
+  assert.deepStrictEqual(runSet(moveConsuming, 1, 0x100, 1, true), [0x46, 0x47], 'MoveWindow allows consuming CHANGED');
+  assert.deepStrictEqual(moves, [{ hwnd: moveConsuming, x: -7, y: -9, w: 53, h: 64, flags: 0x18 }]);
+  assert.deepStrictEqual(orders, [[moveConsuming, 1]], 'MoveWindow honors callback-enabled Z-order');
+  assert.deepStrictEqual(runSet(moveChaining, 1, 0x110, 1, true), [0x46, 0x47, 3, 5]);
+  const mixedOuter = e.test_window(0x600);
+  assert.deepStrictEqual(runSet(mixedOuter, 1, 0x170, 1, true), [0x46, 0x46, 0x47, 0x47],
+    'MoveWindow retains its own mode across a nested SetWindowPos');
+  assert.deepStrictEqual(moves.map(move => move.hwnd), [consuming, mixedOuter]);
+  writeCode(0x800, recorder(chainChanged));
+  const noRepaint = e.test_window(0x800), repaint = e.test_window(0x800);
+  assert.deepStrictEqual(runSet(noRepaint, 0, 0x120, 1, true), [0x46, 0x47, 3, 5]);
+  assert.strictEqual(moves[0].flags, 0x1c, 'MoveWindow(FALSE) begins with NOREDRAW');
+  assert.strictEqual(e.test_dirty(noRepaint), 0, 'NOREDRAW creates no update region');
+  assert.deepStrictEqual(runSet(repaint, 1, 0x130, 1, true), [0x46, 0x47, 3, 5]);
+  assert.strictEqual(moves[0].flags, 0x14, 'MoveWindow(TRUE) enables repaint');
+  // This verifies repaint flags, not synchronous far WM_PAINT delivery;
+  // UpdateWindow's separate Win16 paint limitation is still open.
+  const moveDoomed = e.test_window(0x700);
+  assert(!runSet(moveDoomed, 1, 0x140, 0, true).includes(0x47));
+  assert.deepStrictEqual(moves, [], 'destroyed MoveWindow target is not committed');
+  for (const [i, target] of [0, 0x76543210].entries()) {
+    assert.deepStrictEqual(runSet(target, 1, 0x150 + i * 16, 0, true), []);
+    assert.deepStrictEqual(moves, [], 'native bridge preserves invalid MoveWindow failure');
+  }
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

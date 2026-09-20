@@ -1471,25 +1471,39 @@
   ;; aspect ratio from WM_SIZE by calling MoveWindow with the dimensions they
   ;; already have; repeating the message would recurse forever.
   (func $handle_MoveWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $cx i32) (local $cy i32) (local $cs i32) (local $old_cs i32) (local $dlg_rec i32)
+    (local $flags i32)
+    (local.set $flags (select (i32.const 0x14) (i32.const 0x1c)
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $move_window_core (local.get $arg0) (i32.const 0)
+        (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+        (local.get $flags) (i32.const 0))))
+
+  ;; External result ownership has the same contract as set_window_pos_core:
+  ;; the far caller owns CHANGING/CHANGED and invokes finish after CHANGED.
+  (func $move_window_core
+    (param $arg0 i32) (param $insert_after i32)
+    (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32)
+    (param $flags i32) (param $result_pos i32) (result i32)
+    (local $cx i32) (local $cy i32) (local $cs i32) (local $old_cs i32)
     (local $x i32) (local $y i32) (local $old_xy i32) (local $new_xy i32)
-    (local $flags i32) (local $original_flags i32) (local $repaint i32)
-    (local $insert_after i32) (local $windowpos i32)
+    (local $original_flags i32) (local $windowpos i32)
+    (if (i32.or (i32.eqz (local.get $arg0))
+          (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)))
+      (then (global.set $last_error (i32.const 1400)) (return (i32.const 0))))
     (local.set $x (local.get $arg1))
     (local.set $y (local.get $arg2))
     (local.set $cx (local.get $arg3))
     (local.set $cy (local.get $arg4))
-    (local.set $repaint (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (local.set $flags (i32.const 0x0014)) ;; SWP_NOZORDER | SWP_NOACTIVATE
-    (if (i32.eqz (local.get $repaint))
-      (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x0008))))) ;; SWP_NOREDRAW
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (local.set $original_flags (local.get $flags))
-    (local.set $windowpos (call $windowpos_message_begin
-      (local.get $arg0) (local.get $insert_after)
-      (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
-      (local.get $flags)))
-    (if (local.get $windowpos)
+    (local.set $windowpos (local.get $result_pos))
+    (if (i32.eqz (local.get $result_pos))
+      (then (local.set $windowpos (call $windowpos_message_begin
+        (local.get $arg0) (local.get $insert_after)
+        (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
+        (local.get $flags)))))
+    (if (i32.and (i32.ne (local.get $windowpos) (i32.const 0)) (i32.eqz (local.get $result_pos)))
       (then
         (local.set $insert_after
           (call $gl32 (i32.add (local.get $windowpos) (i32.const 4))))
@@ -1511,14 +1525,14 @@
           (then
             (call $windowpos_message_cancel (local.get $windowpos))
             (global.set $last_error (i32.const 1400))
-            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-            (return)))))
-    (local.set $repaint
-      (i32.eqz (i32.and (local.get $flags) (i32.const 0x0008))))
+            (return (i32.const 0))))))
     (local.set $old_cs (call $host_get_window_client_size (local.get $arg0)))
     (local.set $old_xy (call $window_xy_packed (local.get $arg0)))
     (call $host_move_window (local.get $arg0) (local.get $x) (local.get $y)
       (local.get $cx) (local.get $cy) (local.get $flags))
+    (if (i32.and (i32.eqz (i32.and (local.get $flags) (i32.const 4)))
+          (i32.eqz (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000))))
+      (then (call $host_set_window_zorder (local.get $arg0) (local.get $insert_after))))
     (call $ctrl_geom_sync (local.get $arg0) (local.get $x) (local.get $y)
       (local.get $cx) (local.get $cy) (local.get $flags))
     (call $defwndproc_do_nccalcsize (local.get $arg0))
@@ -1544,7 +1558,17 @@
       (local.get $windowpos) (local.get $arg0) (local.get $insert_after)
       (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
       (local.get $flags))
-    (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
+    (if (i32.eqz (local.get $result_pos))
+      (then
+        (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
+        (call $move_window_finish (local.get $arg0) (local.get $flags))))
+    (i32.const 1))
+
+  (func $move_window_finish (param $arg0 i32) (param $flags i32)
+    (local $dlg_rec i32) (local $repaint i32) (local $cs i32)
+    (if (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)) (then (return)))
+    (local.set $repaint (i32.eqz (i32.and (local.get $flags) (i32.const 8))))
+    (local.set $cs (call $host_get_window_client_size (local.get $arg0)))
     (local.set $dlg_rec (call $dlg_record_for_hwnd (local.get $arg0)))
     (call $windowpos_queue_ncpaint (local.get $arg0) (local.get $flags))
     (if (i32.and
@@ -1560,13 +1584,13 @@
     ;; exactly this; using the stale 0x0 create size moves its controls offscreen.
     (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
     (then
-	      (if (i32.ne (local.get $cs) (local.get $old_cs))
+	      (if (i32.eqz (i32.and (local.get $flags) (i32.const 1)))
 	        (then
 	          (global.set $pending_wm_size (local.get $cs))
 	          (if (local.get $repaint)
 	            (then (call $invalidate_hwnd (local.get $arg0)))))))
 	    (else
-	      (if (i32.ne (local.get $cs) (local.get $old_cs))
+	      (if (i32.eqz (i32.and (local.get $flags) (i32.const 1)))
 	        (then
 	          (if (local.get $repaint)
 	            (then (call $invalidate_hwnd (local.get $arg0))))
@@ -1583,8 +1607,6 @@
     ;; Share the paint core without invoking a second API's stdcall epilogue.
     (if (local.get $repaint)
       (then (call $update_window_now (local.get $arg0))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-    (return)
   )
 
  123: CheckRadioButton(hDlg, firstId, lastId, checkId) — clear all in
