@@ -54,11 +54,32 @@ if (!puppeteer || !CHROME) {
   console.log('SKIP  no Chrome or no puppeteer (set CHROME=)');
   process.exit(0);
 }
-H.budget(arg('timeout', 420) * 1000);
+// The host's walk through EINSTELLUNGEN and the two held keys cost about a
+// minute between them on top of the lobby and the slowdown phases.
+H.budget(arg('timeout', 600) * 1000);
 fs.mkdirSync(OUT, { recursive: true });
 H.clearPngs(OUT);
 
-const DOWN = 40, UP = 38, ENTER = 13;
+const DOWN = 40, UP = 38, ENTER = 13, ESC = 27, LEFT = 37, RIGHT = 39;
+const A = 65, D = 68, W = 87;
+
+// Player one is the host and player two is the client (Instructions.txt 3.4),
+// and the shipped config makes player one the COMPUTER on a keyboard layout
+// that is not A/D/W -- so a hosting human has no controls at all and its blob
+// only twitches when the AI reacts to the ball. That is a game setting, not
+// something this emulator decides, but a match where one side cannot move is
+// not a match, so the host walks through EINSTELLUNGEN first: player one onto
+// the keyboard, then TASTEN DEFINIEREN to bind A/D/W (and the arrow keys for
+// player two) by name instead of trusting the defaults.
+//   settings -> STEUERUNG 1 -> TASTATUR -> TASTEN DEFINIEREN -> six keys
+//   -> ESC lands back on the main menu with EINSTELLUNGEN still selected
+const HOST_SETUP = [
+  DOWN, DOWN, DOWN, ENTER,
+  DOWN, DOWN, ENTER, ENTER, ENTER,
+  DOWN, DOWN, DOWN, ENTER,
+  A, D, W, LEFT, RIGHT, UP,
+  ESC,
+];
 
 const wireOf = () => {
   const w = runningApps[0] && runningApps[0].wine.vlanWire;
@@ -118,6 +139,39 @@ const frameHash = () => {
   return h >>> 0;
 };
 
+// Where each player's blob is, as a fraction of the court's width.
+//
+// frameHash above answers "is anything moving", and that is not the same
+// question: the ball keeps moving while a player is stuck, so a match with
+// one dead blob passes every frame-hash check in this file. This one names
+// the players separately. Red is player one (the host), green is player two
+// (the client). The band is a fraction of the canvas rather than pixels
+// because the CLI renders 640x480 and the browser 800x600; it starts below
+// the palms, which are exactly as green as player two, and below the score,
+// which is exactly as red as player one.
+const blobsAt = (band) => {
+  const win = Object.values(sharedRenderer.windows || {})
+    .filter(w => w && w.visible && !w.isChild)
+    .sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  if (!win) return null;
+  const surface = sharedRenderer.getWindowCanvas(win.hwnd);
+  if (!surface || !surface.canvas) return null;
+  const c = surface.canvas;
+  const y0 = Math.floor(c.height * band[0]);
+  const y1 = Math.floor(c.height * band[1]);
+  const d = surface.ctx.getImageData(0, y0, c.width, y1 - y0).data;
+  const near = (i, r, g, b) => Math.abs(d[i] - r) <= 70
+    && Math.abs(d[i + 1] - g) <= 70 && Math.abs(d[i + 2] - b) <= 70;
+  const acc = { red: { n: 0, x: 0 }, green: { n: 0, x: 0 } };
+  for (let i = 0; i < d.length; i += 4) {
+    const x = (i / 4) % c.width;
+    if (near(i, 200, 30, 30)) { acc.red.n++; acc.red.x += x; }
+    else if (near(i, 30, 210, 30)) { acc.green.n++; acc.green.x += x; }
+  }
+  const of = (a) => (a.n < 100 ? null : a.x / a.n / c.width);
+  return { red: of(acc.red), green: of(acc.green) };
+};
+
 (async () => {
   const server = createServer({ quiet: true });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -170,7 +224,18 @@ const frameHash = () => {
     // the lobby, and it parks until the lobby answers.
     await H.sleep(MENU_MS);
     await snap(host, 'host-menu');
-    await keys(host.page, [DOWN, ENTER, ENTER, DOWN, DOWN, ENTER]);
+    // ESC leaves the settings screen with EINSTELLUNGEN still selected on the
+    // main menu, so the walk to NETZWERKSPIEL from there is UP UP, not DOWN.
+    // --no-host-setup is the negative control: it leaves the shipped config
+    // alone, which is the state two people testing by hand are actually in.
+    // The player-one checks below must FAIL there, or they are checking
+    // nothing -- verified, they do.
+    if (!flag('no-host-setup')) await keys(host.page, HOST_SETUP);
+    await snap(host, 'host-settings');
+    // From EINSTELLUNGEN (where ESC leaves the cursor) NETZWERKSPIEL is two
+    // up; from a menu nobody has touched it is one down.
+    const toNetwork = flag('no-host-setup') ? [DOWN] : [UP, UP];
+    await keys(host.page, [...toNetwork, ENTER, ENTER, DOWN, DOWN, ENTER]);
     await keys(guest.page, [DOWN, ENTER, DOWN, ENTER, DOWN, DOWN, ENTER]);
 
     const peerRows = ({ page }) => page.evaluate(
@@ -207,6 +272,63 @@ const frameHash = () => {
       && b[i].sent - a[i].sent > 10 && b[i].recv - a[i].recv > 10);
     check('game records stream both ways (the match is running)', flowing,
       JSON.stringify({ a, b }));
+
+    // ---- both players can actually play ----------------------------------
+    //
+    // Frames crossing is not a match, and neither is a moving picture: the
+    // ball keeps moving while a player is stuck, which is what a real pair of
+    // testers hit -- one blob answered the keyboard and the other did not.
+    // So drive each side from its OWN keyboard and read the two blobs apart
+    // on BOTH screens. A player is played across the wire when the machine
+    // that never saw the key agrees about where that blob went.
+    const BAND = [0.64, 0.98];
+    const read = p => p.page.evaluate(blobsAt, BAND);
+    const hold = async (p, vk, ms) => {
+      await p.page.evaluate(k => sharedRenderer.handleKeyDown(k), vk);
+      await H.sleep(ms);
+      const seen = { host: await read(host), guest: await read(guest) };
+      await p.page.evaluate(k => sharedRenderer.handleKeyUp(k), vk);
+      await H.sleep(1500);
+      return seen;
+    };
+    // Held, not tapped, and photographed with the key still down: a released
+    // blob drifts, and two machines sampled mid-drift disagree about time
+    // rather than about the game.
+    const rest = { host: await read(host), guest: await read(guest) };
+    const pushed = await hold(host, A, 3000);      // host drives player one
+    const pulled = await hold(guest, RIGHT, 3000); // guest drives player two
+
+    const MOVED = 0.04;   // a blob is about 0.08 of the court wide
+    const AGREE = 0.03;
+    const shift = (from, to, who) => (from && to && from[who] !== null
+      && to[who] !== null) ? to[who] - from[who] : null;
+    const fmt = v => (v === null || v === undefined ? 'gone' : v.toFixed(3));
+    console.log(`  player one (host's own): ${fmt(rest.host.red)} ->`
+      + ` ${fmt(pushed.host.red)} on its own screen, ${fmt(pushed.guest.red)} on its peer's`);
+    console.log(`  player two (guest's own): ${fmt(rest.guest.green)} ->`
+      + ` ${fmt(pulled.guest.green)} on its own screen, ${fmt(pulled.host.green)} on its peer's`);
+
+    const oneHere = shift(rest.host, pushed.host, 'red');
+    const oneThere = shift(rest.guest, pushed.guest, 'red');
+    check('the HOST can move its own player (the half that was stuck)',
+      oneHere !== null && oneHere < -MOVED, `moved ${fmt(oneHere)}`);
+    check('and the peer that never saw that key saw it move the same way',
+      oneThere !== null && oneThere < -MOVED, `moved ${fmt(oneThere)}`);
+    check('both screens agree where player one is',
+      pushed.host.red !== null && pushed.guest.red !== null
+        && Math.abs(pushed.host.red - pushed.guest.red) < AGREE);
+
+    const twoHere = shift(pushed.guest, pulled.guest, 'green');
+    const twoThere = shift(pushed.host, pulled.host, 'green');
+    check('the GUEST can move its own player', twoHere !== null && twoHere > MOVED,
+      `moved ${fmt(twoHere)}`);
+    check('and its peer saw that one move too', twoThere !== null && twoThere > MOVED,
+      `moved ${fmt(twoThere)}`);
+    check('both screens agree where player two is',
+      pulled.host.green !== null && pulled.guest.green !== null
+        && Math.abs(pulled.host.green - pulled.guest.green) < AGREE);
+    await snap(host, 'host-played');
+    await snap(guest, 'guest-played');
 
     // ---- the two machines are not the same machine -----------------------
     //
