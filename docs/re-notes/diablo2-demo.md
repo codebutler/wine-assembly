@@ -411,6 +411,78 @@ where the seed sets `Render` = DWORD 1 under both the HKCU and HKLM key.
 path is what the app uses today and it works. Both failures below are on the
 `Render=1` route only.
 
+### How the value is decoded (disassembly, 2026-09-20)
+
+Two separate numbering schemes are involved, and conflating them is the trap.
+
+**The EXE turns `Render` into a flag byte.** `RegQueryValueEx` of the `Render`
+name (string at `0x005a6e08`, its only xref) returns into a local, and the
+value is then range-checked and dispatched:
+
+```
+00401b56  mov  ecx, [esp+0x10]          ; the Render DWORD
+00401b5a  lea  eax, [ecx-0x1]
+00401b5d  cmp  eax, 3
+00401b60  ja   0x401b8f                 ; outside 1..4 -> leave every flag clear
+00401b62  jmp  [0x401bbc+eax*4]         ; 4 entries: 401b69 401b73 401b7d 401b87
+```
+
+Each arm sets one byte of a five-byte flag block and falls straight out:
+`Render` 1 -> `[esp+0x167]`, 2 -> `[esp+0x166]`, 3 -> `[esp+0x165]`,
+4 -> `[esp+0x164]`. So the byte written is `[esp+0x168] - Render` — the block
+is indexed in descending address order, which is why it does not read as an
+array at a glance.
+
+That also explains the two "none" rows in the table above without needing a
+second measurement: `Render` = 0 fails the `cmp eax,3` unsigned check (it
+wraps to `0xFFFFFFFF`) and sets nothing at all, so the game keeps the
+DirectDraw default.
+
+The same block is read back at `0x401a90` *before* the registry is consulted —
+bytes `0x165`, `0x164`, `0x166` and `0x168` are each tested and any one of them
+set jumps past the registry read entirely. Those are the command-line
+overrides, which is why a switch beats the registry rather than merging with
+it. The switch names live in a table of `{UPPER, lower, group, id}` records at
+`0x005a60e0` (`3DFX`/`3dfx`, `OPENGL`/`opengl`, `D3D`/`d3d`, ... all in group
+`VIDEO`), and its ids are **not** `Render` values — do not read the mapping off
+that table.
+
+**D2gfx has its own, different numbering.** The backend DLL name is fetched in
+`d2gfx.dll` at `0x1000381a`:
+
+```
+10003817  mov  eax, [0x1000d1bc+edi*4]  ; edi = video mode
+1000381e  cmp  eax, ebx                 ; ebx = 0
+10003826  jnz  short 0x10003841
+10003829  push 0x1000d2cc               ; "Unsupported video mode - %d"
+```
+
+The name table at `0x1000d1bc` is sparse, and its indices are the *video mode*,
+not `Render`:
+
+| index | `[0x1000d1bc + i*4]` |
+|---:|---|
+| 0 | NULL |
+| 1 | `D2Gdi.dll` |
+| 2 | NULL |
+| 3 | `D2DDraw.dll` |
+| 4 | `D2Glide.dll` |
+| 5 | NULL |
+| 6 | `D2Direct3D.dll` |
+
+A NULL entry is the error path above, not a fallback. Three function pointers
+sit immediately before the names at `0x1000d1b0` (`0x100029e0`, `0x10002ba0`,
+`0x10002de0`), and the selected mode is published to `[0x1001c048]`.
+
+**Reading which backend won, at runtime.** `d2ddraw.dll` is in the app's static
+import set, so it is loaded on every route and grepping a log for it proves
+nothing — the choice appears only as a runtime `LoadLibrary` of
+`d2direct3d.dll` / `d2glide.dll` / `d2gdi.dll`. That load also happens well
+after the first frames: it is absent from a 130-batch run even on a seed that
+demonstrably ends up in Direct3D, so any probe short of the menu reports
+"DirectDraw" for every value. Give it the full 20000-batch run in the repro
+above before believing a row.
+
 ### Our 8 MB video-memory report makes the game wipe its own code
 
 With the stock report, `Render=1` dies at ~batch 3380 executing zeros at
