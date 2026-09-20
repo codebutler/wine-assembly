@@ -1118,3 +1118,27 @@ The paired artifact passes WinRAR's Worker browser file-drop test
 (`wa-owner-rank-browser.log`). The DirectX owner subsequently reported fixing
 the field access and a full build passing at 14:26 in the messageboard. That
 is the other agent's build report, not a rerun of the failed build logged here.
+
+### Win16 activation rank integration (2026-09-20)
+
+`$win16_activate_start` now calls the same `$wnd_z_raise_owner_group` as the
+Win32 transaction, before its already-active early return. Far notification
+frames and callback ordering remain unchanged; no separate Win16 owner walk
+or host policy was added.
+
+The real far-call matrix now checks A/B rank changes and reasserts the active
+window after creating another above it. Reassertion raises the target without
+duplicate activation/focus notifications. The unmodified runtime fails the
+first rank assertion (`/private/tmp/wa-win16-rank-before.log`); the updated
+runtime passes the full matrix (`/private/tmp/wa-win16-rank-after.log`),
+including nested activation, destruction and stack restoration.
+
+This closes the Win16 activation rank gap identified above, not the remaining
+direct input/taskbar paths or hide/minimize successor selection. Native Win98
+reference traces and desktop-wide cross-app order are still separate work.
+
+Verification: full build gates and both normal/compatibility artifacts pass
+with layout `e6a915eaedf6cf03` (`/private/tmp/wa-win16-rank-build.log`). All
+seven WEP3 first-action gameplay cases pass against the completed normal
+artifact (`/private/tmp/wa-win16-rank-wep3.log`). This gameplay check is
+headless, not a new browser or native-reference measurement.

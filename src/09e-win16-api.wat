@@ -7494,6 +7494,9 @@
     (local.set $previous (global.get $active_hwnd))
     (if (i32.lt_s (call $wnd_table_find (local.get $previous)) (i32.const 0))
       (then (local.set $previous (i32.const 0))))
+    ;; Share owner-group ordering with Win32, including an already-active
+    ;; target. Only the notification continuation differs for far callbacks.
+    (call $wnd_z_raise_owner_group (local.get $target))
     (if (i32.eq (local.get $previous) (local.get $target))
       (then (call $win16_cont_resume) (return)))
     (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))

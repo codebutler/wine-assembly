@@ -43,6 +43,7 @@ const extraWat = `
     (call $win16_DefWindowProc))
   (func (export "test_result") (result i32) (i32.load (global.get $reg_base)))
   (func (export "test_active") (result i32) (global.get $active_hwnd))
+  (func (export "test_rank") (param $h i32) (result i32) (call $wnd_z_get (local.get $h)))
   (func (export "test_focus") (result i32) (global.get $focus_hwnd))
   (func (export "test_reset_activation")
     (global.set $active_hwnd (i32.const 0)) (global.set $focus_hwnd (i32.const 0)))
@@ -571,11 +572,18 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.deepStrictEqual(runShow(activeA, 5, 0x90, true), [6, 7]);
   assert.strictEqual(e.test_active(), activeA);
   assert.strictEqual(e.test_focus(), activeA);
+  assert(e.test_rank(activeA) > e.test_rank(activeB), 'activation raises A above B');
   assert.deepStrictEqual(runShow(activeB, 5, 0x90, true), [6, 6, 8, 7]);
   assert.strictEqual(e.guest_read32(0x110908), e.test_narrow(activeB));
   assert.strictEqual(e.guest_read32(0x110910), e.test_narrow(activeA));
   assert.strictEqual(e.test_active(), activeB);
   assert.strictEqual(e.test_focus(), activeB);
+  assert(e.test_rank(activeB) > e.test_rank(activeA), 'activation raises B above A');
+  const aboveActive = e.test_window(0x5000);
+  assert(e.test_rank(aboveActive) > e.test_rank(activeB));
+  assert.deepStrictEqual(runShow(activeB, 5, 0x90, true), [],
+    'reasserting activation does not resend activation/focus notifications');
+  assert(e.test_rank(activeB) > e.test_rank(aboveActive), 'same active window is raised again');
   for (const mode of [4, 7, 8]) {
     runShow(activeA, mode, 0x90, true);
     assert.strictEqual(e.test_active(), activeB, `show mode ${mode} must not activate`);
