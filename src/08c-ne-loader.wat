@@ -1116,7 +1116,10 @@
             (i32.and (local.get $module) (i32.const 0xFFFF)))))))))
     (global.get $WIN16_DLL_STAGING_STRIDE))
 
-  (func $win16_image_ne_off (result i32)
+  ;; Resolve the current code selector once per lookup. Both image metadata
+  ;; accessors must use the same module bounds, loaded flag and scan order.
+  ;; Zero means the task image, whose metadata lives outside the DLL records.
+  (func $win16_current_image_record (result i32)
     (local $index i32) (local $id i32) (local $rec i32) (local $n i32) (local $base i32)
     (local.set $index (call $win16_sel_to_index (global.get $sreg_cs)))
     (local.set $id (i32.const 1))
@@ -1130,29 +1133,24 @@
             (i32.and (i32.gt_u (local.get $index) (local.get $base))
                      (i32.le_u (local.get $index)
                                (i32.add (local.get $base) (local.get $n)))))
-        (then (return (i32.load (local.get $rec)))))
+        (then (return (local.get $rec))))
       (local.set $id (i32.add (local.get $id) (i32.const 1)))
       (br $scan)))
-    (global.get $win16_ne_off))
+    (i32.const 0))
+
+  (func $win16_image_ne_off (result i32)
+    (local $rec i32)
+    (local.set $rec (call $win16_current_image_record))
+    (if (result i32) (local.get $rec)
+      (then (i32.load (local.get $rec)))
+      (else (global.get $win16_ne_off))))
 
   (func $win16_image_base_addr (result i32)
-    (local $index i32) (local $id i32) (local $rec i32) (local $n i32) (local $base i32)
-    (local.set $index (call $win16_sel_to_index (global.get $sreg_cs)))
-    (local.set $id (i32.const 1))
-    (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $id)
-        (i32.add (global.get $WIN16_DYNAMIC_BASE) (global.get $WIN16_DYNAMIC_MODULES))))
-      (local.set $rec (call $win16_dll_rec (local.get $id)))
-      (local.set $n (i32.load offset=12 (local.get $rec)))
-      (local.set $base (i32.load offset=4 (local.get $rec)))
-      (if (i32.and (i32.ne (local.get $n) (i32.const 0))
-            (i32.and (i32.gt_u (local.get $index) (local.get $base))
-                     (i32.le_u (local.get $index)
-                               (i32.add (local.get $base) (local.get $n)))))
-        (then (return (i32.load offset=8 (local.get $rec)))))
-      (local.set $id (i32.add (local.get $id) (i32.const 1)))
-      (br $scan)))
-    (global.get $PE_STAGING))
+    (local $rec i32)
+    (local.set $rec (call $win16_current_image_record))
+    (if (result i32) (local.get $rec)
+      (then (i32.load offset=8 (local.get $rec)))
+      (else (global.get $PE_STAGING))))
 
   ;; Data selector Windows supplies when it calls a procedure in an NE image.
   ;;
