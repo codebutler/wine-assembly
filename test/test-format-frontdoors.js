@@ -11,7 +11,7 @@ const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
 
 const ROOT = path.join(__dirname, '..');
-const userSource = fs.readFileSync(path.join(ROOT, 'src', '09a-handlers.wat'), 'utf8');
+const userSource = fs.readFileSync(path.join(ROOT, 'src', '09a-handlers2-runtime.wat'), 'utf8');
 const crtSource = fs.readFileSync(path.join(ROOT, 'src', '09a6-handlers-crt.wat'), 'utf8');
 const formatterSource = fs.readFileSync(path.join(ROOT, 'src', '12-wsprintf.wat'), 'utf8');
 

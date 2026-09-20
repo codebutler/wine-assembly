@@ -44,7 +44,7 @@ check(ownerVerdict({
 //    region (not merely its similarly prefixed _SIZE global).
 check(ownerVerdict({
   name: 'CLASS_NAME_STRINGS',
-  owner: '"09a-handlers.wat:$control_class_name_ptr"',
+  owner: '"09a-handlers1-user.wat:$control_class_name_ptr"',
 }).state === 'ok', 'a live function owner verdicts ok');
 const wrongFunction = ownerVerdict({
   name: 'STRING_CONSTANTS',

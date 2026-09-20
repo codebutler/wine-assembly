@@ -4,7 +4,7 @@
   "total": 60,
   "converted": [],
   "byFile": {
-    "src/09a-handlers.wat": 6,
+    "src/09a-handlers1-user.wat": 6,
     "test/test-cross-thread-send.js": 7,
     "test/watx-compiler-alloc.test.js": 4,
     "src/10-helpers.wat": 3,

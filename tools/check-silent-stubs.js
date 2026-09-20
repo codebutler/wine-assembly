@@ -302,7 +302,7 @@ const digest = crypto.createHash('sha256')
 // that can exist; it succeeds and every other handle is D3DERR_INVALIDCALL.
 // GetPixelShader reports that same 0. Morrowind saves and restores it.
 const EXPECTED_COUNT = 266;
-const EXPECTED_SHA256 = '56296f57c7f581ba837efca182b9ec1bb23979e83d0269ea32b195f692b3551e';
+const EXPECTED_SHA256 = 'b9e37457b8861df7fe8c59a322c2fa73146022e808bb15aa8301041d5e4bb441';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

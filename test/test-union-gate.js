@@ -129,7 +129,7 @@ expectCaught('prefix-claims-a-variant', '10e-gdi-metafile.wat',
 // ── 4. reading a word the variant does not own ──────────────────────────────
 // GdiBitmap's +44 exists only to pin the 48-byte stride. It is named
 // `reserved`, and a read of it is the attribution being wrong.
-expectCaught('reserved-field', '09a-handlers.wat',
+expectCaught('reserved-field', '09a4b-handlers-cursor-icon.wat',
   (t) => replaceOnce(t, '(local.set $bpp (load.field.memarg GdiBitmap bpp',
                      '(local.set $bpp (load.field.memarg GdiBitmap reserved',
                      'a read of the stride padding'),

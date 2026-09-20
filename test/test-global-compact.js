@@ -96,7 +96,7 @@ const extraWat = String.raw`
     'dispatch metadata preserves GlobalCompact\'s public ABI');
 
   const source = fs.readFileSync(
-    path.join(ROOT, 'src', '09a-handlers.wat'), 'utf8');
+    path.join(ROOT, 'src', '09a-handlers2-runtime.wat'), 'utf8');
   const body = source.split('(func $handle_GlobalCompact', 2)[1]
     .split('\n  (func $handle_', 1)[0];
   assert(!body.includes('$crash_unimplemented'),
