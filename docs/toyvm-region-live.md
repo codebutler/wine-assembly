@@ -458,3 +458,48 @@ second for that reason, and the gate's speed bar (`--region-jit-gate`, default
 **2.62x and 0.84x an hour apart**. That is why a correctness sweep must pass
 `--region-jit-gate=0` — otherwise the arms silently stop installing anything and
 the run grades a JIT that never engaged.
+
+## Related design: make entry and exit contracts explicit
+
+Relocade gives its embedding host an explicit
+[integration contract](https://github.com/koolkdev/relocade/blob/main/crates/x86/docs/host-integration.md):
+a snapshot block may run only while its code bytes, mappings and segment
+assumptions remain valid, and every exit publishes the architectural state at
+one named restart or successor boundary. The compiler does not own cache
+invalidation; the host proves the entry assumptions before dispatch.
+
+ToyVM already implements the substance of the snapshot half more precisely
+than a coarse page generation would: `compile.js` records exact decoded byte
+ranges, the code bitmap observes writes to them, and region installation
+rechecks the captured bytes. The useful follow-up is to make that one object and
+one predicate rather than add another invalidation scheme:
+
+```
+RegionDependency
+  code ranges + captured bytes
+  CS base / D / IP-width shape
+  entry block heads
+             |
+       valid at install/entry?
+          yes /       \ no
+        enter       discard and decode
+```
+
+The larger opportunity is the exit half. A compiled region has internal
+branches, interpreter handbacks, slice exits, faults and interrupt boundaries.
+Each should be emitted through one exit builder that states:
+
+* which registers and flags are dirty;
+* the published `$gip` and restart/successor boundary;
+* retired instruction and dispatch charges;
+* the exit reason and target, including an internal successor.
+
+That would turn state publication and billing into a structural property of
+the generated region instead of a convention repeated at each exit site. It
+also gives an audit a static list of exits to cover. The audit can then report
+`covered`, `taken only by baseline`, `taken only by region`, or `unreached` for
+each exit instead of silently treating an unvisited exit as audited.
+
+Relocade does not itself solve ToyVM's rare-exit test problem; its value here is
+the contract and the typed publication model. Seeded execution, corpus
+equivalence and the install-side checks above remain necessary.

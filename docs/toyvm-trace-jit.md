@@ -2198,3 +2198,38 @@ waits for is neither the timer IRQ nor the BIOS tick word. Next step, if it
 matters: `--trace-at` the spin's ip with `--trace-entry` past the depacker
 and read what byte it compares — `--trace-entry=N` only prints the first N
 handbacks, which on daretro are all the depacker.
+
+## Related design: a typed region IR before WAT text
+
+Relocade separates x86 semantics from a guest-independent
+[typed Wasm builder](https://github.com/koolkdev/relocade/tree/main/crates/compiler/src).
+Its values retain logical widths, register and memory locations retain their
+identity, and structured exits publish the dirty CPU state before dispatch or
+a fault. Its snapshot compiler and interpreter then call the same
+[x86 semantic layer](https://github.com/koolkdev/relocade/tree/main/crates/x86/src).
+
+ToyVM already obtains the important performance result: tier 3 turns registers
+into Wasm locals, folds addressing and emits one Wasm function for the region.
+What it lacks is an explicit representation between the threaded words and the
+generated WAT. Today several facts are recovered from handler text or protected
+by lowering allow-lists. A narrow typed region IR would make those facts inputs:
+
+| Existing region JIT | Candidate IR fact | Immediate use |
+|---|---|---|
+| handler body plus packed operands | typed reads, writes and effective address | drive folding without rediscovering aliases from WAT text |
+| `handler-effects.js` source analysis | declared register, flag, memory and control effects | check optimization eligibility and reject missing facts |
+| promotion allow-list | named byte/word/dword register views | make partial-register synchronization explicit |
+| separately authored side exits | one exit record with dirty state, `$gip`, steps and reason | generate the same publication protocol for every exit kind |
+
+This is useful as a correctness and maintenance layer before it is an
+optimizer. It should lower to the same WAT bodies and helpers first, with the
+current tier-3 output and corpus equivalence as the comparison. Only after that
+would symbolic values replace textual constant propagation. The first useful
+slice is MOV/ALU/Jcc plus ordinary memory operands; calls, returns, x87,
+volatile immediates and self-modifying forms should decline until their effects
+and exit rules are represented exactly.
+
+This does not argue for compiling every basic block into a new Wasm module.
+ToyVM's measured win comes from hot regions amortising compilation and register
+materialisation across a loop. The IR belongs inside that existing selection
+and installation path.

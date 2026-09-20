@@ -229,3 +229,38 @@ Not in scope here, and the next thing worth pricing after it: the block *cache*
 is still JS (`DosCache` in `dos-loop.js`), so a compile still returns to the
 host to be filed even once the decode itself does not. `src/04-cache.wat` is the
 production answer to that.
+
+## Related design: Relocade's shared instruction definitions
+
+[Relocade](https://github.com/koolkdev/relocade) (`wasm86`) has two execution
+frontends like this VM: snapshot blocks decode bytes while building a module,
+and a generated interpreter decodes guest memory at runtime. Its useful choice
+is that both frontends bind the same declarative
+[instruction definitions](https://github.com/koolkdev/relocade/tree/main/crates/x86/src/instruction/definitions)
+to the same semantic bodies. An instruction form records its opcode pattern,
+operand widths and fields, implicit memory effects and whether it transfers
+control; the two byte cursors differ, but the instruction catalog does not.
+
+ToyVM already shares helper tables and checks the JS and Wasm decoders with
+`decode-diff.js`, but the two decoders still contain separate control flow for
+recognising many forms. The transferable idea is a small ToyVM-owned form
+catalog, not Relocade's Rust compiler:
+
+```
+encoding + operands + effects + boundary
+                    |
+          +---------+----------+
+          |                    |
+       JS decoder          Wasm decoder
+          |                    |
+          +---- identical threaded op ----+
+```
+
+The catalog could generate, or at first merely validate, `ARITY`, operand
+fetch widths, flag effects, memory read/write facts and block-ending forms.
+Start with the regular ALU, MOV and Jcc families where one row describes many
+encodings; leave irregular system, x87 and self-patching forms in their current
+code until a generated row can express their byte-fetch and volatility rules
+without weakening them. `decode-diff.js` remains the gate: sharing a catalog
+reduces drift, but it does not prove that the two cursors fetch bytes in the
+same order or stop at the same boundary.
