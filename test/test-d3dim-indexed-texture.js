@@ -176,6 +176,7 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 2) (i32.const 1)
       (i32.const 1) (i32.const 3) (i32.const 0)
       (i32.const 2) (i32.const 2) (i32.const 0)
+      (i32.const 0)
       (i32.const 0) (i32.const 0)
       (i32.const 0)
       (i32.const 0) (f32.const 0.0) (f32.const 0.0) (f32.const 1.0) (i32.const 0xffffffff) (f32.const 0.5)

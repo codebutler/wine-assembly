@@ -263,7 +263,7 @@
   ;; The seam's one WAT-owned scratch: clear descriptor at +0, describe at +64.
   (func $d3dim_gpu_buffer (result i32)
     (if (i32.eqz (global.get $d3dim_gpu_desc)) (then
-      (global.set $d3dim_gpu_desc (call $g2w (call $heap_alloc (i32.const 192))))))
+      (global.set $d3dim_gpu_desc (call $g2w (call $heap_alloc (i32.const 256))))))
     (global.get $d3dim_gpu_desc))
   (func (export "d3dim_gpu_surface_fmt") (param $entry i32) (result i32)
     (call $dx_surf_fmt_get (local.get $entry)))
@@ -321,6 +321,7 @@
   ;;   7 tex  8 tw  9 th  10 tbpp 11 tpitch 12 tdib_wa 13 keyed 14 key raw 15 pal
   ;;   16 zenable 17 zfunc 18 zwrite  19 blend 20 src 21 dst
   ;;   22 colorop 23 alphaop 24 addr u 25 addr v 26 linear 27 cull 28 shade
+  ;;   29 alphafunc (0 = test off, else D3DCMPFUNC)  30 alpharef
   (func (export "d3dim_gpu_describe") (param $this i32) (result i32)
     (local $out i32) (local $rt i32) (local $state i32) (local $tex i32) (local $filter i32)
     (local $zen i32) (local $zfunc i32) (local $zwrite i32) (local $v i32)
@@ -329,7 +330,7 @@
     (if (i32.or (i32.eqz (local.get $rt)) (i32.eqz (local.get $state)))
       (then (return (i32.const 0))))
     (local.set $out (i32.add (call $d3dim_gpu_buffer) (i32.const 64)))
-    (call $zero_memory (local.get $out) (i32.const 116))
+    (call $zero_memory (local.get $out) (i32.const 124))
     (i32.store offset=0 (local.get $out) (local.get $rt))
     (i32.store offset=4 (local.get $out) (i32.load16_u offset=12 (local.get $rt)))
     (i32.store offset=8 (local.get $out) (i32.load16_u offset=14 (local.get $rt)))
@@ -387,6 +388,18 @@
     (i32.store offset=104 (local.get $out) (i32.eq (local.get $filter) (i32.const 2)))
     (i32.store offset=108 (local.get $out) (call $gl32 (i32.add (local.get $state) (i32.const 344))))
     (i32.store offset=112 (local.get $out) (call $gl32 (i32.add (local.get $state) (i32.const 292))))
+    ;; Alpha test, normalized the way $d3dim_draw_tl_triangle_textured reads it:
+    ;; ALPHATESTENABLE=15 (offset 316), ALPHAREF=24 (352), ALPHAFUNC=25 (356).
+    ;; Published as a bare D3DCMPFUNC because the GPU's fixed-function pixel
+    ;; shader compares in exactly that numbering; 0 means no test, so an
+    ;; enabled test whose ALPHAFUNC was never set stays off here too.
+    (if (call $gl32 (i32.add (local.get $state) (i32.const 316))) (then
+      (local.set $v (i32.and (call $gl32 (i32.add (local.get $state) (i32.const 356)))
+                             (i32.const 0xFF)))
+      (i32.store offset=116 (local.get $out) (local.get $v))
+      (i32.store offset=120 (local.get $out)
+        (i32.and (call $gl32 (i32.add (local.get $state) (i32.const 352)))
+                 (i32.const 0xFF)))))
     (local.get $out))
 
   ;; Texture $tex decoded to RGBA8 bytes in a reused scratch buffer (result is
@@ -2162,20 +2175,50 @@
         (i32.and (i32.shr_u (local.get $rgb) (i32.const 16)) (i32.const 0xFF)))
       (return))))
 
+  ;; kind=23 TexLoad: which Load populated a destination and which one declined,
+  ;; and for the declines, on what test. Every early return below is silent --
+  ;; Texture::Load has no return value we report and the guest goes on drawing
+  ;; with whatever the destination already held -- so a texture that never gets
+  ;; its pixels is indistinguishable on screen from one that was never bound.
+  ;; slot=dst slot, a=src slot, b=reason | dbpp<<8 | sbpp<<16, c=copy w|h<<16.
+  (func $d3dim_texload_trace
+      (param $dst i32) (param $src i32) (param $reason i32)
+      (param $dbpp i32) (param $sbpp i32) (param $cw i32) (param $ch i32)
+    (call $host_dx_trace (i32.const 23)
+      (select (call $dx_slot_of (local.get $dst)) (i32.const -1)
+              (i32.ne (local.get $dst) (i32.const 0)))
+      (select (call $dx_slot_of (local.get $src)) (i32.const -1)
+              (i32.ne (local.get $src) (i32.const 0)))
+      (i32.or (local.get $reason)
+        (i32.or (i32.shl (i32.and (local.get $dbpp) (i32.const 0xFF)) (i32.const 8))
+                (i32.shl (i32.and (local.get $sbpp) (i32.const 0xFF)) (i32.const 16))))
+      (i32.or (i32.and (local.get $cw) (i32.const 0xFFFF))
+              (i32.shl (local.get $ch) (i32.const 16)))))
+
   (func $d3dim_texture_load (param $dst_this i32) (param $src_this i32)
     (local $dst i32) (local $src i32)
     (local $dw i32) (local $dh i32) (local $dbpp i32) (local $dpitch i32) (local $ddib i32)
     (local $sw i32) (local $sh i32) (local $sbpp i32) (local $spitch i32) (local $sdib i32)
     (local $copy_w i32) (local $copy_h i32) (local $row_bytes i32) (local $row i32) (local $col i32) (local $bytespp i32)
     (local $dfmt i32) (local $sfmt i32) (local $key i32)
-    (if (i32.or (i32.eqz (local.get $dst_this)) (i32.eqz (local.get $src_this))) (then (return)))
+    (if (i32.or (i32.eqz (local.get $dst_this)) (i32.eqz (local.get $src_this))) (then
+      (call $d3dim_texload_trace (i32.const 0) (i32.const 0) (i32.const 1)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+      (return)))
     (local.set $dst (call $dx_from_this (local.get $dst_this)))
     (local.set $src (call $dx_from_this (local.get $src_this)))
-    (if (i32.or (i32.eqz (local.get $dst)) (i32.eqz (local.get $src))) (then (return)))
+    (if (i32.or (i32.eqz (local.get $dst)) (i32.eqz (local.get $src))) (then
+      (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 2)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+      (return)))
     (if (i32.or
           (i32.ne (i32.load (local.get $dst)) (i32.const 2))
           (i32.ne (i32.load (local.get $src)) (i32.const 2)))
-      (then (return)))
+      (then
+        (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 3)
+          (i32.load (local.get $dst)) (i32.load (local.get $src))
+          (i32.const 0) (i32.const 0))
+        (return)))
     (call $d3dim_worker_fence)
     (local.set $dw (i32.and (i32.load (i32.add (local.get $dst) (i32.const 12))) (i32.const 0xFFFF)))
     (local.set $dh (i32.shr_u (i32.load (i32.add (local.get $dst) (i32.const 12))) (i32.const 16)))
@@ -2209,8 +2252,16 @@
       (i32.store offset=24 (local.get $dst) (local.get $key))
       (i32.store offset=28 (local.get $dst)
         (i32.or (i32.load offset=28 (local.get $dst)) (i32.const 0x100)))))
-    (if (i32.or (i32.eqz (local.get $ddib)) (i32.eqz (local.get $sdib))) (then (return)))
-    (if (i32.lt_u (local.get $dbpp) (i32.const 8)) (then (return)))
+    (if (i32.or (i32.eqz (local.get $ddib)) (i32.eqz (local.get $sdib))) (then
+      (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 4)
+        (local.get $dbpp) (local.get $sbpp)
+        (i32.ne (local.get $ddib) (i32.const 0))
+        (i32.ne (local.get $sdib) (i32.const 0)))
+      (return)))
+    (if (i32.lt_u (local.get $dbpp) (i32.const 8)) (then
+      (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 5)
+        (local.get $dbpp) (local.get $sbpp) (i32.const 0) (i32.const 0))
+      (return)))
     ;; Format conversion is the whole point of Texture::Load: D3DRM builds the
     ;; system-memory texture in the file's format (8bpp palettized for a GIF)
     ;; and the video-memory destination in the DEVICE's format (RGB565 here),
@@ -2221,7 +2272,11 @@
     ;; nearest-entry search against the destination palette.
     (if (i32.or (i32.ne (local.get $dbpp) (local.get $sbpp))
                 (i32.ne (local.get $dfmt) (local.get $sfmt))) (then
-      (if (i32.eq (local.get $dbpp) (i32.const 8)) (then (return)))
+      (if (i32.eq (local.get $dbpp) (i32.const 8)) (then
+        (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 6)
+          (local.get $dbpp) (local.get $sbpp)
+          (local.get $dfmt) (local.get $sfmt))
+        (return)))
       (local.set $copy_w (local.get $dw))
       (if (i32.lt_u (local.get $sw) (local.get $copy_w)) (then (local.set $copy_w (local.get $sw))))
       (local.set $copy_h (local.get $dh))
@@ -2242,18 +2297,29 @@
           (br $rlp)))
         (local.set $row (i32.add (local.get $row) (i32.const 1)))
         (br $clp)))
+      (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 7)
+        (local.get $dbpp) (local.get $sbpp) (local.get $copy_w) (local.get $copy_h))
       (return)))
     (local.set $bytespp (i32.shr_u (local.get $dbpp) (i32.const 3)))
-    (if (i32.eqz (local.get $bytespp)) (then (return)))
+    (if (i32.eqz (local.get $bytespp)) (then
+      (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 9)
+        (local.get $dbpp) (local.get $sbpp) (i32.const 0) (i32.const 0))
+      (return)))
     (local.set $copy_w (local.get $dw))
     (if (i32.lt_u (local.get $sw) (local.get $copy_w)) (then (local.set $copy_w (local.get $sw))))
     (local.set $copy_h (local.get $dh))
     (if (i32.lt_u (local.get $sh) (local.get $copy_h)) (then (local.set $copy_h (local.get $sh))))
-    (if (i32.or (i32.eqz (local.get $copy_w)) (i32.eqz (local.get $copy_h))) (then (return)))
+    (if (i32.or (i32.eqz (local.get $copy_w)) (i32.eqz (local.get $copy_h))) (then
+      (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 10)
+        (local.get $dbpp) (local.get $sbpp) (local.get $copy_w) (local.get $copy_h))
+      (return)))
     (local.set $row_bytes (i32.mul (local.get $copy_w) (local.get $bytespp)))
     (if (i32.gt_u (local.get $row_bytes) (local.get $dpitch)) (then (local.set $row_bytes (local.get $dpitch))))
     (if (i32.gt_u (local.get $row_bytes) (local.get $spitch)) (then (local.set $row_bytes (local.get $spitch))))
-    (if (i32.eqz (local.get $row_bytes)) (then (return)))
+    (if (i32.eqz (local.get $row_bytes)) (then
+      (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 11)
+        (local.get $dbpp) (local.get $sbpp) (local.get $copy_w) (local.get $copy_h))
+      (return)))
     (local.set $row (i32.const 0))
     (block $done (loop $lp
       (br_if $done (i32.ge_u (local.get $row) (local.get $copy_h)))
@@ -2262,7 +2328,9 @@
         (i32.add (local.get $sdib) (i32.mul (local.get $row) (local.get $spitch)))
         (local.get $row_bytes))
       (local.set $row (i32.add (local.get $row) (i32.const 1)))
-      (br $lp))))
+      (br $lp)))
+    (call $d3dim_texload_trace (local.get $dst) (local.get $src) (i32.const 8)
+      (local.get $dbpp) (local.get $sbpp) (local.get $copy_w) (local.get $copy_h)))
 
   (func $d3dim_texture_entry_from_slot (param $slot i32) (result i32)
     (local $entry i32) (local $redir i32) (local $src i32)
@@ -3791,11 +3859,36 @@
         (i32.shl (i32.shr_u (local.get $g) (i32.const 2)) (i32.const 5)))
       (i32.shr_u (local.get $b) (i32.const 3))))
 
+  ;; D3DRENDERSTATE_ALPHAFUNC against D3DRENDERSTATE_ALPHAREF, D3DCMPFUNC
+  ;; numbering. This is the other way a fixed-function sprite gets its
+  ;; transparency, and the one Diablo II uses: no colour key anywhere, just
+  ;; ALPHAFUNC=NOTEQUAL with ALPHAREF=0 over A1R5G5B5 textures, so a texel
+  ;; whose alpha bit is clear is discarded rather than painted.
+  (func $d3dim_alpha_pass (param $alpha i32) (param $func i32) (param $ref i32) (result i32)
+    (if (i32.eq (local.get $func) (i32.const 1)) (then (return (i32.const 0))))   ;; NEVER
+    (if (i32.eq (local.get $func) (i32.const 2))
+      (then (return (i32.lt_u (local.get $alpha) (local.get $ref)))))             ;; LESS
+    (if (i32.eq (local.get $func) (i32.const 3))
+      (then (return (i32.eq (local.get $alpha) (local.get $ref)))))               ;; EQUAL
+    (if (i32.eq (local.get $func) (i32.const 4))
+      (then (return (i32.le_u (local.get $alpha) (local.get $ref)))))             ;; LESSEQUAL
+    (if (i32.eq (local.get $func) (i32.const 5))
+      (then (return (i32.gt_u (local.get $alpha) (local.get $ref)))))             ;; GREATER
+    (if (i32.eq (local.get $func) (i32.const 6))
+      (then (return (i32.ne (local.get $alpha) (local.get $ref)))))               ;; NOTEQUAL
+    (if (i32.eq (local.get $func) (i32.const 7))
+      (then (return (i32.ge_u (local.get $alpha) (local.get $ref)))))             ;; GREATEREQUAL
+    (i32.const 1))                                                               ;; ALWAYS / unset
+
+  ;; $alpha_test is 0 when D3DRENDERSTATE_ALPHATESTENABLE is off, else
+  ;; ALPHAFUNC | ALPHAREF<<8 -- packed so this signature and
+  ;; $rasterize_triangle_textured's keep one parameter for the whole state.
   (func $viewport_draw_textured_span
     (param $rt_entry i32) (param $tex_entry i32)
     (param $blend i32) (param $src_blend i32) (param $dst_blend i32)
     (param $address_u i32) (param $address_v i32) (param $linear i32)
     (param $colorop i32) (param $alphaop i32) (param $color_key_enable i32)
+    (param $alpha_test i32)
     (param $dither i32) (param $antialias i32)
     (param $y i32)
     (param $x0 i32) (param $u0 f32) (param $v0 f32) (param $q0 f32) (param $c0 i32) (param $z0 f32)
@@ -4033,6 +4126,21 @@
               (i32.and (local.get $sample) (i32.const 0x00ffffff))
               (i32.and (local.get $key_rgb) (i32.const 0x00ffffff))))
         (then (local.set $draw (i32.const 0))))
+      ;; Alpha test, like the colour key, runs before the depth test: a texel
+      ;; the test rejects must not write depth and occlude what is behind it.
+      ;; The alpha compared is the texture stage's output, not the raw texel,
+      ;; so a MODULATE stage with a translucent diffuse is tested on the value
+      ;; that would actually have been written.
+      (if (i32.and (local.get $draw) (i32.ne (local.get $alpha_test) (i32.const 0)))
+        (then
+          (if (i32.eqz (call $d3dim_alpha_pass
+                (i32.shr_u (call $d3dim_texture_stage_combine
+                              (local.get $sample) (local.get $diffuse)
+                              (local.get $colorop) (local.get $alphaop))
+                           (i32.const 24))
+                (i32.and (local.get $alpha_test) (i32.const 0xFF))
+                (i32.and (i32.shr_u (local.get $alpha_test) (i32.const 8)) (i32.const 0xFF))))
+            (then (local.set $draw (i32.const 0))))))
       (if (i32.and (local.get $draw) (i32.ne (local.get $zentry) (i32.const 0)))
         (then
           (local.set $zptr (i32.add (local.get $zdib)
@@ -4483,6 +4591,7 @@
     (param $blend i32) (param $src_blend i32) (param $dst_blend i32)
     (param $address_u i32) (param $address_v i32) (param $linear i32)
     (param $colorop i32) (param $alphaop i32) (param $color_key_enable i32)
+    (param $alpha_test i32)
     (param $dither i32) (param $antialias i32)
     (param $x0 i32) (param $y0 i32) (param $u0 f32) (param $v0 f32) (param $q0 f32) (param $c0 i32) (param $z0 f32)
     (param $x1 i32) (param $y1 i32) (param $u1 f32) (param $v1 f32) (param $q1 f32) (param $c1 i32) (param $z1 f32)
@@ -4541,7 +4650,7 @@
         (local.get $rt_entry) (local.get $tex_entry)
         (local.get $blend) (local.get $src_blend) (local.get $dst_blend)
         (local.get $address_u) (local.get $address_v) (local.get $linear) (local.get $colorop) (local.get $alphaop)
-        (local.get $color_key_enable)
+        (local.get $color_key_enable) (local.get $alpha_test)
         (local.get $dither) (local.get $antialias)
         (local.get $y0)
         (local.get $x0) (local.get $u0) (local.get $v0) (local.get $q0) (local.get $c0) (local.get $z0)
@@ -4551,7 +4660,7 @@
         (local.get $rt_entry) (local.get $tex_entry)
         (local.get $blend) (local.get $src_blend) (local.get $dst_blend)
         (local.get $address_u) (local.get $address_v) (local.get $linear) (local.get $colorop) (local.get $alphaop)
-        (local.get $color_key_enable)
+        (local.get $color_key_enable) (local.get $alpha_test)
         (local.get $dither) (local.get $antialias)
         (local.get $y0)
         (local.get $x1) (local.get $u1) (local.get $v1) (local.get $q1) (local.get $c1) (local.get $z1)
@@ -4619,7 +4728,7 @@
         (local.get $rt_entry) (local.get $tex_entry)
         (local.get $blend) (local.get $src_blend) (local.get $dst_blend)
         (local.get $address_u) (local.get $address_v) (local.get $linear) (local.get $colorop) (local.get $alphaop)
-        (local.get $color_key_enable)
+        (local.get $color_key_enable) (local.get $alpha_test)
         (local.get $dither) (local.get $antialias)
         (local.get $y)
         (local.get $xa) (local.get $ua) (local.get $va) (local.get $qa) (local.get $ca) (local.get $za)
@@ -5275,7 +5384,7 @@
     (local $colorop i32) (local $alphaop i32) (local $filter i32) (local $shade i32)
     (local $dither i32) (local $antialias i32)
     (local $c0 i32) (local $c1 i32) (local $c2 i32)
-    (local $color_key_enable i32)
+    (local $color_key_enable i32) (local $alpha_test i32)
     (if (i32.eqz (local.get $tex)) (then
       (call $d3dim_draw_tl_triangle
         (local.get $this) (local.get $rt) (local.get $use_z)
@@ -5287,6 +5396,18 @@
       (local.set $src_blend (call $gl32 (i32.add (local.get $state) (i32.const 332))))
       (local.set $dst_blend (call $gl32 (i32.add (local.get $state) (i32.const 336))))
       (local.set $color_key_enable (call $gl32 (i32.add (local.get $state) (i32.const 420))))
+      ;; ALPHATESTENABLE=15 (offset 316), ALPHAREF=24 (352), ALPHAFUNC=25 (356).
+      ;; ALPHAREF is a DWORD whose low byte is the 0..255 reference.
+      (if (call $gl32 (i32.add (local.get $state) (i32.const 316))) (then
+        (local.set $alpha_test (i32.or
+          (i32.and (call $gl32 (i32.add (local.get $state) (i32.const 356))) (i32.const 0xFF))
+          (i32.shl (i32.and (call $gl32 (i32.add (local.get $state) (i32.const 352)))
+                            (i32.const 0xFF))
+                   (i32.const 8))))
+        ;; An enabled test with no ALPHAFUNC set is ALWAYS; keep it packed
+        ;; non-zero only when it can actually reject something.
+        (if (i32.eqz (i32.and (local.get $alpha_test) (i32.const 0xFF)))
+          (then (local.set $alpha_test (i32.const 0))))))
       ;; D3DRENDERSTATE_DITHERENABLE=26, ANTIALIAS=2.
       (local.set $dither (call $gl32 (i32.add (local.get $state) (i32.const 360))))
       (local.set $antialias (call $gl32 (i32.add (local.get $state) (i32.const 264))))
@@ -5334,6 +5455,7 @@
       (local.get $blend) (local.get $src_blend) (local.get $dst_blend)
       (local.get $address_u) (local.get $address_v) (local.get $linear)
       (local.get $colorop) (local.get $alphaop) (local.get $color_key_enable)
+      (local.get $alpha_test)
       (local.get $dither) (local.get $antialias)
       (call $d3dim_coord_i (f32.load (local.get $v0)))
       (call $d3dim_coord_i (f32.load (i32.add (local.get $v0) (i32.const 4))))
