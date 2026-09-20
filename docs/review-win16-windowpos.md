@@ -400,3 +400,67 @@ Logs: `/private/tmp/wa-erase-dc-before.log`, `wa-erase-dc-all-abi.log`,
 `wa-erase-dc-vb.log`, `wa-erase-dc-final-build.log`.
 BeginPaint callback timing and propagation of the result to fErase remain
 open; this corrects the default callee, not the entire paint transaction.
+
+## 2026-09-20: BeginPaint callback candidate rejected by browser regression
+
+Saved the **not integrated** Win32 candidate at
+[`experiments/beginpaint-erase-candidate.patch`](experiments/beginpaint-erase-candidate.patch).
+It sends WM_ERASEBKGND from BeginPaint after installing the paint DC clip,
+sets fErase from the actual callback result, retains a declined erase, and
+removes UpdateWindow's premature erase. Win16 still uses its legacy branch;
+this candidate is neither a complete implementation nor safe to enable.
+
+The executable contract probe is:
+
+```sh
+node tools/probe-beginpaint-erase.js
+```
+
+**Expected current-main result: FAIL.** This deliberately unintegrated probe
+is not registered as a passing regression test. It exercises eight combinations
+of erase requested/not requested, NULL/non-NULL class brush and zero/nonzero
+callback result, then repeats with a non-erasing invalidation. It also runs an
+actual nested x86 WM_PAINT -> BeginPaint -> WM_ERASEBKGND sequence and checks
+the supplied paint DC, fErase, partial rectangle, callback depth and stack.
+Promote it into the regression suite when the complete runtime fix is ready.
+The saved candidate passes this probe. Current main first fails by reporting
+fErase=TRUE for a NULL brush even without an erase request.
+
+The candidate passes parent/child painting, Win16 far callbacks, WEP1 8/8,
+and both builds, **but fails the real Diablo browser menu assertion**: red
+selection markers are absent and the client is near-black. Restoring the
+erase bit when the callback returns zero passes the repeated-cycle probe,
+but still fails the same browser assertion. Neither implementation is a
+verified fix. The first browser run passed while compilation was still in
+progress; that run is excluded as candidate evidence because it could have
+loaded the previous artifact. Both failures were runs started after their
+respective candidate builds completed. No screenshot assertion was weakened.
+
+Runtime source was restored to the preceding verified implementation; only
+this report, the candidate patch and the explicit failing probe are retained.
+The restored normal/compatibility build passes, and a fresh browser run passes
+all six Diablo stages through gameplay (`wa-begin-erase-diablo-restored.log`,
+captures in `/private/tmp/wa-begin-erase-diablo-restored`). This is an observed
+restoration, not an assumption that reverting the candidate fixed the game.
+The saved patch passes `git apply --check`; use an isolated test copy if
+reapplying it, since its browser regression is known.
+Evidence:
+
+- `/private/tmp/wa-begin-erase-before.log`: original contract failure.
+- `wa-begin-erase-nested.log`, `wa-begin-erase-persist.log`: candidate probe passes.
+- `wa-begin-erase-diablo-verified.log` and `wa-begin-erase-diablo-persist.log`:
+  both fail the main-menu marker assertion.
+- `/private/tmp/wa-begin-erase-diablo-verified/03-main-menu.png`: inspected
+  near-black menu; the corresponding `-persist` directory retains the repeat.
+- `wa-begin-erase-order.log`, `wa-begin-erase-children.log`,
+  `wa-begin-erase-far.log`, `wa-begin-erase-wep1.log`: narrower passing checks.
+
+Next investigation must observe the **whole erase lifecycle**. Concrete
+competing consumers still present: GetMessage/PeekMessage clear NC_FLAGS bit 2
+when synthesizing an erase; the native modal pump clears it and fills directly;
+the dialog default procedure also has its own erase/paint shortcut. These are
+code findings and plausible causes, **not a traced explanation of Diablo's
+failure yet**. Trace pending flags and callback results around Storm's class-
+brush changes and repeated menu paints before replacing the old brush-derived
+fErase behavior. Then connect the Win16 far BeginPaint continuation and remove
+its legacy branch, with the browser regression required alongside the probe.

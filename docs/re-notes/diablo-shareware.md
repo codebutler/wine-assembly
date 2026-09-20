@@ -3023,3 +3023,29 @@ both runs still present 200 frames in ten seconds; extra API calls rise
 8.99M to 11.79M (more polling, not more rendering). Fast-logger fixed-work
 profile corroborates block transfer 9.89% and operand fetch 7.12% as next
 targets. Experimental flag only; no browser/default change or commit.
+
+## BeginPaint callback experiment — 2026-09-20 (not integrated)
+
+A Win32 candidate replacing brush-derived fErase with a real clipped-HDC
+WM_ERASEBKGND callback passes a focused x86 contract probe but fails
+`test/test-diablo-shareware-browser-web.js` at the main-menu red-marker
+assertion. The screenshot is near-black with faint artwork/text. Preserving
+the erase-owed bit after a zero callback result passes repeated-cycle unit
+checks but still fails that browser assertion. Both failures used completed
+candidate builds; an earlier pass overlapping compilation is not evidence
+about the candidate. Runtime source was restored, not merged with the failure.
+
+Full findings and saved candidate:
+[`../review-win16-windowpos.md`](../review-win16-windowpos.md), last section;
+manual contract probe: `node tools/probe-beginpaint-erase.js` (expected to fail
+on current main). Captures/logs are under
+`/private/tmp/wa-begin-erase-diablo-{verified,persist}` and corresponding `.log`
+files. The exact point losing/requiring erase state is **not yet traced**.
+Inspect GetMessage/PeekMessage, default dialog processing and modal-pump
+consumers alongside Storm's class-brush changes before removing the old
+fErase shortcut. Do not cite the isolated unit pass as game compatibility.
+
+After restoration and a completed rebuild, a fresh browser run passes all
+six stages through gameplay again: `/private/tmp/wa-begin-erase-diablo-restored.log`
+and the same-named capture directory. Thus the before/after browser failure
+is reproduced, while the precise internal cause remains open.
