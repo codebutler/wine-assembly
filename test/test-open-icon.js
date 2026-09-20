@@ -25,6 +25,12 @@ const extraWat = String.raw`
     (call $w2g (local.get $p)))
   (func (export "test_live") (param $h i32) (result i32)
     (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0)))
+  (func (export "test_sys") (param $h i32) (param $sc i32)
+    (local $saved i32)
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DefWindowProcA (local.get $h) (i32.const 0x0112) (local.get $sc)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved)))
   (func (export "test_make_icon_window") (param $proc i32) (result i32)
     (local $hwnd i32)
     (local.set $hwnd (global.get $next_hwnd))
@@ -175,6 +181,23 @@ const u32 = value => [value, value >>> 8, value >>> 16, value >>> 24]
     'OpenIcon synchronously sent WM_QUERYOPEN');
 
   const apiTable = require('../src/api_table.json');
+  for (const command of [0xF120, 0xF030]) {
+    const before = hostCalls.length;
+    e.test_sys(veto, command);
+    assert.strictEqual(e.test_min(veto), 1, 'system restore/maximize honors query veto');
+    assert.strictEqual(hostCalls.length, before, 'veto does not publish host state');
+    const allowed = e.test_make_icon_window(allowProc);
+    e.test_close_window(allowed);
+    e.test_sys(allowed, command);
+    assert.strictEqual(e.test_min(allowed), 0, 'allowed query restores iconic window');
+    assert.strictEqual(e.test_max(allowed), command === 0xF030 ? 1 : 0);
+    const native = e.test_make_icon_window(0);
+    e.test_close_window(native);
+    e.test_sys(native, command);
+    assert.strictEqual(e.test_min(native), 0, 'builtin uses default TRUE query result');
+    e.test_close_window(native);
+    assert.strictEqual(e.test_open_icon(native), 1, 'OpenIcon shares builtin default query handling');
+  }
   const destroyThunk = e.test_thunk(apiTable.find(api => api.name === 'DestroyWindow').id);
   const destroyProc = e.guest_alloc(64) >>> 0;
   // Only WM_QUERYOPEN destroys the target; nested destroy notifications
@@ -193,6 +216,14 @@ const u32 = value => [value, value >>> 8, value >>> 16, value >>> 24]
   assert.strictEqual(e.test_live(retired), 0, 'callback actually retired the HWND');
   assert.strictEqual(hostCalls.length, beforeRetired,
     'outer OpenIcon must not restore or activate a retired target');
+  for (const command of [0xF120, 0xF030]) {
+    const target = e.test_make_icon_window(destroyProc);
+    e.test_close_window(target);
+    const before = hostCalls.length;
+    e.test_sys(target, command);
+    assert.strictEqual(e.test_live(target), 0, 'system query callback retires target');
+    assert.strictEqual(hostCalls.length, before, 'system query cannot commit a retired target');
+  }
 
   assert.strictEqual(e.test_close_window(rendererHwnd), 1,
     'CloseWindow accepts a live renderer-owned window from another process');

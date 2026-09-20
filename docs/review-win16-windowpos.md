@@ -1239,3 +1239,53 @@ Verification also passes the active-window/reentrant wrapper matrix
 both normal and compatibility artifacts, layout `e6a915eaedf6cf03`
 (`/private/tmp/wa-open-icon-retired-build.log`). No new browser measurement is
 claimed for this callback-lifetime correction.
+
+### System-command restore queries (2026-09-20)
+
+`SC_RESTORE` and `SC_MAXIMIZE` now query an iconic target before committing
+show state. Non-iconic commands do not query. Win32 shares
+`$wnd_query_open_allowed` with OpenIcon, including its post-callback liveness
+check. Builtin routing sentinels use the default TRUE result, rather than
+mistaking their unhandled zero for an application veto. OpenIcon and both
+system-command adapters now share `$window_system_show_commit`; restored
+maximized windows also retain the corresponding SIZE_MAXIMIZED notification.
+
+Win16 far procedures are entered through a new invocation-owned continuation
+holding `{hwnd, command}`. The reply is consumed before shared commit, never
+posted and assumed answered. A nested query owns a distinct frame. Rejection
+or target destruction leaves no outer host commit; the original Pascal frame
+and DefWindowProc zero result are restored.
+
+The Microsoft Windows 3.1 Programmer's Reference, Volume 3, printed page 183
+(`WM_QUERYOPEN`, local copy `/private/tmp/wa-win31-messages.pdf`) specifies a
+nonzero return to allow opening and zero to reject. The adapter therefore
+tests the full DX:AX LONG, including a high-word-only nonzero reply. The first
+candidate incorrectly treated the result as AX-only; it was corrected before
+commit. Current [Microsoft documentation](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-queryopen)
+also documents the veto and default acceptance. Native execution traces for
+unusual reentry remain uncollected; destruction/nesting cases here are
+emulator lifetime regressions, not a claim that applications should change
+activation or focus from inside this query.
+
+Coverage includes Win32 allow/veto and builtin default handling for restore
+and maximize; Win16 low/high-word acceptance, rejection, non-iconic bypass,
+nested target/command isolation, destroyed target, no host commit on veto,
+and Pascal stack/result preservation. Disabling the Win32 query fails the
+veto assertion (`/private/tmp/wa-query-open-negative32.log`); using the old
+Win16 adapter fails synchronous delivery
+(`/private/tmp/wa-query-open-negative16.log`). An initial attempt to compile
+the old entire Win32 fragment lacked the newly shared helper symbols and is
+not a behavioral negative control.
+
+Still open: input/taskbar foreground activation, hide/minimize successor
+selection, and broader native message-order comparisons. This query change
+does not claim to close those activation gaps.
+
+Final verification: Win32 query/lifetime matrix
+(`/private/tmp/wa-query-open-win32-complete.log`), full Win16 far-call matrix
+(`/private/tmp/wa-query-open-win16-long.log`), full gated normal/compat build
+(`/private/tmp/wa-query-open-build-long.log`, layout `e6a915eaedf6cf03`), WEP3
+gameplay 7/7 against the completed artifact
+(`/private/tmp/wa-query-open-wep3-final.log`), and actual Notepad taskbar
+minimize/restore in cooperative and Worker Chrome, with guest iconic state
+assertions (`/private/tmp/wa-query-open-browser-final.log`). All pass.

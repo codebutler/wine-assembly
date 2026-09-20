@@ -1380,14 +1380,8 @@
   ;; WM_QUERYOPEN veto. WAT-native top-levels have no application override, so
   ;; their zero result means "use the default TRUE"; an x86 wndproc's zero is
   ;; an intentional veto unless it is a dialog that declined the message.
-  (func $open_icon_core (param $hwnd i32) (result i32)
+  (func $wnd_query_open_allowed (param $hwnd i32) (result i32)
     (local $wp i32) (local $query i32)
-    (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
-      (then
-        (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
-        (return (i32.const 0))))
-    (if (i32.eqz (call $wnd_min_get (local.get $hwnd)))
-      (then (return (i32.const 0))))
     (local.set $wp (call $wnd_table_get (local.get $hwnd)))
     (local.set $query
       (call $wnd_send_message
@@ -1396,21 +1390,26 @@
     (if (i32.and
           (i32.eqz (local.get $query))
           (i32.or
-            (i32.lt_u (local.get $wp) (i32.const 0xFFFF0000))
+            (i32.and (i32.lt_u (local.get $wp) (i32.const 0xFFFF0000))
+              (i32.ne (local.get $wp) (global.get $WNDPROC_BUILTIN)))
             (i32.and
               (i32.eq (local.get $wp) (global.get $WNDPROC_DIALOG))
               (global.get $dialog_last_proc_handled))))
       (then (return (i32.const 0))))
+    ;; TRUE is not proof that application code left its target alive.
+    (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
 
-    ;; WM_QUERYOPEN is application code: a TRUE reply does not imply that
-    ;; its target survived the callback. Do not publish a restore/activation
-    ;; or mutate per-slot show state for a retired HWND.
+  (func $open_icon_core (param $hwnd i32) (result i32)
     (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+      (then
+        (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
+        (return (i32.const 0))))
+    (if (i32.eqz (call $wnd_min_get (local.get $hwnd)))
       (then (return (i32.const 0))))
-    (call $host_sys_command (local.get $hwnd) (i32.const 0xF120)) ;; SC_RESTORE
-    (call $wnd_apply_show_state (local.get $hwnd) (i32.const 9)) ;; SW_RESTORE
-    (call $post_resize_messages (local.get $hwnd)
-      (select (i32.const 2) (i32.const 0) (call $wnd_max_get (local.get $hwnd))))
+    (if (i32.eqz (call $wnd_query_open_allowed (local.get $hwnd)))
+      (then (return (i32.const 0))))
+
+    (call $window_system_show_commit (local.get $hwnd) (i32.const 0xF120))
     (call $paint_flag_set_inv (local.get $hwnd))
     (call $nc_flags_set (local.get $hwnd) (i32.const 4))
     (drop (call $activate_window_with_host (local.get $hwnd)))

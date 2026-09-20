@@ -42,6 +42,18 @@ const extraWat = `
     (call $gs16 (i32.const 0x11080c) (call $win16_h16 (local.get $h)))
     (call $win16_DefWindowProc))
   (func (export "test_result") (result i32) (i32.load (global.get $reg_base)))
+  (func (export "test_min") (param $h i32) (result i32) (call $wnd_min_get (local.get $h)))
+  (func (export "test_max") (param $h i32) (result i32) (call $wnd_max_get (local.get $h)))
+  (func (export "test_iconify") (param $h i32) (call $wnd_apply_show_state (local.get $h) (i32.const 6)))
+  (func (export "test_sys") (param $h i32) (param $sc i32) (param $caller i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (local.get $caller))
+    (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
+    (call $gs32 (i32.const 0x110804) (i32.const 0))
+    (call $gs16 (i32.const 0x110808) (local.get $sc))
+    (call $gs16 (i32.const 0x11080a) (i32.const 0x112))
+    (call $gs16 (i32.const 0x11080c) (call $win16_h16 (local.get $h)))
+    (call $win16_DefWindowProc))
   (func (export "test_active") (result i32) (global.get $active_hwnd))
   (func (export "test_rank") (param $h i32) (result i32) (call $wnd_z_get (local.get $h)))
   (func (export "test_focus") (result i32) (global.get $focus_hwnd))
@@ -142,8 +154,9 @@ function recorder(extra = []) {
 const word = n => [n & 255, (n >>> 8) & 255];
 const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
 (async () => {
-  const rectangles = new Map(), moves = [], orders = [];
+  const rectangles = new Map(), moves = [], orders = [], systemCommands = [];
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none', extraHostOverrides: {
+    sys_command: (hwnd, command) => systemCommands.push([hwnd, command]),
     get_window_rect: (hwnd, out) => {
       // Deliberately distinct outer and client geometry, including negatives.
       for (const [i, n] of (rectangles.get(hwnd) || [-20, -30, 200, 300]).entries()) view.setInt32(out + i * 4, n, true);
@@ -622,5 +635,55 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   runShow(destroyedActive, 5, 0x90, true);
   assert.strictEqual(e.test_alive(destroyedActive), 0);
   assert.strictEqual(e.test_active(), 0, 'activation must not retain a retired HWND');
+  const queryProc = (ax, dx = 0, body = []) => [
+    ...recorder(body).slice(0, -9), 0x5b, 0x5d,
+    0xb8, ...word(ax), 0xba, ...word(dx), 0xca, 0x0a, 0,
+  ];
+  const runSys = (target, command) => {
+    e.guest_write32(0x110900, 0);
+    writeCode(0x90, [0xeb, 0xfe]);
+    e.test_sys(target, command, 0x90);
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 30; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090, 'query returns to far caller');
+    assert.strictEqual(e.get_esp(), 0x11080e, 'query consumes only its Pascal/continuation frames');
+    assert.strictEqual(e.test_result() & 0xffff, 0, 'DefWindowProc result is not query result');
+    return Array.from({length: e.guest_read32(0x110900)}, (_, i) =>
+      e.guest_read32(0x110904 + i * 8) & 0xffff);
+  };
+  writeCode(0x5400, queryProc(1));
+  writeCode(0x5500, queryProc(0));
+  writeCode(0x5800, queryProc(0, 1)); // WM_QUERYOPEN accepts a nonzero LONG.
+  for (const command of [0xF120, 0xF030]) {
+    for (const [allowed, proc] of [[true, 0x5400], [true, 0x5800], [false, 0x5500]]) {
+      const target = e.test_window(proc);
+      e.test_iconify(target);
+      const beforeCommands = systemCommands.length;
+      assert.deepStrictEqual(runSys(target, command), [0x13], 'query is synchronous, once');
+      assert.strictEqual(systemCommands.length - beforeCommands, allowed ? 1 : 0,
+        'only accepted query publishes a system command');
+      assert.strictEqual(e.test_min(target), allowed ? 0 : 1);
+      assert.strictEqual(e.test_max(target), allowed && command === 0xF030 ? 1 : 0);
+      if (allowed) assert.deepStrictEqual(runSys(target, command), [], 'non-iconic command does not query');
+    }
+  }
+  const nestedQuery = e.test_window(0x5500);
+  e.test_iconify(nestedQuery);
+  const nestedSys = [0x68, ...word(e.test_narrow(nestedQuery)), 0x68, ...word(0x112),
+    0x68, ...word(0xF030), 0x6a, 0, 0x6a, 0, 0x9a, ...word(e.test_thunk()), 0x1f, 0];
+  writeCode(0x5600, queryProc(1, 0, nestedSys));
+  const outerQuery = e.test_window(0x5600);
+  e.test_iconify(outerQuery);
+  assert.deepStrictEqual(runSys(outerQuery, 0xF120), [0x13, 0x13]);
+  assert.strictEqual(e.test_min(nestedQuery), 1, 'nested veto remains iconic');
+  assert.strictEqual(e.test_min(outerQuery), 0, 'outer accepted restore keeps its own target/command');
+  writeCode(0x5700, queryProc(1, 0, [0x83, 0x7e, 0x0c, 0x13, 0x75, destroy.length, ...destroy]));
+  const retiredQuery = e.test_window(0x5700);
+  e.test_iconify(retiredQuery);
+  const beforeRetiredQuery = systemCommands.length;
+  runSys(retiredQuery, 0xF120);
+  assert.strictEqual(e.test_alive(retiredQuery), 0, 'query can retire target without stale commit');
+  assert.strictEqual(systemCommands.length, beforeRetiredQuery, 'retired query emits no host commit');
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

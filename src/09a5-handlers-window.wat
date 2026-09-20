@@ -3204,25 +3204,15 @@
               (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF030))
               (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF120))))
         (then
-          (call $host_sys_command (local.get $arg0)
-                (i32.and (local.get $arg2) (i32.const 0xFFF0)))
-          ;; SC_MAXIMIZE / SC_RESTORE actually resize the window — the guest
-          ;; needs WM_MOVE + WM_SIZE so its wndproc relays out (otherwise the
-          ;; back-canvas grows but the app keeps drawing in its old area).
-          ;; SC_MINIMIZE just hides the window; no relayout needed.
-          ;; Each of the three commands is the SW_* it corresponds to, so the
-          ;; show state goes through the same fold ShowWindow uses rather than
-          ;; a second transition table.
-          (if (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF020))
-            (then (call $wnd_apply_show_state (local.get $arg0) (i32.const 6)))) ;; SW_MINIMIZE
-          (if (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF030))
+          (if (call $window_system_show_needs_query (local.get $arg0) (local.get $arg2))
             (then
-              (call $wnd_apply_show_state (local.get $arg0) (i32.const 3)) ;; SW_SHOWMAXIMIZED
-              (call $post_resize_messages (local.get $arg0) (i32.const 2))))
-          (if (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF120))
-            (then
-              (call $wnd_apply_show_state (local.get $arg0) (i32.const 9)) ;; SW_RESTORE
-              (call $post_resize_messages (local.get $arg0) (i32.const 0))))
+              (if (i32.eqz (call $wnd_query_open_allowed (local.get $arg0)))
+                (then
+                  (i32.store (global.get $reg_base) (i32.const 0))
+                  (i32.store offset=16 (global.get $reg_base)
+                    (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+                  (return)))))
+          (call $window_system_show_commit (local.get $arg0) (local.get $arg2))
           (i32.store offset=0 (global.get $reg_base) (i32.const 0))
           (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
       (i32.store offset=0 (global.get $reg_base) (i32.const 0))
@@ -3230,6 +3220,31 @@
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
+
+  ;; Query delivery differs for Win32 and Win16; state publication does not.
+  (func $window_system_show_needs_query (param $hwnd i32) (param $sc i32) (result i32)
+    (local.set $sc (i32.and (local.get $sc) (i32.const 0xFFF0)))
+    (i32.and (call $wnd_min_get (local.get $hwnd))
+      (i32.or (i32.eq (local.get $sc) (i32.const 0xF030))
+              (i32.eq (local.get $sc) (i32.const 0xF120)))))
+
+  (func $window_system_show_commit (param $hwnd i32) (param $sc i32)
+    ;; The query callback may have retired the target.
+    (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+      (then (return)))
+    (local.set $sc (i32.and (local.get $sc) (i32.const 0xFFF0)))
+    (call $host_sys_command (local.get $hwnd) (local.get $sc))
+    (if (i32.eq (local.get $sc) (i32.const 0xF020))
+      (then (call $wnd_apply_show_state (local.get $hwnd) (i32.const 6))))
+    (if (i32.eq (local.get $sc) (i32.const 0xF030))
+      (then
+        (call $wnd_apply_show_state (local.get $hwnd) (i32.const 3))
+        (call $post_resize_messages (local.get $hwnd) (i32.const 2))))
+    (if (i32.eq (local.get $sc) (i32.const 0xF120))
+      (then
+        (call $wnd_apply_show_state (local.get $hwnd) (i32.const 9))
+        (call $post_resize_messages (local.get $hwnd)
+          (select (i32.const 2) (i32.const 0) (call $wnd_max_get (local.get $hwnd)))))))
 
   ;; DefDlgProcA/W: first offer the message to the DLGPROC stored separately
   ;; from the window procedure. A TRUE DLGPROC return means USER must return

@@ -8072,6 +8072,21 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 12)))
     (call $win16_cont_resume))
 
+  ;; Invocation-owned {hwnd, command}; accept a nonzero LONG (DX:AX).
+  (global $WIN16_CONT_QUERYOPEN i32 (i32.const 0xFFB8))
+  (func $win16_queryopen_continue
+    (local $sp i32) (local $hwnd i32) (local $sc i32) (local $allow i32)
+    (local.set $allow (i32.and
+      (i32.or (i32.load (global.get $reg_base)) (i32.load offset=8 (global.get $reg_base)))
+      (i32.const 0xFFFF)))
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $hwnd (call $gl32 (local.get $sp)))
+    (local.set $sc (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 8)))
+    (if (local.get $allow)
+      (then (call $window_system_show_commit (local.get $hwnd) (local.get $sc))))
+    (call $win16_cont_resume))
+
   ;; USER.107 DefWindowProc(hWnd, message, wParam, lParam) -> LONG.
   ;;
   ;; This is also the procedure a task gets back when it subclasses one of our
@@ -8088,6 +8103,21 @@
     (local.set $message (call $win16_arg16 (i32.const 3)))
     (local.set $wparam (call $win16_arg16 (i32.const 2)))
     (local.set $lparam (call $win16_arg32 (i32.const 0)))
+    (if (i32.and (i32.eq (local.get $message) (i32.const 0x0112))
+          (call $window_system_show_needs_query (local.get $hwnd) (local.get $wparam)))
+      (then
+        (if (call $win16_is_far_proc (call $wnd_table_get (local.get $hwnd)))
+          (then
+            (call $win16_cont_push (call $win16_take_return (i32.const 10)) (i32.const 0))
+            (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+            (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+            (call $gs32 (local.get $sp) (local.get $hwnd))
+            (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $wparam))
+            (call $win16_enter_wndproc (call $wnd_table_get (local.get $hwnd))
+              (call $win16_h16 (local.get $hwnd)) (i32.const 0x0013)
+              (i32.const 0) (i32.const 0)
+              (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_QUERYOPEN))
+            (return)))))
     (if (i32.eq (local.get $message) (i32.const 0x0047))
       (then
         ;; Seven 16-bit fields, reached through a selector:offset pointer.
@@ -13802,6 +13832,8 @@
       (then (call $win16_show_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_ACTIVATE))
       (then (call $win16_activate_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_QUERYOPEN))
+      (then (call $win16_queryopen_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_BEGINPAINT))
       (then (call $win16_beginpaint_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took
