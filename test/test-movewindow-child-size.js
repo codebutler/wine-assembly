@@ -171,6 +171,16 @@ const extraWat = String.raw`
   e.test_call_SetWindowPos(first, 80, 82, 100, 50, 0x14);
   assert.strictEqual(e.test_take_nc_paint(first), 0,
     'a hidden ancestor suppresses exposure repaint until the tree is shown');
+  e.wnd_set_style_export(top, e.wnd_get_style_export(top) | 0x10000000);
+  e.test_call_MoveWindow(first, 80, 82, 110, 60, 1);
+  assert.strictEqual(e.test_take_nc_paint(first), 1,
+    'MoveWindow(TRUE) also queues non-client repaint after resizing');
+  e.test_call_MoveWindow(first, 80, 82, 110, 60, 1);
+  assert.strictEqual(e.test_take_nc_paint(first), 0,
+    'same-geometry MoveWindow does not queue non-client repaint');
+  e.test_call_MoveWindow(first, 90, 92, 120, 70, 0);
+  assert.strictEqual(e.test_take_nc_paint(first), 0,
+    'MoveWindow(FALSE) suppresses non-client repaint');
 
   console.log('PASS MoveWindow/SetWindowPos preserve geometry, repaint, and z-order flags');
 })().catch(err => {

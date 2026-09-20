@@ -2509,6 +2509,7 @@
       (local.get $flags))
     (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
     (local.set $dlg_rec (call $dlg_record_for_hwnd (local.get $arg0)))
+    (call $windowpos_queue_ncpaint (local.get $arg0) (local.get $flags))
     (if (i32.and
           (i32.and
             (i32.ne (local.get $dlg_rec) (i32.const 0))

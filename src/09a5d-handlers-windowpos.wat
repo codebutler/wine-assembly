@@ -227,6 +227,17 @@
         (drop (call $wnd_send_message
           (local.get $hwnd) (i32.const 0x0005) (i32.const 0) (local.get $wh))))))
 
+  ;; Both positioning APIs normalize NOMOVE/NOSIZE against committed
+  ;; geometry before calling here. A real change exposes non-client pixels
+  ;; (including standard scrollbars); NOREDRAW leaves them to the app.
+  (func $windowpos_queue_ncpaint (param $hwnd i32) (param $flags i32)
+    (if (i32.and
+          (i32.and
+            (i32.eqz (i32.and (local.get $flags) (i32.const 0x0008)))
+            (call $wnd_is_effectively_visible (local.get $hwnd)))
+          (i32.ne (i32.and (local.get $flags) (i32.const 3)) (i32.const 3)))
+      (then (call $nc_flags_set (local.get $hwnd) (i32.const 1)))))
+
   (func $handle_SetWindowPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetWindowPos(hwnd, hWndInsertAfter, X, Y, cx, cy, uFlags)
     (local $x i32) (local $y i32) (local $cx i32) (local $cy i32)
@@ -400,17 +411,7 @@
       (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
       (local.get $uFlags))
     (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
-    ;; A changed outer rectangle exposes non-client pixels too (notably the
-    ;; standard scrollbar strip). Queue USER's NC paint rather than drawing
-    ;; it from the geometry helper. NOREDRAW leaves this to the application.
-    (if (i32.and
-          (i32.and
-            (i32.eqz (i32.and (local.get $uFlags) (i32.const 0x0008)))
-            (call $wnd_is_effectively_visible (local.get $arg0)))
-          (i32.or
-            (i32.ne (local.get $new_wh) (local.get $old_wh))
-            (i32.ne (local.get $new_xy) (local.get $old_xy))))
-      (then (call $nc_flags_set (local.get $arg0) (i32.const 1))))
+    (call $windowpos_queue_ncpaint (local.get $arg0) (local.get $uFlags))
     ;; Repaint a moved WAT-native control immediately, but only if it is
     ;; actually on screen. Its own WS_VISIBLE bit is not enough: a control
     ;; inside a hidden dialog page keeps that bit set, and painting it writes

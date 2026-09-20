@@ -80,9 +80,25 @@ assert(hiddenDifference <= 10,
   `hiding Color Box overwrote ${hiddenDifference} visible status-bar pixels`);
 assert(restoredDifference <= 10,
   `showing Color Box left ${restoredDifference} status-bar pixels overwritten`);
+// The canvas grows by the 49px Color Box dock height. Its horizontal bar
+// must move with the bottom edge, replacing pixels formerly owned by the
+// palette. Status-only checks miss this stale-palette/non-client regression.
+function scrollbar(image, y) {
+  const crop = new PNG({ width: 206, height: 16 });
+  PNG.bitblt(image, crop, 83, y, 206, 16, 0, 0);
+  return crop;
+}
+const initialBar = scrollbar(images.initial, 326);
+const hiddenBar = diffPng(initialBar, scrollbar(images['colors-off'], 375),
+  { includeAlpha: false }).changed;
+const restoredBar = diffPng(initialBar, scrollbar(images['colors-on'], 326),
+  { includeAlpha: false }).changed;
+assert.strictEqual(hiddenBar, 0, 'resized canvas must repaint its relocated horizontal scrollbar');
+assert.strictEqual(restoredBar, 0, 'restoring Color Box must restore the horizontal scrollbar');
 assert(/window:dock-toggle .*class="msctls_statusbar32".*visible=true/.test(output),
   'Paint status child was not visible after Color Box toggle');
 assert(!/UNIMPLEMENTED API:|RuntimeError|LinkError|CRASH/.test(output),
   'Paint dock toggle triggered an emulator failure');
 
 console.log(`PASS  Paint Color Box toggle preserves status pixels (${hiddenDifference}/${restoredDifference} changed)`);
+console.log(`PASS  Paint scrollbar follows resized canvas (${hiddenBar}/${restoredBar} changed)`);

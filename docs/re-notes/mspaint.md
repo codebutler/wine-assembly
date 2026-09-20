@@ -84,3 +84,27 @@ identical across toggles. Visual inspection shows the view border is now
 continuous, but the palette remnant and missing scrollbar are **not** solved
 by this alone. The separate MoveWindow API's NC invalidation path and the
 ordering of parent client paints versus child NC paints still need checking.
+
+## MoveWindow parity
+
+Filtered tracing confirms the inner canvas (HWND 0x10003) uses
+`MoveWindow(…, 0, 0, 206, 327, TRUE)` when hiding the palette and height 278
+when restoring it. That API also omitted NC invalidation. It now shares
+`$windowpos_queue_ncpaint` with SetWindowPos, using the final normalized
+NOMOVE/NOSIZE and NOREDRAW flags rather than a second hand-copied policy.
+The unit test failed before this change and passes for resize, unchanged
+geometry and `bRepaint=FALSE` afterward.
+
+[MoveWindow's documented redraw contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-movewindow)
+includes non-client scrollbars. This change addresses their missing
+invalidation, **not** full API conformance: the documented synchronous
+UpdateWindow/WM_PAINT behavior is a separate remaining gap in this handler.
+
+Result: full build and WINDOWPOS tests pass; Paint drawing remains 9/9.
+The hidden screenshot now has a complete horizontal scrollbar at y=375,
+covering the formerly stale palette pixels. The strengthened dock-toggle
+test crops with `PNG.bitblt` and compares with the shared `diffPng`: the
+206x16 bar at y=326 initially, y=375 hidden, and y=326 restored is exactly
+identical (**0/0 changed pixels**). Status pixels also remain **0/0**.
+This resolves the palette-remnant/missing-scrollbar observation above;
+full Win98 repaint timing and other unrelated Paint behaviors are not claimed.
