@@ -532,8 +532,9 @@ The menu is up at 527k. It has no window of its own yet: the last window
 (505k-530k) straddles the tail of `mw_logo.bik` and the menu, which is why
 `binkw32+0x30011d80` reappears at 25.3% there.
 
-**Gameplay is still unmeasured.** Reaching it needs the click on New that the
-missing driver performed.
+**Gameplay is still unmeasured**, but not for the reason written here
+originally — the click on New works. See "Driving to gameplay" below for
+where it actually stops.
 
 ### So "the load" is two unrelated problems
 
@@ -543,3 +544,78 @@ missing driver performed.
   transfer.
 
 Quoting one number for "load" hides both.
+
+## Driving to gameplay — how far the CLI gets, and the exact wall
+
+Five headless runs (2026-09-19) chasing a gameplay histogram window. None
+reached gameplay, but they moved the blocker a long way and ruled out three
+input paths. Recorded here so the next session starts from the wall rather
+than from the intro.
+
+### The world renders
+
+The DirectInput click on **New** works. With
+
+```
+--input="<ESC train>,<DI click train>,..."
+  ESC train:  seq 6000 1500 <end>   as B:keydown:27 + B+40:keyup:27
+  DI click:   seq 520000 3000 560000 as B:di-mousedown:1 + B+60:di-mouseup:1
+```
+
+the game runs `mw_intro.bik`, tears it down and builds the prison-ship hold.
+By batch ~810k the captures show the hold **textured, lit, with Jiub in
+frame** — i.e. the D3D/GL path, the world geometry and the character model
+all work. This is much further than the notes above assumed.
+
+### ESC opens the pause menu and nothing we send closes it
+
+The ESC pulse train is load-bearing for skipping the Bink videos, but any
+pulse that lands *after* the world is up opens the in-game pause menu
+(`Return / New / Load / Options / Exit` — note `Return`, which the main menu
+does not have). It is **not a toggle** in our build:
+
+| run | ESC after 860k | frame at 870k-1040k |
+|---|---|---|
+| prof4 | none | pause menu, open |
+| prof5 | one pulse at 866k | pause menu, open |
+
+Two opposite inputs, same result, so a corrective press is not the fix. End
+the train **before the world appears**: `seq 6000 1500 800000` is enough to
+skip every video and leaves no menu.
+
+### The real wall: the chargen Name box
+
+With the train ending at 800k the run reaches the character-generation
+**Name** text prompt, drawn over the live world, by ~810k — and sits there.
+The frame is *byte-identical* from 810k through 900k.
+
+Three input paths tried against that box:
+
+| path | result |
+|---|---|
+| `keydown`/`keyup` letters | field stays empty through 880k — never reaches it |
+| `di-keydown`/`di-keyup` letters | **destructive** — chargen torn down, back at the main menu by 834k |
+| `keypress` letters | untested to completion |
+
+So **do not use `di-keydown` for text.** It is for held game keys (movement);
+feeding letters through it loses the session.
+
+Getting past the box is the whole remaining problem. Likely candidates for
+next time: `keypress` (the WM_CHAR path), or clicking the box's own `OK`
+button — it sits at roughly (447,262) in the 640x480 capture, with the
+cursor parked near (325,250), so a corner-slam `relmousemove` followed by a
+known offset and `di-mousedown:1` is a deterministic way to hit it.
+
+### Cheap oracle: md5 the capture series
+
+Every one of these runs was diagnosed by
+`md5 -q <dir>/*.png | sort | uniq -c`. A single hash across a 170k-batch
+span means the guest is **blocked on a modal**, not running slowly — and it
+costs nothing next to reading a histogram that is really measuring a paused
+game. Do this before running `hot-loop-census.js` on any window, otherwise
+the census faithfully profiles a still frame. It is also what caught the
+regression in the table above: prof8's hash differed from prof7's, which is
+how the DI-key teardown was spotted at all.
+
+Runs are deterministic (see `project_headless_determinism`), so a batch
+number learned from one capture series is reusable in the next run.
