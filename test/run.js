@@ -2359,6 +2359,15 @@ async function main() {
     };
   }
   const tickStateRef = { batch: 0 };
+  const gameplayBench = getArg('gameplay-bench', null) ? require('../tools/diablo-gameplay-bench').createBenchmark({
+    out: getArg('gameplay-bench', null),
+    warmup: Number(getArg('gameplay-warmup', '100')),
+    iterations: Number(getArg('gameplay-iterations', '600')),
+    enabled: Number(getArg('gameplay-candidate', '1')),
+    apiCount: () => apiCount,
+    walking: hasFlag('gameplay-walking'), renderer,
+    profile: getArg('gameplay-profile', null),
+  }) : null;
   // --frame-stats: how evenly the guest presents, not how often. Average fps
   // is the number that hides judder -- 55fps of even 18ms frames looks
   // smooth, 55fps of alternating 17/34ms frames does not, and both report
@@ -2483,6 +2492,7 @@ async function main() {
     // is done touching those pixels, which is exactly when they are worth
     // uploading for a game that renders straight into a locked surface.
     h.dx_trace = (kind, ...a) => {
+      if (gameplayBench) gameplayBench.present(kind, ...a);
       if (kind === 2 || kind === 5 || kind === 6) dxPresent.dirty = true;
       if (FRAME_STATS && (kind === 5 || kind === 6)) recordFrame(frameStats.present);
       // --dx-lock-pause-ms: presentation back-pressure, charged at kind 5.
@@ -2601,7 +2611,17 @@ async function main() {
   // initial === maximum so the buffer is never detached, so one decode per
   // distinct pointer is enough.
   const apiNameCache = new Map();
+  // Experimental A/B: retain API totals but avoid decoding names no consumer
+  // needs. Explicit diagnostics always keep the original logging path.
+  const fastQuietApi = hasFlag('quiet-api-fast') && QUIET_API &&
+    !TRACE_API && !TRACE_API_COUNTS && !TRACE_CRITICAL &&
+    !TRACE_INPUT_DISPATCH && !ESP_DELTA && !breakApis.length;
   h.log = (ptr, len) => {
+    if (fastQuietApi) {
+      apiCount++;
+      pendingComApiId = -1;
+      return;
+    }
     let t = apiNameCache.get(ptr);
     if (t === undefined) {
       const b = new Uint8Array(memory.buffer, ptr, Math.min(len, 256));
@@ -3357,6 +3377,11 @@ async function main() {
   const tickCallStepMs = Math.max(1, parseInt(process.env.TICK_CALL_STEP_MS || '1', 10) || 1);
   const batchClock = createBatchClock(TICK_MS_PER_BATCH, tickCallStepMs);
   const tickState = batchClock.state;
+  if (gameplayBench) {
+    const ticks = batchClock.getTicks, peek = batchClock.batchTicks;
+    batchClock.getTicks = () => gameplayBench.active ? gameplayBench.now : ticks();
+    batchClock.batchTicks = () => gameplayBench.active ? gameplayBench.now : peek();
+  }
   // Published for the --dx-lock-pause-ms hook installed above, which runs long
   // before this line but only ever fires during the batch loop, long after it.
   DX_LOCK_PAUSE.clock = batchClock;
@@ -5842,6 +5867,7 @@ async function main() {
       }
     }
     tickState.batch = batch;
+    if (gameplayBench && batch === 0) gameplayBench.init(instance.exports, memory);
     tickStateRef.batch = batch;
     tickState.callsInBatch = 0;
     if (ctx.pumpAudioCompletions) ctx.pumpAudioCompletions();
@@ -8614,6 +8640,8 @@ async function main() {
       }
       process.exit(1);
     }
+
+    if (gameplayBench && await gameplayBench.boundary(batchClock.batchTicks())) break;
 
     // DEBUG: check COM wrapper after run
     if (TRACE_API && instance.exports.guest_read32) {
