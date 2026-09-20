@@ -64,13 +64,13 @@ const DOWN = 40, UP = 38, ENTER = 13, ESC = 27, LEFT = 37, RIGHT = 39;
 const A = 65, D = 68, W = 87;
 
 // Player one is the host and player two is the client (Instructions.txt 3.4),
-// and the shipped config makes player one the COMPUTER on a keyboard layout
-// that is not A/D/W -- so a hosting human has no controls at all and its blob
-// only twitches when the AI reacts to the ball. That is a game setting, not
-// something this emulator decides, but a match where one side cannot move is
-// not a match, so the host walks through EINSTELLUNGEN first: player one onto
-// the keyboard, then TASTEN DEFINIEREN to bind A/D/W (and the arrow keys for
-// player two) by name instead of trusting the defaults.
+// and volley.exe's OWN default makes player one the COMPUTER on a keyboard
+// layout that is not A/D/W -- so a hosting human has no controls at all and
+// its blob only twitches when the AI reacts to the ball, which looks exactly
+// like a broken network game. We now mount a settings.dat (the game's own
+// save file, written by walking this same menu once) that puts player one on
+// A/D/W, so nobody has to do this by hand. The walk is kept for a profile
+// whose own saved settings override the mounted copy:
 //   settings -> STEUERUNG 1 -> TASTATUR -> TASTEN DEFINIEREN -> six keys
 //   -> ESC lands back on the main menu with EINSTELLUNGEN still selected
 const HOST_SETUP = [
@@ -106,11 +106,27 @@ const snapWindow = () => {
   return { lit: lit / (d.length / 4), png: copy.toDataURL('image/png') };
 };
 
+// Real DOM key events, not sharedRenderer.handleKeyDown().
+//
+// Driving the renderer directly skips the page's own key listener, which is
+// the half a person's fingers actually use -- so a test that calls it proves
+// the emulator can move a blob and says nothing about whether the browser
+// can. Everything here goes through page.keyboard for that reason.
+const KEYNAME = {
+  40: 'ArrowDown', 38: 'ArrowUp', 37: 'ArrowLeft', 39: 'ArrowRight',
+  13: 'Enter', 27: 'Escape', 65: 'KeyA', 68: 'KeyD', 87: 'KeyW',
+};
+const keyName = (vk) => {
+  const name = KEYNAME[vk];
+  if (!name) throw new Error(`no DOM key name for VK ${vk}`);
+  return name;
+};
+
 async function keys(page, list) {
   for (const vk of list) {
-    await page.evaluate(k => sharedRenderer.handleKeyDown(k), vk);
+    await page.keyboard.down(keyName(vk));
     await H.sleep(150);
-    await page.evaluate(k => sharedRenderer.handleKeyUp(k), vk);
+    await page.keyboard.up(keyName(vk));
     await H.sleep(900);
   }
 }
@@ -224,17 +240,17 @@ const blobsAt = (band) => {
     // the lobby, and it parks until the lobby answers.
     await H.sleep(MENU_MS);
     await snap(host, 'host-menu');
-    // ESC leaves the settings screen with EINSTELLUNGEN still selected on the
-    // main menu, so the walk to NETZWERKSPIEL from there is UP UP, not DOWN.
-    // --no-host-setup is the negative control: it leaves the shipped config
-    // alone, which is the state two people testing by hand are actually in.
-    // The player-one checks below must FAIL there, or they are checking
-    // nothing -- verified, they do.
-    if (!flag('no-host-setup')) await keys(host.page, HOST_SETUP);
-    await snap(host, 'host-settings');
-    // From EINSTELLUNGEN (where ESC leaves the cursor) NETZWERKSPIEL is two
-    // up; from a menu nobody has touched it is one down.
-    const toNetwork = flag('no-host-setup') ? [DOWN] : [UP, UP];
+    // --host-setup walks EINSTELLUNGEN first and is now only for a profile
+    // carrying its own saved settings.dat in localStorage; the mounted one
+    // already puts player one on the keyboard, and the gameplay checks below
+    // are what proves it, since the host cannot move at all without it.
+    if (flag('host-setup')) {
+      await keys(host.page, HOST_SETUP);
+      await snap(host, 'host-settings');
+    }
+    // NETZWERKSPIEL is one down from the top of an untouched main menu; ESC
+    // out of the settings screen instead leaves EINSTELLUNGEN selected, two up.
+    const toNetwork = flag('host-setup') ? [UP, UP] : [DOWN];
     await keys(host.page, [...toNetwork, ENTER, ENTER, DOWN, DOWN, ENTER]);
     await keys(guest.page, [DOWN, ENTER, DOWN, ENTER, DOWN, DOWN, ENTER]);
 
@@ -284,10 +300,10 @@ const blobsAt = (band) => {
     const BAND = [0.64, 0.98];
     const read = p => p.page.evaluate(blobsAt, BAND);
     const hold = async (p, vk, ms) => {
-      await p.page.evaluate(k => sharedRenderer.handleKeyDown(k), vk);
+      await p.page.keyboard.down(keyName(vk));
       await H.sleep(ms);
       const seen = { host: await read(host), guest: await read(guest) };
-      await p.page.evaluate(k => sharedRenderer.handleKeyUp(k), vk);
+      await p.page.keyboard.up(keyName(vk));
       await H.sleep(1500);
       return seen;
     };

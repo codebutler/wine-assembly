@@ -38,6 +38,10 @@ messageboard.txt
 *.orig
 stdout.txt
 *.DAT
+# Blobby Volley's own save file, captured once and shipped so the network
+# host has keyboard controls out of the box. 117 bytes, and the app does not
+# launch as a two-human game without it.
+!packages/freeware/blobby-volley/settings.dat
 *.bmp
 *.mp3
 test/binaries/pinball/
