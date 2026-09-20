@@ -4385,60 +4385,51 @@
     (i32.const 0)
   )
 
+  ;; Shared IsChar* predicate. Only decoding/classification differs between
+  ;; ANSI bytes and WCHARs; class masks and BOOL normalization stay together.
+  (func $is_char_type (param $ch i32) (param $mask i32) (param $wide i32) (result i32)
+    (i32.ne (i32.and
+      (if (result i32) (local.get $wide)
+        (then (call $ctype1_unicode_flags (local.get $ch)))
+        (else (call $ctype1_ascii_flags (i32.and (local.get $ch) (i32.const 0xff)))))
+      (local.get $mask)) (i32.const 0)))
+
   ;; BOOL IsCharAlphaA(CHAR ch). Win32 promotes the byte argument to a stack
   ;; slot; use the same invariant ANSI classification as GetStringTypeA.
   (func $handle_IsCharAlphaA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.ne
-        (i32.and
-          (call $ctype1_ascii_flags (i32.and (local.get $arg0) (i32.const 0xff)))
-          (i32.const 0x100))
-        (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $is_char_type
+      (local.get $arg0) (i32.const 0x100) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; BOOL IsCharAlphaNumericA(CHAR ch). C1_ALPHA and C1_DIGIT are the two
   ;; accepted classes; punctuation, spaces and control bytes remain false.
   (func $handle_IsCharAlphaNumericA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.ne
-        (i32.and
-          (call $ctype1_ascii_flags (i32.and (local.get $arg0) (i32.const 0xff)))
-          (i32.const 0x104))
-        (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $is_char_type
+      (local.get $arg0) (i32.const 0x104) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; BOOL IsCharUpperA/IsCharLowerA(CHAR ch). Far 1.70 passes promoted CHAR
   ;; values whose upper bytes are unspecified, so classify the low ANSI byte.
   (func $handle_IsCharUpperA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.ne
-        (i32.and
-          (call $ctype1_ascii_flags (i32.and (local.get $arg0) (i32.const 0xff)))
-          (i32.const 0x01))
-        (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $is_char_type
+      (local.get $arg0) (i32.const 0x01) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IsCharLowerA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.ne
-        (i32.and
-          (call $ctype1_ascii_flags (i32.and (local.get $arg0) (i32.const 0xff)))
-          (i32.const 0x02))
-        (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $is_char_type
+      (local.get $arg0) (i32.const 0x02) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; BOOL IsCharAlphaW/IsCharUpperW(WCHAR ch).  Classify the Unicode code unit
   ;; rather than interpreting its low byte in the process ANSI code page.
   (func $handle_IsCharAlphaW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.ne
-        (i32.and
-          (call $ctype1_unicode_flags (local.get $arg0))
-          (i32.const 0x100))
-        (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $is_char_type
+      (local.get $arg0) (i32.const 0x100) (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IsCharUpperW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.ne
-        (i32.and
-          (call $ctype1_unicode_flags (local.get $arg0))
-          (i32.const 0x01))
-        (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $is_char_type
+      (local.get $arg0) (i32.const 0x01) (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetStringType{A,W} core: one CT_CTYPE1 word per source character. The

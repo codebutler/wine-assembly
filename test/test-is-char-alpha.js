@@ -1,78 +1,56 @@
 #!/usr/bin/env node
 'use strict';
-
 const assert = require('assert');
-const { readWatSourceClosure } = require('./wat-source-closure');
-
-const handlers = readWatSourceClosure();
+const { bootRenderHarness } = require('./render-helper');
 const apiTable = require('../src/api_table.json');
+const cases = [
+  ['IsCharAlphaA', 0x100, false], ['IsCharAlphaNumericA', 0x104, false],
+  ['IsCharUpperA', 1, false], ['IsCharLowerA', 2, false],
+  ['IsCharAlphaW', 0x100, true], ['IsCharUpperW', 1, true],
+];
+const extraWat = cases.map(([name]) => `
+  (func (export "test_${name}") (param $ch i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07000000))
+    (call $handle_${name} (local.get $ch) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
+`).join('') + `
+  (func (export "test_ansi_flags") (param $ch i32) (result i32)
+    (call $ctype1_ascii_flags (local.get $ch)))
+  (func (export "test_unicode_flags") (param $ch i32) (result i32)
+    (call $ctype1_unicode_flags (local.get $ch)))
+`;
 
-const api = apiTable.find(entry => entry.name === 'IsCharAlphaA');
-assert(api, 'IsCharAlphaA is registered');
-assert.strictEqual(api.nargs, 1, 'IsCharAlphaA consumes one promoted CHAR argument');
-assert.match(handlers,
-  /\(func \$handle_IsCharAlphaA[\s\S]*?\(call \$ctype1_ascii_flags[\s\S]*?\(i32\.const 0x100\)[\s\S]*?\(i32\.const 8\)\)\)\)/,
-  'IsCharAlphaA reuses ANSI C1_ALPHA classification and pops ret plus one argument');
-
-const alphaNumericApi = apiTable.find(entry => entry.name === 'IsCharAlphaNumericA');
-assert(alphaNumericApi, 'IsCharAlphaNumericA is registered');
-assert.strictEqual(alphaNumericApi.nargs, 1,
-  'IsCharAlphaNumericA consumes one promoted CHAR argument');
-assert.match(handlers,
-  /\(func \$handle_IsCharAlphaNumericA[\s\S]*?\(call \$ctype1_ascii_flags[\s\S]*?\(i32\.const 0x104\)[\s\S]*?\(i32\.const 8\)\)\)\)/,
-  'IsCharAlphaNumericA accepts C1_ALPHA or C1_DIGIT and pops ret plus one argument');
-
-for (const [name, flag] of [['IsCharUpperA', '0x01'], ['IsCharLowerA', '0x02']]) {
-  const entry = apiTable.find(apiEntry => apiEntry.name === name);
-  assert(entry, `${name} is registered`);
-  assert.strictEqual(entry.nargs, 1, `${name} consumes one promoted CHAR argument`);
-  assert.match(handlers,
-    new RegExp(`\\(func \\$handle_${name}[\\s\\S]*?\\(call \\$ctype1_ascii_flags[\\s\\S]*?\\(i32\\.const ${flag}\\)[\\s\\S]*?\\(i32\\.const 8\\)\\)\\)\\)`),
-    `${name} reuses ANSI CTYPE1 classification and pops ret plus one argument`);
-}
-
-function isCharAlphaA(value) {
-  const ch = value & 0xff;
-  return (ch >= 0x41 && ch <= 0x5a) || (ch >= 0x61 && ch <= 0x7a);
-}
-
-for (const ch of ['A', 'Z', 'a', 'z']) assert.strictEqual(isCharAlphaA(ch.charCodeAt(0)), true);
-for (const ch of ['0', '_', ' ', '[']) assert.strictEqual(isCharAlphaA(ch.charCodeAt(0)), false);
-assert.strictEqual(isCharAlphaA(0x12341), true, 'only the promoted low ANSI byte is classified');
-
-function isCharAlphaNumericA(value) {
-  const ch = value & 0xff;
-  return isCharAlphaA(ch) || (ch >= 0x30 && ch <= 0x39);
-}
-
-function isCharUpperA(value) {
-  const ch = value & 0xff;
-  return (ch >= 0x41 && ch <= 0x5a)
-    || (ch >= 0xc0 && ch <= 0xd6)
-    || (ch >= 0xd8 && ch <= 0xde)
-    || [0x8a, 0x8c, 0x8e, 0x9f].includes(ch);
-}
-
-function isCharLowerA(value) {
-  const ch = value & 0xff;
-  return (ch >= 0x61 && ch <= 0x7a)
-    || (ch >= 0xdf && ch <= 0xf6)
-    || (ch >= 0xf8 && ch <= 0xff)
-    || [0x9a, 0x9c, 0x9e, 0xb5, 0xaa, 0xba].includes(ch);
-}
-
-for (const ch of [0x41, 0xc9, 0x8a, 0x9f]) assert.strictEqual(isCharUpperA(ch), true);
-for (const ch of [0x61, 0xe9, 0x9a, 0xdf]) assert.strictEqual(isCharLowerA(ch), true);
-for (const ch of [0x61, 0xe9, 0xd7, 0xf7]) assert.strictEqual(isCharUpperA(ch), false);
-for (const ch of [0x41, 0xc9, 0xd7, 0xf7]) assert.strictEqual(isCharLowerA(ch), false);
-assert.strictEqual(isCharUpperA(0x490041), true,
-  'only the promoted low ANSI byte is classified');
-
-for (const ch of ['A', 'z', '0', '9']) {
-  assert.strictEqual(isCharAlphaNumericA(ch.charCodeAt(0)), true);
-}
-for (const ch of ['_', ' ', '[', '!']) {
-  assert.strictEqual(isCharAlphaNumericA(ch.charCodeAt(0)), false);
-}
-
-console.log('PASS  IsCharAlphaA/IsCharAlphaNumericA expose bounded ANSI classification');
+(async () => {
+  const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  let checked = 0;
+  for (const [name, mask, wide] of cases) {
+    assert.strictEqual(apiTable.find(api => api.name === name).nargs, 1);
+    const classify = e[`test_${name}`];
+    const flags = wide ? e.test_unicode_flags : e.test_ansi_flags;
+    for (let ch = 0; ch < (wide ? 65536 : 256); ch++) {
+      const expected = (flags(ch) & mask) !== 0 ? 1 : 0;
+      assert.strictEqual(classify(ch), expected, `${name}(${ch})`);
+      assert.strictEqual(e.get_esp(), 0x07000008, `${name} stdcall cleanup`);
+      const promoted = wide ? (ch | 0xabcd0000) : (ch | 0xabcdef00);
+      assert.strictEqual(classify(promoted), expected, `${name} promoted argument`);
+      assert.strictEqual(e.get_esp(), 0x07000008);
+      checked += 2;
+    }
+  }
+  // Independent fixtures: these catch classifier mistakes too.
+  for (const ch of [0x41, 0x5a, 0x61, 0x7a, 0xc9, 0xe9, 0x8a, 0x9f])
+    assert.strictEqual(e.test_IsCharAlphaA(ch), 1);
+  for (const ch of [0, 0x20, 0x30, 0x5b, 0x5f, 0xd7, 0xf7])
+    assert.strictEqual(e.test_IsCharAlphaA(ch), 0);
+  assert.strictEqual(e.test_IsCharAlphaNumericA(0x39), 1);
+  assert.strictEqual(e.test_IsCharUpperA(0x8a), 1);
+  assert.strictEqual(e.test_IsCharUpperW(0x8a), 0, 'Unicode C1 control is not CP1252 S-caron');
+  assert.strictEqual(e.test_IsCharUpperW(0x160), 1);
+  assert.strictEqual(e.test_IsCharAlphaW(0x153), 1);
+  assert.strictEqual(e.test_IsCharUpperW(0x153), 0);
+  assert.strictEqual(e.test_IsCharLowerA(0xdf), 1);
+  assert.strictEqual(e.test_IsCharLowerA(0xc9), 0);
+  assert.strictEqual(e.test_IsCharAlphaW(0xd800), 0, 'surrogate is not a letter');
+  console.log(`PASS ${checked} real IsChar* calls: table agreement, promotion, BOOL and ESP`);
+})().catch(error => { console.error(error); process.exit(1); });
