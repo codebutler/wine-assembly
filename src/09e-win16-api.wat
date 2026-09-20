@@ -8350,13 +8350,31 @@
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 10)))
 
+  ;; Insert-after is an HWND except for the four positioning pseudo-handles.
+  ;; NOZORDER must not translate an ignored (possibly invalid) argument.
+  (func $win16_position_insert_after (param $after i32) (param $flags i32) (result i32)
+    (if (i32.and (local.get $flags) (i32.const 4)) (then (return (i32.const 0))))
+    (if (i32.le_u (local.get $after) (i32.const 1)) (then (return (local.get $after))))
+    (if (i32.eq (local.get $after) (i32.const 0xffff)) (then (return (i32.const -1))))
+    (if (i32.eq (local.get $after) (i32.const 0xfffe)) (then (return (i32.const -2))))
+    (call $win16_h32 (local.get $after)))
+
+  (func $win16_position_zorder (param $hwnd i32) (param $after i32) (param $flags i32)
+    (if (i32.and (local.get $flags) (i32.const 4)) (then (return)))
+    (call $wnd_z_set_after (local.get $hwnd) (local.get $after))
+    ;; SetWindowPos already forwards top-level order to the host. Its child
+    ;; branch needs this bridge, but top-level calls must not be sent twice.
+    (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000))
+      (then (call $host_set_window_zorder (local.get $hwnd) (local.get $after)))))
+
   ;; USER.259 BeginDeferWindowPos(nNumWindows) -> HDWP,
   ;; USER.260 DeferWindowPos(hdwp, hWnd, hWndInsertAfter, x, y, cx, cy, flags),
   ;; USER.261 EndDeferWindowPos(hdwp).
   ;;
   ;; Windows batches the moves so a multi-window relayout lands in one paint;
-  ;; each one is applied as it arrives here instead, which every caller sees as
-  ;; the same final geometry. MFC's CFrameWnd::RecalcLayout arranges a frame's
+  ;; FIXME: each one is applied as it arrives here instead. This exposes
+  ;; premature geometry/messages and does not model real transactions.
+  ;; MFC's CFrameWnd::RecalcLayout arranges a frame's
   ;; control bars this way, so a 16-bit MFC app reaches this on its first
   ;; WM_SIZE — Hearts does, positioning its status bar.
   (func $win16_BeginDeferWindowPos
@@ -8368,7 +8386,6 @@
     (local $hwnd i32) (local $after i32) (local $x i32) (local $y i32)
     (local $cx i32) (local $cy i32) (local $flags i32) (local $hdwp i32)
     (local $hwnd16 i32) (local $proc i32) (local $old_cs i32) (local $cs i32)
-    (local $after32 i32)
     (local.set $hdwp (call $win16_arg16 (i32.const 7)))
     (local.set $hwnd16 (call $win16_arg16 (i32.const 6)))
     (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
@@ -8378,6 +8395,7 @@
     (local.set $cx (call $win16_coord (call $win16_arg16 (i32.const 2))))
     (local.set $cy (call $win16_coord (call $win16_arg16 (i32.const 1))))
     (local.set $flags (call $win16_arg16 (i32.const 0)))
+    (local.set $after (call $win16_position_insert_after (local.get $after) (local.get $flags)))
     (local.set $proc (call $wnd_table_get (local.get $hwnd)))
     (local.set $old_cs (call $host_get_window_client_size (local.get $hwnd)))
     (call $win16_call32_begin (i32.const 7))
@@ -8386,20 +8404,10 @@
     (call $handle_SetWindowPos (local.get $hwnd) (local.get $after)
       (local.get $x) (local.get $y) (local.get $cx) (i32.const 0))
     (call $win16_call32_end)
-    (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x0004))) ;; !SWP_NOZORDER
-      (then
-        (local.set $after32
-          (if (result i32) (i32.eq (local.get $after) (i32.const 0xFFFF))
-            (then (i32.const -1))
-            (else (if (result i32) (i32.eq (local.get $after) (i32.const 0xFFFE))
-              (then (i32.const -2))
-              (else (if (result i32) (i32.le_u (local.get $after) (i32.const 1))
-                (then (local.get $after))
-                (else (call $win16_h32 (local.get $after)))))))))
-        (call $wnd_z_set_after (local.get $hwnd) (local.get $after32))
-        (call $host_set_window_zorder (local.get $hwnd) (local.get $after32))))
+    (call $win16_position_zorder (local.get $hwnd) (local.get $after) (local.get $flags))
     (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
-    ;; USER sends size changes before SetWindowPos/DeferWindowPos returns.
+    ;; This immediate compatibility path sends size changes before returning.
+    ;; Real deferred positioning must move these callbacks to EndDeferWindowPos.
     ;; VBRUN caches PictureBox ScaleWidth/ScaleHeight in that notification;
     ;; posting it leaves the old design-time 32x32 scale visible to the next
     ;; Basic statement even though the HWND has already been resized.
@@ -8428,12 +8436,12 @@
   ;; FreeCell has one such routine and every dialog it owns goes through it, so
   ;; four of its five menu commands stopped here.
   ;;
-  ;; hWndInsertAfter stays raw: HWND_TOP and friends are small constants, not
-  ;; handles, and mapping them would turn them into windows.
+  ;; Widen ordinary insert-after handles while preserving HWND_TOP and the
+  ;; other pseudo-handles before entering the shared positioning path.
   (func $win16_SetWindowPos
     (local $hwnd i32) (local $after i32) (local $x i32) (local $y i32)
     (local $cx i32) (local $cy i32) (local $flags i32) (local $hwnd16 i32)
-    (local $proc i32) (local $old_cs i32) (local $cs i32) (local $after32 i32)
+    (local $proc i32) (local $old_cs i32) (local $cs i32)
     (local.set $hwnd16 (call $win16_arg16 (i32.const 6)))
     (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
     (local.set $after (call $win16_arg16 (i32.const 5)))
@@ -8442,6 +8450,7 @@
     (local.set $cx (call $win16_coord (call $win16_arg16 (i32.const 2))))
     (local.set $cy (call $win16_coord (call $win16_arg16 (i32.const 1))))
     (local.set $flags (call $win16_arg16 (i32.const 0)))
+    (local.set $after (call $win16_position_insert_after (local.get $after) (local.get $flags)))
     (local.set $proc (call $wnd_table_get (local.get $hwnd)))
     (local.set $old_cs (call $host_get_window_client_size (local.get $hwnd)))
     (call $win16_call32_begin (i32.const 7))
@@ -8450,18 +8459,7 @@
     (call $handle_SetWindowPos (local.get $hwnd) (local.get $after)
       (local.get $x) (local.get $y) (local.get $cx) (i32.const 0))
     (call $win16_call32_end)
-    (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x0004))) ;; !SWP_NOZORDER
-      (then
-        (local.set $after32
-          (if (result i32) (i32.eq (local.get $after) (i32.const 0xFFFF))
-            (then (i32.const -1))
-            (else (if (result i32) (i32.eq (local.get $after) (i32.const 0xFFFE))
-              (then (i32.const -2))
-              (else (if (result i32) (i32.le_u (local.get $after) (i32.const 1))
-                (then (local.get $after))
-                (else (call $win16_h32 (local.get $after)))))))))
-        (call $wnd_z_set_after (local.get $hwnd) (local.get $after32))
-        (call $host_set_window_zorder (local.get $hwnd) (local.get $after32))))
+    (call $win16_position_zorder (local.get $hwnd) (local.get $after) (local.get $flags))
     (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
     (if (i32.and
           (call $win16_is_far_proc (local.get $proc))
