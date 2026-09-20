@@ -867,3 +867,20 @@ pre-change HEAD versions while keeping the rest of the current source/host:
 `/private/tmp/wa-activation-before-three.wasm`. WordZap fails identically at
 width 600 (`wa-activation-wordzap-three-baseline.log`). This rules out this
 turn's runtime delta as the sole cause, not every earlier paint change.
+
+## 2026-09-20: WordZap publication lock removed
+
+The WordZap failure above is now resolved without changing its pixel or
+gameplay expectations. The guest draws its splash and polls GetCurrentTime
+before EndPaint; canonical pixels were correct, but the renderer withheld all
+publication while a paint DC was live. BeginPaint is not implicit double
+buffering. Publication now waits only for an executing Worker slice, not for
+EndPaint, and the modal-dialog exception to the former lock is removed.
+
+All seven WEP3 games, WinRAR candidate menu/property-sheet checks, property-sheet
+page lifetimes, native-child DirectDraw overlays and the renderer boundary
+regression pass. Chromium shows the splash in cooperative and Worker modes;
+the WinRAR Worker browser file-drop gate passes. No new full 24-game sweep is
+claimed. Browser-resized WordZap copyright clipping remains a separate issue.
+See [the WordZap investigation](re-notes/wep16-wordzap.md) for traces, official
+contract links, reproduction and verification scope.

@@ -17,19 +17,19 @@ const hostImports = fs.readFileSync(path.join(ROOT, 'lib/host-imports.js'), 'utf
 const browserHost = fs.readFileSync(path.join(ROOT, 'host.js'), 'utf8');
 const guestRpc = fs.readFileSync(path.join(ROOT, 'lib/guest-rpc.js'), 'utf8');
 assert(watSource.includes('(call $host_paint_begin (local.get $arg0))'),
-  'BeginPaint must open the browser publication transaction');
+  'BeginPaint must notify the host of its paint lifetime');
 assert(watSource.includes('(call $host_paint_end (local.get $arg0))'),
-  'EndPaint must close the browser publication transaction');
+  'EndPaint must notify the host of its paint completion');
 assert(watSource.includes('(call $host_paint_begin (local.get $hwnd))') &&
   watSource.includes('(call $host_paint_end (local.get $hwnd))'),
-  'WAT-native EDIT paint must bracket its fill and text as one publication');
+  'WAT-native EDIT paint must report its fill/text lifetime');
 const modalPump = watSource.match(/\(func \$modal_pump_step[\s\S]*?\n  \)/);
 assert(modalPump && /\(drop \(call \$wat_wndproc_dispatch[\s\S]*?\n\s*\(call \$host_invalidate \(local\.get \$hwnd\)\)/
   .test(modalPump[0]),
   'modal native-control paint completion must request a canonical composite');
 assert(hostImports.includes('paint_begin: (hwnd) =>') &&
   hostImports.includes('paint_end: (hwnd) =>'),
-  'host imports must forward paint transactions to the renderer');
+  'host imports must forward paint notifications to the renderer');
 assert(browserHost.includes("WineAssembly.versionedUrl('lib/host-import-sigs.generated.json')"),
   'Worker launch must centrally version the signature table containing paint brackets');
 assert(guestRpc.includes("'paint_begin',") && guestRpc.includes("'paint_end',"),
@@ -53,28 +53,21 @@ try {
   let repaints = 0;
   renderer.repaint = () => { repaints++; };
 
-  // Cooperative execution blocks the browser only until its block budget is
-  // exhausted. A BeginPaint/EndPaint pair can cross that boundary just as it
-  // can cross Worker slices, so it must keep the queued rAF private too.
+  // A display DC is not an implicit double buffer. WordZap draws a splash and
+  // polls time before EndPaint: the already drawn pixels must become visible.
   renderer.beginWorkerGdiPaint(0x10001);
   renderer.scheduleRepaint();
-  assert.strictEqual(callbacks.length, 0,
-    'cooperative BeginPaint must hold a frame that spans slices');
-  renderer.flushRepaint(true);
-  assert.strictEqual(repaints, 0,
-    'cooperative slice boundary must not publish inside BeginPaint');
-  renderer.endWorkerGdiPaint(0x10001);
   assert.strictEqual(callbacks.length, 1,
-    'cooperative EndPaint should queue the completed transaction');
+    'cooperative BeginPaint must not lock publication');
   callbacks.shift()();
   assert.strictEqual(repaints, 1,
-    'completed cooperative paint should composite exactly once');
+    'drawn pixels publish before EndPaint');
+  renderer.endWorkerGdiPaint(0x10001);
   repaints = 0;
 
   // A synchronous modal loop can begin inside its owner's WM_PAINT and wait
-  // there indefinitely for user input. The nested loop suspends the outer
-  // transaction so both what the owner drew before MessageBox and the
-  // separately completed dialog can become visible.
+  // there indefinitely for user input. Neither display DC lifetime may lock
+  // publication; this requires no special-case exception for modal dialogs.
   const ownerCanvas = { _waFlushCanonicalSurface: () => { ownerCanvas.flushes++; }, flushes: 0 };
   const dialogCanvas = { _waFlushCanonicalSurface: () => { dialogCanvas.flushes++; }, flushes: 0 };
   const owner = { hwnd: 0x10020, visible: true, isChild: false,
@@ -94,8 +87,8 @@ try {
   assert.strictEqual(dialogCanvas.flushes, 1,
     'the completed modal surface may publish independently');
   renderer.beginWorkerGdiPaint(dialog.hwnd);
-  assert.strictEqual(renderer._workerPublicationHeld(), true,
-    'a dialog inside its own BeginPaint remains private');
+  assert.strictEqual(renderer._workerPublicationHeld(), false,
+    'a dialog inside its own BeginPaint may also display drawn pixels');
   renderer.endWorkerGdiPaint(dialog.hwnd);
   renderer.endWorkerGdiPaint(owner.hwnd);
   delete renderer.windows[dialog.hwnd];
@@ -139,18 +132,22 @@ try {
   renderer.endWorkerGuestSlice();
   renderer._workerLastCompositeAt = performance.now();
   renderer.flushRepaint(true);
-  assert.strictEqual(callbacks.length, 0,
-    'slice boundary inside BeginPaint/EndPaint must not publish the erase');
+  assert.strictEqual(callbacks.length, 1,
+    'completed slice may publish before EndPaint');
+  callbacks.shift()();
+  assert.strictEqual(repaints, 1);
 
-  // The next slice draws the field contents, but the paint transaction is
-  // still open. A second boundary must keep the complete-looking intermediate
-  // canvas private until EndPaint validates it.
+  // A second slice can draw more through the same DC. EndPaint releases the
+  // DC; it does not commit a frame or validate subsequent damage.
   renderer.beginWorkerGuestSlice();
   renderer.scheduleRepaint();
   renderer.endWorkerGuestSlice();
   renderer.flushRepaint(true);
-  assert.strictEqual(callbacks.length, 0,
-    'a spanning WM_PAINT stays private across every intermediate boundary');
+  assert.strictEqual(callbacks.length, 1,
+    'a spanning WM_PAINT must not starve successive frames');
+  callbacks.shift()();
+  assert.strictEqual(repaints, 2);
+  renderer.scheduleRepaint();
 
   renderer.beginWorkerGuestSlice();
   renderer.endWorkerGdiPaint(0x10002);
@@ -159,8 +156,8 @@ try {
   assert.strictEqual(callbacks.length, 1,
     'EndPaint boundary should publish one coalesced browser frame');
   callbacks.shift()();
-  assert.strictEqual(repaints, 1,
-    'completed Worker paint should composite exactly once');
+  assert.strictEqual(repaints, 3,
+    'pending drawing also publishes after EndPaint');
   assert.strictEqual(renderer._repaintScheduled, false);
   assert.strictEqual(renderer._workerGdiPaintDepth, 0);
 
@@ -170,13 +167,13 @@ try {
   assert.strictEqual(callbacks.length, 1);
   renderer.beginWorkerGuestSlice();
   callbacks.shift()();
-  assert.strictEqual(repaints, 1,
+  assert.strictEqual(repaints, 3,
     'rAF becoming due during a Worker slice must not repaint');
   renderer.endWorkerGuestSlice();
   renderer.flushRepaint(true);
   assert.strictEqual(callbacks.length, 1);
   callbacks.shift()();
-  assert.strictEqual(repaints, 2);
+  assert.strictEqual(repaints, 4);
 
   // If the browser's queued rAF repeatedly loses the race to the next Worker
   // slice, a due frame must still publish at the safe boundary. Rate limiting
@@ -186,7 +183,7 @@ try {
   renderer.endWorkerGuestSlice();
   renderer._workerLastCompositeAt = performance.now() - 20;
   renderer.flushRepaint(true);
-  assert.strictEqual(repaints, 3,
+  assert.strictEqual(repaints, 5,
     'a due frame must publish synchronously at the completed slice boundary');
 } finally {
   if (oldRaf === undefined) delete global.requestAnimationFrame;
