@@ -46,3 +46,56 @@ Evidence, all in `/private/tmp/`:
 ```sh
 WINE_ASSEMBLY_WASM=build/wine-assembly.wasm node test/test-win16-wep3-gameplay.js fujigolf
 ```
+
+## 2026-09-20: geometry cause isolated to missing Win16 activation
+
+`wa-fuji-layout-trace.log` records ShowWindow(SW_MAXIMIZE), followed by the
+clubhouse's synchronous WM_SIZE. The guest calls GetActiveWindow at runtime
+0x0014229a and receives zero at 0x0014229f. The handler's size lParam is
+0x01b20278 (632x434), so the maximized dimensions themselves are available.
+
+Disassembly of **NE segment 5:0x229a** shows the gating condition:
+
+```text
+GetActiveWindow()
+cmp ax, [DS:986c]       ; clubhouse HWND
+jnz 22b2               ; skip layout, chain to DefWindowProc
+push [bp+8]
+push [bp+6]            ; size arguments
+call far movable entry 0xc5
+```
+
+In this load, segment 5 is at 0x00140000 and DS is selector 0x005f.
+Reproduce the disassembly with:
+
+```sh
+node tools/ne-disasm.js test/binaries/wep16/WEP3/FUJIGOLF.EXE 5:0x229a 55
+```
+
+The shared GetActiveWindow correctly reads `active_hwnd`; its Win16 adapter
+delegates and narrows the handle. Win16 ShowWindow, however, only promotes
+`main_hwnd`, never updating active state before its synchronous size callback.
+Those globals are not interchangeable. The earlier main-window promotion
+comment no longer describes sufficient behavior under the shared active-
+window implementation.
+
+An isolated full-source artifact sets `active_hwnd = hwnd` immediately
+before `win16_show_continue`, **only for SW_MAXIMIZE as a diagnostic**.
+`/private/tmp/wa-fuji-active-probe.wasm` passes the unchanged full geometry/
+round gate (`wa-fuji-active-probe.log`). Its clubhouse screenshot
+`wa-fuji-active-probe.png` was visually inspected: the scene is full-height
+and centered, with buttons below it. No bitmap, metric or pixel-test change
+was needed. Main runtime remains unchanged and the shipping gate stays red.
+
+**Do not integrate this bare assignment.** It proves the missing state is
+causal, not that activation is correctly implemented. The production fix
+needs a Win16-safe activation transition: show-mode eligibility (including
+no-activate modes), top-level selection, far WM_ACTIVATE notifications,
+state visible during callbacks, nested activation/destruction safety and
+focus handling. The existing Win32 `active_window_transition` sends through
+its synchronous message path; it cannot be assumed safe for far callbacks.
+
+Official documentation says [SW_MAXIMIZE activates the window](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow)
+and [GetActiveWindow reads the calling queue's active window](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getactivewindow).
+These support the state contract, not an exact Win98 notification-order
+claim; that order still requires dedicated far regression/native evidence.

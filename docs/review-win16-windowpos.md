@@ -796,3 +796,13 @@ geometry checks. Name entry and the first-tee transition work; the test
 remains red for scene bounds 360x291 (height must exceed 310), not a missing
 dialog. No runtime change or relaxed visual threshold. Evidence and next
 investigation are in [the Fuji Golf note](re-notes/wep16-fujigolf.md).
+
+Further isolation: the maximized WM_SIZE has the correct 632x434 dimensions,
+but Win16 ShowWindow has not updated `active_hwnd`. Fuji's NE5:229a compares
+GetActiveWindow (zero) with its clubhouse HWND and skips layout. A diagnostic
+artifact setting active state before the size callback passes the unchanged
+full gate and restores the full-height scene visually. **Not integrated:**
+a bare global assignment omits activation notifications/focus/reentrancy.
+Implement a proper Win16-safe activation transition next; details and probe
+paths are in the app note. No bitmap or system-metric correction is indicated
+by this evidence.
