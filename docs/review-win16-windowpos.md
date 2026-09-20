@@ -121,4 +121,24 @@ This fixes Win16 queue/commit timing and preserves its synchronous WM_SIZE
 path; it is not a claim of complete native notification equivalence. The
 underlying Win16 SetWindowPos bridge's coverage of WINDOWPOSCHANGING/CHANGED
 and WM_MOVE remains a separate gap. The previously reproduced queued-paint
-test failure also remains separate and is not hidden by this change.
+test failure was separate and was not hidden by this change; its resolution
+is recorded below.
+
+## 2026-09-20: queued-paint regression resolved
+
+The visibility test expected the shown EDIT to remain queued after End.
+However, SetWindowPos synchronously calls the native painter, and the shared
+native dispatch now consumes the completed update. A zero pending handle
+therefore did not demonstrate a missing paint.
+
+The test now records the existing `ctrl_paint_trace` import and requires one
+successful native-paint dispatch at End, no remaining child update region,
+and no pending child paint. It also requires no native paint during Defer,
+on hiding, or with SWP_NOREDRAW, while retaining the exposed-parent damage
+check. These checks pass. An in-memory mutation replacing the native paint
+dispatch with a no-op fails the new exactly-once paint assertion. No runtime
+code or queue behavior was changed to satisfy the test.
+
+Logs: `/private/tmp/wa-defer-paint.log`, `wa-defer-paint-negative.log`,
+`wa-defer-paint-order.log`. This verifies dispatch/update bookkeeping, not a
+new pixel-level or native Win98 timing comparison.

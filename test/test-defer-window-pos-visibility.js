@@ -53,15 +53,26 @@ const extraWat = String.raw`
 
   (func (export "test_select_next_paint") (result i32)
     (call $paint_select_next_dirty))
+  (func (export "test_update_rect") (param $hwnd i32) (param $rect i32) (result i32)
+    (call $update_get_rect (local.get $hwnd) (call $g2w (local.get $rect))))
 `;
 
 (async () => {
-  const { exports: e } = await bootRenderHarness({ extraWat });
+  const painted = [];
+  const { exports: e } = await bootRenderHarness({ extraWat,
+    extraHostOverrides: {
+      ctrl_paint_trace(hwnd, classAndReason) {
+        if ((classAndReason >>> 8) === 0) painted.push(hwnd >>> 0);
+      },
+    },
+  });
+  const rect = e.guest_alloc(16);
   const child = e.test_create_edit(0, 0, 40, 20, 0x50000000, 0) >>> 0;
   const parent = e.wnd_get_parent(child) >>> 0;
   e.wnd_set_style_export(parent,
     (e.wnd_get_style_export(parent) | WS_VISIBLE) >>> 0);
   e.test_clear_window_paint(child);
+  painted.length = 0;
 
   assert(e.wnd_get_style_export(child) & WS_VISIBLE,
     'test child starts visible');
@@ -78,6 +89,7 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_call_EndDeferWindowPos(hdwp), 1);
   assert.strictEqual(e.wnd_get_style_export(child) & WS_VISIBLE, 0,
     'End commits SWP_HIDEWINDOW to WS_VISIBLE');
+  assert.deepStrictEqual(painted, [], 'hiding must not invoke the native child painter');
 
   hdwp = e.test_call_BeginDeferWindowPos() >>> 0;
   assert.strictEqual(
@@ -87,19 +99,27 @@ const extraWat = String.raw`
     'show keeps the deferred-position handle valid');
   assert.strictEqual(e.wnd_get_style_export(child) & WS_VISIBLE, 0,
     'SWP_SHOWWINDOW also waits for End');
+  assert.deepStrictEqual(painted, [], 'Defer must not paint the still-hidden child');
   assert.strictEqual(e.test_call_EndDeferWindowPos(hdwp), 1);
   assert(e.wnd_get_style_export(child) & WS_VISIBLE,
     'End commits SWP_SHOWWINDOW to WS_VISIBLE');
-  assert.strictEqual(e.test_first_pending_paint() >>> 0, child,
-    'a newly shown deferred window is queued for paint');
+  assert.deepStrictEqual(painted, [child],
+    'End synchronously paints the newly shown native control once');
+  assert.notStrictEqual(e.test_first_pending_paint() >>> 0, child,
+    'a completed native paint must not remain queued');
+  assert.strictEqual(e.test_update_rect(child, rect), 0,
+    'the native paint consumes its update region');
 
   e.test_clear_window_paint(child);
+  painted.length = 0;
   hdwp = e.test_call_BeginDeferWindowPos() >>> 0;
   e.test_call_DeferWindowPos_flags(
     hdwp, child, 0x04 | SWP_NOREDRAW, 3, 4, 42, 22);
   e.test_call_EndDeferWindowPos(hdwp);
   assert.notStrictEqual(e.test_select_next_paint() >>> 0, child,
     'SWP_NOREDRAW does not create an update region');
+  assert.deepStrictEqual(painted, [], 'SWP_NOREDRAW must not invoke the native painter');
+  assert.strictEqual(e.test_update_rect(child, rect), 0);
 
   e.test_clear_window_paint(child);
   hdwp = e.test_call_BeginDeferWindowPos() >>> 0;
