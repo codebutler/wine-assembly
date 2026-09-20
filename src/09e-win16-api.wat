@@ -7331,16 +7331,11 @@
           (local.set $proc (call $wnd_table_get (local.get $child)))
           (if (call $win16_is_far_proc (local.get $proc))
             (then
-              (call $nc_flags_set (local.get $child) (i32.const 7))
-              ;; Give the child its background at the moment it becomes
-              ;; exposed. Deferring the erase until the first BeginPaint can
-              ;; invert Win16/VB's paint order and wipe custom child contents
-              ;; that were already drawn into their visible client surface.
-              (if (call $wnd_get_bg_brush (local.get $child))
-                (then
-                  (drop (call $host_erase_background (local.get $child)
-                    (call $wnd_get_bg_brush (local.get $child))))
-                  (call $nc_flags_clear (local.get $child) (i32.const 2))))))
+              ;; Exposure requests erasing; it does not authorize a class-
+              ;; brush fill behind the guest wndproc's back. VB children
+              ;; choose their BackColor in that callback. BeginPaint owns
+              ;; its delivery and interprets the actual result.
+              (call $nc_flags_set (local.get $child) (i32.const 7))))
           (call $win16_rearm_visible_child_erases (local.get $child))))
       (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
       (br $scan))))

@@ -768,3 +768,19 @@ Open paint fidelity work includes empty-update rcPaint, per-class redraw
 flags, native modal/default-dialog erase consumers, and ShowWindow's prior-
 visibility return and compatibility erase DC. No performance claim is made
 from these functional runs on a loaded shared machine.
+
+## 2026-09-20: child exposure must not bypass guest erasing
+
+The remaining Go Figure black fields were isolated to
+`win16_rearm_visible_child_erases`: it filled each exposed far-wndproc child
+with its class brush and consumed the erase request without dispatching the
+guest callback. Removing that shortcut restores the game's white bordered
+fields, score and timer. Exposure now retains the request for BeginPaint's
+real far erase callback; a class brush no longer overrides guest handling.
+
+The isolated candidate passes Go Figure, Rodent/Rattler and WEP1 8/8.
+The corrected Go Figure screenshot was visually inspected, and the current-
+source far regression passes with a new class-brush exposure assertion.
+Trace, artifact and capture paths are recorded in
+[the Go Figure note](re-notes/wep16-gofigure.md). Fuji Golf remains open;
+this does not establish native-equivalent parent-exposure message timing.

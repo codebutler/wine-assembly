@@ -113,6 +113,8 @@ const extraWat = `
   (func (export "test_bridge_scratch") (result i32) (call $gl32 (global.get $GUEST_STACK)))
   (func (export "test_background") (param $h i32) (param $brush i32)
     (call $wnd_set_bg_brush (local.get $h) (local.get $brush)))
+  (func (export "test_expose_children") (param $h i32)
+    (call $win16_rearm_visible_child_erases (local.get $h)))
   (func (export "test_erase_pending") (param $h i32) (result i32)
     (i32.and (call $nc_flags_test (local.get $h)) (i32.const 2)))
   (func (export "test_alive") (param $h i32) (result i32)
@@ -528,5 +530,12 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   e.test_damage(invalidateDuringPaint, 0);
   assert.deepStrictEqual(runUpdate(invalidateDuringPaint, 0x90), [0x0f]);
   assert.strictEqual(e.test_dirty(invalidateDuringPaint), 1);
+  const exposedParent = e.test_window(0x200);
+  const exposedChild = e.test_window(0x4500);
+  e.test_as_child(exposedChild, exposedParent);
+  e.test_background(exposedChild, 6); // COLOR_WINDOW + 1 is not permission to bypass its wndproc
+  e.test_expose_children(exposedParent);
+  assert.strictEqual(e.test_erase_pending(exposedChild), 2,
+    'exposure retains erasing for the guest callback even with a class brush');
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });
