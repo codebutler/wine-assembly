@@ -46,3 +46,30 @@ tests: unchanged geometry/messages before End, independent batches, invalid
 and retired handles, failure cleanup, and reentrant far callbacks that finish
 before End returns. The remaining large wrapper duplication should be removed
 as part of that change, not used to disguise the immediate-execution shortcut.
+
+## 2026-09-20: shared commit preparation
+
+Extracted `$hdwp_prepare_end(handle)` from the Win32 End handler. It validates
+the entire batch, preserves existing abort/error behavior, and marks the
+record busy. It returns the record or zero without changing EAX, ESP or EIP.
+The Win32 handler still owns its return value, stack cleanup and apply loop.
+
+The original transaction regression passes before and after extraction.
+Added direct tests for frame neutrality, busy rejection without releasing
+the outer record, retired-handle rejection and 32 release/reuse cycles.
+The visibility regression fails its queued-paint assertion (`0 != 65538`),
+identically with the original End validation restored in memory; no test
+expectation was weakened. Logs: `/private/tmp/wa-hdwp-prepare-before.log`,
+`wa-hdwp-prepare-after.log`, `wa-hdwp-prepare-visible.log`,
+`wa-hdwp-prepare-visible-baseline.log`, `wa-hdwp-prepare-build.log`.
+The full canonical/compat build and gates pass.
+
+Next implementation: Win16 Begin/Defer use the shared HDWP storage; End uses
+this preparation helper and keeps `{record, next-index}` on its own guest
+stack above the ordinary far-return continuation. Each entry is handed to
+the existing Pascal SetWindowPos bridge with a dedicated continuation return
+address. That bridge already delivers synchronous far WM_SIZE callbacks, so
+the next entry can resume only after the previous callback returns. Retain
+the busy record until the final entry, then release it and the Win16 handle.
+This avoids a second queue, a second validator, and global callback state.
+The Win16 transaction implementation itself is still pending.

@@ -645,26 +645,25 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))  ;; stdcall, 8 args
   )
 
-  ;; 631: EndDeferWindowPos(hWinPosInfo) → BOOL
-  (func $handle_EndDeferWindowPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  ;; Validate and claim a batch without changing the caller's CPU frame.
+  ;; The Win32 and Win16 commit loops can then use their own callback ABI.
+  ;; Returns the claimed record, or zero; failures retain their existing
+  ;; abort/last-error behavior, while a busy batch is never released.
+  (func $hdwp_prepare_end (param $handle i32) (result i32)
     (local $record i32) (local $entries i32) (local $entry i32)
-    (local $count i32) (local $i i32) (local $saved_esp i32)
+    (local $count i32) (local $i i32)
     (local $hwnd i32) (local $after i32) (local $flags i32) (local $parent i32)
-    (local.set $record (call $hdwp_find (local.get $arg0)))
+    (local.set $record (call $hdwp_find (local.get $handle)))
     (if (i32.eqz (local.get $record))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-        (return)))
+        (return (i32.const 0))))
     (if (call $gl32 (i32.add (local.get $record) (i32.const 20)))
       (then
         ;; A guest wndproc re-entering End with the handle currently being
         ;; applied must not double-apply or free the outer operation.
         (global.set $last_error (i32.const 6))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-        (return)))
+        (return (i32.const 0))))
     (local.set $entries (call $gl32 (i32.add (local.get $record) (i32.const 4))))
     (local.set $count (call $gl32 (i32.add (local.get $record) (i32.const 8))))
     (local.set $parent (call $gl32 (i32.add (local.get $record) (i32.const 16))))
@@ -683,15 +682,11 @@
             (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
         (then
           (call $hdwp_abort (local.get $record) (i32.const 1400))
-          (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-          (return)))
+          (return (i32.const 0))))
       (if (i32.ne (call $wnd_get_parent (local.get $hwnd)) (local.get $parent))
         (then
           (call $hdwp_abort (local.get $record) (i32.const 87))
-          (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-          (return)))
+          (return (i32.const 0))))
       (if (i32.and
             (i32.eqz (i32.and (local.get $flags) (i32.const 4)))
             (i32.and
@@ -707,12 +702,24 @@
                 (i32.ne (call $wnd_get_parent (local.get $after)) (local.get $parent)))
             (then
               (call $hdwp_abort (local.get $record) (i32.const 1400))
-              (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-              (return)))))
+              (return (i32.const 0))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $validate)))
     (call $gs32 (i32.add (local.get $record) (i32.const 20)) (i32.const 1))
+    (local.get $record))
+
+  ;; 631: EndDeferWindowPos(hWinPosInfo) → BOOL
+  (func $handle_EndDeferWindowPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $record i32) (local $entries i32) (local $entry i32)
+    (local $count i32) (local $i i32) (local $saved_esp i32)
+    (local.set $record (call $hdwp_prepare_end (local.get $arg0)))
+    (if (i32.eqz (local.get $record))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
+    (local.set $entries (call $gl32 (i32.add (local.get $record) (i32.const 4))))
+    (local.set $count (call $gl32 (i32.add (local.get $record) (i32.const 8))))
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (local.set $i (i32.const 0))
     (block $done (loop $apply

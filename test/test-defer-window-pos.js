@@ -62,6 +62,13 @@ const extraWat = String.raw`
     (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_last_error") (result i32) (global.get $last_error))
+  (func (export "test_prepare") (param $handle i32) (result i32)
+    (call $hdwp_prepare_end (local.get $handle)))
+  (func (export "test_prepare_release") (param $record i32)
+    (call $hdwp_release (local.get $record)))
+  (func (export "test_prepare_busy") (param $record i32) (result i32)
+    (call $gl32 (i32.add (local.get $record) (i32.const 20))))
+  (func (export "test_eax") (result i32) (i32.load (global.get $reg_base)))
 `;
 
 (async () => {
@@ -206,6 +213,27 @@ const extraWat = String.raw`
     'simultaneous empty transactions receive distinct handles');
   assert.strictEqual(e.test_call_EndDeferWindowPos(emptyA), 1);
   assert.strictEqual(e.test_call_EndDeferWindowPos(emptyB), 1);
+
+  const prepared = e.test_call_BeginDeferWindowPos(0) >>> 0;
+  const cpu = () => [e.get_esp(), e.get_eip(), e.test_eax()];
+  const beforePrepare = cpu();
+  const record = e.test_prepare(prepared);
+  assert(record, 'stack-neutral preparation returns the live record');
+  assert.deepStrictEqual(cpu(), beforePrepare, 'preparation leaves the caller CPU frame alone');
+  assert.strictEqual(e.test_prepare_busy(record), 1, 'preparation claims the batch');
+  assert.strictEqual(e.test_prepare(prepared), 0, 'nested preparation rejects a busy batch');
+  assert.strictEqual(e.test_last_error(), 6);
+  assert.deepStrictEqual(cpu(), beforePrepare, 'busy rejection is frame-neutral');
+  assert.strictEqual(e.test_prepare_busy(record), 1, 'busy rejection does not release the outer batch');
+  e.test_prepare_release(record);
+  assert.strictEqual(e.test_prepare(prepared), 0, 'retired handles are rejected');
+  assert.deepStrictEqual(cpu(), beforePrepare, 'invalid-handle rejection is frame-neutral');
+  for (let i = 0; i < 32; i++) {
+    const handle = e.test_call_BeginDeferWindowPos(0);
+    const live = e.test_prepare(handle);
+    assert(live, 'released preparation reclaims bounded table/storage');
+    e.test_prepare_release(live);
+  }
 
   console.log('PASS  Begin/Defer/EndDeferWindowPos owns an atomic HDWP lifecycle');
 })().catch(error => {
