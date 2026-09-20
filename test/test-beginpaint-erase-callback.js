@@ -38,6 +38,8 @@ const extraWat = `
   (func (export "test_update") (param $h i32) (call $update_window_now (local.get $h)))
   (func (export "test_erase_pending") (param $h i32) (result i32)
     (i32.and (call $nc_flags_test (local.get $h)) (i32.const 2)))
+  (func (export "test_damage_pending") (param $h i32) (result i32)
+    (call $update_get_rect (local.get $h) (i32.const 0)))
   (func (export "test_thunk") (param $id i32) (result i32)
     (local $p i32)
     (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
@@ -65,6 +67,7 @@ const u32 = v => [v, v >>> 8, v >>> 16, v >>> 24].map(b => b & 255);
     e.test_damage(h, erase, background);
     const dc = e.test_begin(h, ps);
     assert(dc, 'BeginPaint returns a paint DC');
+    assert.strictEqual(e.test_damage_pending(h), 0, 'BeginPaint validates before returning, not EndPaint');
     assert.strictEqual(e.guest_read32(record + 8), erase, 'only erase-marked damage sends WM_ERASEBKGND');
     if (erase) {
       assert.strictEqual(e.guest_read32(record + 4), 0x14);
@@ -139,5 +142,13 @@ const u32 = v => [v, v >>> 8, v >>> 16, v >>> 24].map(b => b & 255);
   assert.strictEqual(e.guest_read32(ps + 4), 0, 'current erase was handled');
   assert.strictEqual(e.test_erase_pending(renewWindow), 2, 'callback reinvalidation retains its new erase request');
   e.test_end(renewWindow, ps);
+  assert.strictEqual(e.test_damage_pending(renewWindow), 1, 'EndPaint preserves callback reinvalidation');
+  const repeatWindow = e.test_window(proc);
+  e.test_damage(repeatWindow, 0, 0);
+  e.test_begin(repeatWindow, ps);
+  e.test_damage(repeatWindow, 0, 0); // same rectangle, invalidated during painting
+  e.test_end(repeatWindow, ps);
+  assert.strictEqual(e.test_damage_pending(repeatWindow), 1,
+    'EndPaint must not validate newly invalidated pixels even when they equal old rcPaint');
   console.log('PASS BeginPaint synchronous erase callback, paint DC, result-driven fErase and no-erase cases');
 })().catch(error => { console.error(error); process.exit(1); });

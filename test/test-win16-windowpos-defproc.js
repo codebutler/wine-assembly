@@ -510,5 +510,23 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.deepStrictEqual(runShow(showDoomed, 1, 0x90), [0x14]);
   assert.strictEqual(e.test_alive(showDoomed), 0);
   assert.strictEqual(e.test_erase_pending(showDoomed), 0, 'ShowWindow cannot rearm a destroyed HWND');
+
+  // TriPeaks calls UpdateWindow on itself between BeginPaint and EndPaint.
+  // Its old damage must already be gone or that call recursively enters the
+  // same paint until the guest stack is exhausted.
+  writeCode(0x4500, paintProc([0xff, 0x76, 0x0e, 0x9a, ...word(update), 0x1f, 0]));
+  const updateDuringPaint = e.test_window(0x4500);
+  e.test_damage(updateDuringPaint, 0);
+  assert.deepStrictEqual(runUpdate(updateDuringPaint, 0x90), [0x0f]);
+  assert.strictEqual(e.test_dirty(updateDuringPaint), 0);
+
+  // Reinvalidate precisely the snapshot rectangle during painting. EndPaint
+  // must not validate that newer request just because its coordinates match.
+  writeCode(0x4600, paintProc([0xff, 0x76, 0x0e, 0x16, 0x68, 0x00, 0x0d,
+    0x6a, 0, 0x9a, ...word(invalidate), 0x1f, 0]));
+  const invalidateDuringPaint = e.test_window(0x4600);
+  e.test_damage(invalidateDuringPaint, 0);
+  assert.deepStrictEqual(runUpdate(invalidateDuringPaint, 0x90), [0x0f]);
+  assert.strictEqual(e.test_dirty(invalidateDuringPaint), 1);
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

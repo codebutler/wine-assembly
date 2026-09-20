@@ -827,6 +827,16 @@
           (i32.load offset=8 (local.get $wa))
           (i32.load offset=12 (local.get $wa))
           (i32.const 1))))) ;; RGN_AND
+    ;; Snapshot damage into PAINTSTRUCT/DC, then validate before entering any
+    ;; callback. UpdateWindow from inside WM_PAINT must not recursively paint
+    ;; this same damage. Later invalidations belong to a new paint cycle and
+    ;; EndPaint must not erase them using this snapshot's rectangle.
+    (if (local.get $hdc)
+      (then
+        (call $update_clear_hwnd (local.get $arg0))
+        (call $paint_flag_clear_hwnd (local.get $arg0))
+        (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
+          (then (global.set $paint_pending (i32.const 0))))))
     ;; Win32 can enter a guest wndproc synchronously here, after the paint
     ;; DC's update/system clip is installed. The callback, not the presence
     ;; of a class brush, decides whether the application still owes erasing.

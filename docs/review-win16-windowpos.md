@@ -737,3 +737,34 @@ other current source/host files retained:
 reverted for this comparison. These results rule out this turn's delta as
 the sole cause, not an earlier paint change. Investigate these broader-suite
 failures next; they were not exercised by the prior WEP1-only checks.
+
+## 2026-09-20: validate damage at BeginPaint, not EndPaint
+
+TriPeaks exposed the remaining validation shortcut: its WM_PAINT calls
+UpdateWindow on itself between BeginPaint and EndPaint. Outstanding old
+damage caused recursive painting until the guest stack was corrupted and
+the app displayed an OOM message. The trace and reproduction are recorded
+in [the TriPeaks note](re-notes/wep16-tripeaks.md).
+
+Shared BeginPaint now snapshots PAINTSTRUCT and the paint DC clip, then clears
+the consumed update and paint-pending state before any erase callback.
+EndPaint releases the DC but no longer validates rcPaint. Consequently new
+invalidations from callbacks or painting survive, including exact overlaps
+with the old rectangle. This implements the documented
+[BeginPaint validation timing](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getupdaterect).
+
+The previous runtime fails the new immediate-validation assertion
+(`/private/tmp/wa-begin-validation-before.log`). Current Win32 and real far
+callback tests pass, including self-UpdateWindow during painting and
+same-rectangle reinvalidation (`after`, `far-nested` logs with that prefix).
+Parent/child paint order passes (`order`). Both builds pass (`build`), and
+the completed build passes TriPeaks full tableau (`tripeaks`), WEP1 8/8
+(`wep1`), VB Rodent/Rattler (`vb`) and Diablo's six-stage browser/gameplay
+flow (`diablo`). The TriPeaks screenshot was also visually inspected.
+
+Go Figure still fails with black puzzle fields (`gofigure`); Fuji Golf's
+earlier missing-control failure is not resolved or claimed retested here.
+Open paint fidelity work includes empty-update rcPaint, per-class redraw
+flags, native modal/default-dialog erase consumers, and ShowWindow's prior-
+visibility return and compatibility erase DC. No performance claim is made
+from these functional runs on a loaded shared machine.

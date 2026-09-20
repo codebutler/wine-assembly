@@ -244,6 +244,8 @@ function testTriPeaks(outDir) {
     `30:dlg-cmd:1,60:png:${before},80:keydown:113,81:keyup:113,` +
     `180:png:${after},210:stop`, 230);
   assertHealthy(output, 'TriPeaks');
+  assert.doesNotMatch(output, /Out of memory/i,
+    'TriPeaks must not recursively repaint itself into stack exhaustion');
   assert(changedPixels(before, after, { x: 2, y: 42, w: 636, h: 325 }) > 25000,
     'TriPeaks should deal the full card tableau after New Game');
   const faceRow = colorBounds(after, { x: 4, y: 155, w: 632, h: 86 },

@@ -1245,18 +1245,13 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
-  ;; 181: EndPaint(hwnd, lpPaintStruct) — validate rcPaint and release its WAT DC.
+  ;; 181: EndPaint(hwnd, lpPaintStruct) — release the paint DC. BeginPaint has
+  ;; already validated its damage; subsequent invalidations must survive.
   (func $handle_EndPaint (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32) (local $hdc i32)
     (if (i32.and (i32.ne (local.get $arg1) (i32.const 0)) (i32.ne (local.get $arg0) (i32.const 0)))
       (then
         (local.set $wa (call $g2w (local.get $arg1)))
-        (drop (call $update_validate_rect
-          (local.get $arg0)
-          (i32.load offset=8 (local.get $wa))
-          (i32.load offset=12 (local.get $wa))
-          (i32.load offset=16 (local.get $wa))
-          (i32.load offset=20 (local.get $wa))))
         ;; PAINTSTRUCT.hdc is at +0
         (local.set $hdc (i32.load (local.get $wa)))
         (drop (call $host_release_dc (local.get $hdc)))
