@@ -1,0 +1,77 @@
+#!/usr/bin/env node
+'use strict';
+
+// Read-only runtime diagnostic. Compiles current sources plus observation
+// exports, then exercises the real host and USER entry points in one process.
+// No success assertion pins today's bugs; compare the returned state/order.
+const fs = require('fs');
+const path = require('path');
+const { bootRenderHarness } = require('../test/render-helper');
+
+const extraWat = String.raw`
+  (func (export "probe_create") (result i32)
+    (local $h i32)
+    (local.set $h (global.get $next_hwnd))
+    (global.set $next_hwnd (i32.add (local.get $h) (i32.const 1)))
+    (call $wnd_table_set (local.get $h) (global.get $WNDPROC_BUILTIN))
+    (drop (call $wnd_set_style (local.get $h) (i32.const 0x10CF0000)))
+    (local.get $h))
+  (func (export "probe_rank") (param $h i32) (result i32)
+    (call $wnd_z_get (local.get $h)))
+  (func (export "probe_active") (result i32) (global.get $active_hwnd))
+  (func (export "probe_focus") (result i32) (global.get $focus_hwnd))
+  (func (export "probe_style") (param $h i32) (result i32)
+    (call $wnd_get_style (local.get $h)))
+  (func (export "probe_min") (param $h i32) (result i32)
+    (call $wnd_min_get (local.get $h)))
+  (func (export "probe_api") (param $kind i32) (param $h i32) (param $cmd i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+    (if (i32.eqz (local.get $kind))
+      (then (call $handle_SetActiveWindow (local.get $h) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $kind) (i32.const 1))
+      (then (call $handle_ShowWindow (local.get $h) (local.get $cmd) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $kind) (i32.const 2))
+      (then (call $handle_CloseWindow (local.get $h) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0)))))
+`;
+
+(async () => {
+  const { exports: e, instance, memory, renderer, host } =
+    await bootRenderHarness({ extraWat, fonts: 'none' });
+  const fixture = fs.readFileSync(path.join(__dirname, '../test/binaries/calc.exe'));
+  new Uint8Array(memory.buffer).set(fixture, e.get_staging());
+  if (!e.load_pe(fixture.length)) throw Error('Cannot initialize the USER fixture');
+  e.init_dx_com_thunks();
+  const windows = ['A', 'B', 'C'].map((name, index) => {
+    const hwnd = e.probe_create() >>> 0;
+    renderer.createWindow(hwnd, 0x10cf0000, 20 + index * 20, 20, 200, 160,
+      name, 0, instance, memory);
+    return { name, hwnd };
+  });
+  const nameOf = hwnd => windows.find(w => w.hwnd === (hwnd >>> 0))?.name || null;
+  const snapshots = [];
+  const record = stage => {
+    const state = windows.map(({ name, hwnd }) => ({
+      name, hwnd, watRank: e.probe_rank(hwnd), rendererRank: renderer.windows[hwnd].zOrder,
+      visibleBit: !!(e.probe_style(hwnd) & 0x10000000),
+      renderedVisible: !!renderer.windows[hwnd].visible,
+      minimized: !!e.probe_min(hwnd),
+      nextFromHost: nameOf(host.get_window_related(hwnd, 2)),
+    }));
+    snapshots.push({ stage, active: nameOf(e.probe_active()), focus: nameOf(e.probe_focus()),
+      watTopFirst: [...state].sort((a, b) => b.watRank - a.watRank).map(w => w.name),
+      rendererTopFirst: [...state].sort((a, b) => b.rendererRank - a.rendererRank).map(w => w.name),
+      windows: state });
+  };
+  const a = windows[0].hwnd;
+  record('created A, B, C');
+  e.probe_api(0, a, 0); record('SetActiveWindow(A)');
+  e.probe_api(1, a, 0); record('ShowWindow(A, SW_HIDE)');
+  e.probe_api(1, a, 5); record('ShowWindow(A, SW_SHOW)');
+  e.probe_api(1, a, 6); record('ShowWindow(A, SW_MINIMIZE)');
+  e.probe_api(1, a, 9); record('ShowWindow(A, SW_RESTORE)');
+  e.probe_api(2, a, 0); record('CloseWindow(A)');
+  console.log(JSON.stringify({ fixture: 'three same-thread unowned top-level windows', snapshots }, null, 2));
+})().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

@@ -1001,3 +1001,52 @@ also covers preserved child HWND and foreign-thread host delegation;
 `wa-activation-wrappers-openicon.log`, `wa-activation-wrappers-owned.log`, and
 `wa-activation-wrappers-build.log` pass. The completed artifact passes WinRAR's
 real Worker browser file-drop gate (`wa-activation-wrappers-browser.log`).
+
+## 2026-09-20: hide/minimize successor audit, ordering prerequisite
+
+`node tools/probe-window-activation-order.js` now reproduces the missing
+successor transition using current USER handlers and the actual canvas host
+imports. It creates three unowned, same-thread top-levels A, B, C, then
+activates A and calls ShowWindow/CloseWindow. Observation exports report WAT
+ranks, styles, iconic state and active/focus state alongside renderer ranks
+and its GW_HWNDNEXT result. It does not change production code, assert today's
+wrong behavior as a regression contract, or overwrite the shipping artifact.
+
+Observed on the 4d865cde runtime (`/private/tmp/wa-window-activation-order.log`):
+
+| Stage | WAT top-first | Renderer top-first | Guest active/focus | Rendered visible |
+| --- | --- | --- | --- | --- |
+| Create A, B, C | C B A | C B A | NULL / NULL | A B C |
+| SetActiveWindow(A) | C B A | A C B | A / A | A B C |
+| ShowWindow(A, SW_HIDE) | C B A | A C B | A / A | B C |
+| ShowWindow(A, SW_SHOW) | C B A | A C B | A / A | A B C |
+| ShowWindow(A, SW_MINIMIZE) | C B A | A C B | A / A | B C |
+| ShowWindow(A, SW_RESTORE) | C B A | A C B | A / A | A B C |
+| CloseWindow(A) | C B A | A C B | NULL / NULL | B C |
+
+After activation, host GW_HWNDNEXT(A) is C at every stage. Neither hide nor
+minimize sends the guest to C; CloseWindow clears the queue instead. This is
+not merely a missing caption repaint. Microsoft documents SW_MINIMIZE as
+activating the next top-level in Z order and SW_HIDE as activating another
+window: [ShowWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow).
+
+There are currently three distinct orders to avoid conflating:
+
+- `WND_Z_ORDER_TABLE`, assigned on registration and certain explicit WAT raises;
+- renderer `zOrder`, updated by `activate_window` / `_raiseWindowGroup` and used
+  by host GW_HWNDNEXT and composition;
+- `wnd_find_next_sibling`, explicitly a **later allocation slot**, not Z order.
+
+The activation path raises the renderer group but does not update the WAT
+ranks. The probe demonstrates the divergence with ordinary public activation,
+before any hide/minimize special case. A selector that assumes active A is at
+the head of the WAT order will find no window below it in this example, despite
+two visible successors in the compositor.
+
+Next implementation needs an explicit ordering authority and a tested
+successor transaction shared by hide/minimize/CloseWindow. Keep per-app WAT
+order distinct from desktop-wide inter-app order, and cover owner groups,
+disabled/hidden candidates, no candidate and callback reentrancy. Do not use
+allocation-slot order or a hardcoded fallback to the main HWND. The probe is
+an emulator diagnosis, not native Win98 selection evidence; these production
+defects remain open.
