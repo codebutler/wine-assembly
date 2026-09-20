@@ -1390,17 +1390,25 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
   )
 
   ;; Change this thread queue's active top-level and synchronously deliver the
-  ;; documented WM_ACTIVATE pair. State changes before callbacks so a wndproc
-  ;; that calls GetActiveWindow observes the new window. If the callback picks
+  ;; documented WM_ACTIVATE pair. Deactivation sees the old active HWND;
+  ;; publication occurs before the new window's activation callback. If it picks
   ;; a descendant focus itself, preserve that choice; otherwise DefWindowProc's
   ;; default is represented by moving focus to the activated top-level.
+  ;; Queue-instance generation advances only when a different HWND is
+  ;; published. This catches nested A->C->A without cancelling on SetActive(A).
+  (global $active_transition_serial (mut i32) (i32.const 0))
+  (func $active_window_publish (param $target i32)
+    (global.set $active_transition_serial (i32.add (global.get $active_transition_serial) (i32.const 1)))
+    (global.set $active_hwnd (local.get $target))
+    (call $wnd_note_active_popup (local.get $target)))
+
   (func $active_window_transition (param $target i32) (result i32)
     (call $active_window_transition_reason (local.get $target) (i32.const 1)))
 
   ;; The cause belongs to this invocation, not a global: a mouse activation
   ;; callback may call SetActiveWindow, whose nested notification is WA_ACTIVE.
   (func $active_window_transition_reason (param $target i32) (param $reason i32) (result i32)
-    (local $previous i32) (local $old_focus i32)
+    (local $previous i32) (local $old_focus i32) (local $serial i32)
     (local.set $previous (global.get $active_hwnd))
     (if (i32.and
           (i32.ne (local.get $previous) (i32.const 0))
@@ -1414,7 +1422,7 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (if (i32.eq (local.get $previous) (local.get $target))
       (then (return (local.get $previous))))
 
-    (global.set $active_hwnd (local.get $target)) (call $wnd_note_active_popup (local.get $target))
+    (local.set $serial (global.get $active_transition_serial))
     (if (local.get $previous)
       (then
         (drop (call $wnd_send_message
@@ -1425,8 +1433,13 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     ;; Synchronous callbacks may activate a different window. That nested
     ;; transition owns its state; do not send the superseded target a later
     ;; activation or clear the focus it just selected.
-    (if (i32.ne (global.get $active_hwnd) (local.get $target))
+    (if (i32.ne (global.get $active_transition_serial) (local.get $serial))
       (then (return (local.get $previous))))
+    (if (i32.and (i32.ne (local.get $target) (i32.const 0))
+          (i32.lt_s (call $wnd_table_find (local.get $target)) (i32.const 0)))
+      (then (return (local.get $previous))))
+    (call $active_window_publish (local.get $target))
+    (local.set $serial (global.get $active_transition_serial))
     (if (i32.and
           (i32.ne (local.get $target) (i32.const 0))
           (i32.ge_s (call $wnd_table_find (local.get $target)) (i32.const 0)))
@@ -1437,7 +1450,8 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
             (i32.shl (call $wnd_min_get (local.get $target)) (i32.const 16)))
           (local.get $previous)))
         (call $host_invalidate_frame (local.get $target))))
-    (if (i32.ne (global.get $active_hwnd) (local.get $target))
+    (if (i32.or (i32.ne (global.get $active_transition_serial) (local.get $serial))
+          (i32.ne (global.get $active_hwnd) (local.get $target)))
       (then (return (local.get $previous))))
 
     ;; WM_ACTIVATE's default procedure assigns focus only when the window is
@@ -1465,8 +1479,9 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
                   (local.get $old_focus) (i32.const 0x0008) ;; WM_KILLFOCUS
                   (local.get $target) (i32.const 0)))))
             (if (i32.or
-                  (i32.ne (global.get $active_hwnd) (local.get $target))
-                  (i32.ne (global.get $focus_hwnd) (local.get $target)))
+                  (i32.ne (global.get $active_transition_serial) (local.get $serial))
+                  (i32.or (i32.ne (global.get $active_hwnd) (local.get $target))
+                    (i32.ne (global.get $focus_hwnd) (local.get $target))))
               (then (return (local.get $previous))))
             (drop (call $wnd_send_message
               (local.get $target) (i32.const 0x0007) ;; WM_SETFOCUS

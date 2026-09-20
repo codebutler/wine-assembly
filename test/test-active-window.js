@@ -336,6 +336,37 @@ const extraWat = String.raw`
     assert(!records().some(r => r.hwnd === clickTarget && r.msg === 7),
       'superseded click must not reclaim focus');
   }
+  const getActiveThunk = e.test_thunk(apiTable.find(api => api.name === 'GetActiveWindow').id);
+  const destroyThunk = e.test_thunk(apiTable.find(api => api.name === 'DestroyWindow').id);
+  const seenActive = e.guest_alloc(4);
+  for (const mode of [0, 1, 2, 3, 4]) {
+    const oldProc = e.guest_alloc(256);
+    const old = e.test_make_window(oldProc, WS_VISIBLE, 0, 1);
+    const target = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+    const chosen = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+    const activate = h => [0x68, ...u32(h), 0xb8, ...u32(setActiveThunk), 0xff, 0xd0];
+    const action = [0xc7, 0x05, ...u32(armed), ...u32(0),
+      0xb8, ...u32(getActiveThunk), 0xff, 0xd0, 0xa3, ...u32(seenActive),
+      ...(mode && mode !== 4 ? activate(mode === 2 ? old : chosen) : []),
+      ...(mode === 4 ? [0x68, ...u32(target), 0xb8, ...u32(destroyThunk), 0xff, 0xd0] : []),
+      ...(mode === 3 ? activate(old) : [])];
+    const onInactive = [0x83, 0x7c, 0x24, 12, 0, 0x75, action.length, ...action];
+    const onActivate = [0x83, 0x7c, 0x24, 8, 6, 0x75, onInactive.length, ...onInactive];
+    bytes.set(makeWndProc(observed, [0x83, 0x3d, ...u32(armed), 0,
+      0x74, onActivate.length, ...onActivate]), toWasm(oldProc));
+    view.setUint32(toWasm(armed), 0, true);
+    e.test_set_active(old, stack);
+    resetRecords();
+    view.setUint32(toWasm(armed), 1, true);
+    assert.strictEqual(result(e.test_set_active(target, stack)), old);
+    assert.strictEqual(view.getUint32(toWasm(seenActive), true), old,
+      'native deactivation observes old active HWND');
+    const expected = mode === 1 ? chosen : mode === 3 || mode === 4 ? old : target;
+    assert.strictEqual(e.test_get_active(), expected, `native reentry mode ${mode}`);
+    assert.strictEqual(e.test_focus(), expected);
+    assert.strictEqual(records().filter(r => r.hwnd === target && r.msg === 6 && r.wParam === 1).length,
+      mode === 1 || mode === 3 || mode === 4 ? 0 : 1, 'superseded/retired activation is not delivered');
+  }
   console.log('PASS Set/GetActiveWindow retain per-thread USER activation state');
 })().catch(error => {
   console.error(error && error.stack || error);

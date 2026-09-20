@@ -626,8 +626,9 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   const nestedActive = e.test_window(0x5000);
   const activateNested = [0x68, ...word(e.test_narrow(nestedActive)), 0x6a, 5,
     0x9a, ...word(show), 0x1f, 0];
-  writeCode(0x5100, recorder([0x83, 0x7e, 0x0c, 6, 0x75, activateNested.length,
-    ...activateNested]));
+  const activateOnly = [0x83, 0x7e, 0x0a, 0, 0x74, activateNested.length, ...activateNested];
+  writeCode(0x5100, recorder([0x83, 0x7e, 0x0c, 6, 0x75, activateOnly.length,
+    ...activateOnly]));
   const superseded = e.test_window(0x5100);
   runShow(superseded, 5, 0x90, true);
   assert.strictEqual(e.test_active(), nestedActive, 'nested activation wins');
@@ -781,5 +782,30 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     'nested ShowWindow retains API reason inside click activation');
   assert.strictEqual(e.test_active(), nestedActive);
   assert.strictEqual(e.test_focus(), nestedActive);
+  for (const mode of [0, 1, 2, 3, 4]) {
+    const off = 0x7000 + mode * 0x100;
+    const old = e.test_window(off), target = e.test_window(0x5000), chosen = e.test_window(0x5000);
+    const activate = h => [0x68, ...word(e.test_narrow(h)), 0x6a, 5,
+      0x9a, ...word(show), 0x1f, 0];
+    const action = [0x36, 0xc7, 0x06, 0x40, 0x0f, 0, 0,
+      0x9a, ...word(getActive), 0x1f, 0, 0x36, 0xa3, 0x42, 0x0f,
+      ...(mode && mode !== 4 ? activate(mode === 2 ? old : chosen) : []),
+      ...(mode === 4 ? [0x68, ...word(e.test_narrow(target)),
+        0x9a, ...word(e.test_destroy_thunk()), 0x1f, 0] : []),
+      ...(mode === 3 ? activate(old) : [])];
+    const onInactive = [0x83, 0x7e, 0x0a, 0, 0x75, action.length, ...action];
+    const onActivate = [0x83, 0x7e, 0x0c, 6, 0x75, onInactive.length, ...onInactive];
+    writeCode(off, recorder([0x36, 0x83, 0x3e, 0x40, 0x0f, 0,
+      0x74, onActivate.length, ...onActivate]));
+    e.guest_write32(0x110f40, 0);
+    runShow(old, 5, 0x90, true);
+    e.guest_write32(0x110f40, 1);
+    runShow(target, 5, 0x90, true);
+    assert.strictEqual(e.guest_read32(0x110f40) >>> 16, e.test_narrow(old),
+      'far deactivation observes old active HWND');
+    const expected = mode === 1 ? chosen : mode === 3 || mode === 4 ? old : target;
+    assert.strictEqual(e.test_active(), expected, `far reentry mode ${mode}`);
+    assert.strictEqual(e.test_focus(), expected);
+  }
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

@@ -1575,3 +1575,46 @@ discarded, not scored as success. Local load average exceeded 130 during
 the attempts; these are ordering observations, not performance results.
 The reference-harness source checks pass. No production runtime change in
 this measurement step.
+
+### Delayed active-window publication implemented (2026-09-20)
+
+Both notification transactions now retain the old active HWND while sending
+WA_INACTIVE. They publish the new HWND only after that callback returns,
+before sending its activating WM_ACTIVATE. A shared instance-local transition
+serial advances at publication, not on entry or same-active reassertion.
+Win32 keeps its observed serial in a local; Win16 keeps it in its own
+24-byte continuation frame. A nested committed transition cancels remaining
+outer notifications/focus work, including A→C→A. A same-active request does
+not. Retired targets are checked before publication so destroying the
+candidate during deactivation cannot clear the still-active old window.
+
+Real x86 and far callbacks now query GetActiveWindow inside deactivation.
+Tests cover no reentry, selecting a third window, reselecting the old window,
+switching away and back, and destroying the candidate. The far API caller
+uses ShowWindow's shared activation transaction; it is not a claim that a
+new Win16 SetActiveWindow adapter was implemented. Existing return-value,
+stack, reason, nested focus and destruction checks remain enabled.
+
+One existing far fixture called ShowWindow from both activating and
+deactivating WM_ACTIVATE. With native publication order that callback can
+recursively ask to deactivate itself. The fixture now reacts only to a
+nonzero activation reason; the new deactivation-reentry matrix explicitly
+uses a one-shot hook, as the native probe does. An initial test edit also
+duplicated an existing GetActiveWindow thunk declaration; that syntax error
+was removed before running the far matrix.
+
+The pre-change Win32 transaction and pre-change far adapter each fail the
+new old-active observation assertion (`/private/tmp/wa-activation-serial-negative32.log`
+and `wa-activation-serial-negative16.log`). Native case 4 (DefWindowProc
+reclaiming activation after a nested choice), focus reentry details and
+mouse-pump delivery remain open; this change does not make a blanket claim
+that every nested activation must win regardless of subsequent default
+processing.
+
+Final Win32/far matrices pass (`/private/tmp/wa-activation-serial32-final.log`,
+`wa-activation-serial16-final.log`). The full normal/compat gated build passes
+(`wa-activation-serial-build.log`, unchanged layout `6ee344b49d5799cb`),
+as do all seven WEP3 gameplay cases (`wa-activation-serial-wep3.log`) and
+actual Notepad cooperative/Worker Chrome taskbar checks
+(`wa-activation-serial-browser.log`). These regression checks use the
+completed artifacts; they do not exercise unimplemented mouse-pump activation.

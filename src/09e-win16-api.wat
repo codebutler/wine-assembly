@@ -7487,7 +7487,7 @@
       (else (call $win16_show_continue))))
 
   ;; Far twin of the active-window notification transaction. The invocation
-  ;; owns {target, previous, phase, old-focus, reason}; no callback scratch is global.
+  ;; owns {target, previous, phase, old-focus, reason, serial}; no callback scratch is global.
   (global $WIN16_CONT_ACTIVATE i32 (i32.const 0xFFB4))
   (func $win16_activate_start (param $target i32)
     (call $win16_activate_start_reason (local.get $target) (i32.const 1)))
@@ -7502,15 +7502,14 @@
     (call $wnd_z_raise_owner_group (local.get $target))
     (if (i32.eq (local.get $previous) (local.get $target))
       (then (call $win16_cont_resume) (return)))
-    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (call $gs32 (local.get $sp) (local.get $target))
     (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $previous))
     (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
     (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (i32.const 0))
     (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (local.get $reason))
-    (global.set $active_hwnd (local.get $target))
-    (call $wnd_note_active_popup (local.get $target))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 20)) (global.get $active_transition_serial))
     (call $win16_activate_continue))
 
   (func $win16_activate_continue
@@ -7522,10 +7521,20 @@
     (block $done (loop $next
       ;; A nested activation owns its choice; an outer callback must not
       ;; reactivate or refocus its now superseded target.
-      (br_if $done (i32.ne (global.get $active_hwnd) (local.get $target)))
+      (br_if $done (i32.ne (global.get $active_transition_serial)
+        (call $gl32 (i32.add (local.get $sp) (i32.const 20)))))
       (if (i32.lt_s (call $wnd_table_find (local.get $target)) (i32.const 0))
-        (then (global.set $active_hwnd (i32.const 0)) (br $done)))
+        (then
+          (if (i32.eq (global.get $active_hwnd) (local.get $target))
+            (then (global.set $active_hwnd (i32.const 0))))
+          (br $done)))
       (local.set $phase (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
+      (if (i32.eq (local.get $phase) (i32.const 1))
+        (then
+          (call $active_window_publish (local.get $target))
+          (call $gs32 (i32.add (local.get $sp) (i32.const 20)) (global.get $active_transition_serial))))
+      (br_if $done (i32.and (i32.gt_u (local.get $phase) (i32.const 1))
+        (i32.ne (global.get $active_hwnd) (local.get $target))))
       (br_if $done (i32.ge_u (local.get $phase) (i32.const 4)))
       (call $gs32 (i32.add (local.get $sp) (i32.const 8))
         (i32.add (local.get $phase) (i32.const 1)))
@@ -7580,7 +7589,7 @@
                 (i32.shl (call $wnd_min_get (local.get $hwnd)) (i32.const 16))))
               (else (local.get $wp))) (local.get $lp)))))
       (br $next)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 24)))
     (call $win16_cont_resume))
 
   ;; Invocation-owned {hwnd, client-size, pending-bits} across far callbacks.
