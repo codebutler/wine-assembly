@@ -43,6 +43,8 @@ function makeWndProc(observed, callback = []) {
 }
 
 const extraWat = String.raw`
+  (func (export "test_click_activate") (param $h i32) (result i32)
+    (call $active_window_transition_reason (local.get $h) (i32.const 2)))
   (func (export "test_thunk") (param $id i32) (result i32)
     (local $p i32)
     (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
@@ -304,6 +306,36 @@ const extraWat = String.raw`
       `wrapper ${kind}, ${where}/${message}: outer host activation must not undo the nested choice`);
   }
 
+  {
+    const first = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+    const second = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+    e.test_set_active(first, stack);
+    resetRecords();
+    assert.strictEqual(e.test_click_activate(second), first);
+    assert.deepStrictEqual(records(), [
+      { hwnd: first, msg: 6, wParam: 0, lParam: second },
+      { hwnd: second, msg: 6, wParam: 2, lParam: first },
+      { hwnd: first, msg: 8, wParam: second, lParam: 0 },
+      { hwnd: second, msg: 7, wParam: first, lParam: 0 },
+    ], 'mouse reason changes only the activating WM_ACTIVATE');
+    resetRecords();
+    e.test_click_activate(second);
+    assert.deepStrictEqual(records(), [], 'same-target click does not repeat activation');
+    const clickProc = e.guest_alloc(256);
+    const clickTarget = e.test_make_window(clickProc, WS_VISIBLE, 0, 1);
+    const nestedAction = [0x68, ...u32(first), 0xb8, ...u32(setActiveThunk), 0xff, 0xd0];
+    const whenClick = [0x83, 0x7c, 0x24, 12, 2, 0x75, nestedAction.length, ...nestedAction];
+    bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 6,
+      0x75, whenClick.length, ...whenClick]), toWasm(clickProc));
+    resetRecords();
+    e.test_click_activate(clickTarget);
+    assert.strictEqual(e.test_get_active(), first);
+    assert(records().some(r => r.hwnd === clickTarget && r.msg === 6 && r.wParam === 2));
+    assert(records().some(r => r.hwnd === first && r.msg === 6 && r.wParam === 1),
+      'nested API activation does not inherit mouse reason');
+    assert(!records().some(r => r.hwnd === clickTarget && r.msg === 7),
+      'superseded click must not reclaim focus');
+  }
   console.log('PASS Set/GetActiveWindow retain per-thread USER activation state');
 })().catch(error => {
   console.error(error && error.stack || error);

@@ -4,6 +4,10 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  (func (export "test_click_activate") (param $h i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x11080e))
+    (call $win16_cont_push (i32.const 0x000f0090) (i32.const 42))
+    (call $win16_activate_start_reason (local.get $h) (i32.const 2)))
   (func (export "test_mouse") (param $h i32) (param $top i32) (param $lp i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
     (call $gs16 (i32.const 0x110800) (i32.const 0x90))
@@ -746,5 +750,36 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   runSys(retiredQuery, 0xF120);
   assert.strictEqual(e.test_alive(retiredQuery), 0, 'query can retire target without stale commit');
   assert.strictEqual(systemCommands.length, beforeRetiredQuery, 'retired query emits no host commit');
+  const runClick = target => {
+    e.guest_write32(0x110900, 0);
+    writeCode(0x90, [0xeb, 0xfe]);
+    e.test_click_activate(target);
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 30; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090);
+    assert.strictEqual(e.get_esp(), 0x11080e, 'reason frame popped exactly');
+    assert.strictEqual(e.test_result() & 0xffff, 42, 'caller continuation result preserved');
+    return Array.from({length: e.guest_read32(0x110900)}, (_, i) => ({
+      msg: e.guest_read32(0x110904 + i * 8) & 0xffff,
+      wp: e.guest_read32(0x110904 + i * 8) >>> 16,
+      lp: e.guest_read32(0x110908 + i * 8),
+    }));
+  };
+  const clickA = e.test_window(0x5000), clickB = e.test_window(0x5000);
+  runShow(clickA, 5, 0x90, true);
+  assert.deepStrictEqual(runClick(clickB), [
+    {msg: 6, wp: 0, lp: e.test_narrow(clickB)},
+    {msg: 6, wp: 2, lp: e.test_narrow(clickA)},
+    {msg: 8, wp: e.test_narrow(clickB), lp: 0},
+    {msg: 7, wp: e.test_narrow(clickA), lp: 0},
+  ]);
+  assert.deepStrictEqual(runClick(clickB), []);
+  const nestedClickEvents = runClick(superseded);
+  assert(nestedClickEvents.some(r => r.msg === 6 && r.wp === 2));
+  assert(nestedClickEvents.some(r => r.msg === 6 && r.wp === 1),
+    'nested ShowWindow retains API reason inside click activation');
+  assert.strictEqual(e.test_active(), nestedActive);
+  assert.strictEqual(e.test_focus(), nestedActive);
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

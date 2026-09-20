@@ -7487,9 +7487,12 @@
       (else (call $win16_show_continue))))
 
   ;; Far twin of the active-window notification transaction. The invocation
-  ;; owns {target, previous, phase, old-focus}; no callback scratch is global.
+  ;; owns {target, previous, phase, old-focus, reason}; no callback scratch is global.
   (global $WIN16_CONT_ACTIVATE i32 (i32.const 0xFFB4))
   (func $win16_activate_start (param $target i32)
+    (call $win16_activate_start_reason (local.get $target) (i32.const 1)))
+
+  (func $win16_activate_start_reason (param $target i32) (param $reason i32)
     (local $sp i32) (local $previous i32)
     (local.set $previous (global.get $active_hwnd))
     (if (i32.lt_s (call $wnd_table_find (local.get $previous)) (i32.const 0))
@@ -7499,12 +7502,13 @@
     (call $wnd_z_raise_owner_group (local.get $target))
     (if (i32.eq (local.get $previous) (local.get $target))
       (then (call $win16_cont_resume) (return)))
-    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (call $gs32 (local.get $sp) (local.get $target))
     (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $previous))
     (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
     (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (local.get $reason))
     (global.set $active_hwnd (local.get $target))
     (call $wnd_note_active_popup (local.get $target))
     (call $win16_activate_continue))
@@ -7531,7 +7535,9 @@
           (local.set $hwnd (select (local.get $previous) (local.get $target)
             (i32.eqz (local.get $phase))))
           (local.set $msg (i32.const 6))
-          (local.set $wp (local.get $phase))
+          (local.set $wp (select (i32.const 0)
+            (call $gl32 (i32.add (local.get $sp) (i32.const 16)))
+            (i32.eqz (local.get $phase))))
           (local.set $lp (select (local.get $target) (local.get $previous)
             (i32.eqz (local.get $phase)))))
         (else
@@ -7574,7 +7580,7 @@
                 (i32.shl (call $wnd_min_get (local.get $hwnd)) (i32.const 16))))
               (else (local.get $wp))) (local.get $lp)))))
       (br $next)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 20)))
     (call $win16_cont_resume))
 
   ;; Invocation-owned {hwnd, client-size, pending-bits} across far callbacks.

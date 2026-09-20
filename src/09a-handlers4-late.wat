@@ -1395,6 +1395,11 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
   ;; a descendant focus itself, preserve that choice; otherwise DefWindowProc's
   ;; default is represented by moving focus to the activated top-level.
   (func $active_window_transition (param $target i32) (result i32)
+    (call $active_window_transition_reason (local.get $target) (i32.const 1)))
+
+  ;; The cause belongs to this invocation, not a global: a mouse activation
+  ;; callback may call SetActiveWindow, whose nested notification is WA_ACTIVE.
+  (func $active_window_transition_reason (param $target i32) (param $reason i32) (result i32)
     (local $previous i32) (local $old_focus i32)
     (local.set $previous (global.get $active_hwnd))
     (if (i32.and
@@ -1428,7 +1433,7 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
       (then
         (drop (call $wnd_send_message
           (local.get $target) (i32.const 0x0006) ;; WM_ACTIVATE
-          (i32.or (i32.const 1) ;; WA_ACTIVE
+          (i32.or (local.get $reason) ;; WA_ACTIVE or WA_CLICKACTIVE
             (i32.shl (call $wnd_min_get (local.get $target)) (i32.const 16)))
           (local.get $previous)))
         (call $host_invalidate_frame (local.get $target))))

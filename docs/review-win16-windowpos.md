@@ -1488,3 +1488,40 @@ are regression checks, not proof of the still-unimplemented input activation
 transaction. Next integrate query/activation/eat at removal, with
 WA_CLICKACTIVE and far-safe pump completion, before removing eager renderer
 focus/raise behavior.
+
+### Activation cause plumbing and remaining ordering gap (2026-09-20)
+
+The Win32 notification transaction now takes an invocation-local reason;
+the existing API entry wrapper supplies WA_ACTIVE (1), and the mouse path
+can supply WA_CLICKACTIVE (2). The far transaction likewise carries the
+reason in its own stack frame (20 bytes, formerly 16). Deactivation remains
+WA_INACTIVE; Win16 still puts minimized state in HIWORD(lParam), whereas
+Win32 puts it in HIWORD(wParam). No global "current mouse activation" flag
+can leak into a nested API activation.
+
+The new tests exercise the full deactivation/activation/focus stream with
+reason 2, same-target no-repeat behavior, and an API activation nested inside
+the mouse activation callback. The nested notification must retain reason 1
+and its selected active/focus window. Far stack cleanup and the original
+caller continuation result are checked explicitly. Initial tests reused a
+destroyed Win32 fixture and a minimized Win16 fixture; they were corrected
+to allocate fresh windows rather than weakening the expected stream.
+
+**Still not native-equivalent:** the preserved native trace reports old A
+as active during A's WM_ACTIVATE/WA_INACTIVE callback, then B during B's
+WM_ACTIVATE/WA_CLICKACTIVE. Both current transactions publish B before
+calling A. Existing reentrancy guards depend on that early publication.
+Before mouse-pump integration, fix the publication boundary together with
+reentrant-transition ownership (including same-target/ABA cases); do not
+just move the assignment while retaining a guard that assumes it already
+happened. The reason plumbing does not claim to fix that ordering or to
+route actual mouse input yet.
+
+Verification: Win32 and far matrices pass (`/private/tmp/wa-click-reason32-final.log`,
+`/private/tmp/wa-click-reason16-final.log`). Forcing reason 1 in either runtime
+path makes the corresponding stream assertion fail (the two
+`wa-click-reason-negative*` logs). Both gated artifacts build successfully
+(`wa-click-reason-build.log`, unchanged region layout), all seven WEP3
+gameplay cases pass (`wa-click-reason-wep3.log`), and completed-artifact
+Notepad minimize/restore checks pass in cooperative and Worker Chrome
+(`wa-click-reason-browser.log`).
