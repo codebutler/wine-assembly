@@ -3676,6 +3676,24 @@
     (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $free) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
+  ;; KERNEL.199 SetHandleCount(wNumber) -> how many file handles the task may
+  ;; actually use. Win16 caps a task at 255 and returns what it could grant,
+  ;; not what was asked for, and a C runtime records that number and then
+  ;; trusts it. The file table below is $WIN16_FILE_MAX slots with 0-4 reserved
+  ;; for the standard handles, so the truthful answer is the request clamped to
+  ;; what this table can serve. Visual Basic 3's runtime asks before it opens
+  ;; anything, which is where every VBRUN300 game stopped.
+  (func $win16_SetHandleCount
+    (local $want i32) (local $cap i32)
+    (local.set $want (call $win16_arg16 (i32.const 0)))
+    (local.set $cap (i32.const 255))
+    (if (i32.lt_u (global.get $WIN16_FILE_MAX) (local.get $cap))
+      (then (local.set $cap (global.get $WIN16_FILE_MAX))))
+    (i32.store offset=0 (global.get $reg_base)
+      (select (local.get $want) (local.get $cap)
+        (i32.le_u (local.get $want) (local.get $cap))))
+    (call $win16_api_return (i32.const 2)))
+
   ;; ---- File handles ----
   ;;
   ;; Every other kind of handle goes through $win16_h16, which numbers from
@@ -4087,6 +4105,20 @@
       (then (call $win16_hmemcpy) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 169))
       (then (call $win16_GetFreeSpace) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 199))
+      (then (call $win16_SetHandleCount) (return (i32.const 1))))
+    ;; KERNEL.102 DOS3Call — the task loads the registers an INT 21h would take
+    ;; and far-calls KERNEL instead of issuing the interrupt. It is the same
+    ;; service with the same register and carry-flag results, so it runs the
+    ;; same handler the `int 21h` instruction does ($th_int in 05c); the only
+    ;; difference is the far return, and it carries no stack arguments.
+    ;; Visual Basic 3's runtime sets its divide-by-zero vector (AH=25h) this
+    ;; way before it runs a form, which is where VBRUN300 stopped.
+    (if (i32.eq (local.get $ordinal) (i32.const 102))
+      (then
+        (call $win16_dos_int21)
+        (call $win16_api_return (i32.const 0))
+        (return (i32.const 1))))
     ;; AllocCStoDSAlias, AllocDStoCSAlias, AllocAlias and AllocSelector all
     ;; come to the same thing here: another selector over the same bytes.
     (if (i32.or (i32.eq (local.get $ordinal) (i32.const 170))
@@ -5753,6 +5785,19 @@
         (call $win16_call32_end)
         (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
         (call $win16_api_return (i32.const 0))
+        (return (i32.const 1))))
+    ;; USER.287 GetLastActivePopup(hWnd) -> the popup that window last owned,
+    ;; or the window itself when it owns none. Visual Basic 3's runtime asks
+    ;; for its form's last popup while it is starting up.
+    (if (i32.eq (local.get $ordinal) (i32.const 287))
+      (then
+        (local.set $arg (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+        (call $win16_call32_begin (i32.const 1))
+        (call $handle_GetLastActivePopup (local.get $arg) (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
+        (call $win16_api_return (i32.const 2))
         (return (i32.const 1))))
     ;; USER.58 GetClassName(hWnd, lpClassName, nMaxCount) -> its length. Tic
     ;; Tac Drop asks every window it made what class it is while wiring up its
