@@ -1024,6 +1024,29 @@ function resolveAddr(spec) {
 function resolveAddrList(spec) {
   return spec ? spec.split(',').map(resolveAddr).filter(v => v !== 0) : [];
 }
+// The inverse, for printing. A crash dump full of bare runtime VAs is a dump
+// nobody can act on without first grepping the log for load lines and doing
+// the subtraction by hand -- and getting that wrong reads as a plausible
+// address in the wrong module. `exe` is skipped as a name because every
+// module key maps to it as well.
+function describeAddr(va) {
+  va = va >>> 0;
+  const mods = Object.entries(moduleBases)
+    .filter(([k]) => k !== 'exe')
+    .map(([name, m]) => ({ name, base: m.loadAddr >>> 0, orig: m.origBase >>> 0 }))
+    .sort((a, b) => a.base - b.base);
+  for (let i = 0; i < mods.length; i++) {
+    if (va < mods[i].base) continue;
+    // Bound by the next module's base; the last one gets a 16 MB cap so an
+    // address far above everything is reported as unattributed, not smeared
+    // onto whichever module happens to have loaded last.
+    const end = i + 1 < mods.length ? mods[i + 1].base : mods[i].base + 0x1000000;
+    if (va >= end) continue;
+    const off = (va - mods[i].base + mods[i].orig) >>> 0;
+    return `${hex(va)} (${mods[i].name}+${hex(off)})`;
+  }
+  return hex(va);
+}
 
 const breakAddrs = BREAKPOINT ? BREAKPOINT.split(',').map(s => parseInt(s, 16)) : []; // re-resolved post-DLL-load if any spec is module-relative
 if (breakAddrs.length > 1) {
@@ -8667,7 +8690,7 @@ async function main() {
       while (logs.length) console.log(logs.shift());
       console.log(`\n*** CRASH at batch ${batch}: ${e.message}`);
       console.log('  Full stack:', e.stack.split('\n').slice(0, 15).join('\n    '));
-      console.log('  EIP before batch: ' + hex(eipBefore));
+      console.log('  EIP before batch: ' + describeAddr(eipBefore));
       // eipBefore is only where the BATCH entered; hundreds of blocks may run
       // after it, so on its own it routinely names an innocent function. When
       // the guest transfers into blank memory the trap EIP is garbage too, and
@@ -8678,7 +8701,8 @@ async function main() {
       try {
         const prevEip = instance.exports.get_dbg_prev_eip() >>> 0;
         prev2Eip = instance.exports.get_dbg_prev2_eip() >>> 0;
-        console.log('  prev_eip: ' + hex(prevEip) + '   prev2_eip: ' + hex(prev2Eip));
+        console.log('  prev_eip:  ' + describeAddr(prevEip));
+        console.log('  prev2_eip: ' + describeAddr(prev2Eip));
       } catch (_) {}
       try { console.log('  thread_alloc: ' + hex(instance.exports.get_thread_alloc())); } catch (_) {}
       console.log('  ' + regs());
