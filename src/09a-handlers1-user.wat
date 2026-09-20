@@ -1028,25 +1028,13 @@
 
   ;; 105: SetForegroundWindow(hWnd) — 1 arg stdcall
   (func $handle_SetForegroundWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $top i32)
-    (local.set $top (call $wnd_top_level (local.get $arg0)))
-    (if (i32.and
-          (i32.ge_s (call $wnd_table_find (local.get $top)) (i32.const 0))
-          (i32.eq (call $wnd_get_thread (local.get $top)) (global.get $current_thread_id)))
-      (then (drop (call $active_window_transition (local.get $top)))))
-    (i32.store offset=0 (global.get $reg_base) (call $host_activate_window (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $activate_window_with_host (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; SwitchToThisWindow(hWnd, fAltTab) — activate renderer window
   (func $handle_SwitchToThisWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $top i32)
-    (local.set $top (call $wnd_top_level (local.get $arg0)))
-    (if (i32.and
-          (i32.ge_s (call $wnd_table_find (local.get $top)) (i32.const 0))
-          (i32.eq (call $wnd_get_thread (local.get $top)) (global.get $current_thread_id)))
-      (then (drop (call $active_window_transition (local.get $top)))))
-    (drop (call $host_activate_window (local.get $arg0)))
+    (drop (call $activate_window_with_host (local.get $arg0)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
@@ -1393,7 +1381,7 @@
   ;; their zero result means "use the default TRUE"; an x86 wndproc's zero is
   ;; an intentional veto unless it is a dialog that declined the message.
   (func $open_icon_core (param $hwnd i32) (result i32)
-    (local $wp i32) (local $query i32) (local $top i32)
+    (local $wp i32) (local $query i32)
     (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
       (then
         (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
@@ -1420,12 +1408,7 @@
       (select (i32.const 2) (i32.const 0) (call $wnd_max_get (local.get $hwnd))))
     (call $paint_flag_set_inv (local.get $hwnd))
     (call $nc_flags_set (local.get $hwnd) (i32.const 4))
-    (local.set $top (call $wnd_top_level (local.get $hwnd)))
-    (if (i32.and
-          (i32.ge_s (call $wnd_table_find (local.get $top)) (i32.const 0))
-          (i32.eq (call $wnd_get_thread (local.get $top)) (global.get $current_thread_id)))
-      (then (drop (call $active_window_transition (local.get $top)))))
-    (drop (call $host_activate_window (local.get $hwnd)))
+    (drop (call $activate_window_with_host (local.get $hwnd)))
     (i32.const 1))
 
   ;; 119: OpenIcon(hwnd) — restores a minimized window; return nonzero.

@@ -36,6 +36,8 @@ function makeWndProc(observed, callback = []) {
   emit(0x89, 0x0d, ...u32(observed + COUNT)); // mov [count],ecx
   emit(...callback);
   emit(0x31, 0xc0); // xor eax,eax
+  emit(0x83, 0x7c, 0x24, 8, 0x13, 0x75, 5); // accept WM_QUERYOPEN for OpenIcon
+  emit(0xb8, ...u32(1));
   emit(0xc2, 0x10, 0x00); // ret 16
   return Uint8Array.from(out);
 }
@@ -110,6 +112,21 @@ const extraWat = String.raw`
     (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_focus") (result i32) (global.get $focus_hwnd))
+  (func (export "test_activation_wrapper") (param $kind i32) (param $h i32) (param $stack i32) (result i64)
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (if (i32.eq (local.get $kind) (i32.const 1))
+      (then (call $handle_SetForegroundWindow (local.get $h) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $kind) (i32.const 2))
+      (then (call $handle_SwitchToThisWindow (local.get $h) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $kind) (i32.const 3))
+      (then
+        (call $wnd_apply_show_state (local.get $h) (i32.const 2))
+        (call $handle_OpenIcon (local.get $h) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $kind) (i32.const 4))
+      (then (call $show_window_activate_top_level (local.get $h) (i32.const 5))))
+    (i64.or
+      (i64.extend_i32_u (i32.load (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
   (func (export "test_destroy") (param $hwnd i32)
     (call $wnd_destroy_recursive (local.get $hwnd)))
 `;
@@ -225,19 +242,29 @@ const extraWat = String.raw`
   assert.deepStrictEqual(hostCalls.slice(-3), [
     ['activate', second], ['zorder', child, 0], ['activate', child],
   ], 'foreground and child Bring calls preserve their renderer targets');
+  assert.strictEqual(e.test_set_foreground(child), 1);
+  assert.strictEqual(e.test_get_active() >>> 0, first);
+  assert.deepStrictEqual(hostCalls.at(-1), ['activate', child],
+    'shared activation keeps the original child HWND for the host');
 
   e.test_destroy(first);
   assert.strictEqual(e.test_get_active(), 0,
     'destroying the active top-level clears GetActiveWindow state');
+  assert.strictEqual(e.test_set_foreground(foreign), 1);
+  assert.strictEqual(e.test_get_active(), 0, 'foreign foreground delegation does not steal queue activation');
+  assert.deepStrictEqual(hostCalls.at(-1), ['activate', foreign],
+    'foreign foreground HWND still reaches the host');
 
   const setActiveThunk = e.test_thunk(apiTable.find(api => api.name === 'SetActiveWindow').id);
   const armed = e.guest_alloc(4) >>> 0;
   const resetRecords = () => view.setUint32(toWasm(observed + COUNT), 0, true);
   // Reenter from every synchronous notification boundary, using real guest
   // x86 and the public SetActiveWindow thunk, not a host state assignment.
-  for (const [where, message, wp] of [
+  const boundaries = [
     ['old', 6, 0], ['target', 6, 1], ['old', 8, null], ['target', 7, null],
-  ]) {
+  ];
+  for (const [kind, where, message, wp] of [0, 1, 2, 3, 4]
+    .flatMap(kind => boundaries.map(boundary => [kind, ...boundary]))) {
     resetRecords();
     const hookProc = e.guest_alloc(256) >>> 0;
     const old = e.test_make_window(where === 'old' ? hookProc : proc, WS_VISIBLE, 0, 1) >>> 0;
@@ -256,9 +283,14 @@ const extraWat = String.raw`
     resetRecords();
     hostCalls.length = 0;
     view.setUint32(toWasm(armed), 1, true);
-    packed = e.test_set_active(target, stack);
-    assert.strictEqual(result(packed), old, 'outer return retains its original previous HWND');
-    assert.strictEqual(finalEsp(packed), stack + 8, 'nested activation preserves stdcall stack');
+    packed = kind === 0 ? e.test_set_active(target, stack) :
+      e.test_activation_wrapper(kind, target, stack);
+    if (kind === 0) assert.strictEqual(result(packed), old,
+      'outer return retains its original previous HWND');
+    if (kind === 3) assert.strictEqual(result(packed), 1,
+      'OpenIcon still reports its successful restore');
+    assert.strictEqual(finalEsp(packed), stack + (kind === 4 ? 0 : kind === 2 ? 12 : 8),
+      `wrapper ${kind}: nested activation preserves caller stack`);
     assert.strictEqual(e.test_get_active() >>> 0, chosen);
     assert.strictEqual(e.test_focus() >>> 0, chosen, `${where}/${message}: nested focus survives`);
     const events = records();
@@ -269,7 +301,7 @@ const extraWat = String.raw`
       ((r.msg === 6 && r.wParam === 1) || r.msg === 7)),
     `${where}/${message}: superseded target gets no stale activation/focus`);
     assert.deepStrictEqual(hostCalls, [['activate', chosen]],
-      `${where}/${message}: outer host activation must not undo the nested choice`);
+      `wrapper ${kind}, ${where}/${message}: outer host activation must not undo the nested choice`);
   }
 
   console.log('PASS Set/GetActiveWindow retain per-thread USER activation state');

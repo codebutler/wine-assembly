@@ -962,3 +962,42 @@ hash `494e011486f18808`), with no data-segment overlaps. All named logs are in
 The completed artifact also passes the WinRAR Worker browser file-drop test
 (`wa-active-reentrant-winrar-web.log`). This is a browser integration check,
 not an exhaustive native activation-order comparison.
+
+## 2026-09-20: foreground/restore wrappers share guarded publication
+
+The follow-up closes the post-callback host-overwrite paths identified above.
+`$activate_window_with_host` resolves the target's top-level and runs the
+same-thread transition, but does not activate the browser target if a callback
+has selected another window. SetForegroundWindow, SwitchToThisWindow, OpenIcon
+and the ShowWindow activation helper share it. It preserves the original HWND
+passed to the host (including child handles), and foreign-thread targets still
+delegate to the host without stealing the calling queue's active state.
+SetActiveWindow keeps its previous-HWND return path. OpenIcon still returns
+success for a completed restore even if callbacks selected another window.
+
+BringWindowToTop already activates the host before its guest callbacks, so it
+does not have this particular post-callback overwrite and was not changed.
+This is not a claim that every aspect of BringWindowToTop is native-correct.
+
+The real guest callback matrix now has twenty cases: SetActiveWindow,
+SetForegroundWindow, SwitchToThisWindow, OpenIcon, and the ShowWindow activation
+helper, each reentered from four activation/focus notification boundaries.
+The prior runtime fails the SetForegroundWindow/WA_INACTIVE case by sending
+the superseded host activation after the nested one
+(`/private/tmp/wa-activation-wrappers-before.log`). The corrected matrix passes;
+stack cleanup, nested active/focus state, absence of stale notifications and
+host targets are checked. The ShowWindow case tests its activation helper,
+not the entire ShowWindow message sequence. Separate owned-form ShowWindow and
+OpenIcon/CloseWindow integration tests pass, including the existing restore
+and query-veto behavior. Normal and compatibility builds pass.
+
+Remaining: hide/minimize successor selection, startup notification timing,
+ShowWindow erase-DC ownership, exact native focus/default-procedure ordering,
+and same-target nested activation generations. This change does not model
+cross-process foreground restrictions or supply native Win98 trace evidence.
+
+Final verification logs in `/private/tmp/`: `wa-activation-wrappers-contract.log`
+also covers preserved child HWND and foreign-thread host delegation;
+`wa-activation-wrappers-openicon.log`, `wa-activation-wrappers-owned.log`, and
+`wa-activation-wrappers-build.log` pass. The completed artifact passes WinRAR's
+real Worker browser file-drop gate (`wa-activation-wrappers-browser.log`).

@@ -3853,5 +3853,4 @@
                    (i32.eqz (call $wnd_get_parent (local.get $hwnd))))
           (i32.ne (global.get $active_hwnd) (local.get $hwnd)))
       (then
-        (drop (call $active_window_transition (local.get $hwnd)))
-        (drop (call $host_activate_window (local.get $hwnd))))))
+        (drop (call $activate_window_with_host (local.get $hwnd))))))

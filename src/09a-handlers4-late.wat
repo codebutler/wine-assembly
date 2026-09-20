@@ -1481,6 +1481,21 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
                   (i32.const 0) (i32.const 0)))))))))
     (local.get $previous))
 
+  ;; Foreground/restore wrappers also activate the browser window. For our
+  ;; queue, finish guest notifications first, then publish only if callbacks
+  ;; still select this top-level. Foreign-thread targets retain host delegation.
+  (func $activate_window_with_host (param $hwnd i32) (result i32)
+    (local $top i32)
+    (local.set $top (call $wnd_top_level (local.get $hwnd)))
+    (if (i32.and
+          (i32.ge_s (call $wnd_table_find (local.get $top)) (i32.const 0))
+          (i32.eq (call $wnd_get_thread (local.get $top)) (global.get $current_thread_id)))
+      (then
+        (drop (call $active_window_transition (local.get $top)))
+        (if (i32.ne (global.get $active_hwnd) (local.get $top))
+          (then (return (i32.const 0))))))
+    (call $host_activate_window (local.get $hwnd)))
+
   ;; 406: SetActiveWindow(hwnd) — previous active top-level for this thread.
   (func $handle_SetActiveWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.or
