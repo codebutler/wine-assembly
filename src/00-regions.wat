@@ -350,6 +350,8 @@
     (owner "09e-win16-api.wat:$WIN16_BUILTIN_NAMES"))
   (region.declare $WND_THREAD_TABLE (size 0x00000400) (align 0x00000100)
     (owner "09c0-window-table.wat:$wnd_thread_addr"))
+  (region.declare $THREAD_MSG_INPUT_FLAGS (size 0x00001000) (align 0x00000100)
+    (owner "09a-handlers.wat:$thread_msg_input_flags_addr"))
   (region.declare $THREAD_MSG_QUEUES (size 0x00002080) (align 0x00000100)
     (stride $THREAD_MSG_QUEUE_STRIDE (count 8))
     (owner "09a-handlers.wat:$thread_msg_queue_addr"))

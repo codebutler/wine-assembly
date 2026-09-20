@@ -6879,6 +6879,15 @@
   (func $post_queue_push
         (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
         (result i32)
+    (call $post_queue_push_flags (local.get $hwnd) (local.get $msg)
+      (local.get $wParam) (local.get $lParam) (i32.const 0)))
+  (func $post_queue_push_input
+        (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
+    (call $post_queue_push_flags (local.get $hwnd) (local.get $msg)
+      (local.get $wParam) (local.get $lParam) (i32.const 1)))
+  (func $post_queue_push_flags
+        (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
+        (param $flags i32) (result i32)
     (local $owner i32) (local $ok i32)
     (if (local.get $hwnd)
       (then (local.set $owner (call $wnd_get_thread (local.get $hwnd)))))
@@ -6886,8 +6895,8 @@
     ;; route a message whose live HWND names the actual owning queue.
     (if (i32.and (global.get $host_shadow) (i32.eqz (local.get $owner)))
       (then (return (i32.const 0))))
-    (local.set $ok (call $shared_post_queue_enqueue
-      (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))
+    (local.set $ok (call $shared_post_queue_enqueue_flags
+      (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam) (local.get $flags)))
     ;; --trace-win16 shows every posted message going in, which is the other
     ;; half of the dlg-pump/task-loop lines showing them come out. A message
     ;; delivered twice is either pushed twice or popped twice, and only both

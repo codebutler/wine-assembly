@@ -1346,3 +1346,47 @@ Baseline `test/test-peek-message-filter.js` passes
 (`/private/tmp/wa-mouse-pump-baseline.log`). It covers filter retention,
 PM_NOREMOVE, owner-thread keyboard delivery and queue growth, but does not
 exercise WM_MOUSEACTIVATE. This audit changes no runtime behavior.
+
+### Queue input provenance (2026-09-20)
+
+Host-input routing and filtered-peek migration now enqueue with a private
+source flag. Ordinary `PostMessage` enqueue uses zero, even for the same
+WM_LBUTTONDOWN number. The 16-byte guest message payload/ring ABI stays
+unchanged: a 4KB sidecar holds one dword for each of 16 × 64 inline slots;
+heap overflow nodes grow from 20 to 24 bytes. Ring compaction and overflow
+refill move metadata with the payload under the existing window lock.
+Slot reuse overwrites it, so a later application post cannot inherit an
+earlier input label. No guest message bits are repurposed.
+
+`$user_queue_input_flags` is an instance-private last-read observation, not
+shared event state: direct/cached input reports 1, ordinary posts and empty
+reads report 0, and shared queue reads publish the selected entry's source.
+The durable provenance resides in the queue entry's shared storage. Consumers
+must snapshot the observation before callbacks or other queue operations.
+Flag 1 means host/input-origin (including synthetic UI/test input), not proof
+that a physical device generated it. Activation processing remains absent;
+this change does not yet encode a processed activation decision.
+
+The filter regression covers owner routing, repeated direct and overflow
+PM_NOREMOVE, same-thread filter migration, overflow-to-ring refill, ring-gap
+compaction, posted mouse messages, slot reuse and the high thread-16 partition.
+The initial high-thread fixture tried to change an existing HWND's owner by
+registering it again; USER correctly retained the original owner. The fixed
+fixture creates a distinct HWND. The source-disabled negative control fails
+the owner-routing assertion (`/private/tmp/wa-input-flags-negative.log`).
+
+The first build caught the missing region-size declaration; that declaration
+was added rather than relaxing the gate. The full build then passed for both
+artifacts (`/private/tmp/wa-input-flags-build-final.log`), with matching mirror
+and layout `6ee344b49d5799cb`. Queue-growth/FIFO tests pass
+(`/private/tmp/wa-input-flags-queue.log`), as do Notepad taskbar
+minimize/restore checks in actual cooperative and Worker Chrome
+(`/private/tmp/wa-input-flags-browser.log`). No performance benefit or
+simultaneous-contention result is claimed.
+
+Final filter matrix also instantiates the same module twice over one shared
+memory: one instance enqueues input and the other observes its source, while
+their last-read globals remain independent. It passes
+(`/private/tmp/wa-input-flags-shared.log`). This is sequential cross-instance
+coverage, not concurrent stress. Next: per-event activation-processing state,
+parent/default query behavior, and Win16-safe pump continuation.

@@ -6,10 +6,15 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_input_flags") (result i32) (global.get $user_queue_input_flags))
+  (func (export "test_post_input") (param $h i32) (result i32)
+    (call $post_queue_push_input (local.get $h) (i32.const 0x0201) (i32.const 1) (i32.const 0)))
   (func (export "test_input_owner") (param $tid i32)
     (global.set $current_thread_id (local.get $tid)))
   (func (export "test_input_window")
     (call $wnd_table_set (i32.const 0x3333) (i32.const 0x12345678)))
+  (func (export "test_high_window")
+    (call $wnd_table_set (i32.const 0x3334) (i32.const 0x12345678)))
   (func (export "test_read_owner_queue") (param $msg i32) (result i32)
     (local $tid i32) (local $result i32)
     (local.set $tid (global.get $current_thread_id))
@@ -51,6 +56,7 @@ const extraWat = String.raw`
   const hardware = [];
   let hardwarePolls = 0;
   let now = 100;
+  let inputHwnd = 0x3333;
   const { exports: e, memory } = await bootRenderHarness({
     extraWat,
     extraHostOverrides: {
@@ -58,12 +64,13 @@ const extraWat = String.raw`
         hardwarePolls++;
         return hardware.length ? hardware.shift() : 0;
       },
-      check_input_hwnd: () => 0x3333,
+      check_input_hwnd: () => inputHwnd,
       check_input_lparam: () => 0x0014000A,
       get_ticks: () => now,
     },
   });
   const queue = new DataView(memory.buffer, e.get_post_queue_base(), 64);
+  const { exports: other } = await bootRenderHarness({ extraWat, memory, fonts: 'none' });
   const msgWa = e.get_guest_base() + 0x3000;
   const msg = new DataView(memory.buffer, msgWa, 28);
 
@@ -179,6 +186,7 @@ const extraWat = String.raw`
     assert.strictEqual(msg.getUint32(4, true), 0x0100);
     assert.strictEqual(msg.getUint32(8, true), 13);
     assert.strictEqual(msg.getUint32(12, true), 0x0014000A);
+    assert.strictEqual(e.test_input_flags(), 1, `${method}: owner routing retains host-input provenance`);
   }
 
   e.test_input_owner(2);
@@ -194,11 +202,14 @@ const extraWat = String.raw`
     assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
     assert.strictEqual(msg.getUint32(4, true), 0x0400);
     assert.strictEqual(msg.getUint32(8, true), i);
+    assert.strictEqual(e.test_input_flags(), 0, 'ordinary posts do not inherit input provenance');
   }
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
   assert.strictEqual(msg.getUint32(4, true), 0x0100,
     'hardware routed behind a grown owner queue is retained without loss');
+  assert.strictEqual(e.test_input_flags(), 1, 'overflow-to-ring refill retains input provenance');
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 0);
+  assert.strictEqual(e.test_input_flags(), 0, 'an empty read clears the last source');
 
   // Cross-thread posts use the same filtered queue path. Put the only admitted
   // message behind a full 64-entry ring so the scan must reach heap overflow
@@ -222,6 +233,59 @@ const extraWat = String.raw`
     assert.strictEqual(msg.getUint32(8, true), i);
   }
   assert.strictEqual(e.post_queue_depth(), 0);
+
+  // The source belongs to the queue entry, not its numeric WM_* value.
+  e.test_input_owner(2);
+  for (let i = 0; i < 66; i++) e.post_message_q(0x3333, 0x0417, i, 0);
+  hardware.push(0x00010201);
+  e.test_call_GetMessageA(0x3000);
+  e.test_input_owner(1);
+  for (const remove of [0, 0, 1]) {
+    assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0201, 0x0201, remove), 1);
+    assert.strictEqual(e.test_input_flags(), 1, 'filtered overflow peeks retain source across PM_NOREMOVE');
+  }
+  for (let i = 0; i < 66; i++) {
+    assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
+    assert.strictEqual(e.test_input_flags(), 0, 'removing input does not label neighbouring posts');
+  }
+  e.post_message_q(0x3333, 0x0201, 1, 0x0014000A);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0201, 0x0201, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 0, 'posted mouse-down is not hardware input on reused storage');
+  hardware.push(0x00010201);
+  for (const remove of [0, 0, 1]) {
+    assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0201, 0x0201, remove), 1);
+    assert.strictEqual(e.test_input_flags(), 1, 'direct cached hardware peeks retain source');
+  }
+  hardware.push(0x00010201);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0400, 0x0400, 1), 0);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0201, 0x0201, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 1, 'same-thread filter migration retains source');
+
+  // Last supported queue exercises the high-thread sidecar partition.
+  e.test_input_owner(16);
+  e.test_high_window();
+  inputHwnd = 0x3334;
+  e.post_message_q(0x3334, 0x0400, 0, 0);
+  e.test_input_owner(2);
+  hardware.push(0x00010201);
+  e.test_call_GetMessageA(0x3000);
+  e.post_message_q(0x3334, 0x0401, 0, 0);
+  e.test_input_owner(16);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0400, 0x0400, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 0);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 1, 'ring gap compaction moves source with payload in thread 16');
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 0);
+  e.test_input_owner(1);
+
+  other.test_input_owner(2);
+  assert.strictEqual(other.test_post_input(0x3334), 1);
+  e.test_input_owner(16);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0201, 0x0201, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 1, 'another WASM instance publishes source through shared memory');
+  assert.strictEqual(other.test_input_flags(), 0, 'last-read observation stays instance-private');
+  e.test_input_owner(1);
 
   e.test_seed_paint(0x4444);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0401, 0x0401, 1), 0,

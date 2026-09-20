@@ -411,11 +411,25 @@
       (i32.mul (i32.sub (local.get $tid) (i32.const 1))
         (global.get $THREAD_MSG_QUEUE_STRIDE))))
 
+  (global $THREAD_MSG_INPUT_FLAGS i32 (region.addr $THREAD_MSG_INPUT_FLAGS 0))
+  (global $THREAD_MSG_INPUT_FLAGS_SIZE i32 (region.size $THREAD_MSG_INPUT_FLAGS))
+  ;; Source metadata is private to USER, not a bit stolen from guest messages.
+  ;; One dword per ring slot, 16 queues of 64 slots. Moved under LOCK_WND.
+  (global $user_queue_input_flags (mut i32) (i32.const 0))
+  (func $thread_msg_input_flags_addr (param $tid i32) (param $queue i32) (param $slot i32) (result i32)
+    (i32.add (global.get $THREAD_MSG_INPUT_FLAGS)
+      (i32.add (i32.mul (i32.sub (local.get $tid) (i32.const 1)) (i32.const 256))
+        (i32.shr_u (i32.sub (i32.sub (local.get $slot) (local.get $queue)) (i32.const 16)) (i32.const 2)))))
+
   ;; The ring is the cross-instance fast path. Queue+12 points to a heap-backed
   ;; {head,tail,count} overflow state only while a burst exceeds 64 messages;
-  ;; each overflow node is {next,hwnd,msg,wParam,lParam}. Producers allocate
+  ;; each overflow node is {next,hwnd,msg,wParam,lParam,inputFlags}. Producers allocate
   ;; outside LOCK_WND, whose critical sections may never call a host import.
   (func $shared_post_queue_enqueue (param $hwnd i32) (param $msg i32) (param $wparam i32) (param $lparam i32) (result i32)
+    (call $shared_post_queue_enqueue_flags (local.get $hwnd) (local.get $msg)
+      (local.get $wparam) (local.get $lparam) (i32.const 0)))
+  (func $shared_post_queue_enqueue_flags (param $hwnd i32) (param $msg i32)
+    (param $wparam i32) (param $lparam i32) (param $flags i32) (result i32)
     (local $cnt i32) (local $tail i32) (local $slot i32) (local $queue i32) (local $tid i32)
     (local $state i32) (local $state_candidate i32) (local $state_wa i32)
     (local $node i32) (local $node_wa i32)
@@ -441,7 +455,7 @@
         ;; This is the rare overflow path. Allocate both possible objects before
         ;; reacquiring the process-wide window lock; a racing producer may have
         ;; published the state first, in which case the spare is freed below.
-        (local.set $node (call $heap_alloc (i32.const 20)))
+        (local.set $node (call $heap_alloc (i32.const 24)))
         (if (i32.eqz (local.get $node)) (then (return (i32.const 0))))
         (local.set $state_candidate (call $heap_alloc (i32.const 12)))
         (if (i32.eqz (local.get $state_candidate))
@@ -458,6 +472,7 @@
         (i32.store offset=8 (local.get $node_wa) (local.get $msg))
         (i32.store offset=12 (local.get $node_wa) (local.get $wparam))
         (i32.store offset=16 (local.get $node_wa) (local.get $lparam))
+        (i32.store offset=20 (local.get $node_wa) (local.get $flags))
         (call $lock_wnd_acquire)
         (if (i32.and (i32.ne (local.get $hwnd) (i32.const 0))
               (i32.ne (call $wnd_get_thread (local.get $hwnd)) (local.get $tid)))
@@ -480,6 +495,7 @@
             (i32.store offset=4 (local.get $slot) (local.get $msg))
             (i32.store offset=8 (local.get $slot) (local.get $wparam))
             (i32.store offset=12 (local.get $slot) (local.get $lparam))
+            (i32.store (call $thread_msg_input_flags_addr (local.get $tid) (local.get $queue) (local.get $slot)) (local.get $flags))
             (i32.store offset=8 (local.get $queue)
               (i32.rem_u (i32.add (local.get $tail) (i32.const 1))
                 (global.get $THREAD_MSG_QUEUE_MAX)))
@@ -512,6 +528,7 @@
     (i32.store offset=4 (local.get $slot) (local.get $msg))
     (i32.store offset=8 (local.get $slot) (local.get $wparam))
     (i32.store offset=12 (local.get $slot) (local.get $lparam))
+    (i32.store (call $thread_msg_input_flags_addr (local.get $tid) (local.get $queue) (local.get $slot)) (local.get $flags))
     (i32.store offset=8 (local.get $queue)
       (i32.rem_u (i32.add (local.get $tail) (i32.const 1))
         (global.get $THREAD_MSG_QUEUE_MAX)))
@@ -552,6 +569,8 @@
     (local $state i32) (local $state_wa i32)
     (local $node i32) (local $prev i32) (local $node_wa i32) (local $next i32)
     (local $free_node i32) (local $free_state i32)
+    (local $flags i32)
+    (global.set $user_queue_input_flags (i32.const 0))
     (local.set $queue (call $thread_msg_queue_addr (local.get $tid)))
     (if (i32.eqz (local.get $queue)) (then (return (i32.const 0))))
     ;; Count is the producer's publication word. Avoid taking the process-wide
@@ -617,12 +636,14 @@
         (local.set $hwnd (i32.load (local.get $slot)))
         (local.set $msg (i32.load offset=4 (local.get $slot)))
         (local.set $wparam (i32.load offset=8 (local.get $slot)))
-        (local.set $lparam (i32.load offset=12 (local.get $slot))))
+        (local.set $lparam (i32.load offset=12 (local.get $slot)))
+        (local.set $flags (i32.load (call $thread_msg_input_flags_addr (local.get $tid) (local.get $queue) (local.get $slot)))))
       (else
         (local.set $hwnd (i32.load offset=4 (local.get $node_wa)))
         (local.set $msg (i32.load offset=8 (local.get $node_wa)))
         (local.set $wparam (i32.load offset=12 (local.get $node_wa)))
-        (local.set $lparam (i32.load offset=16 (local.get $node_wa)))))
+        (local.set $lparam (i32.load offset=16 (local.get $node_wa)))
+        (local.set $flags (i32.load offset=20 (local.get $node_wa)))))
     (if (local.get $remove)
       (then
         (if (i32.eq (local.get $found) (i32.const 1))
@@ -646,6 +667,8 @@
                       (global.get $THREAD_MSG_QUEUE_MAX))
                     (i32.const 16)))))
               (call $memcpy (local.get $slot) (local.get $src) (i32.const 16))
+              (i32.store (call $thread_msg_input_flags_addr (local.get $tid) (local.get $queue) (local.get $slot))
+                (i32.load (call $thread_msg_input_flags_addr (local.get $tid) (local.get $queue) (local.get $src))))
               (local.set $j (i32.add (local.get $j) (i32.const 1)))
               (br $shift)))
             (local.set $cnt (i32.sub (local.get $cnt) (i32.const 1)))
@@ -670,6 +693,8 @@
                 (i32.store offset=4 (local.get $slot) (i32.load offset=8 (local.get $node_wa)))
                 (i32.store offset=8 (local.get $slot) (i32.load offset=12 (local.get $node_wa)))
                 (i32.store offset=12 (local.get $slot) (i32.load offset=16 (local.get $node_wa)))
+                (i32.store (call $thread_msg_input_flags_addr (local.get $tid) (local.get $queue) (local.get $slot))
+                  (i32.load offset=20 (local.get $node_wa)))
                 (i32.store offset=8 (local.get $queue)
                   (i32.rem_u (i32.add (local.get $tail) (i32.const 1))
                     (global.get $THREAD_MSG_QUEUE_MAX)))
@@ -704,6 +729,7 @@
     (call $lock_wnd_release)
     (if (local.get $free_node) (then (call $heap_free (local.get $free_node))))
     (if (local.get $free_state) (then (call $heap_free (local.get $free_state))))
+    (global.set $user_queue_input_flags (local.get $flags))
     ;; A null pointer is an internal USER probe: publish only the four fields
     ;; its caller needs in instance-private globals. Full guest MSG writes also
     ;; synthesize time/pt; they must receive a real 28-byte output buffer.

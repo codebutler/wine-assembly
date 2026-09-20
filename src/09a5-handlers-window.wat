@@ -1694,7 +1694,7 @@
         ;; Retain the event if the owner's queue is full; retry next poll.
         (global.set $pending_input_packed
           (select (i32.const 0) (local.get $packed)
-            (call $post_queue_push (local.get $hwnd)
+            (call $post_queue_push_input (local.get $hwnd)
               (i32.and (local.get $packed) (i32.const 0xFFFF))
               (i32.shr_u (local.get $packed) (i32.const 16))
               (global.get $pending_input_lparam))))
@@ -1705,6 +1705,7 @@
     (local $tmp i32) (local $msg_ptr i32) (local $packed i32) (local $nc_rect i32)
     (local $ret i32) (local $msg i32)
     (local $hotkey i32) (local $hotkey_msg i32)
+    (global.set $user_queue_input_flags (i32.const 0))
     ;; Move the virtual wire before looking for a message. WSAAsyncSelect is a
     ;; promise that the app will be TOLD about socket activity, so a server
     ;; written to that model calls no socket function at all while it waits --
@@ -1795,6 +1796,7 @@
     (if (i32.ne (local.get $packed) (i32.const 0))
     (then
     (local.set $msg (i32.and (local.get $packed) (i32.const 0xFFFF)))
+    (global.set $user_queue_input_flags (i32.const 1))
     (local.set $hotkey_msg (local.get $msg))
     (local.set $hotkey (call $hotkey_match
       (local.get $hotkey_msg) (i32.shr_u (local.get $packed) (i32.const 16))))
@@ -1988,6 +1990,7 @@
     (local $ret i32)
     (local $hotkey i32)
     (local $spin_activity_marked i32)
+    (global.set $user_queue_input_flags (i32.const 0))
     (local.set $spin_activity_marked (global.get $spin_peek_activity_marked))
     (global.set $spin_peek_activity_marked (i32.const 0))
     ;; Same reason as GetMessageA: an idle message pump is where a
@@ -2121,6 +2124,7 @@
     (if (i32.ne (local.get $packed) (i32.const 0))
       (then
         (local.set $msg (i32.and (local.get $packed) (i32.const 0xFFFF)))
+        (global.set $user_queue_input_flags (i32.const 1))
         (local.set $hotkey (call $hotkey_match
           (local.get $msg) (i32.shr_u (local.get $packed) (i32.const 16))))
         (if (local.get $hotkey)
@@ -2184,7 +2188,7 @@
             (local.set $tmp (global.get $pending_input_hwnd))
             (if (i32.eqz (local.get $tmp))
               (then (local.set $tmp (global.get $main_hwnd))))
-            (if (call $post_queue_push
+            (if (call $post_queue_push_input
               (local.get $tmp)
               (i32.and (local.get $packed) (i32.const 0xFFFF))
               (i32.shr_u (local.get $packed) (i32.const 16))
