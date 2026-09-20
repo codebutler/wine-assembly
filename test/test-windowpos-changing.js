@@ -29,12 +29,13 @@ const YS = 100;
 const CXS = 132;
 const CYS = 164;
 const FLAGS = 196;
-const OBSERVED_BYTES = 228;
+const INSERT_AFTER = 228;
+const OBSERVED_BYTES = 260;
 
 const pack = (low, high) => ((low & 0xffff) | ((high & 0xffff) << 16)) >>> 0;
 const u32 = value => [value, value >>> 8, value >>> 16, value >>> 24].map(v => v & 0xff);
 
-function makeWndProc(observed) {
+function makeWndProc(observed, changedFlags = SWP_NOZORDER | SWP_NOREDRAW) {
   const code = [];
   const labels = new Map();
   const fixups = [];
@@ -52,7 +53,7 @@ function makeWndProc(observed) {
   const recordWindowPos = () => {
     emit(0x8b, 0x4c, 0x24, 0x10); // mov ecx,[esp+16] (WINDOWPOS*)
     for (const [offset, base] of [
-      [8, XS], [12, YS], [16, CXS], [20, CYS], [24, FLAGS],
+      [4, INSERT_AFTER], [8, XS], [12, YS], [16, CXS], [20, CYS], [24, FLAGS],
     ]) {
       emit(0x8b, 0x41, offset); // mov eax,[ecx+offset]
       storeIndexedEax(observed + base);
@@ -80,7 +81,7 @@ function makeWndProc(observed) {
   emit(0xc7, 0x41, 0x0c, ...u32(112)); // y
   emit(0xc7, 0x41, 0x10, ...u32(113)); // cx
   emit(0xc7, 0x41, 0x14, ...u32(114)); // cy
-  emit(0xc7, 0x41, 0x18, ...u32(SWP_NOZORDER | SWP_NOREDRAW));
+  emit(0xc7, 0x41, 0x18, ...u32(changedFlags));
   jump('finish');
 
   label('changed');
@@ -192,11 +193,15 @@ const extraWat = String.raw`
   const sizes = new Map();
   const positions = new Map();
   const moves = [];
+  const zorders = [];
   let memory;
   const harness = await bootRenderHarness({
     extraWat,
     fonts: 'none',
     extraHostOverrides: {
+      set_window_zorder(hwnd, after) {
+        zorders.push({ hwnd: hwnd >>> 0, after: after >>> 0 });
+      },
       get_window_client_size(hwnd) {
         return sizes.get(hwnd >>> 0) || 0;
       },
@@ -320,6 +325,33 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_call_DefWindowProc(hwnd, windowpos, 1), 0);
   assert.deepStrictEqual(messages(), [WM_SIZE],
     'DefWindowProcW shares flag-sensitive geometry derivation');
+
+  // Use a separate code address: rewriting an already decoded wndproc would
+  // test instruction-cache invalidation instead of WINDOWPOS semantics.
+  const zproc = e.guest_alloc(512) >>> 0;
+  bytes.set(makeWndProc(observed, SWP_NOREDRAW), toWasm(zproc));
+  const zhwnd = e.test_make_window(zproc) >>> 0;
+  clearObserved();
+  zorders.length = 0;
+  assert.strictEqual(e.test_call_SetWindowPos(zhwnd, 1, 2, 30, 40, 0x14), 1);
+  assert.deepStrictEqual(zorders, [{ hwnd: zhwnd, after: 1 }],
+    'changing can clear NOZORDER and replace HWND_TOP with HWND_BOTTOM at the host');
+  assert.strictEqual(read(INSERT_AFTER, 0), 0, 'changing sees the original insertion target');
+  assert.strictEqual(read(INSERT_AFTER, 1), 1, 'changed reports the target actually committed');
+
+  clearObserved();
+  zorders.length = 0;
+  assert.strictEqual(e.test_call_SetWindowPos(hwnd, 1, 2, 30, 40, SWP_NOACTIVATE), 1);
+  assert.deepStrictEqual(zorders, [], 'changing can set NOZORDER to suppress the host change');
+
+  clearObserved();
+  zorders.length = 0;
+  assert.strictEqual(e.test_call_SetWindowPos(zhwnd, 1, 2, 30, 40,
+    SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_NOREDRAW), 1);
+  assert.deepStrictEqual(messages(), [WM_WINDOWPOSCHANGED]);
+  assert.deepStrictEqual(zorders, [{ hwnd: zhwnd, after: 0 }],
+    'NOSENDCHANGING commits the original insertion target');
+  assert.strictEqual(read(INSERT_AFTER), 0);
 
   console.log('PASS  WINDOWPOS changing/changed mutation and DefWindowProc geometry semantics');
 })().catch(error => {
