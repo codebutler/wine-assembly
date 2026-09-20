@@ -567,8 +567,14 @@
   ;; The five DX_SURF_* tables and DX_CURSOR_SAVE are parallel-indexed to
   ;; DX_OBJECTS by $dx_slot_of, so every one of them is $DX_MAX records wide
   ;; and only the record size differs.
-  (region.declare $DX_SURF_META (size 0x00010000) (align 0x00001000)
-    (stride 0x8 (count $DX_MAX))
+  ;; 16 bytes rather than 8: the third word is the surface's billed byte count.
+  ;; It used to live in DxObject.misc2, which SetColorKey overwrites with the
+  ;; colour key on the very same type-2 record -- so a keyed surface handed
+  ;; $dx_vidmem_used its KEY back on release instead of its size, and the
+  ;; difference never returned. Creation metadata belongs in the creation
+  ;; metadata table, where nothing else writes it.
+  (region.declare $DX_SURF_META (size 0x00020000) (align 0x00001000)
+    (stride 0x10 (count $DX_MAX))
     (owner "09a8-handlers-directx.wat:$dx_surf_meta_ptr"))
   (region.declare $OP_INDEX (size 0x00002000) (align 0x00001000)
     (stride 0x4 (count $OP_INDEX_MAX))

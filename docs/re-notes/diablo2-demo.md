@@ -655,3 +655,61 @@ run happened to pick. Reading a guest module's global used to mean grepping
 the run log for its load line and pasting a base into the expression, which is
 silently wrong on the next run — a bad base still reads *some* memory and
 returns plausible numbers.
+
+### 2026-09-20: found — a texture Release that never freed the surface
+
+The video-memory question above has an answer, and it is ours, not D2's.
+
+`QueryInterface` for `IDirect3DTexture`/`IDirect3DTexture2` does not create a
+new object: it hands back another COM view of the DirectDrawSurface's own
+`DX_OBJECTS` slot. So the final release through the texture vtable *is* the
+final release of the surface. Both handlers called `$dx_free`, which retires
+the slot and returns nothing — the DIB pages stayed allocated and
+`$dx_vidmem_used` stayed charged for them. `$dx_surface_release`, the one
+path that frees the DIB and refunds the bytes, was never reached, because D2
+drops its cache through the texture view.
+
+Measured live at the character screen, before the fix:
+
+| | |
+|---|---|
+| live DirectDraw surfaces | 705, holding 10.7 MB |
+| runs in the DIB arena owned by nothing | **4756, holding 48.5 MB** of 63 MB |
+| orphan run sizes | 4194 × 1 page, 421 × 10, 95 × 19, 36 × 35 |
+| `dwFree` handed to D2 at its last query | **0x88700 — 558 KB** |
+| `cacheA_256` | `nMaxNumItems=0 count=0`, real LRU pointers |
+| EIP | `0x17d0561` — the spin |
+
+Those orphan sizes are the game's own tile geometries, which is what
+identified the owner: a 32x32 at 2 bytes a pixel is one page, a 128x128 is ten
+with its slack row, a 256x256 is thirty-five. Nothing else in the process
+allocates in that distribution.
+
+So the whole chain, end to end: texture released through the texture view →
+pages and video memory stranded → `GetAvailableVidMem` answers 558 KB →
+`nMaxNumItems = (limit - base) / (bpp * w * h)` comes out zero → the eviction
+loop at `+0x9561` can never exit → black screen forever. Three steps separated
+the symptom from the cause, and each one looked like a different subsystem's
+bug: a renderer that never draws, then a guest that idles, then a cache that
+was never initialized.
+
+After the fix, on the same route at the same point: **10 orphan runs holding
+3.7 MB** (the primary/back pair and page rounding), 3584 live surfaces
+accounting for all 44.1 MB they hold.
+
+Two notes for anyone working near this:
+
+* **`$dx_free` is not a surface teardown** and never was. Any other view that
+  retires a type-2 slot through it leaks the same way; the texture views were
+  the two that a shipping app actually took.
+* **`DxObject.misc2` was a union of two things with different lifetimes** —
+  the billed byte count written at creation, and the colour key that
+  `SetColorKey` writes over it while the surface is alive. The refund read
+  `misc2`, so a keyed surface gave back its colour key. The billed figure now
+  lives in `DX_SURF_META+8`, which nothing else writes. D2 does not key these
+  surfaces, so this was latent for it — but the fix above routes many more
+  surfaces through that refund, which is why the two landed together.
+
+`test/test-d3dim-texture-release-arena.js` covers both, and carries its own
+negative control: a bare `$dx_free` must still strand the pages, or the other
+assertions stop being evidence.

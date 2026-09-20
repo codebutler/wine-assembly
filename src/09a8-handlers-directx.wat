@@ -66,8 +66,7 @@
   ;;   misc1 (+20)  DDSurface: dib_ptr | DDPalette: palette data addr
   ;;                D3DIM light: next-in-list | execbuf: data guest ptr
   ;;                D3DIM vertex buf: FVF | viewport: width
-  ;;   misc2 (+24)  DDSurface: color key low, and its byte size for the vidmem
-  ;;                accounting $dx_free does | DSBuffer: nSamplesPerSec
+  ;;   misc2 (+24)  DDSurface: color key low | DSBuffer: nSamplesPerSec
   ;;                D3DIM execbuf: instruction offset | viewport: height
   ;; The per-type reading belongs at the site, which is where the type is known.
   (layout DxObject
@@ -780,9 +779,25 @@
     (i32.add (global.get $DX_SURF_FMT)
       (i32.shl (call $dx_slot_of (local.get $entry_wa)) (i32.const 2))))
 
+  ;; Per-surface creation metadata, 16 bytes a slot:
+  ;;   +0  creation caps    +4  parent slot + 1    +8  billed vidmem bytes
   (func $dx_surf_meta_ptr (param $entry_wa i32) (result i32)
     (i32.add (global.get $DX_SURF_META)
-      (i32.shl (call $dx_slot_of (local.get $entry_wa)) (i32.const 3))))
+      (i32.shl (call $dx_slot_of (local.get $entry_wa)) (i32.const 4))))
+
+  ;; What this surface added to $dx_vidmem_used when it was created, and so
+  ;; exactly what its release must give back. Kept out of the DxObject record
+  ;; because every spare field there is a per-type union with a different
+  ;; lifetime, and the one this used to share (misc2) is rewritten by
+  ;; SetColorKey while the surface is alive.
+  (func $dx_surf_billed_set (param $entry_wa i32) (param $bytes i32)
+    (if (local.get $entry_wa)
+      (then (i32.store offset=8 (call $dx_surf_meta_ptr (local.get $entry_wa))
+              (local.get $bytes)))))
+
+  (func $dx_surf_billed_get (param $entry_wa i32) (result i32)
+    (if (i32.eqz (local.get $entry_wa)) (then (return (i32.const 0))))
+    (i32.load offset=8 (call $dx_surf_meta_ptr (local.get $entry_wa))))
 
   (func $dx_surf_owner_ptr (param $entry_wa i32) (result i32)
     (i32.add (global.get $DX_SURF_OWNER)
@@ -2259,8 +2274,9 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
-    (call $zero_memory (call $dx_surf_meta_ptr (local.get $entry)) (i32.const 8))
+    (call $zero_memory (call $dx_surf_meta_ptr (local.get $entry)) (i32.const 16))
     (i32.store (call $dx_surf_meta_ptr (local.get $entry)) (local.get $caps))
+    (call $dx_surf_billed_set (local.get $entry) (local.get $vidmem_bytes))
     (i32.store (call $dx_surf_owner_ptr (local.get $entry))
       (i32.add (call $dx_slot_of (call $dx_from_this (local.get $arg0))) (i32.const 1)))
     ;; Fill entry
@@ -2304,7 +2320,7 @@
         (local.set $back_obj (call $dx_create_com_obj (i32.const 2) (global.get $DX_VTBL_DDSURF2)))
         (if (local.get $back_obj) (then
           (local.set $back_entry (call $dx_from_this (local.get $back_obj)))
-          (call $zero_memory (call $dx_surf_meta_ptr (local.get $back_entry)) (i32.const 8))
+          (call $zero_memory (call $dx_surf_meta_ptr (local.get $back_entry)) (i32.const 16))
           (i32.store (call $dx_surf_owner_ptr (local.get $back_entry))
             (i32.add (call $dx_slot_of (call $dx_from_this (local.get $arg0))) (i32.const 1)))
           ;; The attached back buffer inherits the primary chain's allocation
@@ -2335,6 +2351,7 @@
               (return)))
           (local.set $dib_wa (call $g2w (local.get $dib_guest))) (call $zero_memory (local.get $dib_wa) (local.get $dib_size))
           (global.set $dx_vidmem_used (i32.add (global.get $dx_vidmem_used) (local.get $dib_size)))
+          (call $dx_surf_billed_set (local.get $back_entry) (local.get $dib_size))
           (store.field DxObject misc1 (local.get $back_entry) (local.get $dib_wa))
           (store.field DxObject misc2 (local.get $back_entry) (local.get $dib_size))
           (store.field DxObject flags (local.get $back_entry) (i32.const 2)) ;; flag=backbuf
@@ -3833,7 +3850,10 @@
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
     (if (i32.le_s (local.get $rc) (i32.const 0))
       (then
-        (local.set $surf_bytes (load.field DxObject misc2 (local.get $entry)))
+        ;; The billed figure, not misc2: SetColorKey rewrites misc2 on a live
+        ;; surface, so a keyed surface would otherwise refund its colour key.
+        (local.set $surf_bytes (call $dx_surf_billed_get (local.get $entry)))
+        (call $dx_surf_billed_set (local.get $entry) (i32.const 0))
         (local.set $dib_wa (load.field DxObject misc1 (local.get $entry)))
         (global.set $dx_vidmem_used (i32.sub (global.get $dx_vidmem_used) (local.get $surf_bytes)))
         (if (i32.eq (local.get $entry) (global.get $dx_primary_wa))

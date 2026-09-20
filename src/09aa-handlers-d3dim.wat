@@ -1775,14 +1775,26 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3DTexture_Release — 1 args (incl. this)
+  ;;
+  ;; An IDirect3DTexture is not a separate object: QueryInterface hands back
+  ;; another COM view of the DirectDrawSurface's own DX_OBJECTS slot. So the
+  ;; final release of the texture view is the final release of the SURFACE,
+  ;; and it has to run the surface teardown -- $dx_free alone retires the slot
+  ;; while leaving the DIB pages allocated and $dx_vidmem_used still charged
+  ;; for them.
+  ;;
+  ;; Measured on Diablo II, which creates and drops its texture cache through
+  ;; exactly this vtable: 4756 orphaned runs, 48.5 MB of a 63 MB arena, held
+  ;; by nothing, in precisely the game's three tile geometries (1 page for a
+  ;; 32x32, 10 for a 128x128, 35 for a 256x256 with its slack row). The video
+  ;; memory never came back either, so the next GetAvailableVidMem answered
+  ;; 6.4 MB, d2direct3d sized its cache from that and eventually reached a
+  ;; capacity of zero -- and its eviction loop cannot terminate at capacity
+  ;; zero, because count==0 skips the body including the decrement while the
+  ;; exit test count==nMaxNumItems is already true. The black screen that made
+  ;; this look like a rendering bug is that spin, two steps downstream.
   (func $handle_IDirect3DTexture_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $rc i32)
-    (call $d3dim_worker_fence)
-    (local.set $entry (call $dx_from_this (local.get $arg0)))
-    (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
-    (if (i32.le_s (local.get $rc) (i32.const 0))
-      (then (call $dx_free (local.get $entry)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
-      (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (i32.store offset=0 (global.get $reg_base) (local.get $rc))))
+    (call $d3dim_texture_view_release (local.get $arg0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IDirect3DTexture_Initialize — 3 args (incl. this)
@@ -1823,15 +1835,29 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3DTexture2_Release — 1 args (incl. this)
+  ;; Same object, same teardown; see IDirect3DTexture_Release above.
   (func $handle_IDirect3DTexture2_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $d3dim_texture_view_release (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; Release one COM view of a texture. A view over a real DirectDraw surface
+  ;; (type 2) goes through the surface teardown so its DIB pages and video
+  ;; memory are returned; anything else keeps the plain slot release, because
+  ;; $dx_surface_release would read misc1/misc2 as a DIB pointer and a byte
+  ;; count, and on another type those are a different pair of things entirely.
+  (func $d3dim_texture_view_release (param $this i32)
     (local $entry i32) (local $rc i32)
     (call $d3dim_worker_fence)
-    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $entry (call $dx_from_this (local.get $this)))
+    (if (i32.eq (load.field DxObject type (local.get $entry)) (i32.const 2))
+      (then
+        (i32.store offset=0 (global.get $reg_base)
+          (call $dx_surface_release (local.get $this)))
+        (return)))
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (if (i32.le_s (local.get $rc) (i32.const 0))
       (then (call $dx_free (local.get $entry)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
-      (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (i32.store offset=0 (global.get $reg_base) (local.get $rc))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+      (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (i32.store offset=0 (global.get $reg_base) (local.get $rc)))))
 
   ;; IDirect3DTexture2_PaletteChanged — 3 args (incl. this)
   (func $handle_IDirect3DTexture2_PaletteChanged (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

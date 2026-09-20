@@ -638,6 +638,7 @@
     (store.field DxObject misc2 (local.get $entry) (local.get $size))
     (store.field DxObject flags (local.get $entry) (local.get $flags))
     (global.set $dx_vidmem_used (i32.add (global.get $dx_vidmem_used) (local.get $size)))
+    (call $dx_surf_billed_set (local.get $entry) (local.get $size))
     (local.get $obj))
 
   ;; IDirect3D9_GetAdapterCount — 1 args (incl. this)
