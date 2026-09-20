@@ -388,7 +388,11 @@ reaches gameplay (`node test/run.js --app=simcity2000_demo`).
 
 **Not redistributable.** `README.TXT` and `NOD.TXT` on the media are marketing
 copy — product description, Maxis support phone number, BBS, "Run Setup.exe" —
-and carry no redistribution grant of any kind. This is a promotional
+and carry no redistribution grant of any kind. The compilation's own
+`LICENSE.TXT` (Nodtronics Pty Ltd) grants only a single-system license and
+clause 2.2 forbids separating component parts; 2.4 allows a whole-product
+transfer only when no copy is retained. Nothing there can grant rights to
+somebody else's game anyway. This is a promotional
 interactive demo of Maxis/EA property obtained from a third-party compilation
 CD, which is not an authoritative license source, so it does **not** qualify as
 freely-copyable shareware the way the StarCraft and Diablo demos do. It stays a
