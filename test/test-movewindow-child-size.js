@@ -44,6 +44,11 @@ const extraWat = String.raw`
     (call $paint_flag_test_hwnd (local.get $hwnd)))
   (func (export "test_reparent") (param $hwnd i32) (param $parent i32)
     (call $wnd_set_parent (local.get $hwnd) (local.get $parent)))
+  (func (export "test_take_nc_paint") (param $hwnd i32) (result i32)
+    (local $flags i32)
+    (local.set $flags (call $nc_flags_test (local.get $hwnd)))
+    (call $nc_flags_clear (local.get $hwnd) (i32.const 1))
+    (i32.and (local.get $flags) (i32.const 1)))
 `;
 
 (async () => {
@@ -150,6 +155,22 @@ const extraWat = String.raw`
     'ordinary move still invalidates the exposed parent');
   assert.strictEqual(e.test_paint_pending(second), 1,
     'ordinary move still invalidates overlapping sibling coverage');
+
+  e.wnd_set_style_export(top, e.wnd_get_style_export(top) | 0x10000000);
+  e.test_take_nc_paint(first);
+  e.test_call_SetWindowPos(first, 60, 62, 80, 30, 0x16); // resize, NOMOVE
+  assert.strictEqual(e.test_take_nc_paint(first), 1,
+    'resizing queues non-client repaint for borders and standard scrollbars');
+  e.test_call_SetWindowPos(first, 60, 62, 80, 30, 0x14);
+  assert.strictEqual(e.test_take_nc_paint(first), 0,
+    'identical geometry does not queue redundant non-client repaint');
+  e.test_call_SetWindowPos(first, 70, 72, 90, 40, 0x1c);
+  assert.strictEqual(e.test_take_nc_paint(first), 0,
+    'NOREDRAW suppresses non-client repaint on a real geometry change');
+  e.wnd_set_style_export(top, e.wnd_get_style_export(top) & ~0x10000000);
+  e.test_call_SetWindowPos(first, 80, 82, 100, 50, 0x14);
+  assert.strictEqual(e.test_take_nc_paint(first), 0,
+    'a hidden ancestor suppresses exposure repaint until the tree is shown');
 
   console.log('PASS MoveWindow/SetWindowPos preserve geometry, repaint, and z-order flags');
 })().catch(err => {

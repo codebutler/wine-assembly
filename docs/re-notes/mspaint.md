@@ -66,3 +66,21 @@ control helper compiled in memory, it fails; the patched helper passes.
 WINDOWPOS mutation and parent-first paint tests also pass. Full build and
 Paint dock-toggle (0/0) / drawing (9/9) remain green. Palette remnants and
 scrollbar repaint remain open.
+
+## SetWindowPos non-client invalidation
+
+The trace confirms that Color Box toggling resizes the surrounding dock/view
+windows with `DeferWindowPos(..., 0x14)` (redraw enabled). EndDeferWindowPos
+delegates those entries to SetWindowPos, which did not queue WM_NCPAINT for
+geometry changes. It now marks NC paint pending for a visible window whose
+position or outer size actually changed, respecting SWP_NOREDRAW and hidden
+ancestors. It queues the normal message; it does not force a direct paint.
+
+`test-movewindow-child-size.js` covers resize, identical geometry, NOREDRAW,
+and hidden-ancestor cases. Compiling the pre-change SetWindowPos into the
+current test fails the resize assertion; the candidate passes. The full
+build and WINDOWPOS mutation test pass, and Paint's status remains pixel
+identical across toggles. Visual inspection shows the view border is now
+continuous, but the palette remnant and missing scrollbar are **not** solved
+by this alone. The separate MoveWindow API's NC invalidation path and the
+ordering of parent client paints versus child NC paints still need checking.
