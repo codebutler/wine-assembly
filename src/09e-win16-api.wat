@@ -8590,6 +8590,92 @@
     (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 0))
     (call $win16_defer_continue))
 
+  ;; Far WINDOWPOS transaction: 60 bytes on the task stack, followed by the
+  ;; ordinary six-byte return continuation. Private header {hwnd,flags,stage,
+  ;; reserved} is followed by WINDOWPOS16 at +16 and result WINDOWPOS32 at +32.
+  ;; The callback only owns the 14-byte structure, never our target or stage.
+  (global $WIN16_CONT_WINDOWPOS i32 (i32.const 0xFFA4))
+  (func $win16_windowpos_pointer (param $sp i32) (result i32)
+    (i32.or (i32.shl (global.get $sreg_ss) (i32.const 16))
+      (i32.and (i32.sub (i32.add (local.get $sp) (i32.const 16))
+        (global.get $seg_base_ss)) (i32.const 0xFFFF))))
+
+  (func $win16_windowpos_continue
+    (local $sp i32) (local $hwnd i32) (local $flags i32) (local $after i32)
+    (local $ok i32) (local $proc i32) (local $i i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $hwnd (call $gl32 (local.get $sp)))
+    (if (i32.eqz (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
+      (then
+        (local.set $flags (i32.or
+          (i32.and (call $gl16 (i32.add (local.get $sp) (i32.const 28))) (i32.const 0xFDEF))
+          (i32.and (call $gl32 (i32.add (local.get $sp) (i32.const 4))) (i32.const 0x0210))))
+        (local.set $after (call $win16_position_insert_after
+          (call $gl16 (i32.add (local.get $sp) (i32.const 18))) (local.get $flags)))
+        (call $win16_call32_begin (i32.const 0))
+        (local.set $ok (call $set_window_pos_core (local.get $hwnd) (local.get $after)
+          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 20))))
+          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 22))))
+          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 24))))
+          (call $win16_coord (call $gl16 (i32.add (local.get $sp) (i32.const 26))))
+          (local.get $flags) (i32.add (local.get $sp) (i32.const 32))))
+        (call $win16_call32_end)
+        (call $gs16 (i32.add (local.get $sp) (i32.const 60)) (local.get $ok))
+        (if (local.get $ok)
+          (then
+            (call $win16_position_zorder (local.get $hwnd) (local.get $after) (local.get $flags))
+            ;; Commit output fields, including normalized NOMOVE/NOSIZE,
+            ;; back to the same far structure the changing callback saw.
+            (call $gs16 (i32.add (local.get $sp) (i32.const 16)) (call $win16_h16 (local.get $hwnd)))
+            (block $copied (loop $copy
+              (br_if $copied (i32.ge_u (local.get $i) (i32.const 5)))
+              (call $gs16 (i32.add (local.get $sp) (i32.add (i32.const 20) (i32.shl (local.get $i) (i32.const 1))))
+                (call $gl32 (i32.add (local.get $sp) (i32.add (i32.const 40) (i32.shl (local.get $i) (i32.const 2))))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $copy)))
+            (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 1))
+            (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+            (if (call $win16_is_far_proc (local.get $proc))
+              (then
+                (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+                  (i32.const 0x47) (i32.const 0) (call $win16_windowpos_pointer (local.get $sp))
+                  (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_WINDOWPOS))
+                (return)))
+            ;; A changing callback may replace its procedure with a native
+            ;; one. That side gets the canonical 32-bit result structure.
+            (drop (call $wnd_send_message (local.get $hwnd) (i32.const 0x47)
+              (i32.const 0) (i32.add (local.get $sp) (i32.const 32))))))))
+    (if (call $gl16 (i32.add (local.get $sp) (i32.const 60)))
+      (then (call $windowpos_finish_paint (local.get $hwnd)
+        (call $gl32 (i32.add (local.get $sp) (i32.const 56))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 60)))
+    (call $win16_cont_resume))
+
+  (func $win16_windowpos_begin
+    (param $hwnd16 i32) (param $after i32) (param $x i32) (param $y i32)
+    (param $cx i32) (param $cy i32) (param $flags i32)
+    (local $sp i32) (local $hwnd i32)
+    (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
+    (call $win16_cont_push (call $win16_take_return (i32.const 14)) (i32.const 1))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 60)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $flags))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 16)) (local.get $hwnd16))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 18)) (local.get $after))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 20)) (local.get $x))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 22)) (local.get $y))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 24)) (local.get $cx))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 26)) (local.get $cy))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 28)) (local.get $flags))
+    (if (i32.and (local.get $flags) (i32.const 0x400))
+      (then (call $win16_windowpos_continue))
+      (else
+        (call $win16_enter_wndproc (call $wnd_table_get (local.get $hwnd)) (local.get $hwnd16)
+          (i32.const 0x46) (i32.const 0) (call $win16_windowpos_pointer (local.get $sp))
+          (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_WINDOWPOS)))))
+
   ;; USER.232 SetWindowPos(hWnd, hWndInsertAfter, x, y, cx, cy, wFlags) — the
   ;; ungathered form of DeferWindowPos above, and the same call underneath.
   ;;
@@ -8603,7 +8689,6 @@
   (func $win16_SetWindowPos
     (local $hwnd i32) (local $after i32) (local $x i32) (local $y i32)
     (local $cx i32) (local $cy i32) (local $flags i32) (local $hwnd16 i32)
-    (local $proc i32) (local $old_cs i32) (local $cs i32)
     (local.set $hwnd16 (call $win16_arg16 (i32.const 6)))
     (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
     (local.set $after (call $win16_arg16 (i32.const 5)))
@@ -8612,9 +8697,12 @@
     (local.set $cx (call $win16_coord (call $win16_arg16 (i32.const 2))))
     (local.set $cy (call $win16_coord (call $win16_arg16 (i32.const 1))))
     (local.set $flags (call $win16_arg16 (i32.const 0)))
+    (if (call $win16_is_far_proc (call $wnd_table_get (local.get $hwnd)))
+      (then
+        (call $win16_windowpos_begin (local.get $hwnd16) (local.get $after)
+          (local.get $x) (local.get $y) (local.get $cx) (local.get $cy) (local.get $flags))
+        (return)))
     (local.set $after (call $win16_position_insert_after (local.get $after) (local.get $flags)))
-    (local.set $proc (call $wnd_table_get (local.get $hwnd)))
-    (local.set $old_cs (call $host_get_window_client_size (local.get $hwnd)))
     (call $win16_call32_begin (i32.const 7))
     (call $win16_call32_arg (i32.const 5) (local.get $cy))
     (call $win16_call32_arg (i32.const 6) (local.get $flags))
@@ -8626,17 +8714,6 @@
     (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $win16_api_return (i32.const 14)) (return)))
     (call $win16_position_zorder (local.get $hwnd) (local.get $after) (local.get $flags))
-    (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
-    (if (i32.and
-          (call $win16_is_far_proc (local.get $proc))
-          (i32.ne (local.get $cs) (local.get $old_cs)))
-      (then
-        (call $win16_cont_push
-          (call $win16_take_return (i32.const 14)) (i32.const 1))
-        (call $win16_enter_wndproc (local.get $proc) (local.get $hwnd16)
-          (i32.const 0x0005) (i32.const 0) (local.get $cs)
-          (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_OFFSET))
-        (return)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 14)))
 
@@ -12973,6 +13050,8 @@
       (then (call $win16_defer_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_DEFPOS))
       (then (call $win16_defpos_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_WINDOWPOS))
+      (then (call $win16_windowpos_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took
     ;; its own arguments off the stack; the CWPSTRUCT and CREATESTRUCT built
     ;; underneath them are this side's to drop.

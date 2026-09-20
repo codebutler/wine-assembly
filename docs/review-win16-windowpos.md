@@ -183,3 +183,54 @@ pipeline. Win16 SetWindowPos/MoveWindow still need to send mutable CHANGING
 and final CHANGED, and replace their direct WM_SIZE shortcut with this default
 processing. Minimized/maximized size classifications and native Win98 event
 comparison remain separate fidelity checks.
+
+## 2026-09-20: SetWindowPos far transaction connected
+
+Win16 SetWindowPos now sends CHANGING before committing and CHANGED afterward
+to a far application procedure. Its previous unconditional WM_SIZE shortcut
+is removed. A procedure consuming CHANGED gets no derived geometry messages;
+one chaining to USER.107 gets them through the default continuation above.
+EndDeferWindowPos inherits this sequence at commit time.
+
+Each invocation keeps a 60-byte frame over its ordinary far-return record:
+an immutable target/original-flags/stage header, the 14-byte far WINDOWPOS,
+and a 28-byte canonical commit result. FFA4 resumes after each guest callback.
+Mutation is read after CHANGING, with signed coordinates, mapped insertion
+handles and protected NOACTIVATE/NOOWNERZORDER flags. The same far structure
+receives the committed geometry and normalized NOMOVE/NOSIZE flags. A changed
+`hwnd` field cannot redirect the operation; destruction of the actual target
+during CHANGING causes failure without a host geometry/Z-order update.
+
+The Win32 ABI wrapper now calls `set_window_pos_core`, which also accepts an
+external result buffer for the Win16 transaction. This retains one geometry,
+visibility, non-client calculation and retained-DC implementation. A zero
+buffer retains Win32 notification dispatch. Both notification mechanisms call
+`windowpos_finish_paint` only after CHANGED returns, rather than painting in
+advance of an asynchronous far callback. Native Win16 control procedures keep
+the existing bridge.
+
+The expanded actual-x86 regression covers mutable negative coordinates/size/
+Z-order, protected flags, immutable target identity, identical far-pointer
+lifetime across both notifications, consumed versus default-processed CHANGED,
+NOSENDCHANGING, no-op suppression, nested SetWindowPos calls with distinct
+stack-owned structures, and an actual USER.DestroyWindow call from CHANGING.
+Original EIP, ESP and BOOL return are checked. Restoring the old Win16 source
+in memory makes the new assertion fail with `[WM_SIZE]` rather than
+`[WM_WINDOWPOSCHANGING, WM_WINDOWPOSCHANGED]`.
+
+The deferred test now chains CHANGED to DefWindowProc and counts only WM_SIZE;
+it still proves callback completion before End, nested independent commits,
+busy outer-batch rejection and outer continuation recovery. Counting every
+message as a size callback would mask the notification fix.
+
+Passing: far notification/default regression, native Win16 Z-order, Win32
+changing/mutation, deferred visibility, parent/child paint ordering, Win16
+deferred/nested transactions, Rodent/Rattler gameplay and both build modes.
+Logs: `/private/tmp/wa-setpos16-before.log`, `wa-setpos16-final.log`,
+`wa-setpos16-native.log`, `wa-setpos16-win32.log`, `wa-setpos16-visible.log`,
+`wa-setpos16-paint-order.log`, `wa-setpos16-defer-final.log`,
+`wa-setpos16-vb-final.log`, `wa-setpos16-build-final.log`.
+
+Still open: MoveWindow's separate Win16 direct-size path, default CHANGING
+min/max validation, minimized/maximized WM_SIZE classifications, and native
+Win98 event-order comparison. This transaction change does not establish those.

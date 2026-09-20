@@ -48,6 +48,8 @@ const extraWat = `
       (call $win16_index_to_sel (i32.const 1)) (i32.const 16)) (local.get $offset))))
   (func (export "test_end_thunk") (result i32)
     (call $win16_thunk_for (i32.const 2) (i32.const 261) (i32.const 0)))
+  (func (export "test_defproc_thunk") (result i32)
+    (call $win16_thunk_for (i32.const 2) (i32.const 107) (i32.const 0)))
   (func (export "test_parent") (result i32)
     (local $h i32)
     (local.set $h (global.get $next_hwnd))
@@ -115,10 +117,19 @@ const extraWat = `
     const h = e.test_begin(0); assert(h);
     e.test_end(h); assert.strictEqual(finish(), 1, 'batch table reclaimed');
   }
-  // A real 16-bit far wndproc increments a counter in SS and RETF 10.
+  // A real far wndproc chains CHANGED to DefWindowProc, and increments its
+  // counter only on the resulting WM_SIZE, not on CHANGING/CHANGED.
   // Break at End's original return address so the run loop cannot execute
   // unrelated bytes after the continuation has restored the caller.
-  [0x36, 0x66, 0xff, 0x06, 0x00, 0x09, 0xca, 0x0a, 0x00]
+  const defproc = e.test_defproc_thunk();
+  const chain = [0xff, 0x76, 0x0e, 0xff, 0x76, 0x0c, 0xff, 0x76, 0x0a,
+    0xff, 0x76, 0x08, 0xff, 0x76, 0x06,
+    0x9a, defproc & 255, defproc >>> 8, 0x1f, 0];
+  const positionProc = onSize => [0x55, 0x89, 0xe5,
+    0x83, 0x7e, 0x0c, 0x47, 0x75, chain.length, ...chain,
+    0x83, 0x7e, 0x0c, 5, 0x75, onSize.length, ...onSize,
+    0x5d, 0xca, 0x0a, 0x00];
+  positionProc([0x36, 0x66, 0xff, 0x06, 0x00, 0x09])
     .forEach((byte, i) => e.guest_write8(0x100200 + i, byte));
   // The decoder may compile the caller block before observing a breakpoint;
   // provide a valid parked caller rather than a run of uninitialized bytes.
@@ -132,7 +143,7 @@ const extraWat = `
   assert.strictEqual(e.test_defer(callbackBatch, child, 1, 2, 83, 91), callbackBatch);
   assert.strictEqual(e.guest_read32(0x110900), 0, 'no far callback during Defer');
   e.test_end(callbackBatch);
-  assert.strictEqual(e.get_eip(), 0x100200, 'End enters the far WM_SIZE procedure');
+  assert.strictEqual(e.get_eip(), 0x100200, 'End enters the far changing procedure');
   e.set_bp(0x10004d);
   for (let i = 0; e.get_eip() !== 0x10004d && i < 20; i++) e.run(100);
   e.set_bp(0);
@@ -148,12 +159,11 @@ const extraWat = `
   const thunk = e.test_end_thunk();
   const callEnd = handle => [0x68, handle & 255, handle >>> 8,
     0x9a, thunk & 255, thunk >>> 8, 0x1f, 0]; // CALL FAR thunk selector 3
-  const nestedCode = [
+  const nestedCode = positionProc([
     ...callEnd(outer), 0x36, 0xa3, 0x0c, 0x09, // busy outer End -> AX=0
     ...callEnd(nested), 0x36, 0xa3, 0x04, 0x09, // independent inner End -> AX=1
     0x36, 0x66, 0xff, 0x06, 0x08, 0x09,       // resumed after inner callback
-    0xca, 0x0a, 0x00,
-  ];
+  ]);
   nestedCode.forEach((byte, i) => e.guest_write8(0x100300 + i, byte));
   for (const offset of [0, 4, 8, 12]) e.guest_write32(0x110900 + offset, 0);
   e.test_bind_callback(child, 0x300);

@@ -28,6 +28,10 @@ const extraWat = `
       (i32.const 120) (i32.const 230) (i32.const 8)))
   (func (export "test_thunk") (result i32)
     (call $win16_thunk_for (i32.const 2) (i32.const 107) (i32.const 0)))
+  (func (export "test_set_thunk") (result i32)
+    (call $win16_thunk_for (i32.const 2) (i32.const 232) (i32.const 0)))
+  (func (export "test_destroy_thunk") (result i32)
+    (call $win16_thunk_for (i32.const 2) (i32.const 53) (i32.const 0)))
   (func (export "test_call") (param $h i32) (param $pointer i32) (param $caller i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
     (call $gs16 (i32.const 0x110800) (local.get $caller))
@@ -38,6 +42,18 @@ const extraWat = `
     (call $gs16 (i32.const 0x11080c) (call $win16_h16 (local.get $h)))
     (call $win16_DefWindowProc))
   (func (export "test_result") (result i32) (i32.load (global.get $reg_base)))
+  (func (export "test_set") (param $h i32) (param $flags i32) (param $caller i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (local.get $caller))
+    (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
+    (call $gs16 (i32.const 0x110804) (local.get $flags))
+    (call $gs16 (i32.const 0x110806) (i32.const 40))
+    (call $gs16 (i32.const 0x110808) (i32.const 30))
+    (call $gs16 (i32.const 0x11080a) (i32.const 2))
+    (call $gs16 (i32.const 0x11080c) (i32.const 1))
+    (call $gs16 (i32.const 0x11080e) (i32.const 0))
+    (call $gs16 (i32.const 0x110810) (call $win16_h16 (local.get $h)))
+    (call $win16_SetWindowPos))
 `;
 
 // Pascal far wndproc, recording {message,wParam,lParam} into SS:0904.
@@ -54,11 +70,20 @@ function recorder(extra = []) {
 const word = n => [n & 255, (n >>> 8) & 255];
 const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
 (async () => {
+  const rectangles = new Map(), moves = [], orders = [];
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none', extraHostOverrides: {
     get_window_rect: (hwnd, out) => {
       // Deliberately distinct outer and client geometry, including negatives.
-      for (const [i, n] of [-20, -30, 200, 300].entries()) view.setInt32(out + i * 4, n, true);
+      for (const [i, n] of (rectangles.get(hwnd) || [-20, -30, 200, 300]).entries()) view.setInt32(out + i * 4, n, true);
     },
+    move_window: (hwnd, x, y, w, h, flags) => {
+      const old = rectangles.get(hwnd) || [-20, -30, 200, 300];
+      const nx = flags & 2 ? old[0] : x, ny = flags & 2 ? old[1] : y;
+      const nw = flags & 1 ? old[2] - old[0] : w, nh = flags & 1 ? old[3] - old[1] : h;
+      rectangles.set(hwnd, [nx, ny, nx + nw, ny + nh]);
+      moves.push({ hwnd, x, y, w, h, flags });
+    },
+    set_window_zorder: (hwnd, after) => orders.push([hwnd, after]),
   }});
   const view = new DataView(memory.buffer);
   e.test_init();
@@ -110,5 +135,67 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   writeCode(0x300, recorder([0x83, 0x7e, 0x0c, 3, 0x75, nestedCall.length, ...nestedCall]));
   const outer = e.test_window(0x300);
   assert.deepStrictEqual(run(outer, 0, 0x80), [move, size, size], 'nested callbacks retain independent flags and stages');
-  console.log('PASS Win16 DefWindowProc WINDOWPOS layout, flags, client geometry and nested far callbacks');
+
+  const mutation = [0x8b, 0x5e, 0x06, // bx = WINDOWPOS offset in SS
+    ...[[0, 0xdead], [2, 1], [4, -7], [6, -9], [8, 53], [10, 64], [12, 8]]
+      .flatMap(([offset, value]) => [0x36, 0xc7, 0x47, offset, ...word(value)])];
+  const mutateChanging = [0x83, 0x7e, 0x0c, 0x46, 0x75, mutation.length, ...mutation];
+  const chain = [0xff, 0x76, 0x0e, 0xff, 0x76, 0x0c, 0xff, 0x76, 0x0a,
+    0xff, 0x76, 0x08, 0xff, 0x76, 0x06, 0x9a, ...word(thunk), 0x1f, 0];
+  const chainChanged = [0x83, 0x7e, 0x0c, 0x47, 0x75, chain.length, ...chain];
+  writeCode(0x400, recorder(mutateChanging));
+  writeCode(0x500, recorder([...mutateChanging, ...chainChanged]));
+  const consuming = e.test_window(0x400), chaining = e.test_window(0x500);
+  const runSet = (target, flags, caller, result = 1) => {
+    e.guest_write32(0x110900, 0); moves.length = 0; orders.length = 0;
+    writeCode(caller, [0xeb, 0xfe]);
+    e.test_set(target, flags, caller);
+    if (!(flags & 0x400)) assert.deepStrictEqual(moves, [], 'changing runs before any geometry is committed');
+    e.set_bp(0x100000 + caller);
+    for (let i = 0; e.get_eip() !== 0x100000 + caller && i < 30; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100000 + caller);
+    assert.strictEqual(e.get_esp(), 0x110812, 'SetWindowPos continuation and Pascal frame restored');
+    assert.strictEqual(e.test_result(), result);
+    return Array.from({ length: e.guest_read32(0x110900) }, (_, i) => e.guest_read32(0x110904 + i * 8) & 0xffff);
+  };
+  assert.deepStrictEqual(runSet(consuming, 0x14, 0xa0), [0x46, 0x47], 'consuming changed gets no synthetic move/size');
+  assert.deepStrictEqual(moves, [{ hwnd: consuming, x: -7, y: -9, w: 53, h: 64, flags: 0x18 }]);
+  assert.deepStrictEqual(orders, [[consuming, 1]], 'far changing callback can replace insertion target');
+  const beforePointer = e.guest_read32(0x110908) >>> 0, afterPointer = e.guest_read32(0x110910) >>> 0;
+  assert.strictEqual(beforePointer, afterPointer, 'both notifications share the invocation-owned WINDOWPOS');
+  assert.strictEqual(beforePointer >>> 16, 0x17, 'WINDOWPOS is a far pointer in the task stack segment');
+  const wp = 0x110000 + (afterPointer & 0xffff);
+  assert.strictEqual(e.guest_read32(wp) & 0xffff, e.test_narrow(consuming), 'callback cannot replace the target HWND');
+  assert.strictEqual(e.guest_read32(wp + 12) & 0xffff, 0x18, 'changed sees committed flags');
+  assert.deepStrictEqual(runSet(chaining, 0x14, 0xb0), [0x46, 0x47, 3, 5], 'default processing alone derives geometry messages');
+  assert.deepStrictEqual(runSet(chaining, 0x418, 0xc0), [0x47, 3, 5], 'NOSENDCHANGING skips only changing');
+  assert.deepStrictEqual(moves, [{ hwnd: chaining, x: 1, y: 2, w: 30, h: 40, flags: 0x418 }]);
+  assert.deepStrictEqual(runSet(chaining, 0x418, 0xd0), [0x47], 'unchanged geometry suppresses derived move/size');
+
+  const setThunk = e.test_set_thunk();
+  const nestedSet = [e.test_narrow(consuming), 0, 5, 6, 7, 8, 0x14]
+    .flatMap(value => [0x68, ...word(value)]);
+  nestedSet.push(0x9a, ...word(setThunk), 0x1f, 0);
+  writeCode(0x600, recorder([...mutateChanging,
+    0x83, 0x7e, 0x0c, 0x46, 0x75, nestedSet.length, ...nestedSet]));
+  const nestedOuter = e.test_window(0x600);
+  assert.deepStrictEqual(runSet(nestedOuter, 0x14, 0xe0), [0x46, 0x46, 0x47, 0x47],
+    'nested SetWindowPos completes before the outer changing callback returns');
+  assert.deepStrictEqual(moves.map(({ hwnd, x, y, w, h }) => [hwnd, x, y, w, h]),
+    [[consuming, -7, -9, 53, 64], [nestedOuter, -7, -9, 53, 64]], 'nested WINDOWPOS cannot overwrite outer mutations');
+  const pointers = Array.from({ length: 4 }, (_, i) => e.guest_read32(0x110908 + i * 8) >>> 0);
+  assert.strictEqual(pointers[0], pointers[3]);
+  assert.strictEqual(pointers[1], pointers[2]);
+  assert.notStrictEqual(pointers[0], pointers[1], 'nested transactions own distinct far structures');
+  const destroyThunk = e.test_destroy_thunk();
+  const destroy = [0xff, 0x76, 0x0e, 0x9a, ...word(destroyThunk), 0x1f, 0];
+  writeCode(0x700, recorder([0x83, 0x7e, 0x0c, 0x46, 0x75, destroy.length, ...destroy]));
+  const doomed = e.test_window(0x700);
+  const destroyedMessages = runSet(doomed, 0x14, 0xf0, 0);
+  assert.strictEqual(destroyedMessages[0], 0x46);
+  assert(!destroyedMessages.includes(0x47), 'destroying the target during changing cancels changed');
+  assert.deepStrictEqual(moves, [], 'destroyed target is never moved');
+  assert.deepStrictEqual(orders, [], 'destroyed target is never reordered');
+  console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

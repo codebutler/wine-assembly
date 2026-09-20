@@ -230,8 +230,22 @@
 
   (func $handle_SetWindowPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetWindowPos(hwnd, hWndInsertAfter, X, Y, cx, cy, uFlags)
-    (local $x i32) (local $y i32) (local $cx i32) (local $cy i32)
-    (local $uFlags i32) (local $original_flags i32) (local $dlg_rec i32)
+    (i32.store offset=0 (global.get $reg_base)
+      (call $set_window_pos_core (local.get $arg0) (local.get $arg1)
+        (local.get $arg2) (local.get $arg3) (local.get $arg4)
+        (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+        (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+        (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
+
+  ;; An external result WINDOWPOS lets the Win16 far continuation own its
+  ;; notifications while sharing every geometry/paint commit below. Zero
+  ;; retains the ordinary Win32 changing/changed transaction.
+  (func $set_window_pos_core
+    (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32)
+    (param $cy i32) (param $uFlags i32) (param $result_pos i32) (result i32)
+    (local $x i32) (local $y i32) (local $cx i32)
+    (local $original_flags i32)
     (local $screen i32) (local $insert_after i32) (local $windowpos i32)
     (local $old_wh i32) (local $new_wh i32) (local $old_xy i32) (local $new_xy i32)
     ;; A missing target is not a successful host no-op. Reject it before
@@ -240,15 +254,11 @@
           (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)))
       (then
         (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
-        (return)))
+        (return (i32.const 0))))
     (local.set $insert_after (local.get $arg1))
     (local.set $x (local.get $arg2))
     (local.set $y (local.get $arg3))
     (local.set $cx (local.get $arg4))
-    (local.set $cy (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (local.set $uFlags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     ;; An AdjustWindowRectEx-expanded CW_USEDEFAULT remains "leave this part
     ;; alone" during SDL's first SetWindowPos, even though it is no longer the
     ;; exact 0x80000000 bit pattern understood by the host fallback.
@@ -285,11 +295,14 @@
     ;; may change position, size, z-order and most flags. NOACTIVATE and
     ;; NOOWNERZORDER are explicitly documented as immutable in this message.
     (local.set $original_flags (local.get $uFlags))
-    (local.set $windowpos (call $windowpos_message_begin
-      (local.get $arg0) (local.get $insert_after)
-      (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
-      (local.get $uFlags)))
-    (if (local.get $windowpos)
+    (local.set $windowpos (local.get $result_pos))
+    (if (i32.eqz (local.get $result_pos))
+      (then (local.set $windowpos (call $windowpos_message_begin
+        (local.get $arg0) (local.get $insert_after)
+        (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
+        (local.get $uFlags)))))
+    (if (i32.and (i32.ne (local.get $windowpos) (i32.const 0))
+                (i32.eqz (local.get $result_pos)))
       (then
         (local.set $insert_after
           (call $gl32 (i32.add (local.get $windowpos) (i32.const 4))))
@@ -313,9 +326,7 @@
           (then
             (call $windowpos_message_cancel (local.get $windowpos))
             (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
-            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
-            (return)))))
+            (return (i32.const 0))))))
     ;; Child controls own their geometry in CONTROL_GEOM. Top-level frames do
     ;; not: their renderer window can still be at the resource-template size
     ;; while the compatibility record and client rectangle already contain
@@ -409,7 +420,18 @@
       (local.get $windowpos) (local.get $arg0) (local.get $insert_after)
       (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
       (local.get $uFlags))
-    (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
+    (if (i32.eqz (local.get $result_pos))
+      (then
+        (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
+        (call $windowpos_finish_paint (local.get $arg0) (local.get $uFlags))))
+    (i32.const 1))
+
+  ;; Run after CHANGED returns, whether it used Win32 synchronous dispatch or
+  ;; the Win16 far continuation. Never paint ahead of the guest notification.
+  (func $windowpos_finish_paint (param $arg0 i32) (param $uFlags i32)
+    (local $dlg_rec i32)
+    (if (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
+      (then (return)))
     (call $windowpos_queue_ncpaint (local.get $arg0) (local.get $uFlags))
     ;; Repaint a moved WAT-native control immediately, but only if it is
     ;; actually on screen. Its own WS_VISIBLE bit is not enough: a control
@@ -434,6 +456,4 @@
                 (i32.ne (i32.load offset=4 (local.get $dlg_rec)) (i32.const 0)))
               (i32.lt_s (call $wnd_get_class_slot (local.get $arg0)) (i32.const 0)))
           (then (drop (call $host_erase_background (local.get $arg0) (i32.const 16)))))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
