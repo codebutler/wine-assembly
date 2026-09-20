@@ -465,3 +465,50 @@ So the D3D route needs two things, in this order: a video-memory report that is
 not a lie about a 1998 card, and a DX object table that can hold the cache that
 report implies. Neither is worth landing until both are done, because each one
 alone only moves the crash.
+
+### Resolved 2026-09-19: it is one constant of D2's, read twice
+
+The guess above was close but the mechanism is more specific, and knowing it
+turns the tuning into arithmetic.
+
+`d2direct3d` sizes its texture caches in the function whose arena carve begins
+at `+0x1000271a`. It reads **`[0x10019968]` — the `dwFree` out-parameter of the
+second `GetAvailableVidMem` call, the one asking for `DDSCAPS_NONLOCALVIDMEM`
+(AGP) texture memory** — into `edi`, and clamps it to its own hardcoded
+`cmp edi, 0x2000000` ceiling. Everything follows from that one value:
+
+* `edi` is the arena **end**. Each cache gets a slice of `edi - base`, and
+  `+0x10009260` computes `slots = (end - base) / (bpp*w*h)` with a **signed**
+  `idiv`, stores it, then `shl eax,5` and `rep stosd`s `slots*32` bytes.
+* Answer **0** and `slots` goes negative. Measured at the fatal call: base
+  `0x022f8000`, end `0x00000000`, `slots = -17888`, `slots*32 = 0xfff74200`,
+  so the `rep stosd` at `+0x1000929b` walks ~4 GB. That is the 561M-unmapped-
+  access wipe above; the all-zero `ESP=0` dump is a consequence, not a clue,
+  because the register file lives in memory and the stosd went through it.
+* We answered 0 because `free = total - used` and **D2 sizes its caches twice,
+  never releasing the first round**. 8 MB and 16 MB produce byte-identical
+  traces — the first round succeeds (`EDI=0x00ed4000`), the second gets 0.
+* The 32 MB ceiling also explains the 4094 above: a full 32 MB arena is about
+  179 tiles of 256x256, 97 of 128x128 and 3276 of 32x32 — roughly 3550 — so
+  two rounds overflow a 4096-slot table. **No report makes D2 ask for more**,
+  which is what makes the table size a finite answer rather than a guess.
+
+The other ceiling is ours: every surface is really a DIB in `$DIB_BACKING_BASE`
+(63 MB), and page rounding plus the `pitch*16+64` slack row costs 1.09x for
+256x256, 1.25x for 128x128 and **2.0x** for 32x32 — weighted about **1.29x** of
+what we promise. Measured: 64 MB and 48 MB both fill the arena exactly
+(`pages used 16384 free 0`), surfaces come back with `dib=0xf0` and
+`CreateSurface` fails into the same `d3dSprite.cpp:85` assert — the same
+message as slot exhaustion, from a completely different cause.
+
+Landed: `$DX_VIDMEM_TOTAL` = **40 MB** (one named constant replacing the six
+scattered literals) and `$DX_MAX` = **8192** with its seven sibling regions.
+At 40 MB the first round gets D2's full 32 MB ceiling, the second gets 8 MB,
+and the arena settles at `pages used 14977 free 1407`. **No wipe, no assert,
+687 live surfaces, and the screen goes from desktop teal to black** — D2 owns
+the display and clears it.
+
+Open, and the next lead: it clears but never draws. 120000 batches at
+`--batch-size=200000` finish in 24s with a uniformly black frame, so it is idle
+rather than working. The wipe and the assert are both gone; what remains is a
+present/draw question, not a memory one.

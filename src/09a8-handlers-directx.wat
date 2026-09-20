@@ -83,7 +83,16 @@
     (field flags    i32))    ;; +28  ends at +32 == $DX_ENTRY_SIZE
   (global $DX_OBJECTS i32 (region.addr $DX_OBJECTS 0))
   (global $DX_OBJECTS_SIZE i32 (region.size $DX_OBJECTS))
-  (global $DX_MAX i32 (i32.const 4096))
+  ;; 8192 rather than 4096 because a texture cache is sized from the video
+  ;; memory we report, and the surfaces that fill it are all live at once --
+  ;; exhaustion here is not a slot leak, $dx_alloc_locked already recycles.
+  ;; Diablo II sizes its cache twice against its own 32 MB ceiling and never
+  ;; releases the first one, and 32 MB of arena is about 3550 surfaces (~179
+  ;; of 256x256, ~97 of 128x128, ~3276 of 32x32 at 2 bytes a pixel), which is
+  ;; why 4096 filled at 4094 and asserted in the guest's d3dSprite.cpp:85.
+  ;; Two rounds plus what the game holds besides fits here; $DX_VIDMEM_TOTAL
+  ;; is the other half of this and the two move together.
+  (global $DX_MAX i32 (i32.const 8192))
   ;; D3DIM matrix handle table (Immediate Mode): 256 slots × 64 bytes.
   ;; Handle value = slot_idx + 1 (0 is invalid). Allocation state is kept in
   ;; a separate byte table because SetMatrix may legitimately store an all-zero
@@ -443,6 +452,42 @@
   ;; GetAvailableVidMem delta across CreateSurface/Release to detect texture
   ;; footprint; must move in response to allocations.
   (global $dx_vidmem_used (mut i32) (i32.const 0))
+
+  ;; The card we claim to be, in bytes, reported identically by GetCaps
+  ;; (dwVidMemTotal/dwVidMemFree) and by GetAvailableVidMem for local and
+  ;; non-local memory alike. It is a named constant because it is not flavour:
+  ;; an app that carves a texture cache out of this figure sizes that cache,
+  ;; and therefore how many surfaces it creates, from it -- so $DX_MAX is a
+  ;; consequence of this number and the two only move together.
+  ;;
+  ;; 64 MB rather than the 8 MB this used to be, because free is total minus
+  ;; what is already held and Diablo II sizes its caches twice. d2direct3d
+  ;; takes the NON-LOCAL free figure (d2direct3d+0x10002710), clamps it to its
+  ;; own 32 MB ceiling, and divides the arena by the bytes per tile with a
+  ;; SIGNED idiv. Answer 0 -- which 8 MB and 16 MB both do by the second round,
+  ;; because the first round's caches are never released -- and the slot count
+  ;; comes out negative, so the rep stosd at +0x1000929b zeroes about 4 GB.
+  ;; That is the 561M-unmapped-access wipe in the re-notes, and because the
+  ;; register file lives in memory the dump lands all-zero a long way from it.
+  ;; The ceiling on the other side is $DIB_BACKING_BASE, 0x03F00000 (63 MB):
+  ;; every surface we hand out is really a DIB there, so promising more video
+  ;; memory than that region can back just moves the failure to dib_alloc
+  ;; returning the NULL sentinel. Measured at 64 MB: the two rounds together
+  ;; ask for two full 32 MB arenas, the arena ends at "pages used 16384 free 0"
+  ;; and surfaces come back with dib=0xf0 and nothing in them. 48 MB gives D2
+  ;; its full 32 MB ceiling on the first round and a healthy 16 MB on the
+  ;; second, and the sum still fits the region with room for the per-surface
+  ;; slack row and page rounding.
+  ;;
+  ;; That rounding is not small, and it is why the figure is 40 MB and not the
+  ;; 48 MB the bytes alone suggest. Every surface costs whole 4K pages plus a
+  ;; slack row of pitch*16+64, so D2's tile sizes cost 1.09x (256x256), 1.25x
+  ;; (128x128) and 2.0x (32x32) of their pixels -- and its cache is 20% 32x32
+  ;; tiles by arena bytes, which weights the whole thing to about 1.29x. Both
+  ;; rounds plus the 800x600 primary and back buffer then have to fit 63 MB,
+  ;; which puts the ceiling near 45 MB; 48 MB was measured filling the arena
+  ;; exactly and asserting d3dSprite.cpp:85 on the surface that would not fit.
+  (global $DX_VIDMEM_TOTAL i32 (i32.const 0x02800000))
 
   ;; Most-recently-created IDirectDraw guest ptr; IDirectDrawSurface2::GetDDInterface
   ;; returns it so apps like flip3dtl can navigate from RT surface back to DDraw.
@@ -3244,9 +3289,9 @@
         (then (i32.store (i32.add (local.get $wa) (i32.const 0x38)) (i32.const 0x400))))
       ;; dwVidMemTotal / dwVidMemFree — MCM caches [caps+0x3c] as budget
       (if (i32.gt_u (local.get $sz) (i32.const 0x3c))
-        (then (i32.store (i32.add (local.get $wa) (i32.const 0x3c)) (i32.const 0x00800000))))
+        (then (i32.store (i32.add (local.get $wa) (i32.const 0x3c)) (global.get $DX_VIDMEM_TOTAL))))
       (if (i32.gt_u (local.get $sz) (i32.const 0x40))
-        (then (i32.store (i32.add (local.get $wa) (i32.const 0x40)) (i32.const 0x00800000))))))
+        (then (i32.store (i32.add (local.get $wa) (i32.const 0x40)) (global.get $DX_VIDMEM_TOTAL))))))
     ;; Same for HEL caps
     (if (local.get $arg2) (then
       (local.set $wa (call $g2w (local.get $arg2)))
@@ -3260,9 +3305,9 @@
       (if (i32.gt_u (local.get $sz) (i32.const 0x38))
         (then (i32.store (i32.add (local.get $wa) (i32.const 0x38)) (i32.const 0x400))))
       (if (i32.gt_u (local.get $sz) (i32.const 0x3c))
-        (then (i32.store (i32.add (local.get $wa) (i32.const 0x3c)) (i32.const 0x00800000))))
+        (then (i32.store (i32.add (local.get $wa) (i32.const 0x3c)) (global.get $DX_VIDMEM_TOTAL))))
       (if (i32.gt_u (local.get $sz) (i32.const 0x40))
-        (then (i32.store (i32.add (local.get $wa) (i32.const 0x40)) (i32.const 0x00800000))))))
+        (then (i32.store (i32.add (local.get $wa) (i32.const 0x40)) (global.get $DX_VIDMEM_TOTAL))))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
@@ -3606,13 +3651,13 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetAvailableVidMem(this, lpDDSCaps, lpdwTotal, lpdwFree) — IDirectDraw2+ only
-  ;; Total = 8 MB (matches GetCaps dwVidMemTotal). Free = Total - $dx_vidmem_used;
+  ;; Total = $DX_VIDMEM_TOTAL (matches GetCaps dwVidMemTotal). Free = Total - used;
   ;; MCM uses the delta across CreateSurface/Release to measure texture bytes.
   (func $handle_IDirectDraw2_GetAvailableVidMem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $free i32)
-    (local.set $free (i32.sub (i32.const 0x00800000) (global.get $dx_vidmem_used)))
+    (local.set $free (i32.sub (global.get $DX_VIDMEM_TOTAL) (global.get $dx_vidmem_used)))
     (if (i32.lt_s (local.get $free) (i32.const 0)) (then (local.set $free (i32.const 0))))
-    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0x00800000))))
+    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (global.get $DX_VIDMEM_TOTAL))))
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $free))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
