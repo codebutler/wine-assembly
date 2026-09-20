@@ -464,3 +464,57 @@ failure yet**. Trace pending flags and callback results around Storm's class-
 brush changes and repeated menu paints before replacing the old brush-derived
 fErase behavior. Then connect the Win16 far BeginPaint continuation and remove
 its legacy branch, with the browser regression required alongside the probe.
+
+## 2026-09-20: traced erase-state losses and hidden-scan correction
+
+`tools/probe-erase-lifecycle.js` builds an instrumented WASM in a temporary
+directory, without editing sources or the shipping artifact. It traces NC
+erase sets/clears, hidden-window scans, BeginPaint entry and returned fErase,
+with HWND, flags and guest EIP/caller. `--candidate` applies the saved rejected
+patch in memory. Patch anchors use the compiler's byte-to-source conversion
+(UTF-8 comment punctuation is normalized); ambiguous or stale anchors fail.
+This is a cooperative-mode diagnostic, not a performance benchmark.
+
+```sh
+node tools/probe-erase-lifecycle.js --candidate --app=diablo_shareware \
+  --batch-size=200000 --tick-ms-per-batch=20 --max-batches=1100 \
+  --max-seconds=90 --no-close --repaint-every=100
+```
+
+Two actual state losses are now observed, not just suspected:
+
+1. Creation sets bit 2 on hidden children 0x10003/0x10004. `nc_flags_scan`
+   directly clears it while those windows are effectively hidden. Before
+   this fix, 0x10004's first BeginPaint arrives with flags=0. This clear did
+   not call `nc_flags_clear`, which is why tracing only that helper missed it.
+2. With the callback candidate, BeginPaint on 0x10002/0x10003 returns fErase=1
+   and retains bit 2 after the erase is declined. The bit is then cleared
+   while Storm polls messages at runtime 0x7a8b48, return 0x7a8b58.
+   The logged Storm base is 0x7a1000; disassembly at original 0x15007b48
+   identifies the call at 0x15007b52 to IAT 0x15036688. The import table
+   identifies that slot as PeekMessageA (USER32 IAT 0x36634, index 21).
+
+The production fix in this step is **only loss 1**: hidden scans retain the
+erase bit, skip delivery, and continue to subsequent windows. Existing
+non-client calculation/paint handling is otherwise unchanged. Destruction
+still clears the slot. A new regression fails on the original code and
+checks hidden parents, visible children under hidden parents, repeated and
+combined-mask scans, fairness to a later visible window, exposure and cleanup.
+
+The repeated instrumented candidate run now sees 0x10004's first BeginPaint
+with flags=2, proving that exposure preserves the original request. The
+later PeekMessage consumption still occurs and subsequent calls again see
+flags=0. Thus the hidden fix does **not** establish that the saved candidate
+is ready to integrate. Next: correct the queued/synchronous erase distinction
+without duplicating state, then rerun the contract and browser oracles.
+
+Evidence: `/private/tmp/wa-erase-lifecycle-main.log`,
+`wa-erase-lifecycle-candidate.log`, `wa-erase-lifecycle-hidden-title.log`
+(pre-fix hidden clears), `wa-erase-lifecycle-preserved.log` (post-fix),
+`wa-hidden-erase-before.log`, `wa-hidden-erase-after.log`.
+
+Verification of the production hidden-scan fix: normal/compatibility builds,
+Diablo's six-stage browser flow through gameplay, WEP1 8/8, Rodent/Rattler
+and shared parent/child paint ordering pass. Logs:
+`/private/tmp/wa-hidden-erase-{build,diablo,wep1,vb,order}.log`;
+browser captures: `/private/tmp/wa-hidden-erase-diablo/`.

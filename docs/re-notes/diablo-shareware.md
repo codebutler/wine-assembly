@@ -3049,3 +3049,17 @@ After restoration and a completed rebuild, a fresh browser run passes all
 six stages through gameplay again: `/private/tmp/wa-begin-erase-diablo-restored.log`
 and the same-named capture directory. Thus the before/after browser failure
 is reproduced, while the precise internal cause remains open.
+
+### Erase-state trace follow-up
+
+The isolated `tools/probe-erase-lifecycle.js --candidate` run now identifies
+two losses: `nc_flags_scan` clears creation-time erase on effectively hidden
+children 0x10003/0x10004, and PeekMessageA consumes the candidate's retained
+declined-erase bit. Storm's polling call is original VA 0x15007b52 through
+IAT 0x15036688 (USER32 index 21), return 0x15007b58. With the logged runtime
+Storm base 0x7a1000, the corresponding trace caller is 0x7a8b58.
+
+Hidden scans now retain erase requests until exposure. The same trace changes
+0x10004's first BeginPaint from flags=0 to flags=2; later polling still clears
+that bit. This fixes one observed loss, not the entire candidate. See the
+latest section of `docs/review-win16-windowpos.md` for commands and logs.

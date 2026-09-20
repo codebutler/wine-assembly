@@ -4672,7 +4672,14 @@
                 (then (return (local.get $hwnd))))
               (if (i32.and (local.get $mask) (i32.const 4))
                 (then (call $defwndproc_do_nccalcsize (local.get $hwnd))))
-              (local.set $new (i32.and (local.get $flags) (i32.xor (local.get $mask) (i32.const -1))))
+              ;; Hidden windows cannot receive an erase yet, but hiding is
+              ;; not validation. Retain the erase request until exposure or
+              ;; destruction; otherwise the first BeginPaint sees no request.
+              ;; Continue scanning so this deferred window cannot starve a
+              ;; later visible one. Other NC work retains its existing policy.
+              (local.set $new (i32.or
+                (i32.and (local.get $flags) (i32.const 2))
+                (i32.and (local.get $flags) (i32.xor (local.get $mask) (i32.const -1)))))
               (i32.store (local.get $ptr) (local.get $new))
               (if (i32.and (i32.eqz (local.get $new))
                            (i32.gt_u (global.get $nc_flags_count) (i32.const 0)))
