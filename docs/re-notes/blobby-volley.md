@@ -167,6 +167,122 @@ file rather than about the arrows. Green went 478.7 → 584.3 → 533.2 under
 So the keys travel with the settings file, and the mouse never reaches a
 network client at all.
 
+### Two processes, two clocks — why the gate flaked, and it is not the game
+
+`test-blobby-vlan`'s "and saw it come back" went red in roughly three runs of
+five: the guest held player two's LEFT key and its blob moved *right*. None of
+the obvious causes survived contact with the logs (2026-09-20):
+
+- **Not a dropped key.** `run.js` logs every input it applies, and all four
+  landed: `keydown 39 @1799`, `keyup 39 @2083`, `keydown 37 @2159`,
+  `keyup 37 @2466`, each with a matching `[ctl]` ack. The LEFT key was held
+  for 156 batches across the capture.
+- **Not the wire.** The ledgers match end to end — guest sent 2151 DATA frames
+  and the host received 2138; host sent 152 and the guest received 152 — at a
+  steady ~90 frames per 100 log lines, with no backlog.
+- **Not a point being scored.** The scoreboard rows are byte-identical between
+  the `before` and `right` captures (`png-diff --region=0,0,640,60`), and the
+  only change by `left` is a 4x4 box at the top of the picture: the ball.
+
+What the pictures actually show is that the blob was never being steered at
+all. Measured with `tools/png-color-box.js` over the capture series:
+
+```
+before        2733 px   centroid 478.7   box 454..503 x 329..399 (50x71)
+right         2391 px   centroid 527.1   box 500..555 x 340..399 (56x60)
+left          2391 px   centroid 591.1   box 564..619 x 340..399 (56x60)
+host-idle     2736 px   centroid 475.5   box 451..500 x 329..399 (50x71)
+```
+
+478.7 → 527.1 over 281 batches is 0.172 px/batch; 527.1 → 591.1 over the next
+375 is 0.171. **One constant rate across the whole experiment**, indifferent to
+which key was held — about 7 px/s, a seventh of a walk — with the sprite frozen
+in one frame (`56x60`, the *same* 2391 matching pixels in two captures 375
+batches apart, against `50x71` at rest), and then a snap back to the serve spot.
+A frozen frame sliding at a fixed rate is dead reckoning, not a simulated blob,
+so the key had nothing to steer and the sample is void rather than wrong.
+
+Why it is being dead-reckoned is already written down in our own tree, at
+`test/run.js:3411`: *two emulator processes in one room cannot share a
+batch-driven clock*, because a batch is not a unit of time and each process
+runs them at its own rate. In that run the host retired **34628** batches to
+the guest's **3194** — at 200 ms/batch, ~6900 s of guest time against ~640 s,
+a 10x divergence — and anything either side decides by elapsed time is decided
+against a clock the other does not share. The gate never passed `--real-ticks`.
+
+**The same disease bit the lobby, one layer up.** The guest's "take the first
+session" keys were scheduled at batch 1000/1040, but the session list is filled
+by a frame that arrives in *wall-clock* time. On a box at load 41 the guest ran
+176 batches/s, so batch 1040 landed about six seconds in, before the host had
+answered; the guest pressed ENTER on an empty list, never sent `JOIN_REQ`, and
+five lobby checks went red with a completely healthy host. Those keys are now
+sent from the arrival of the reply (`.. arrived dpl ENUM_REPLY` in the *guest's*
+log — the host's own "I answered" line says nothing about the far side) over the
+control channel. Cause, then effect.
+
+The gate now also refuses to measure a void sample: two captures one hold apart
+with no key down, and the blob must be standing still before a hold counts,
+retried up to three times, with the sprite box printed so a frozen frame is
+visible rather than inferred.
+
+That check earned its place on the first run with it. The blob *was* standing
+still (`0.0px`, rest sprite `50x71`), so the sample was sound — and it exposed
+a second variant of the same latency, one where the two screens do **not**
+agree:
+
+```
+host   478.7 -> 527.1 -> 546.3
+guest  478.7 -> 478.7 -> 546.3
+```
+
+The guest held its own player's RIGHT key, the host saw that player move to
+527.1, and the guest's own screen still showed it at the serve spot. So the
+machine the key was pressed on is the one running *behind*: its view of its own
+player lags the host's by more than a whole hold. That is the 14x send
+asymmetry (host 152 frames against the guest's 2151) landing where it hurts,
+and it is the same clock divergence seen from the other end. Do not read
+"both screens agreed" from the earlier run as a general property — in that run
+they did, in this one they did not, and neither tells you the blob was steered.
+
+### `--real-ticks` is the fix, and it is now part of the gate
+
+The documented remedy for two processes in one room turns out to fix every
+symptom above at once. Measured 2026-09-20, same box, back to back:
+
+| | batch clock | `--real-ticks` both sides |
+|---|---|---|
+| RIGHT hold | +48.4 px | **+150.1 px** |
+| LEFT hold | +19.2 px (the wrong way) | **-278.1 px** |
+| host vs guest | disagreed mid-hold (527.1 / 478.7) | identical at every point |
+| idle "homing drift" | -67.6, -115.6 px | **0.1 px** |
+| host DATA frames sent | 152 | **1890** |
+| send asymmetry | 14x | **1.2x** |
+| gate | 2 checks red | **all checks passed** |
+
+The ledger is the mechanism: the host was sending state 152 times while the
+guest sent 2151, so the guest's screen was updated at a fourteenth of the rate
+it was reporting at, and everything it drew of its own player between those
+updates was extrapolation. On the shared wall clock that collapses to 1.2x and
+the blob travels three times as far under the same hold, because it is now
+being *steered* for the whole hold instead of coasting.
+
+Two things worth keeping from that table. The feared cost did not appear —
+a hold moves the blob **further**, not less, so `MOVED_PX` was never in danger.
+And the **"homing drift" was itself a clock artifact**: it is 0.1 px now. The
+idle control in the stray-key check was built to subtract a phantom. It stays,
+because it costs one capture and documents the trap, but it is no longer
+load-bearing.
+
+The batch *rates* still differ by 11x (host 36558 batches, guest 3216) and that
+no longer matters, which is the whole point: time stopped coming from batches.
+`--real-ticks` is now passed unconditionally by `test-blobby-vlan.js` rather
+than being an env-var opt-in — a test that runs two emulators in one room has
+no business on the batch clock.
+
+Every number here was taken at load 24-91 on a 34-user box. Pixel positions and
+frame counts are load-immune; batch rates are not, and are quoted only to show
+they stopped mattering.
+
 ### Still open: the live browser pair
 
 In a live browser pair (two pages, RTC wire, 2026-09-20) the client responded to

@@ -84,11 +84,19 @@ const HOST_KEYS = [
   ...key(620, ENTER),
   ...key(700, DOWN), ...key(720, DOWN), ...key(760, ENTER),
 ];
+// The guest stops at its own settings screen. Picking a session out of the
+// list is NOT scheduled here, because the list is filled by a frame from the
+// host and that frame arrives in wall-clock time: a batch is not a unit of
+// time, and how many batches this process retires per second is a property of
+// the machine's load. Measured 2026-09-20 at load 41, the guest ran 176
+// batches/s, so a key at batch 1040 landed about six seconds in -- long before
+// the host had answered -- and it pressed ENTER on an empty list and never
+// joined, taking five lobby checks red with a completely healthy host. The
+// keys for it are sent from the arrival of the reply instead, below.
 const GUEST_KEYS = [
   ...key(460, DOWN), ...key(520, ENTER),
   ...key(600, DOWN), ...key(620, ENTER),
   ...key(700, DOWN), ...key(720, DOWN), ...key(760, ENTER),
-  ...key(1000, UP), ...key(1040, ENTER),
 ];
 
 const WINDOW_BYTES = 64 * 1024;
@@ -113,6 +121,14 @@ function spawn(name, ip, input, watch) {
     // The one line that names the guest thread's EIP without tracing its calls.
     '--trace-sched=20',
     '--quiet-api',
+    // Two emulator processes in one room cannot share a batch-driven clock
+    // (test/run.js, where --real-ticks is defined): a batch is not a unit of
+    // time and each process retires them at its own rate, so each side
+    // decides everything time-based against a clock the other does not have.
+    // Measured 2026-09-20, this one flag is the difference between a flaky
+    // gate and a green one -- see docs/re-notes/blobby-volley.md for the
+    // numbers. It is not optional here, whatever the machine's load.
+    '--real-ticks',
     '--batch-size=200000',
     '--max-batches=100000000',
     '--max-seconds=300',
@@ -181,6 +197,10 @@ async function main() {
 
     guest = spawn('guest', '10.0.0.2', GUEST_KEYS, {
       enumReq: /\[net\] -> dpl ENUM_REQ/,
+      // The reply as the GUEST sees it, which is the event the session list
+      // depends on -- the host's own "I answered" line says nothing about
+      // whether the list on the other side has been filled in yet.
+      replyIn: /\.\. arrived dpl ENUM_REPLY/,
       joinReq: /\[net\] -> dpl JOIN_REQ/,
       playerAdd: /\[net\] <- dpl PLAYER_ADD/,
       data: /\[net\] <- dpl DATA/,
@@ -190,6 +210,20 @@ async function main() {
 
     check('guest broadcast a session search', await waitFor(guest, 'enumReq', 180000));
     check('host answered the search', await waitFor(host, 'enumReply', 60000));
+
+    // Cause, then effect: the session list exists only once that reply has
+    // arrived HERE, so the keys that take the first session are sent now,
+    // over the control channel, rather than at a batch number picked in
+    // advance (see the note on GUEST_KEYS).
+    check('the reply reached the guest', await waitFor(guest, 'replyIn', 60000));
+    await sleep(3000);
+    for (const vk of [UP, ENTER]) {
+      control(guest, { cmd: `keydown:${vk}` });
+      await sleep(500);
+      control(guest, { cmd: `keyup:${vk}` });
+      await sleep(2000);
+    }
+
     check('guest asked to join the session', await waitFor(guest, 'joinReq', 120000));
     check('host admitted the guest', await waitFor(host, 'joinAck', 60000));
     check('guest learned the host player', await waitFor(guest, 'playerAdd', 60000));
@@ -235,11 +269,41 @@ async function main() {
       return shot;
     };
     const hold = (vk, tag) => holdOn(guest, vk, tag);
-    const before = await shoot('before');
+    const moved = (a, b) => (a.cx === null || b.cx === null) ? null : b.cx - a.cx;
+
+    // A hold only means something if the blob was standing still first, and
+    // in a network match it sometimes is not. Measured 2026-09-20 on a failing
+    // run: the guest's own player slid right at a constant 0.17px per batch
+    // (~7px/s, a seventh of a walk) through both holds, frozen in one squashed
+    // sprite frame -- 56x60 and the same 2391 matching pixels in two captures
+    // 375 batches apart, against 50x71 at rest -- and then snapped back to its
+    // serve spot. A frozen frame sliding at a fixed rate is dead reckoning,
+    // not a blob being simulated, and a key pressed into that state moves
+    // nothing: run.js logged every keydown and keyup applied (39 at 1799,
+    // released 2083, 37 at 2159, released 2466), the wire was symmetric and
+    // unbacklogged (2151 frames out, 2138 in on the far side) and both screens
+    // agreed on every position. So the sample is void rather than wrong, and
+    // the only way to tell is to look before pressing anything: two captures
+    // one hold apart, no key down.
+    let before = null;
+    for (let attempt = 1; attempt <= 3 && before === null; attempt++) {
+      const a = await shoot(`settle-${attempt}a`);
+      await sleep(6000);
+      const b = await shoot(`settle-${attempt}b`);
+      const drift = moved(a.guest, b.guest);
+      const still = drift !== null && Math.abs(drift) < AGREE_PX;
+      console.log(`  settle ${attempt}: green ${fmt(a.guest.cx)} -> ${fmt(b.guest.cx)}`
+        + ` (${drift === null ? 'gone' : fmt(drift)}px, sprite ${a.guest.w}x${a.guest.h}`
+        + ` -> ${b.guest.w}x${b.guest.h})`
+        + (still ? '  standing still' : '  still sliding, waiting'));
+      if (still) before = b;
+      else await sleep(8000);
+    }
+    check('the guest\'s player stands still with no key held', before !== null);
+    if (before === null) before = await shoot('before');
     const right = await hold(P2_RIGHT, 'right');
     const after = await hold(P2_LEFT, 'left');
 
-    const moved = (a, b) => (a.cx === null || b.cx === null) ? null : b.cx - a.cx;
     const dHost = moved(before.host, right.host);
     const dGuest = moved(before.guest, right.guest);
     console.log(`  green blob x: host ${fmt(before.host.cx)} -> ${fmt(right.host.cx)}`
