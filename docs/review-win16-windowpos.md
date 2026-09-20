@@ -142,3 +142,44 @@ code or queue behavior was changed to satisfy the test.
 Logs: `/private/tmp/wa-defer-paint.log`, `wa-defer-paint-negative.log`,
 `wa-defer-paint-order.log`. This verifies dispatch/update bookkeeping, not a
 new pixel-level or native Win98 timing comparison.
+
+## 2026-09-20: Win16 default WINDOWPOSCHANGED processing
+
+Microsoft's *Windows 3.1 Programmer's Reference*, volume 3, printed pages
+210–211 and 424, documents a FAR pointer to seven Win16 WINDOWPOS fields and
+assigns WM_MOVE/WM_SIZE generation to DefWindowProc. The original Microsoft
+manual is available from this [archive mirror](https://bitsavers.trailing-edge.com/pdf/microsoft/windows_3.1/Windows_3.1_Programmers_Reference_Volume_3_Messages_Structures_and_Macros_1992.pdf).
+Read via local PDF/text copies `/private/tmp/wa-win31-messages.{pdf,txt}`;
+no Wine source used.
+
+The Win16 default procedure previously forwarded the unconverted segmented
+pointer to the Win32 handler, which expects 28 bytes rather than 14. It now
+reads the Win16 flags at offset 12 and uses a stack-owned `{hwnd,flags,stage}`
+continuation to deliver far Pascal geometry callbacks. Its return record
+preserves the caller and zero DX:AX. Nested calls have independent flags and
+stages; the stage advances before each callback. The window is revalidated
+before the next delivery. Native procedures retain their synchronous path.
+
+Both widths share the existing `client_rect_wh_packed` helper for committed
+client size, eliminating the Win32 sender's open-coded copy. Origins use the
+existing parent-relative/top-level coordinate helper, not WINDOWPOS outer
+geometry. The MOVE-then-SIZE order preserves the shared implementation;
+the cited manual does not independently establish that exact order.
+
+`test-win16-windowpos-defproc.js` executes actual x86 RETF callbacks and an
+actual nested CALL FAR to USER.107. Before the fix, its first case receives
+no messages instead of move/size. Coverage includes all four NOMOVE/NOSIZE
+combinations, signed top-level client coordinates, child coordinates relative
+to the parent's client, poisoned request geometry, adjacent input guards,
+nested calls with different flags, original far return and complete stack
+cleanup. Logs: `/private/tmp/wa-defpos16-{before,final}.log`.
+
+The shared Win32 mutation test, Win16 deferred/nested transaction regression,
+Rodent/Rattler gameplay, and full normal/compatibility builds also pass:
+`/private/tmp/wa-defpos16-{win32,defer,vb,build}.log`.
+
+This fixes default processing as a prerequisite, not the entire positioning
+pipeline. Win16 SetWindowPos/MoveWindow still need to send mutable CHANGING
+and final CHANGED, and replace their direct WM_SIZE shortcut with this default
+processing. Minimized/maximized size classifications and native Win98 event
+comparison remain separate fidelity checks.

@@ -202,7 +202,7 @@
   ;; WM_WINDOWPOSCHANGED without chaining here intentionally receives neither,
   ;; exactly as USER documents.
   (func $windowpos_defproc_geometry (param $hwnd i32) (param $windowpos i32)
-    (local $flags i32) (local $wh i32)
+    (local $flags i32)
     (if (i32.eqz (local.get $windowpos)) (then (return)))
     (local.set $flags
       (call $gl32 (i32.add (local.get $windowpos) (i32.const 24))))
@@ -213,19 +213,9 @@
           (call $window_client_xy_packed (local.get $hwnd))))))
     (if (i32.eqz (i32.and (local.get $flags) (i32.const 1))) ;; !SWP_NOSIZE
       (then
-        (local.set $wh (i32.or
-          (i32.and
-            (i32.sub (call $client_rect_get_r (local.get $hwnd))
-              (call $client_rect_get_l (local.get $hwnd)))
-            (i32.const 0xFFFF))
-          (i32.shl
-            (i32.and
-              (i32.sub (call $client_rect_get_b (local.get $hwnd))
-                (call $client_rect_get_t (local.get $hwnd)))
-              (i32.const 0xFFFF))
-            (i32.const 16))))
         (drop (call $wnd_send_message
-          (local.get $hwnd) (i32.const 0x0005) (i32.const 0) (local.get $wh))))))
+          (local.get $hwnd) (i32.const 0x0005) (i32.const 0)
+          (call $client_rect_wh_packed (local.get $hwnd)))))))
 
   ;; Both positioning APIs normalize NOMOVE/NOSIZE against committed
   ;; geometry before calling here. A real change exposes non-client pixels

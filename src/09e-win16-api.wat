@@ -7513,6 +7513,47 @@
       (i32.shr_u (local.get $ret) (i32.const 16))
       (i32.and (local.get $ret) (i32.const 0xFFFF))))
 
+  ;; The Win16 default geometry sender cannot use the Win32 synchronous
+  ;; sender: its target is a far Pascal procedure. Keep {hwnd,flags,stage}
+  ;; on the guest stack over the ordinary six-byte return continuation.
+  (global $WIN16_CONT_DEFPOS i32 (i32.const 0xFFA0))
+  (func $win16_defpos_continue
+    (local $sp i32) (local $hwnd i32) (local $flags i32) (local $stage i32)
+    (local $proc i32) (local $message i32) (local $lp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $hwnd (call $gl32 (local.get $sp)))
+    (local.set $flags (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+    (block $done (loop $next
+      (local.set $stage (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
+      (br_if $done (i32.ge_u (local.get $stage) (i32.const 2)))
+      (br_if $done (i32.eqz (local.get $hwnd)))
+      (br_if $done (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      ;; Advance before entering guest code; nested default processing gets
+      ;; its own frame and cannot restart this invocation's WM_MOVE.
+      (call $gs32 (i32.add (local.get $sp) (i32.const 8))
+        (i32.add (local.get $stage) (i32.const 1)))
+      (if (i32.eqz (local.get $stage))
+        (then
+          (br_if $next (i32.and (local.get $flags) (i32.const 2)))
+          (local.set $message (i32.const 3))
+          (local.set $lp (call $window_client_xy_packed (local.get $hwnd))))
+        (else
+          (br_if $next (i32.and (local.get $flags) (i32.const 1)))
+          (local.set $message (i32.const 5))
+          (local.set $lp (call $client_rect_wh_packed (local.get $hwnd)))))
+      (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+      (if (call $win16_is_far_proc (local.get $proc))
+        (then
+          (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+            (local.get $message) (i32.const 0) (local.get $lp)
+            (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_DEFPOS))
+          (return)))
+      (drop (call $wnd_send_message (local.get $hwnd) (local.get $message)
+        (i32.const 0) (local.get $lp)))
+      (br $next)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 12)))
+    (call $win16_cont_resume))
+
   ;; USER.107 DefWindowProc(hWnd, message, wParam, lParam) -> LONG.
   ;;
   ;; This is also the procedure a task gets back when it subclasses one of our
@@ -7524,11 +7565,28 @@
   ;; did nothing at all until this was here.
   (func $win16_DefWindowProc
     (local $hwnd i32) (local $message i32) (local $wparam i32) (local $lparam i32)
-    (local $class i32)
+    (local $class i32) (local $sp i32) (local $flags i32)
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 4))))
     (local.set $message (call $win16_arg16 (i32.const 3)))
     (local.set $wparam (call $win16_arg16 (i32.const 2)))
     (local.set $lparam (call $win16_arg32 (i32.const 0)))
+    (if (i32.eq (local.get $message) (i32.const 0x0047))
+      (then
+        ;; Seven 16-bit fields, reached through a selector:offset pointer.
+        ;; Do not pass this pointer or layout to the Win32 default procedure.
+        (local.set $flags (i32.const 3))
+        (if (local.get $lparam)
+          (then (local.set $flags (call $gl16 (i32.add
+            (call $win16_far_to_guest (i32.shr_u (local.get $lparam) (i32.const 16))
+              (i32.and (local.get $lparam) (i32.const 0xFFFF))) (i32.const 12))))))
+        (call $win16_cont_push (call $win16_take_return (i32.const 10)) (i32.const 0))
+        (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+        (call $gs32 (local.get $sp) (local.get $hwnd))
+        (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $flags))
+        (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
+        (call $win16_defpos_continue)
+        (return)))
     (if (call $win16_defdlg_command (local.get $hwnd)
               (local.get $message) (local.get $wparam))
       (then
@@ -12868,6 +12926,8 @@
       (then (call $win16_cont_resume) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_DEFER))
       (then (call $win16_defer_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_DEFPOS))
+      (then (call $win16_defpos_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took
     ;; its own arguments off the stack; the CWPSTRUCT and CREATESTRUCT built
     ;; underneath them are this side's to drop.
