@@ -1142,3 +1142,37 @@ with layout `e6a915eaedf6cf03` (`/private/tmp/wa-win16-rank-build.log`). All
 seven WEP3 first-action gameplay cases pass against the completed normal
 artifact (`/private/tmp/wa-win16-rank-wep3.log`). This gameplay check is
 headless, not a new browser or native-reference measurement.
+
+### Input/taskbar transaction gap (2026-09-20)
+
+Reproduce with `node tools/probe-window-activation-order.js --check-order
+--input-paths`. This runs the real mouse-down/up methods and the real taskbar
+button handlers; only the DOM button container is synthetic. The existing
+API-order assertions still pass. Input observations are diagnostic, not
+assertions that enshrine the incorrect results.
+
+With A active and B exposed at the right edge, clicking B produces:
+
+```text
+                   guest active  guest focus  guest top  renderer top
+mouse B                 A             B           N           B
+taskbar B raise         A             B           N           B
+taskbar B minimize      A             B           N           B (hidden)
+taskbar B restore       A             B           N           B
+```
+
+N is A's nested owned palette. Taskbar minimize leaves B's guest minimized
+bit false while hiding the renderer window; restore only reverses the
+renderer-side state. The taskbar does not dispatch the guest show-state
+transaction. Mouse input changes focus but does not activate B. This is
+broader than a missing rank export: synchronizing rank alone would leave
+both active-window notifications and show state incorrect.
+
+Next implementation must route mouse activation and taskbar system commands
+through the owning guest, preserving callback reentry and Win16 far-call
+semantics. Do not invoke callback-bearing activation on a Worker shadow
+instance just to update its globals. The rank helper is pure locked table
+arithmetic; the activation transaction is not. Verify both cooperative and
+Worker delivery, including keyboard routing across app instances, before
+claiming the input paths closed. The current probe covers one process in
+the headless renderer, not native Win98 or concurrent Worker input.

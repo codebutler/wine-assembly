@@ -63,6 +63,7 @@ const extraWat = String.raw`
       visibleBit: !!(e.probe_style(hwnd) & 0x10000000),
       renderedVisible: !!renderer.windows[hwnd].visible,
       minimized: !!e.probe_min(hwnd),
+      renderedMinimized: !!renderer.windows[hwnd]._minimized,
       nextFromHost: nameOf(host.get_window_related(hwnd, 2)),
     }));
     snapshots.push({ stage, active: nameOf(e.probe_active()), focus: nameOf(e.probe_focus()),
@@ -104,6 +105,45 @@ const extraWat = String.raw`
     }
     assert.deepStrictEqual(snapshots.at(-1).watTopFirst.slice(0, 4), ['N', 'Q', 'P', 'A'],
       'visible owned levels remain above owner, preserving sibling order');
+  }
+  if (process.argv.includes('--input-paths')) {
+    // Exercise actual input and taskbar handlers. Only the DOM button sink is
+    // synthetic; no USER exports, renderer state transitions or onclick bodies
+    // are replaced. Keep these observations separate from --check-order until
+    // the input transaction is integrated with guest state.
+    const b = windows[1].hwnd;
+    renderer.handleMouseDown(235, 100, 0);
+    renderer.handleMouseUp(235, 100, 0);
+    record('mouse click on exposed B client');
+    const previousDocument = globalThis.document;
+    const buttons = [];
+    const container = {
+      set innerHTML(value) { buttons.length = 0; },
+      appendChild(button) { buttons.push(button); },
+    };
+    globalThis.document = {
+      getElementById: id => id === 'task-buttons' ? container : null,
+      createElement: tag => {
+        assert.strictEqual(tag, 'button');
+        return {};
+      },
+    };
+    try {
+      // Establish a known foreground owner using the working API path, then
+      // drive the taskbar's raise, minimize and restore branches for B.
+      e.probe_api(0, a, 0);
+      for (const action of ['raise', 'minimize', 'restore']) {
+        renderer.updateTaskbar();
+        const button = buttons.find(button => button.textContent === 'B');
+        assert(button, 'B taskbar button exists');
+        button.onclick();
+        record(`taskbar B ${action}`);
+      }
+      assert(renderer.windows[b], 'taskbar retains the target window');
+    } finally {
+      if (previousDocument === undefined) delete globalThis.document;
+      else globalThis.document = previousDocument;
+    }
   }
   console.log(JSON.stringify({ fixture: 'same-thread top-level and owned-window activation', snapshots }, null, 2));
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
