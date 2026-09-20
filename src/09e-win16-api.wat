@@ -750,9 +750,77 @@
     (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
+  ;; TOOLHELP.54 GlobalEntryHandle(lpGlobal, hItem). GLOBALENTRY is the
+  ;; documented packed 36-byte structure. A Win16 selector here is a base and
+  ;; a limit into the arena, so the fields a caller can act on — the linear
+  ;; address, the block size and the handle — are real, and the ones this
+  ;; machine has no equivalent for (lock counts, the heap-walk cursors) are
+  ;; zero rather than invented.
+  (func $win16_GlobalEntryHandle
+    (local $entry i32) (local $item i32) (local $index i32) (local $base i32)
+    (local.set $item (call $win16_arg16 (i32.const 0)))
+    (local.set $entry (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (local.set $index (call $win16_sel_to_index (local.get $item)))
+    (local.set $base (call $win16_seg_base (local.get $index)))
+    (if (i32.and (i32.ne (local.get $base) (i32.const 0))
+                 (i32.ge_u (call $gl32 (local.get $entry)) (i32.const 36)))
+      (then
+        (call $zero_memory (call $g2w (i32.add (local.get $entry) (i32.const 4)))
+          (i32.const 32))
+        (call $gs32 (i32.add (local.get $entry) (i32.const 4)) (local.get $base))
+        ;; $win16_seg_limit is the segment's size in bytes, not a last-byte
+        ;; index, so dwBlockSize is it unchanged.
+        (call $gs32 (i32.add (local.get $entry) (i32.const 8))
+          (call $win16_seg_limit (local.get $index)))
+        (call $gs16 (i32.add (local.get $entry) (i32.const 12)) (local.get $item))
+        (call $gs16 (i32.add (local.get $entry) (i32.const 24)) (global.get $sreg_ds)) ;; hOwner
+        (call $gs16 (i32.add (local.get $entry) (i32.const 26)) (i32.const 1))         ;; GT_DGROUP
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (call $win16_api_return (i32.const 6)))
+
+  ;; TOOLHELP.75 InterruptRegister(hTask, lpfnIntCallback) and .76
+  ;; InterruptUnRegister(hTask). The callback these install is entered on a
+  ;; processor fault — a GP fault, a divide by zero, Ctrl-Alt-SysRq — and this
+  ;; emulator raises none of those into the guest, so there is no mechanism to
+  ;; register against. Both return FALSE, which is the SDK's own "could not
+  ;; register" answer and the one a caller is required to handle; claiming
+  ;; success and never calling back would leave the app believing it has a
+  ;; fault handler it does not have.
+  (func $win16_InterruptRegister
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (call $win16_api_return (i32.const 6)))
+
+  (func $win16_InterruptUnRegister
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (call $win16_api_return (i32.const 2)))
+
+  ;; TOOLHELP.77 TerminateApp(hTask, wFlags). The task is asking for itself or
+  ;; another task to be taken down; with one task per emulator process that is
+  ;; the process ending. wFlags = UAE_BOX (1) asks for the "unrecoverable
+  ;; application error" box first, which is logged rather than drawn — the run
+  ;; is over either way and the marker is what names it in a capture.
+  (func $win16_TerminateApp
+    (call $host_log_i32 (i32.const 0xCA16A99D))   ;; TOOLHELP TerminateApp
+    (call $host_exit (i32.const 1))
+    (global.set $eip (i32.const 0))
+    (global.set $steps (i32.const 0)))
+
   (func $win16_toolhelp (param $module i32) (param $ordinal i32) (result i32)
     (if (i32.eqz (call $win16_dynamic_module_is_toolhelp (local.get $module)))
       (then (return (i32.const 0))))
+    (if (i32.eq (local.get $ordinal) (i32.const 54))
+      (then (call $win16_GlobalEntryHandle) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 75))
+      (then (call $win16_InterruptRegister) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 76))
+      (then (call $win16_InterruptUnRegister) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 77))
+      (then (call $win16_TerminateApp) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 62))
       (then (call $win16_ModuleFindHandle) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 72))
@@ -2912,7 +2980,7 @@
   ;; handle dereferenceable, and what LocalLock recognises.
   (func $win16_LocalAlloc
     (local $bytes i32) (local $h i32) (local $p i32) (local $size i32) (local $limit i32)
-    (local $moveable i32)
+    (local $moveable i32) (local $seg_top i32)
     (local.set $moveable (i32.and (call $win16_arg16 (i32.const 1)) (i32.const 2)))
     (local.set $bytes (i32.and (i32.add (call $win16_arg16 (i32.const 0)) (i32.const 1))
                                (i32.const 0xFFFE)))
@@ -2982,6 +3050,38 @@
         ;; above the stack rather than below it, which is where a task that
         ;; laid out its own DGROUP put it. Visual Basic asks for an eight
         ;; kilobyte block out of a four kilobyte heap while loading its form.
+        ;; In this loader's DGROUP the heap sits *below* the stack, so growing
+        ;; the segment does not by itself make room: the next block would be
+        ;; carved straight through the stack, and the far return of this very
+        ;; call would then read a zero selector. BoxWorld asks for 8KB out of a
+        ;; heap with the stack a few hundred bytes above it and died exactly
+        ;; there. Step over the stack instead — reserve the gap up to the old
+        ;; segment top as one allocated block nobody can be handed, and carry
+        ;; the heap on above it, which is where the grown segment's new space
+        ;; actually is.
+        (if (i32.and (i32.gt_u (i32.add (local.get $h) (local.get $bytes))
+                               (call $win16_lheap_get (i32.const 2)))
+                     (i32.and (i32.eq (global.get $sreg_ss) (global.get $sreg_ds))
+                              (i32.gt_u (i32.and (i32.sub
+                                  (i32.load offset=16 (global.get $reg_base))
+                                  (global.get $seg_base_ss)) (i32.const 0xFFFF))
+                                (local.get $h))))
+          (then
+            (local.set $seg_top (call $win16_seg_limit
+              (call $win16_sel_to_index (global.get $sreg_ds))))
+            (if (i32.and (i32.gt_u (local.get $seg_top) (local.get $h))
+                         (i32.le_u (i32.add (i32.add (local.get $seg_top) (i32.const 2))
+                                            (local.get $bytes))
+                                   (i32.const 0x10000)))
+              (then
+                ;; The size word's low bit is the free flag, so a reserved gap
+                ;; of odd length has to round down rather than mark itself free.
+                (local.set $seg_top (i32.and (local.get $seg_top) (i32.const 0xFFFE)))
+                (call $win16_lblock_set (i32.sub (local.get $h) (i32.const 2))
+                  (i32.and (i32.sub (local.get $seg_top) (local.get $h))
+                           (i32.const 0xFFFE)) (i32.const 0))
+                (call $win16_lheap_set_ptr (local.get $seg_top))
+                (local.set $h (i32.add (local.get $seg_top) (i32.const 2)))))))
         (if (i32.gt_u (i32.add (local.get $h) (local.get $bytes))
                       (call $win16_lheap_get (i32.const 2)))
           (then
@@ -3952,6 +4052,49 @@
   ;; boundary so a Win16 InstallShield bootstrap can hand its newly expanded
   ;; 32-bit engine to the browser with the caller's VFS intact. The operation
   ;; marker selects WinExec command-line parsing in host.js.
+  ;; KERNEL.45 LoadModule(lpModuleName, lpParameterBlock) -> an HINSTANCE, or a
+  ;; DOS error code below 32. It is WinExec's older, lower-level twin: the
+  ;; parameter block carries the environment, the command tail and the show
+  ;; command that WinExec builds for itself.
+  ;;
+  ;; A missing file is the answer this mostly gives here, and it is the real
+  ;; one rather than a stub: Brain Jam looks for `sol.exe` next to itself
+  ;; before offering to deal a Solitaire layout, and on a machine without it
+  ;; Windows returns 2. Saying "launched" to that would be a lie, and saying
+  ;; nothing at all stopped the task.
+  (func $win16_LoadModule
+    (local $name i32) (local $pb i32) (local $show i32)
+    (local.set $pb (i32.const 0))
+    (if (call $win16_arg16 (i32.const 1))
+      (then (local.set $pb (call $win16_far_to_guest
+        (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))))
+    (local.set $name (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
+    (call $win16_call32_begin (i32.const 1))
+    (call $handle_GetFileAttributesA (local.get $name) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 2)) ;; ERROR_FILE_NOT_FOUND
+        (call $win16_api_return (i32.const 8))
+        (return)))
+    ;; The block's lpCmdShow is a far pointer to two words, the second of which
+    ;; is the show command; without a block the task gets a normal window.
+    (local.set $show (i32.const 1))
+    (if (local.get $pb)
+      (then (if (call $gl16 (i32.add (local.get $pb) (i32.const 8)))
+        (then (local.set $show (call $gl16 (i32.add (call $win16_far_to_guest
+          (call $gl16 (i32.add (local.get $pb) (i32.const 8)))
+          (call $gl16 (i32.add (local.get $pb) (i32.const 6)))) (i32.const 2))))))))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_WinExec (local.get $name) (local.get $show) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 8)))
+
   (func $win16_WinExec
     (local $command i32) (local $show i32)
     (local.set $show (call $win16_arg16 (i32.const 0)))
@@ -4083,6 +4226,8 @@
       (then (call $win16_GetDriveType) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 166))
       (then (call $win16_WinExec) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 45))
+      (then (call $win16_LoadModule) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 74))
       (then (call $win16_OpenFile) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 137))
@@ -5282,6 +5427,24 @@
     (i32.store offset=0 (global.get $reg_base) (local.get $off))
     (call $win16_api_return (i32.const 4)))
 
+  ;; USER.473 AnsiPrev(lpszStart, lpszCurrentChar) -> the previous character.
+  ;; Single-byte, so it is the pointer minus one — except at the start of the
+  ;; string, where AnsiPrev returns lpszStart so a backwards walk terminates.
+  ;; Pascal order puts lpszCurrentChar at index 0 and lpszStart above it.
+  (func $win16_AnsiPrev
+    (local $sel i32) (local $off i32) (local $start_sel i32) (local $start_off i32)
+    (local.set $off (call $win16_arg16 (i32.const 0)))
+    (local.set $sel (call $win16_arg16 (i32.const 1)))
+    (local.set $start_off (call $win16_arg16 (i32.const 2)))
+    (local.set $start_sel (call $win16_arg16 (i32.const 3)))
+    (if (i32.eqz (i32.and (i32.eq (local.get $sel) (local.get $start_sel))
+                          (i32.eq (local.get $off) (local.get $start_off))))
+      (then (local.set $off (i32.and (i32.sub (local.get $off) (i32.const 1))
+                                     (i32.const 0xFFFF)))))
+    (i32.store offset=8 (global.get $reg_base) (local.get $sel))
+    (i32.store offset=0 (global.get $reg_base) (local.get $off))
+    (call $win16_api_return (i32.const 8)))
+
   (func $win16_LoadString
     (local $id i32) (local $max i32) (local $dst i32)
     (local $p i32) (local $end i32) (local $i i32) (local $len i32) (local $n i32)
@@ -5670,6 +5833,92 @@
     (global.set $yield_reason (i32.const 6))
     (global.set $steps (i32.const 0)))
 
+  ;; USER.24 RemoveProp / .25 GetProp / .26 SetProp(hWnd, lpString[, hData]).
+  ;; The name argument is a far pointer to a string *or* an atom, and Win16
+  ;; says which by the selector: an atom arrives with a zero segment, and the
+  ;; 32-bit side already distinguishes the two the same way (`$prop_key` reads
+  ;; anything below 0x10000 as an atom). Putting a zero selector through the
+  ;; descriptor table instead would translate the atom into a wild address.
+  ;; Kyodai Mahjongg hangs its whole per-window state off these three.
+  (func $win16_prop (param $which i32)
+    (local $hwnd i32) (local $sel i32) (local $name i32) (local $data i32)
+    (local $words i32)
+    (local.set $words (select (i32.const 4) (i32.const 3)
+      (i32.eq (local.get $which) (i32.const 1))))
+    (if (i32.eq (local.get $which) (i32.const 1))
+      (then (local.set $data (call $win16_arg16 (i32.const 0)))))
+    (local.set $name (call $win16_arg16 (i32.sub (local.get $words) (i32.const 3))))
+    (local.set $sel (call $win16_arg16 (i32.sub (local.get $words) (i32.const 2))))
+    (if (local.get $sel)
+      (then (local.set $name (call $win16_far_to_guest (local.get $sel) (local.get $name)))))
+    (local.set $hwnd (call $win16_h32
+      (call $win16_arg16 (i32.sub (local.get $words) (i32.const 1)))))
+    ;; One 32-bit argument per Win16 word except the far pointer, which is two.
+    (call $win16_call32_begin (i32.sub (local.get $words) (i32.const 1)))
+    (if (i32.eq (local.get $which) (i32.const 0))
+      (then (call $handle_GetPropA (local.get $hwnd) (local.get $name) (i32.const 0)
+              (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $which) (i32.const 1))
+      (then (call $handle_SetPropA (local.get $hwnd) (local.get $name) (local.get $data)
+              (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $which) (i32.const 2))
+      (then (call $handle_RemovePropA (local.get $hwnd) (local.get $name) (i32.const 0)
+              (i32.const 0) (i32.const 0) (i32.const 0))))
+    (call $win16_call32_end)
+    ;; A property value is a 16-bit HANDLE here and whatever the app stored is
+    ;; what comes back, so the word is returned as stored rather than mapped.
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.shl (local.get $words) (i32.const 1))))
+
+  ;; USER.153 ChangeMenu(hMenu, wIDChangeItem, lpszNewItem, wIDNewItem, wChange)
+  ;; — the Windows 2.x menu editor, which 3.x split into five functions and
+  ;; which plenty of 3.x code still calls because the header kept it. The
+  ;; operation is selected by bits in wChange, and every branch here is one of
+  ;; those five with the flag bit taken back out before it is passed on.
+  ;;
+  ;; MF_APPEND and MF_OWNERDRAW are both 0x0100, and that collision is why this
+  ;; call was deprecated. ChangeMenu's own documented reading wins: inside this
+  ;; function 0x0100 means append.
+  (func $win16_ChangeMenu
+    (local $menu i32) (local $id_change i32) (local $item i32) (local $sel i32)
+    (local $id_new i32) (local $change i32) (local $flags i32)
+    (local.set $change (call $win16_arg16 (i32.const 0)))
+    (local.set $id_new (call $win16_arg16 (i32.const 1)))
+    (local.set $item (call $win16_arg16 (i32.const 2)))
+    (local.set $sel (call $win16_arg16 (i32.const 3)))
+    (local.set $id_change (call $win16_arg16 (i32.const 4)))
+    (local.set $menu (call $win16_h32 (call $win16_arg16 (i32.const 5))))
+    ;; MF_BITMAP items carry a handle in that word, not a pointer.
+    (if (i32.eqz (i32.and (local.get $change) (i32.const 0x0004)))
+      (then (if (local.get $sel)
+        (then (local.set $item (call $win16_far_to_guest (local.get $sel) (local.get $item))))))
+      (else (local.set $item (call $win16_h32 (local.get $item)))))
+    (if (i32.and (local.get $change) (i32.const 0x0010))
+      (then (local.set $id_new (call $win16_h32 (local.get $id_new)))))
+    ;; Take the four operation-selecting bits back out of the flags word.
+    (local.set $flags (i32.and (local.get $change) (i32.const 0xEC7F)))
+    (call $win16_call32_begin (i32.const 5))
+    (call $win16_call32_arg (i32.const 3) (local.get $id_new))
+    (call $win16_call32_arg (i32.const 4) (local.get $item))
+    (if (i32.and (local.get $change) (i32.const 0x0100))
+      (then (call $handle_AppendMenuA (local.get $menu) (local.get $flags)
+              (local.get $id_new) (local.get $item) (i32.const 0) (i32.const 0)))
+      (else (if (i32.and (local.get $change) (i32.const 0x1200))
+        ;; MF_DELETE and MF_REMOVE differ only in who owns a detached popup,
+        ;; and nothing here owns one apart from its parent menu.
+        (then (call $handle_DeleteMenu (local.get $menu) (local.get $id_change)
+                (local.get $flags) (i32.const 0) (i32.const 0) (i32.const 0)))
+        (else (if (i32.and (local.get $change) (i32.const 0x0080))
+          (then (call $handle_ModifyMenuA (local.get $menu) (local.get $id_change)
+                  (local.get $flags) (local.get $id_new) (local.get $item) (i32.const 0)))
+          (else (call $handle_InsertMenuA (local.get $menu) (local.get $id_change)
+                  (local.get $flags) (local.get $id_new) (local.get $item) (i32.const 0))))))))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
+    (call $win16_api_return (i32.const 12)))
+
   (func $win16_user (param $ordinal i32) (result i32)
     (local $arg i32) (local $arg2 i32) (local $arg3 i32)
     ;; USER.13 GetTickCount and USER.15 GetCurrentTime are the same clock; the
@@ -5861,6 +6110,8 @@
       (then (call $win16_ansi_case (i32.const 0) (i32.const 1)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 472))
       (then (call $win16_AnsiNext) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 473))
+      (then (call $win16_AnsiPrev) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 121))
       (then (call $win16_hook (i32.const 3)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 234))
@@ -5923,6 +6174,16 @@
       (then (call $win16_CountClipboardFormats) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 145))
       (then (call $win16_RegisterClipboardFormat) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 153))
+      (then (call $win16_ChangeMenu) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 190))
+      (then (call $win16_GetUpdateRect) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 24))
+      (then (call $win16_prop (i32.const 2)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 25))
+      (then (call $win16_prop (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 26))
+      (then (call $win16_prop (i32.const 1)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 154))
       (then (call $win16_menu_item (i32.const 0)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 155))
@@ -6073,6 +6334,16 @@
       (then (call $win16_EndDeferWindowPos) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 232))
       (then (call $win16_SetWindowPos) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 233))
+      (then (call $win16_SetParent) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 268))
+      (then (call $win16_global_atom (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 269))
+      (then (call $win16_global_atom (i32.const 2)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 270))
+      (then (call $win16_global_atom (i32.const 1)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 271))
+      (then (call $win16_global_atom (i32.const 3)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 229))
       (then (call $win16_GetTopWindow) (return (i32.const 1))))
     ;; GetNextWindow is GetWindow with the same two arguments; USER kept both
@@ -7761,6 +8032,31 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $copy))))
 
+  ;; USER.190 GetUpdateRect(hWnd, lpRect, bErase) -> whether anything needs
+  ;; painting. lpRect is optional: a program that only wants the yes/no passes
+  ;; NULL, and a NULL far pointer arrives as a zero selector, which must not go
+  ;; through the descriptor table. Moraff's Spherejongg asks inside its paint
+  ;; loop before it decides how much of the board to redraw.
+  (func $win16_GetUpdateRect
+    (local $hwnd i32) (local $dst i32) (local $erase i32) (local $tmp i32)
+    (local.set $erase (call $win16_arg16 (i32.const 0)))
+    (local.set $dst (i32.const 0))
+    (if (call $win16_arg16 (i32.const 2))
+      (then (local.set $dst (call $win16_far_to_guest
+        (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))))
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 3))))
+    (local.set $tmp (global.get $GUEST_STACK))
+    (call $win16_call32_begin (i32.const 3))
+    (call $handle_GetUpdateRect (local.get $hwnd)
+      (select (local.get $tmp) (i32.const 0) (local.get $dst))
+      (local.get $erase) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (if (local.get $dst)
+      (then (call $win16_rect_narrow (local.get $dst) (local.get $tmp))))
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
+    (call $win16_api_return (i32.const 8)))
+
   ;; USER.32 GetWindowRect / USER.33 GetClientRect(hWnd, lpRect).
   (func $win16_get_rect (param $is_window i32)
     (local $hwnd i32) (local $dst i32) (local $tmp i32)
@@ -8835,6 +9131,69 @@
     (call $win16_call32_end)
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
+
+  ;; USER.268 GlobalAddAtom, .269 GlobalDeleteAtom, .270 GlobalFindAtom and
+  ;; .271 GlobalGetAtomName. The system atom table is one table, not a Win16
+  ;; and a Win32 one, so these are the 16-bit doorway onto the same handlers
+  ;; DDE and the clipboard already register formats through: a 16-bit task and
+  ;; a Win32 path that name the same string must get the same atom back.
+  (func $win16_global_atom (param $which i32)
+    (local $str i32) (local $atom i32) (local $buf i32) (local $size i32)
+    ;; 0 add, 1 find — one far string. 2 delete — one atom. 3 get name.
+    (if (i32.lt_u (local.get $which) (i32.const 2))
+      (then
+        (local.set $str (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+        (call $win16_call32_begin (i32.const 1))
+        (if (i32.eqz (local.get $which))
+          (then (call $handle_GlobalAddAtomA (local.get $str)
+                  (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+          (else (call $handle_GlobalFindAtomA (local.get $str)
+                  (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+        (call $win16_call32_end)
+        (i32.store offset=0 (global.get $reg_base)
+          (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (call $win16_api_return (i32.const 4))
+        (return)))
+    (if (i32.eq (local.get $which) (i32.const 2))
+      (then
+        (local.set $atom (call $win16_arg16 (i32.const 0)))
+        (call $win16_call32_begin (i32.const 1))
+        (call $handle_GlobalDeleteAtom (local.get $atom)
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        ;; GlobalDeleteAtom returns 0 on success and the atom itself on failure.
+        (i32.store offset=0 (global.get $reg_base)
+          (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (call $win16_api_return (i32.const 2))
+        (return)))
+    (local.set $size (call $win16_arg16 (i32.const 0)))
+    (local.set $buf (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
+    (local.set $atom (call $win16_arg16 (i32.const 3)))
+    (call $win16_call32_begin (i32.const 3))
+    (call $handle_GlobalGetAtomNameA (local.get $atom) (local.get $buf) (local.get $size)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (call $win16_api_return (i32.const 8)))
+
+  ;; USER.233 SetParent(hWndChild, hWndNewParent) -> the previous parent.
+  ;; Pascal order puts the new parent at index 0 and the child above it.
+  (func $win16_SetParent
+    (local $child i32) (local $parent i32)
+    (local.set $parent (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (local.set $child  (call $win16_h32 (call $win16_arg16 (i32.const 1))))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_SetParent (local.get $child) (local.get $parent)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
+    (call $win16_api_return (i32.const 4)))
 
   ;; USER.229 GetTopWindow(hWnd) and USER.262 GetWindow(hWnd, wCmd) — the pair
   ;; a frame walks its children with, one after the other.
@@ -10801,6 +11160,13 @@
     (if (i32.eq (local.get $which) (i32.const 2))
       (then (call $handle_AnimatePalette (local.get $pal) (local.get $start)
               (local.get $count) (local.get $entries) (i32.const 0) (i32.const 0))))
+    ;; GDI.375 GetSystemPaletteEntries has the same five words, with a DC where
+    ;; the others take a palette: a program that wants to know what the screen
+    ;; is actually showing asks this one. ClockWerx reads it before it decides
+    ;; which of its two blitters to use.
+    (if (i32.eq (local.get $which) (i32.const 3))
+      (then (call $handle_GetSystemPaletteEntries (local.get $pal) (local.get $start)
+              (local.get $count) (local.get $entries) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
     (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
@@ -11082,6 +11448,42 @@
     (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 8)))
 
+  ;; GDI.63 CreatePolygonRgn(lpPoints, nCount, nPolyFillMode) -> HRGN. Same
+  ;; widening as GDI.36 Polygon: a Win16 POINT is two words and the region
+  ;; builder reads two longs. GNU Chess draws every piece as a filled polygon
+  ;; region, so this is its first frame rather than a decoration.
+  (func $win16_CreatePolygonRgn
+    (local $src i32) (local $n i32) (local $mode i32) (local $dst i32) (local $i i32)
+    (local.set $mode (call $win16_arg16 (i32.const 0)))
+    (local.set $n (call $win16_coord (call $win16_arg16 (i32.const 1))))
+    (local.set $src (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
+    (if (i32.gt_u (local.get $n) (i32.const 512))
+      (then
+        (call $host_log_i32 (i32.const 0xCA16B01F))   ;; polygon too long for scratch
+        (call $host_log_i32 (local.get $n))
+        (unreachable)))
+    (local.set $dst (global.get $GUEST_STACK))
+    (block $done (loop $pts
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $gs32 (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 3)))
+        (call $win16_coord (call $gl16
+          (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 2))))))
+      (call $gs32 (i32.add (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 3)))
+                           (i32.const 4))
+        (call $win16_coord (call $gl16
+          (i32.add (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 2)))
+                   (i32.const 2)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $pts)))
+    (call $win16_call32_begin (i32.const 3))
+    (call $handle_CreatePolygonRgn (local.get $dst) (local.get $n) (local.get $mode)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base)
+      (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
+    (call $win16_api_return (i32.const 8)))
+
   ;; GDI.21 ExcludeClipRect(hDC, X1, Y1, X2, Y2) -> the new clip region's type.
   (func $win16_ExcludeClipRect
     (call $win16_gdi_rect_bridge (i32.const 21)))
@@ -11296,6 +11698,32 @@
     (call $win16_call32_end)
     (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 12)))
+
+  ;; GDI.49 CreateBitmapIndirect(lpBitmap) — the same call with its five
+  ;; arguments in a BITMAP: bmType, bmWidth, bmHeight, bmWidthBytes as words,
+  ;; bmPlanes and bmBitsPixel as bytes, then a far bmBits. Brain Jam builds its
+  ;; card backs this way.
+  (func $win16_CreateBitmapIndirect
+    (local $bm i32) (local $bits i32)
+    (local.set $bm (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+    (local.set $bits (i32.const 0))
+    (if (call $gl16 (i32.add (local.get $bm) (i32.const 12)))
+      (then (local.set $bits (call $win16_far_to_guest
+        (call $gl16 (i32.add (local.get $bm) (i32.const 12)))
+        (call $gl16 (i32.add (local.get $bm) (i32.const 10)))))))
+    (call $win16_call32_begin (i32.const 5))
+    (call $win16_call32_arg (i32.const 4) (local.get $bits))
+    (call $handle_CreateBitmap
+      (call $win16_coord (call $gl16 (i32.add (local.get $bm) (i32.const 2))))
+      (call $win16_coord (call $gl16 (i32.add (local.get $bm) (i32.const 4))))
+      (call $gl8 (i32.add (local.get $bm) (i32.const 8)))
+      (call $gl8 (i32.add (local.get $bm) (i32.const 9)))
+      (local.get $bits) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base)
+      (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
+    (call $win16_api_return (i32.const 4)))
 
   ;; GDI.442 CreateDIBitmap(hDC, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage).
   (func $win16_CreateDIBitmap
@@ -11813,6 +12241,10 @@
       (then (call $win16_palette_entries (i32.const 0)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 364))
       (then (call $win16_palette_entries (i32.const 1)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 375))
+      (then (call $win16_palette_entries (i32.const 3)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 63))
+      (then (call $win16_CreatePolygonRgn) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 366))
       (then (call $win16_UpdateColors) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 367))
@@ -11889,6 +12321,8 @@
       (then (call $win16_save_restore_dc (i32.const 1)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 48))
       (then (call $win16_CreateBitmap) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 49))
+      (then (call $win16_CreateBitmapIndirect) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 83))
       (then (call $win16_dc_point (i32.const 2)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 1))
@@ -12770,6 +13204,44 @@
         (call $win16_call32_end)
         (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 0))
+        (return (i32.const 1))))
+    ;; 202 midiOutGetDevCaps(wDeviceID, lpCaps, wSize). The two MIDIOUTCAPS are
+    ;; not the same struct: Win16's vDriverVersion is a word where Win32's is a
+    ;; dword, so every field after it sits two bytes lower and a straight
+    ;; forward would hand the caller its name shifted by two and its dwSupport
+    ;; from the middle of wChannelMask. The 32-bit answer is taken into scratch
+    ;; and narrowed. ClockWerx asks before it decides whether to open music.
+    (if (i32.eq (local.get $ordinal) (i32.const 202))
+      (then
+        (local.set $p1 (call $win16_arg16 (i32.const 0)))                  ;; wSize
+        (local.set $p2 (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
+        (local.set $dev (call $win16_coord (call $win16_arg16 (i32.const 3))))
+        (call $win16_call32_begin (i32.const 3))
+        (call $handle_midiOutGetDevCapsA (local.get $dev) (global.get $GUEST_STACK)
+          (i32.const 52) (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+          (then
+            (local.set $name (region.addr $GUEST_STACK 64))
+            (call $gs16 (local.get $name)
+              (call $gl16 (global.get $GUEST_STACK)))                      ;; wMid
+            (call $gs16 (i32.add (local.get $name) (i32.const 2))
+              (call $gl16 (region.addr $GUEST_STACK 2)))
+            (call $gs16 (i32.add (local.get $name) (i32.const 4))
+              (call $gl16 (region.addr $GUEST_STACK 4)))
+            (call $guest_memmove (i32.add (local.get $name) (i32.const 6))
+              (region.addr $GUEST_STACK 8) (i32.const 32))
+            (call $guest_memmove (i32.add (local.get $name) (i32.const 38))
+              (region.addr $GUEST_STACK 40) (i32.const 8))
+            (call $gs32 (i32.add (local.get $name) (i32.const 46))
+              (call $gl32 (region.addr $GUEST_STACK 48)))
+            (if (i32.gt_u (local.get $p1) (i32.const 50))
+              (then (local.set $p1 (i32.const 50))))
+            (call $guest_memmove (local.get $p2) (local.get $name) (local.get $p1))))
+        (i32.store offset=0 (global.get $reg_base)
+          (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 8))
         (return (i32.const 1))))
     ;; 701 mciSendCommand(wDeviceID, wMessage, dwParam1, dwParam2). The two
     ;; dwParams are the same dwords on both sides, and dwParam2 is usually a

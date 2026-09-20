@@ -653,6 +653,27 @@ const GUEST_CWD = getArg('cwd', null); // --cwd=C:\DIR: initial guest process wo
 // visualizer kept in binaries/plugins/candidates has to be seen at
 // c:\plugins\vis_avs.dll before Winamp will enumerate it at all.
 const VFS_MOUNT = getArgs('vfs-mount');
+// --win16-lib=PATH (repeatable, a .DLL or a directory of them): shared 16-bit
+// runtimes that belong in the guest's system directory rather than beside the
+// exe. Their installer put them there and some of them check: CTL3D's LibMain
+// compares its own GetModuleFileName directory against GetSystemDirectory and
+// puts up "has not been correctly installed" when they differ, so a copy in
+// the app directory is rejected rather than merely untidy. Each file is both
+// searched by the NE loader and mounted at c:\windows\system\<name>, which is
+// what makes GetModuleFileName report it from there.
+const WIN16_LIBS = (() => {
+  const out = [];
+  for (const spec of getArgs('win16-lib')) {
+    const full = path.resolve(spec);
+    if (!fs.existsSync(full)) throw new Error(`--win16-lib: no such path: ${spec}`);
+    if (fs.statSync(full).isDirectory()) {
+      for (const entry of fs.readdirSync(full)) {
+        if (/\.(dll|drv|exe)$/i.test(entry)) out.push(path.join(full, entry));
+      }
+    } else out.push(full);
+  }
+  return out;
+})();
 // --zip=PATH (repeatable): mount a read-only ZIP archive into the VFS before
 // launch, under c:\program files\<zipname>\ (override with --zip-root=DIR); a
 // single top-level folder in the archive is unwrapped. Stored and deflated
@@ -4275,6 +4296,13 @@ async function main() {
         const p = path.join(dir, f);
         if (fs.existsSync(p)) return fs.readFileSync(p);
       }
+      // Then the system-directory pool, which is where a shared 16-bit runtime
+      // belongs and where its installer would have put it.
+      const wanted = name.replace(/\.[^.]*$/, '').toLowerCase();
+      for (const lib of WIN16_LIBS) {
+        if (path.basename(lib).replace(/\.[^.]*$/, '').toLowerCase() !== wanted) continue;
+        return fs.readFileSync(lib);
+      }
       return null;
     }, (m) => console.log(m), (ASSET_ENTRY && ASSET_ENTRY.win16Modules) || []);
   const requiredDlls = detectRequiredDlls(exeBytes);
@@ -4455,6 +4483,10 @@ async function main() {
       const size = fs.statSync(hostPath).size;
       addFile(guestPath, hostPath, size);
       addFontAlias(guestPath, hostPath, size);
+    }
+    for (const lib of WIN16_LIBS) {
+      const guestPath = `c:\\windows\\system\\${path.basename(lib).toLowerCase()}`;
+      addFile(guestPath, lib, fs.statSync(lib).size);
     }
     // Mount a matched registry app's data files at the same VFS paths the page
     // gives them. An entry is a repo-relative URL (-> c:\basename), or

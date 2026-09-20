@@ -1413,11 +1413,24 @@
               (local.get $off))))
             ;; Only the untouched prologue is rewritten. Anything else at an
             ;; entry point is not the pattern this is allowed to assume.
+            ;;
+            ;; There are two spellings of "load the caller's DS into AX so the
+            ;; loader can overwrite it", and Windows patches both: Microsoft C
+            ;; emits PUSH DS / POP AX / NOP, Borland emits MOV AX,DS / NOP.
+            ;; Recognising only the first left every Borland-built DLL running
+            ;; against the *caller's* data segment, which reads as a wild far
+            ;; pointer the moment the function loads one: LEAD Technologies'
+            ;; LEAD50.DLL far-calls through its own table three instructions
+            ;; in, and all three Moraff games died there with a null selector.
             (if (i32.and
-                  (i32.eq (i32.load8_u (local.get $wa)) (i32.const 0x1E))
-                  (i32.and
-                    (i32.eq (i32.load8_u offset=1 (local.get $wa)) (i32.const 0x58))
-                    (i32.eq (i32.load8_u offset=2 (local.get $wa)) (i32.const 0x90))))
+                  (i32.eq (i32.load8_u offset=2 (local.get $wa)) (i32.const 0x90))
+                  (i32.or
+                    (i32.and
+                      (i32.eq (i32.load8_u (local.get $wa)) (i32.const 0x1E))
+                      (i32.eq (i32.load8_u offset=1 (local.get $wa)) (i32.const 0x58)))
+                    (i32.and
+                      (i32.eq (i32.load8_u (local.get $wa)) (i32.const 0x8C))
+                      (i32.eq (i32.load8_u offset=1 (local.get $wa)) (i32.const 0xD8)))))
               (then
                 (i32.store8 (local.get $wa) (i32.const 0xB8))
                 (i32.store16 offset=1 (local.get $wa) (local.get $sel))))))
