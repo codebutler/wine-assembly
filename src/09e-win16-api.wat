@@ -6242,6 +6242,8 @@
       (then (call $win16_DestroyWindow) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 81))
       (then (call $win16_FillRect) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 82))
+      (then (call $win16_InvertRect) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 83))
       (then (call $win16_FrameRect) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 110))
@@ -8503,6 +8505,24 @@
     (call $win16_call32_end)
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
+
+  ;; USER.82 InvertRect(hDC, lpRect) — FillRect with no brush, inverting the
+  ;; destination instead. MoraffWare's SphereJongg draws its tile highlight
+  ;; with it, which is a couple of minutes into a run, so the fail-fast stub
+  ;; behind it looked like a crash rather than a missing entry point.
+  (func $win16_InvertRect
+    (local $hdc i32) (local $src i32) (local $tmp i32)
+    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 2))))
+    (local.set $src (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+    (local.set $tmp (global.get $GUEST_STACK))
+    (call $win16_rect_widen (local.get $tmp) (local.get $src))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_InvertRect (local.get $hdc) (local.get $tmp)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (call $win16_api_return (i32.const 6)))
 
   ;; USER.83 FrameRect(hDC, lpRect, hBrush) — FillRect's outline. Solitaire's
   ;; Deck dialog draws the selection box around the chosen card back with it.
