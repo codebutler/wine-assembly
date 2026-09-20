@@ -132,6 +132,24 @@ function runOne(inst, memory, logged, name) {
     // Integer lookup must keep working next to it: the bitmaps are numbered.
     checkThat('numbered resources still resolve',
       inst.exports.win16_find_resource(2, 54) !== 0);
+
+    // FindResource hands back a handle, and every later call in the pipeline
+    // works from that handle alone -- the caller's string lives in its own
+    // segment and may be freed by then. So a by-name match has to leave
+    // behind something durable that names the same entry, which is the
+    // NAMEINFO id word. Without it FindResource could only answer integer
+    // ids, and Moraff's Jiggler -- whose every image and sound is a named
+    // custom resource -- got NULL for all of them and drew an empty board.
+    const solAt = inst.exports.win16_find_resource_ex(14, 0, put('SOL'));
+    const solRid = inst.exports.win16_res_found_id() | 0;
+    checkThat('a by-name match records its NAMEINFO id word', solRid !== 0);
+    checkThat('that word is a name offset, not an integer id',
+      (solRid & 0x8000) === 0, `rid=${fmt(solRid)}`);
+    check('the recorded word finds the same resource again',
+      inst.exports.win16_find_resource_rid(14, solRid), solAt);
+    // An id word nothing stores must not match some other entry by accident.
+    checkThat('an unknown id word finds nothing',
+      inst.exports.win16_find_resource_rid(14, 0x7fff) === 0);
   }
 
   // ---- execute ----

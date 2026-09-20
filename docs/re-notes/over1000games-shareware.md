@@ -13,7 +13,7 @@ wrong about three of them for three different reasons.
 |---|---|---|
 | `board-scrabout` | SCRABOUT.EXE | draws — two fixes, below |
 | `board-3dshere` | SPHEJONG.EXE | draws — needed USER.82 `InvertRect` |
-| `strategy-jiggler` | JIGGLER.EXE | menu works, game area **open** — below |
+| `strategy-jiggler` | JIGGLER.EXE | plays — three menu fixes plus named FindResource |
 | `board-wingong` | MOREJONG.EXE | draws — longer budget |
 | `strategy-klotski` | KLOTSKI.EXE | plays — the blank capture was a fluke |
 | `cards-sokoban` | SOKOBAN.EXE | **open** — VB3, "execution entered zeros" |
@@ -78,13 +78,40 @@ Play -> New Memory Jigsaw Game -> 4x4..20x20 (ids 5004..5020). `--input=…
 menu-dump:bar` prints the whole open tree, and `node tools/ne-dump.js … --menus`
 prints it statically.
 
-**3. The game area is still black (open).** After a game starts, the app runs
-real work with no Win32/Win16 calls at all and 50,000 `gdi_surface_upload`s —
-every one of them inside `500,300 96x96`, which is a corner widget, not the
-board. It reads `CATHEDRA.BKG` through the VFS and decodes it with `LEAD50.DLL`
-(a LEAD Technologies Win16 imaging library it loads as module 13), so that
-decode is the next thing to look at. `--trace-gdi` is the fastest way back to
-this state: a healthy board would upload the whole client area.
+**3. `FindResource` refused every resource named by string.** That is what
+made the game area black. JIGGLER keeps its whole picture and sound set in
+custom NE resource types — `node tools/ne-dump.js JIGGLER.EXE --all` shows 52
+`"WAVE"` and 10 `"TEXT"` entries, all with *string* names — and
+`$win16_FindResource` bailed out whenever the name argument was a far pointer
+rather than a `MAKEINTRESOURCE` integer, so all of them came back NULL. The
+consequences read nothing like the cause:
+
+```
+KERNEL.60 FINDRESOURCE(…) -> AX=0x0000      x20, every one of them
+KERNEL.62 LOCKRESOURCE(0) -> DX:AX = 0:0
+<module 13>.2 (0x37:0x8dd0, 0, 0, 0)        L_InitBitmap with a 0x0x0 image
+GDI.51 CREATECOMPATIBLEBITMAP(hdc, 0, 0)
+GDI.45 SELECTOBJECT(0x111, 0)               a NULL bitmap in the memory DC
+GDI.35 STRETCHBLT(… wSrc=0, hSrc=0 …)       x10000, over the board
+```
+
+A working load looks the same with numbers in it: `<module 13>.2(pBitmap,
+620, 440, 24)` and then 13 `STRETCHDIBITS` of 35 scanlines each.
+
+Fixed 2026-09-20. The by-name machinery already existed in the NE walker
+(`$win16_find_resource_ex` takes a `name_wa`) and only `FindResource` did not
+use it. The wrinkle is that `FindResource` returns a *handle* and every later
+call works from that handle alone, by which time the caller's string may be
+gone — so the scan now records the matched NAMEINFO id word in
+`$win16_res_found_id`, the descriptor carries it (a fourth word; the stride
+went 12 -> 16), and `$win16_find_resource_rid` re-finds that exact entry for
+LoadResource/LockResource/SizeofResource/AccessResource. A named entry's id
+word has bit 15 clear and an integer id always has it set, so the two can
+never be confused. Regression: the SOL block in `test/test-win16-exec.js`.
+
+The board now draws: 18,785 colours at the route below, wood-grain tile backs
+and the working clock widget, against 196 colours and a black rectangle
+before.
 
 ## Klotski
 

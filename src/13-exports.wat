@@ -4944,6 +4944,12 @@
   ;; hangs a menu on a window. A 16-bit task keeps its resources in the NE
   ;; table, which the PE walker cannot see at all, so answering from
   ;; $find_resource alone told the renderer every Win16 app was menu-less.
+  ;; The NAMEINFO id word the last NE resource scan matched. FindResource
+  ;; keeps it so a resource named by string can be found again after the
+  ;; caller's string is gone; a test needs it to check that round trip.
+  (func (export "win16_res_found_id") (result i32)
+    (global.get $win16_res_found_id))
+
   (func (export "rsrc_exists") (param $type_id i32) (param $name_id i32) (result i32)
     (if (global.get $code16)
       (then (return (i32.ne

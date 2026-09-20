@@ -97,11 +97,14 @@
   (func $win16_res_handle_table (result i32)
     (i32.add (call $win16_handle_table) (i32.const 0x9000)))
 
+  ;; Four words: key, module, the selector LockResource cached, and the
+  ;; NAMEINFO id word for a resource that was found by name.
   (func $win16_res_desc (param $index i32) (result i32)
     (i32.add (call $win16_res_handle_table)
-             (i32.mul (local.get $index) (i32.const 12))))
+             (i32.mul (local.get $index) (i32.const 16))))
 
-  (func $win16_res_handle_alloc (param $key i32) (param $module i32) (result i32)
+  (func $win16_res_handle_alloc (param $key i32) (param $module i32)
+        (param $rid i32) (result i32)
     (local $index i32) (local $p i32)
     (if (i32.ge_u (global.get $win16_res_handle_next) (global.get $WIN16_RES_HANDLE_MAX))
       (then (return (i32.const 0))))
@@ -111,7 +114,26 @@
     (i32.store (local.get $p) (local.get $key))
     (i32.store offset=4 (local.get $p) (local.get $module))
     (i32.store offset=8 (local.get $p) (i32.const 0))
+    (i32.store offset=12 (local.get $p) (local.get $rid))
     (call $win16_h16 (i32.or (i32.const 0x00E10000) (local.get $index))))
+
+  ;; Re-find the resource a descriptor names. A descriptor that was created by
+  ;; name carries the matched NAMEINFO id word, because the caller's string is
+  ;; not ours to keep; one created from an integer id carries zero and is found
+  ;; the ordinary way. Leaves $win16_res_len and $win16_res_file_off set, which
+  ;; is what every caller here actually wants.
+  (func $win16_res_desc_find (param $desc i32) (result i32)
+    (local $key i32) (local $rid i32)
+    ;; Callers reach this through an i32.and beside their own null check, and
+    ;; both operands of an i32.and are evaluated, so the null case arrives here.
+    (if (i32.eqz (local.get $desc)) (then (return (i32.const 0))))
+    (local.set $key (i32.load (local.get $desc)))
+    (local.set $rid (i32.load offset=12 (local.get $desc)))
+    (if (local.get $rid)
+      (then (return (call $win16_find_resource_rid
+        (i32.shr_u (local.get $key) (i32.const 16)) (local.get $rid)))))
+    (call $win16_find_resource (i32.shr_u (local.get $key) (i32.const 16))
+                               (i32.and (local.get $key) (i32.const 0xFFFF))))
 
   (func $win16_res_desc_from_handle (param $h16 i32) (result i32)
     (local $h i32) (local $index i32)
@@ -130,7 +152,7 @@
     (call $zero_memory (call $win16_handle_table)
       (i32.shl (global.get $WIN16_HANDLE_MAX) (i32.const 2)))
     (call $zero_memory (call $win16_res_handle_table)
-      (i32.mul (global.get $WIN16_RES_HANDLE_MAX) (i32.const 12)))
+      (i32.mul (global.get $WIN16_RES_HANDLE_MAX) (i32.const 16)))
     ;; The interrupt vectors go with the task: a zero means nothing is hooked,
     ;; which is what a fresh task should see. So do the extra local heaps —
     ;; a selector one run laid a heap into is a different segment in the next.
@@ -1855,13 +1877,26 @@
     (if (i32.eq (local.get $type) (i32.const -1))
       (then (local.set $type (call $win16_find_resource_type_name
         (call $win16_res_name_wa (i32.const 0))))))
-    (if (i32.and (i32.ne (local.get $type) (i32.const 0))
-                 (i32.ne (local.get $id) (i32.const -1)))
+    ;; A resource named by string is not a lesser case of one named by number.
+    ;; Refusing it here cost Moraff's Jiggler its whole picture set: every one
+    ;; of its images and sounds is a named custom resource, FindResource
+    ;; answered NULL for all of them, and the game went on to build a 0x0
+    ;; bitmap and blit a 1x1 source over its board for the rest of the run.
+    (if (i32.ne (local.get $type) (i32.const 0))
       (then
-        (if (call $win16_find_resource (local.get $type) (local.get $id))
-          (then (i32.store offset=0 (global.get $reg_base) (call $win16_res_handle_alloc
-            (call $win16_res_key (local.get $type) (local.get $id))
-            (global.get $win16_res_module_id)))))))
+        (if (i32.ne (local.get $id) (i32.const -1))
+          (then
+            (if (call $win16_find_resource (local.get $type) (local.get $id))
+              (then (i32.store offset=0 (global.get $reg_base) (call $win16_res_handle_alloc
+                (call $win16_res_key (local.get $type) (local.get $id))
+                (global.get $win16_res_module_id) (i32.const 0))))))
+          (else
+            (if (call $win16_find_resource_ex (local.get $type) (i32.const 0)
+                  (call $win16_res_name_wa (i32.const 2)))
+              (then (i32.store offset=0 (global.get $reg_base) (call $win16_res_handle_alloc
+                (call $win16_res_key (local.get $type) (i32.const 0))
+                (global.get $win16_res_module_id)
+                (global.get $win16_res_found_id)))))))))
     (global.set $win16_res_module_id (i32.const 0))
     (call $win16_api_return (i32.const 10)))
 
@@ -1920,9 +1955,8 @@
         (local.set $module (i32.load offset=4 (local.get $desc)))))
     (global.set $win16_res_module_id (local.get $module))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFF))
-    (if (i32.and (local.get $desc)
-          (call $win16_find_resource (i32.shr_u (local.get $key) (i32.const 16))
-                                     (i32.and (local.get $key) (i32.const 0xFFFF))))
+    (if (i32.and (i32.ne (local.get $desc) (i32.const 0))
+          (i32.ne (call $win16_res_desc_find (local.get $desc)) (i32.const 0)))
       (then
         (local.set $path (global.get $GUEST_STACK))
         (if (i32.eqz (call $win16_res_module_path (local.get $module) (local.get $path)))
@@ -1958,9 +1992,8 @@
         (local.set $key (i32.load (local.get $desc)))
         (global.set $win16_res_module_id (i32.load offset=4 (local.get $desc)))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (if (i32.and (local.get $desc)
-          (call $win16_find_resource (i32.shr_u (local.get $key) (i32.const 16))
-                                     (i32.and (local.get $key) (i32.const 0xFFFF))))
+    (if (i32.and (i32.ne (local.get $desc) (i32.const 0))
+          (i32.ne (call $win16_res_desc_find (local.get $desc)) (i32.const 0)))
       (then (i32.store offset=0 (global.get $reg_base) (global.get $win16_res_len))))
     (global.set $win16_res_module_id (i32.const 0))
     (call $win16_api_return (i32.const 4)))
@@ -1991,9 +2024,7 @@
         (local.set $key (i32.load (local.get $desc)))
         (local.set $module (i32.load offset=4 (local.get $desc)))
         (global.set $win16_res_module_id (local.get $module))
-        (local.set $data (call $win16_find_resource
-          (i32.shr_u (local.get $key) (i32.const 16))
-          (i32.and (local.get $key) (i32.const 0xFFFF))))
+        (local.set $data (call $win16_res_desc_find (local.get $desc)))
         (local.set $len (global.get $win16_res_len))
         (if (i32.and (i32.ne (local.get $data) (i32.const 0)) (i32.ne (local.get $len) (i32.const 0)))
           (then

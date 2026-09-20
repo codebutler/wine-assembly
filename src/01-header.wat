@@ -3945,6 +3945,13 @@
   (global $win16_res_module_id (mut i32) (i32.const 0))
   ;; Where the last resource found sits in its module's file.
   (global $win16_res_file_off (mut i32) (i32.const 0))
+  ;; The NAMEINFO id word of the entry the last resource scan matched. For a
+  ;; named resource that word is an offset to a Pascal string rather than an
+  ;; id, and it is the only durable way to name that entry again: the caller's
+  ;; string lives in its own segment and may be gone by the time LoadResource
+  ;; asks. FindResource stores it in the descriptor so the rest of the
+  ;; pipeline can re-find the entry without the string.
+  (global $win16_res_found_id (mut i32) (i32.const 0))
   ;; Scratch for the widened wvsprintf argument list — 32 dwords, allocated on
   ;; first use because most tasks never format anything.
   (global $win16_va_scratch (mut i32) (i32.const 0))

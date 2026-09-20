@@ -729,9 +729,25 @@
   ;; nothing anywhere to say the name was the thing that missed.
   (func $win16_find_resource_ex (export "win16_find_resource_ex")
         (param $type_id i32) (param $res_id i32) (param $name_wa i32) (result i32)
+    (call $win16_find_resource_trace
+      (local.get $type_id) (local.get $res_id) (local.get $name_wa) (i32.const 0)))
+
+  ;; Re-find the entry a by-name lookup matched, by its stored NAMEINFO id
+  ;; word. A named entry's id word is a resource-table offset, so it names the
+  ;; entry exactly and cannot be confused with an integer id, which always has
+  ;; bit 15 set.
+  (func $win16_find_resource_rid (export "win16_find_resource_rid")
+        (param $type_id i32) (param $rid i32) (result i32)
+    (call $win16_find_resource_trace
+      (local.get $type_id) (i32.const 0) (i32.const 0) (local.get $rid)))
+
+  (func $win16_find_resource_trace
+        (param $type_id i32) (param $res_id i32) (param $name_wa i32)
+        (param $rid_want i32) (result i32)
     (local $found i32)
     (local.set $found (call $win16_find_resource_scan
-      (local.get $type_id) (local.get $res_id) (local.get $name_wa)))
+      (local.get $type_id) (local.get $res_id) (local.get $name_wa)
+      (local.get $rid_want)))
     (if (global.get $win16_trace)
       (then
         (call $host_log_i32 (i32.const 0xCA16A9E4))
@@ -745,11 +761,13 @@
   ;; the nametable fallback below deliberately re-enters through the wrapper,
   ;; so a trace shows the second lookup the miss turned into.
   (func $win16_find_resource_scan
-        (param $type_id i32) (param $res_id i32) (param $name_wa i32) (result i32)
+        (param $type_id i32) (param $res_id i32) (param $name_wa i32)
+        (param $rid_want i32) (result i32)
     (local $p i32) (local $shift i32) (local $type i32) (local $count i32)
     (local $q i32) (local $i i32) (local $end i32) (local $ne_off i32) (local $img i32)
     (local $rt i32) (local $rid i32)
     (global.set $win16_res_len (i32.const 0))
+    (global.set $win16_res_found_id (i32.const 0))
     ;; Which image: what the caller's hInstance named, or CS when it named
     ;; nothing — see $win16_res_module.
     (local.set $ne_off (call $win16_res_ne_off (global.get $win16_res_module_id)))
@@ -788,16 +806,22 @@
             (br_if $scanned (i32.ge_u (local.get $i) (local.get $count)))
             (local.set $rid (i32.load16_u (i32.add (local.get $q) (i32.const 6))))
             (if (select
-                  ;; Asking by name: only the named entries can match, and the
-                  ;; id field is the offset to the stored string.
-                  (i32.and (i32.eqz (i32.and (local.get $rid) (i32.const 0x8000)))
-                           (call $win16_res_name_eq
-                             (i32.add (local.get $rt) (local.get $rid))
-                             (local.get $name_wa)))
-                  (i32.eq (local.get $rid)
-                          (i32.or (local.get $res_id) (i32.const 0x8000)))
-                  (local.get $name_wa))
+                  ;; Asking for one exact NAMEINFO id word: what FindResource
+                  ;; recorded when it matched this entry by name.
+                  (i32.eq (local.get $rid) (local.get $rid_want))
+                  (select
+                    ;; Asking by name: only the named entries can match, and
+                    ;; the id field is the offset to the stored string.
+                    (i32.and (i32.eqz (i32.and (local.get $rid) (i32.const 0x8000)))
+                             (call $win16_res_name_eq
+                               (i32.add (local.get $rt) (local.get $rid))
+                               (local.get $name_wa)))
+                    (i32.eq (local.get $rid)
+                            (i32.or (local.get $res_id) (i32.const 0x8000)))
+                    (local.get $name_wa))
+                  (local.get $rid_want))
               (then
+                (global.set $win16_res_found_id (local.get $rid))
                 (global.set $win16_res_len
                   (i32.shl (i32.load16_u (i32.add (local.get $q) (i32.const 2))) (local.get $shift)))
                 ;; Where it sits in the file, for AccessResource — which hands
