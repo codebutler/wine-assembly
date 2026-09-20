@@ -77,6 +77,8 @@ const extraWat = `
     (if (local.get $erase) (then (call $nc_flags_set (local.get $h) (i32.const 2)))))
   (func (export "test_visible") (param $h i32) (param $visible i32)
     (drop (call $wnd_set_style (local.get $h) (select (i32.const 0x10000000) (i32.const 0) (local.get $visible)))))
+  (func (export "test_visible_bit") (param $h i32) (result i32)
+    (i32.ne (i32.and (call $wnd_get_style (local.get $h)) (i32.const 0x10000000)) (i32.const 0)))
   (func (export "test_update") (param $h i32) (param $caller i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
     (call $gs16 (i32.const 0x110800) (local.get $caller))
@@ -361,6 +363,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.strictEqual(e.test_alive(eraseDoomed), 0);
   assert.strictEqual(e.test_erase_pending(eraseDoomed), 0, 'declined erase cannot rearm a destroyed window');
   const runShow = (target, cmd, caller, includeActivation = false) => {
+    const wasVisible = e.test_visible_bit(target);
     e.guest_write32(0x110900, 0);
     writeCode(caller, [0xeb, 0xfe]);
     e.test_show(target, cmd, caller);
@@ -369,6 +372,8 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     e.set_bp(0);
     assert.strictEqual(e.get_eip(), 0x100000 + caller);
     assert.strictEqual(e.get_esp(), 0x110808, 'ShowWindow restores its Pascal and nested callback frames');
+    assert.strictEqual(Number((e.test_result() & 0xffff) !== 0), wasVisible,
+      'ShowWindow returns pre-call visibility, not success or a callback result');
     assert(!Array.from({length: e.test_post_count()}, (_, i) => e.test_post_msg(i)).includes(0x14),
       'ShowWindow must not leave a posted erase to overwrite later UpdateWindow painting');
     const messages = Array.from({length: e.guest_read32(0x110900)}, (_, i) => e.guest_read32(0x110904 + i * 8) & 0xffff);
@@ -383,6 +388,11 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.deepStrictEqual(runUpdate(showing, 0x50), [0x0f, 0x14]);
   assert.strictEqual(e.test_dirty(showing), 0);
   assert.deepStrictEqual(runShow(showing, 1, 0x60), [], 'showing an already visible window does not repeat initial erase');
+  runShow(showing, 0, 0x60);
+  assert.strictEqual(e.test_visible_bit(showing), 0, 'hide clears WS_VISIBLE');
+  runShow(showing, 0, 0x60); // Already hidden must return FALSE too.
+  runShow(showing, 8, 0x60);
+  assert.strictEqual(e.test_visible_bit(showing), 1, 'nonactivating show sets WS_VISIBLE');
   const updateSelf = [0xff, 0x76, 0x0e, 0x9a, ...word(update), 0x1f, 0];
   const handledShow = recorder([0x83, 0x7e, 0x0c, 5, 0x75, updateSelf.length, ...updateSelf,
     0x83, 0x7e, 0x0c, 0x0f, 0x75, paintBody([]).length, ...paintBody([])]);
@@ -506,13 +516,21 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   const show = e.test_user_thunk(42);
   const innerShow = e.test_window(0x4000); // declines erase
   e.test_visible(innerShow, 0);
-  writeCode(0x4400, successProc([0x68, ...word(e.test_narrow(innerShow)), 0x6a, 1,
-    0x9a, ...word(show), 0x1f, 0]));
+  const nestedShowBody = [0x68, ...word(e.test_narrow(innerShow)), 0x6a, 1,
+    0x9a, ...word(show), 0x1f, 0, 0x36, 0xa3, 0x20, 0x0f];
+  writeCode(0x4400, successProc([0x83, 0x7e, 0x0c, 0x14,
+    0x75, nestedShowBody.length, ...nestedShowBody]));
   const outerShow = e.test_window(0x4400);
   e.test_visible(outerShow, 0);
   assert.deepStrictEqual(runShow(outerShow, 1, 0x90), [0x14, 0x14]);
+  assert.strictEqual(e.guest_read32(0x110f20) & 0xffff, 0,
+    'nested hidden ShowWindow independently returns FALSE');
   assert.strictEqual(e.test_erase_pending(innerShow), 2);
   assert.strictEqual(e.test_erase_pending(outerShow), 0, 'nested ShowWindow results remain invocation-owned');
+  e.test_visible(outerShow, 0);
+  assert.deepStrictEqual(runShow(outerShow, 1, 0x90), [0x14]);
+  assert.strictEqual(e.guest_read32(0x110f20) & 0xffff, 1,
+    'nested visible ShowWindow returns TRUE without replacing outer FALSE');
 
   const showDoomed = e.test_window(0xb00);
   e.test_visible(showDoomed, 0);

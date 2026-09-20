@@ -884,3 +884,36 @@ the WinRAR Worker browser file-drop gate passes. No new full 24-game sweep is
 claimed. Browser-resized WordZap copyright clipping remains a separate issue.
 See [the WordZap investigation](re-notes/wep16-wordzap.md) for traces, official
 contract links, reproduction and verification scope.
+
+## 2026-09-20: Win16 ShowWindow returns prior visibility
+
+The Win16 adapter captured WS_VISIBLE on entry but discarded that value when
+creating its far-return continuation, hardcoding TRUE. The documented return
+is the window's previous visibility, not success:
+[Microsoft ShowWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow).
+The adapter now normalizes the captured bit and stores it in the existing
+invocation-owned continuation. Callback results, nested ShowWindow calls and
+destruction cannot replace the outer return. No new frame or global is needed.
+
+The far regression snapshots entry visibility and checks the returned AX for
+each show case, including maximize, minimized/nonactivating modes, child
+windows, destruction and activation reentrancy. Explicit hide/repeated-hide/
+re-show cases cover both boolean results. The nested erase callback captures
+its own ShowWindow return, testing inner TRUE with outer FALSE independently.
+The negative control fails on the previous runtime (`wa-show-result-before.log`)
+at the first hidden-to-visible transition, returning 1 instead of 0.
+
+Activation selection on hide/minimize, application/restored-size notification
+timing, other activation entry points and the ShowWindow compatibility erase
+DC remain separate open items; this return-value fix does not resolve them.
+
+The full far regression passes (`/private/tmp/wa-show-result-after.log`), as do
+normal and compatibility builds (`wa-show-result-build.log`, layout hash
+`494e011486f18808`). The nested-return fixture calls ShowWindow only from its
+erase callback: calling it unconditionally also repeats it from activation
+notifications, overwriting the captured first return with a later TRUE.
+
+Completed-artifact gameplay also passes: WEP1 8/8, WEP3 7/7, and VB Rodent/
+Rattler 2/2 (`wa-show-result-wep1.log`, `wa-show-result-wep3.log`,
+`wa-show-result-vb.log`). These runs used `WINE_ASSEMBLY_WASM=build/wine-assembly.wasm`
+after the build completed, not a stale pre-fix artifact.

@@ -7451,7 +7451,10 @@
         (global.set $pending_wm_size (i32.const 0))
         (call $defwndproc_do_nccalcsize (local.get $hwnd))
         (local.set $client_size (call $client_rect_wh_packed (local.get $hwnd)))))
-    (call $win16_cont_push (call $win16_take_return (i32.const 4)) (i32.const 1))
+    ;; ShowWindow reports the entry visibility, not success. Keep the result
+    ;; in this invocation's continuation so nested callbacks cannot replace it.
+    (call $win16_cont_push (call $win16_take_return (i32.const 4))
+      (i32.ne (local.get $was_visible) (i32.const 0)))
     (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (call $gs32 (local.get $sp) (local.get $hwnd))
