@@ -33,6 +33,7 @@ assert.match(formatterSource,
   'the CRT wrapper should preserve its policy identity');
 
 const STACK = 0x00300000;
+const userEntries = ['wsprintfA', 'wsprintfW', 'wvsprintfA', 'wvsprintfW'];
 const extraWat = String.raw`
   (func $test_format_result (result i64)
     (i64.or
@@ -62,7 +63,15 @@ const extraWat = String.raw`
       (local.get $out) (local.get $fmt) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $test_format_result))
-`;
+` + userEntries.map(name => `
+  (func (export "test_${name}_abi")
+        (param $out i32) (param $fmt i32) (param $args i32) (result i64)
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
+    (call $handle_${name}
+      (local.get $out) (local.get $fmt) (local.get $args)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $test_format_result))
+`).join('');
 
 (async () => {
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
@@ -96,6 +105,39 @@ const extraWat = String.raw`
     esp: Number(packed >> 32n) >>> 0,
   });
 
+  // The explicit va_list must not accidentally use ESP+12. Seed both with
+  // valid but different arguments so either wrong route produces a safe,
+  // observable failure instead of an unmapped read or a coincidental match.
+  const allocW = text => {
+    const encoded = Buffer.from(text + '\0', 'utf16le');
+    const guest = e.guest_alloc(encoded.length) >>> 0;
+    bytes.set(encoded, wa(guest));
+    return guest;
+  };
+  const view = new DataView(memory.buffer);
+  const args = e.guest_alloc(8) >>> 0;
+  for (const name of userEntries) {
+    const wide = name.endsWith('W');
+    const explicit = name.startsWith('wv');
+    const alloc = wide ? allocW : allocA;
+    const fmt = alloc('value %d %s');
+    const word = alloc(wide ? '\u03a9' : '\xe9');
+    const poison = alloc('wrong');
+    view.setUint32(wa(STACK + 12), explicit ? 777 : 98, true);
+    view.setUint32(wa(STACK + 16), explicit ? poison : word, true);
+    view.setUint32(wa(args), explicit ? 98 : 777, true);
+    view.setUint32(wa(args + 4), explicit ? word : poison, true);
+    const expected = `value 98 ${wide ? '\u03a9' : '\xe9'}`;
+    const encoded = Buffer.from(expected + '\0', wide ? 'utf16le' : 'latin1');
+    const allocation = allocOut(128);
+    const out = allocation + 4;
+    const result = unpack(e[`test_${name}_abi`](out, fmt, args));
+    assert.deepStrictEqual(result, { result: expected.length, esp: STACK + (explicit ? 16 : 4) }, name);
+    assert.deepStrictEqual(Buffer.from(bytes.subarray(wa(out), wa(out) + encoded.length)), encoded, name);
+    assert(bytes.subarray(wa(allocation), wa(out)).every(byte => byte === 0xa5), `${name} prefix guard`);
+    assert(bytes.subarray(wa(out) + encoded.length, wa(allocation) + 128).every(byte => byte === 0xa5), `${name} suffix guard`);
+  }
+
   const text = allocA('stack %d %s');
   const word = allocA('walk');
   for (const entry of [e.test_wsprintfA_frontdoor, e.test_sprintf_frontdoor]) {
@@ -119,7 +161,7 @@ const extraWat = String.raw`
       'the policy split must not change currently-supported formatting output');
   }
 
-  console.log('PASS  wsprintfA/sprintf share mechanics behind distinct front doors');
+  console.log('PASS  User32 A/W formatting encoding, argument source, character counts, guards and ABI; distinct CRT policy');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);
