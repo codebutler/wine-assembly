@@ -1211,3 +1211,31 @@ prior renderer fails the pre-delivery state assertion
 (`/private/tmp/wa-taskbar-negative.log`). The desktop-plane Z-order test and
 JavaScript syntax/diff checks also pass. No WAT changes or rebuild are needed
 for this delivery correction.
+
+### OpenIcon query callback lifetime (2026-09-20)
+
+Before adding query delivery to the system-command path, inspection found
+that the existing `$open_icon_core` trusted a TRUE `WM_QUERYOPEN` result even
+when that callback destroyed its target. It now revalidates the HWND after
+the callback and returns 0 without restoring/activating a retired target.
+No fabricated last-error value or fallback HWND is added.
+
+`test/test-open-icon.js` installs an x86 wndproc that calls the public
+`DestroyWindow` thunk only during `WM_QUERYOPEN`, tolerates nested destruction
+notifications, and then returns TRUE. The old runtime returns 1 (negative
+control: `/private/tmp/wa-open-icon-retired-before.log`). The corrected runtime
+returns 0, confirms the target is retired, and emits no outer restore or
+activation host call (`/private/tmp/wa-open-icon-retired-after.log`). Existing
+allow/veto/maximized/foreign-window checks remain passing.
+
+The broader system-command query gap remains open. In particular,
+`$wnd_send_message_inner` posts far Win16 callbacks and returns 0; calling
+that helper for a synchronous Win16 veto would incorrectly reject every
+restore. A proper Win16 query implementation needs an invocation-owned far
+continuation, as the activation and positioning adapters already use.
+
+Verification also passes the active-window/reentrant wrapper matrix
+(`/private/tmp/wa-open-icon-retired-active.log`) and the full build gates for
+both normal and compatibility artifacts, layout `e6a915eaedf6cf03`
+(`/private/tmp/wa-open-icon-retired-build.log`). No new browser measurement is
+claimed for this callback-lifetime correction.

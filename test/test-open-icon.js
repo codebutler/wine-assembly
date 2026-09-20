@@ -14,6 +14,17 @@ const { bootRenderHarness } = require('./render-helper');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_thunk") (param $id i32) (result i32)
+    (local $p i32)
+    (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
+    (local.set $p (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $p) (i32.const 0))
+    (i32.store offset=4 (local.get $p) (local.get $id))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end)
+    (call $w2g (local.get $p)))
+  (func (export "test_live") (param $h i32) (result i32)
+    (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0)))
   (func (export "test_make_icon_window") (param $proc i32) (result i32)
     (local $hwnd i32)
     (local.set $hwnd (global.get $next_hwnd))
@@ -162,6 +173,26 @@ const u32 = value => [value, value >>> 8, value >>> 16, value >>> 24]
     'vetoed OpenIcon must not touch renderer state');
   assert.strictEqual(new DataView(memory.buffer).getUint32(toWasm(observed), true), 0x0013,
     'OpenIcon synchronously sent WM_QUERYOPEN');
+
+  const apiTable = require('../src/api_table.json');
+  const destroyThunk = e.test_thunk(apiTable.find(api => api.name === 'DestroyWindow').id);
+  const destroyProc = e.guest_alloc(64) >>> 0;
+  // Only WM_QUERYOPEN destroys the target; nested destroy notifications
+  // return normally. Return TRUE afterward to catch a stale restore commit.
+  new Uint8Array(memory.buffer).set(Uint8Array.from([
+    0x83, 0x7c, 0x24, 8, 0x13, 0x75, 11,
+    0xff, 0x74, 0x24, 4, // push hwnd
+    0xb8, ...u32(destroyThunk), 0xff, 0xd0,
+    0xb8, ...u32(1), 0xc2, 0x10, 0,
+  ]), toWasm(destroyProc));
+  const retired = e.test_make_icon_window(destroyProc) >>> 0;
+  assert.strictEqual(e.test_close_window(retired), 1);
+  const beforeRetired = hostCalls.length;
+  assert.strictEqual(e.test_open_icon(retired), 0,
+    'a target destroyed inside WM_QUERYOPEN cannot be restored');
+  assert.strictEqual(e.test_live(retired), 0, 'callback actually retired the HWND');
+  assert.strictEqual(hostCalls.length, beforeRetired,
+    'outer OpenIcon must not restore or activate a retired target');
 
   assert.strictEqual(e.test_close_window(rendererHwnd), 1,
     'CloseWindow accepts a live renderer-owned window from another process');

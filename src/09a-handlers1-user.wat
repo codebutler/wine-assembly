@@ -1402,6 +1402,11 @@
               (global.get $dialog_last_proc_handled))))
       (then (return (i32.const 0))))
 
+    ;; WM_QUERYOPEN is application code: a TRUE reply does not imply that
+    ;; its target survived the callback. Do not publish a restore/activation
+    ;; or mutate per-slot show state for a retired HWND.
+    (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+      (then (return (i32.const 0))))
     (call $host_sys_command (local.get $hwnd) (i32.const 0xF120)) ;; SC_RESTORE
     (call $wnd_apply_show_state (local.get $hwnd) (i32.const 9)) ;; SW_RESTORE
     (call $post_resize_messages (local.get $hwnd)
