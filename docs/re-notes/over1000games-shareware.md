@@ -13,9 +13,9 @@ wrong about three of them for three different reasons.
 |---|---|---|
 | `board-scrabout` | SCRABOUT.EXE | draws — two fixes, below |
 | `board-3dshere` | SPHEJONG.EXE | draws — needed USER.82 `InvertRect` |
-| `strategy-jiggler` | JIGGLER.EXE | draws — only ever needed a longer budget |
+| `strategy-jiggler` | JIGGLER.EXE | menu works, game area **open** — below |
 | `board-wingong` | MOREJONG.EXE | draws — longer budget |
-| `strategy-klotski` | KLOTSKI.EXE | draws — the blank capture was a fluke |
+| `strategy-klotski` | KLOTSKI.EXE | plays — the blank capture was a fluke |
 | `cards-sokoban` | SOKOBAN.EXE | **open** — VB3, "execution entered zeros" |
 | `arcade-clxwrk` | CLOCKWRX.EXE | **open** — imports from `DISPLAY` |
 
@@ -35,6 +35,63 @@ Three of the seven were photographed too early or under load, not broken:
   them and the byte count does not.
 - **Two of the "blanks" were early crashes**, which the sweep cannot tell apart
   from a blank because both end with a teal PNG.
+
+## Moraff's Jiggler
+
+Three things stand between a cold start and a game, and only the first is the
+app being coy.
+
+**1. The "Critical Note:" box.** An `MB_OKCANCEL` message box greets every
+launch and says the menu only appears when you point at the upper-left corner
+of the screen. `IDCANCEL` is the "never show this again" answer, so the
+headless route is `--input=40000:dlg-cmd:2`.
+
+**2. Its menu lives on a borderless WS_POPUP dialog.** `LoadMenu` resolves the
+named `MAINMENU` resource, `menu_load` installs six bar items, and the app then
+`SetParent`s the 1305x42 menu strip onto the game window. Fixed 2026-09-20
+(`7aa1b93c`): `SetParent` was marking any reparented window `isChild` (which
+costs it the bar outright), `drawWindow` painted a bar only for a *bordered*
+window, and `handleMouseDown` dropped the click because a menu bar is outside
+the client rect of a dialog with a parent. Regressions:
+`test/test-set-parent-keeps-popup-toplevel.js` and
+`test/test-menu-bar-borderless-dialog-click.js`.
+
+The two `$win16_trace` markers added with that fix are the ones to reach for on
+any "the menu is empty" report: `0xCA16A9E4` is every NE resource lookup with
+its result, `0xCA16A9E3` is `menu_load`'s outcome stage (4 = resource not
+found, 6 = parsed zero bar items, 7 = installed, with the bar count). They say
+in one line whether the resource or the parse is the problem — here it was
+neither.
+
+Reaching a game, with the menu geometry as of that commit:
+
+```
+node test/run.js --exe=<dir>/JIGGLER.EXE --vfs-include='*.BKG,*.TIF,*.ID' \
+  --quiet-api --no-close --max-batches=90000 \
+  --input=40000:dlg-cmd:2,50000:mousemove:2:2,60000:click:110:8,\
+62000:click:130:30,65000:click:300:30
+```
+
+`&Start New Game` (id 104) is a *bar* item, not a popup — clicking it at
+`40,8` posts `WM_COMMAND 104` directly. The sized games are under
+Play -> New Memory Jigsaw Game -> 4x4..20x20 (ids 5004..5020). `--input=…
+menu-dump:bar` prints the whole open tree, and `node tools/ne-dump.js … --menus`
+prints it statically.
+
+**3. The game area is still black (open).** After a game starts, the app runs
+real work with no Win32/Win16 calls at all and 50,000 `gdi_surface_upload`s —
+every one of them inside `500,300 96x96`, which is a corner widget, not the
+board. It reads `CATHEDRA.BKG` through the VFS and decodes it with `LEAD50.DLL`
+(a LEAD Technologies Win16 imaging library it loads as module 13), so that
+decode is the next thing to look at. `--trace-gdi` is the fastest way back to
+this state: a healthy board would upload the whole client area.
+
+## Klotski
+
+Its "blank" attract screen is a LineTo/Rectangle animation — 563,000 `LineTo`
+calls in 40 seconds, which is also why it only turns over ~450 batches/s. The
+menu bar opens on a click at `35,50`, and `--input=8000:post-cmd:300`
+("Level &1") starts a game: 32.38% of the pixels inside `24,72 472x265` change.
 
 ## ScrabOut
 
