@@ -129,7 +129,15 @@ Real gameplay: **18 pass, 2 fail** across these four suites, including separate
 runs of cases skipped after the first failure. Original HEAD tests run from
 memory against the same runtime reproduce both failures: Tetris's active
 title-bar assertion and Chip's Challenge's Lesson 1 movement assertion.
-Neither assertion was weakened; these runtime/test-workflow gaps remain open.
+Neither assertion was weakened. The subsequent Chip's Challenge investigation
+found a flawed mouse/timing workflow: a clock-only change falsely passes even
+without Right. The corrected keyboard workflow now requires a pixel-identical
+idle control and >10,000 changed board pixels under Right, excluding counters;
+see [the findings](re-notes/wep16-chips.md). Tetris remains open: its startup
+capture shows an inactive caption while About is open and an active caption
+after dismissal; the old test requires active color during About and also
+assumes fixed random piece colors. Do not infer a runtime paint defect solely
+from that first failed assertion.
 Local logs: `/private/tmp/wa-png-wep1.log`, `wa-png-wep2.log`,
 `wa-png-wep4.log`, `wa-png-vb.log`, `wa-png-idlewild.log`,
 `wa-png-wep4-remaining.log`, and `wa-png-wep{1,4}-baseline.log`.

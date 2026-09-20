@@ -83,13 +83,27 @@ function testChess(outDir) {
 function testChips(outDir) {
   const before = path.join(outDir, 'chips-before.png');
   const after = path.join(outDir, 'chips-after.png');
+  const idleBefore = path.join(outDir, 'chips-idle-before.png');
+  const idleAfter = path.join(outDir, 'chips-idle-after.png');
+  // Enter dismisses the lesson overlay without steering Chip or transferring
+  // keyboard focus to BoardClass. Advance guest time deterministically: a
+  // wall-clock sleep does not give the guest intermediate timer dispatches.
+  const idleOutput = runGame('wep16_chips',
+    `50:keydown:13,51:keyup:13,150:png:${idleBefore},` +
+    `280:png:${idleAfter},310:stop`, 350, ['--tick-ms-per-batch=5']);
+  assertHealthy(idleOutput, "Chip's Challenge idle control");
   const output = runGame('wep16_chips',
-    `50:mousedown:200:310,51:mouseup:200:310,100:png:${before},` +
-    `120:keydown:39,140:sleep-ms:700,220:png:${after},240:keyup:39,270:stop`,
-    300, ['--real-ticks']);
+    `50:keydown:13,51:keyup:13,150:png:${before},` +
+    `170:keydown:39,280:png:${after},290:keyup:39,310:stop`,
+    350, ['--tick-ms-per-batch=5']);
   assertHealthy(output, "Chip's Challenge");
-  assert(changedPixels(before, after, { x: 50, y: 70, w: 470, h: 305 }) > 10000,
-    "Chip's Challenge should dismiss Lesson 1 and advance under movement input");
+  const board = { x: 56, y: 76, w: 288, h: 288 };
+  assert.strictEqual(changedPixels(idleBefore, before, board), 0,
+    'control and movement runs must begin with the same lesson board');
+  assert.strictEqual(changedPixels(idleBefore, idleAfter, board), 0,
+    'the lesson board must remain still without movement input');
+  assert(changedPixels(before, after, board) > 10000,
+    "Chip's Challenge board should advance under Right, excluding timer digits");
   console.log("PASS  Win16 Chip's Challenge starts Lesson 1 and responds to movement");
 }
 
