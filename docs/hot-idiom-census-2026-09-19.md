@@ -97,3 +97,20 @@ few percent, not ten. Measure each on the quiet box with a null arm
 
 Raw data: `census2/` on the box (`~/wa-bench/census2`), logs with the
 40-row pair lists, the per-window JSON, and the gate PNGs.
+
+## Outcome of recommendation (1) — 2026-09-19, same day
+
+Built and measured: `cmp r32,r32 / cmp r32,imm32 + Jcc` as handler 469.
+**Neutral on the quiet box** with a null arm (StarCraft +1.3% in a 1.4%
+band, Heroes II −0.3% in 0.8%, Diablo −1.6% vs null in 3.3%; retired
+instructions moved ≤0.5%). A first layout that broke `$decode_run`'s
+fall-through chains was measurably *slower* on all three. The fusion, its
+test and the full write-up are on branch `cmpjcc-fusion`
+(`docs/cmp-jcc-fusion-2026-09-19.md` there); nothing landed on main.
+
+What it changes above: a fusion that only removes a dispatch is below what
+the box can resolve, so (1)'s remaining forms are closed, and (2) and (3)
+must be estimated against "does it delete memory traffic or a block
+transfer" before being built. The oracle also showed StarCraft's 2000-batch
+headless route is **not** self-deterministic (base vs base: 5,631 px, ~4k
+API calls), so use Heroes II, Diablo or SimGolf as the picture oracle.
