@@ -422,7 +422,12 @@
       (call $win16_arg16 (i32.const 6)) (call $win16_arg16 (i32.const 5))))
     (local.set $key (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 4)) (call $win16_arg16 (i32.const 3))))
-    (local.set $def (call $win16_coord (call $win16_arg16 (i32.const 2))))
+    ;; nDefault is a UINT, not a coordinate. $win16_coord translates the word
+    ;; 0x8000 into the CW_USEDEFAULT sentinel 0x80000000, which the WORD return
+    ;; below then masks back to 0 — and CW_USEDEFAULT is exactly the default an
+    ;; app passes when it keeps its window rect in an INI, so ScrabOut read 0
+    ;; for all four and created a 0x0 main window that drew nothing.
+    (local.set $def (call $win16_arg16 (i32.const 2)))
     (local.set $file (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
     (call $win16_call32_begin (i32.const 4))
@@ -480,7 +485,8 @@
       (call $win16_arg16 (i32.const 4)) (call $win16_arg16 (i32.const 3))))
     (local.set $key (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
-    (local.set $def (call $win16_coord (call $win16_arg16 (i32.const 0))))
+    ;; Unsigned, for the same reason as the private form above.
+    (local.set $def (call $win16_arg16 (i32.const 0)))
     (call $win16_call32_begin (i32.const 3))
     (call $handle_GetProfileIntA (local.get $app) (local.get $key)
       (local.get $def) (i32.const 0) (i32.const 0) (i32.const 0))
