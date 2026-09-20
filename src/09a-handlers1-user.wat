@@ -327,78 +327,77 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
-  ;; 1099: EnumDisplayMonitors(hdc, lprcClip, lpfnEnum, dwData) — 4 args stdcall
-  ;; Calls lpfnEnum(hMonitor, hdcMonitor, lprcMonitor, dwData) once for primary monitor
+  ;; Primary-monitor enumeration. Each suspended callback owns a stack frame:
+  ;; saved return, saved final ESP, RECT. Nested calls cannot overwrite it.
+  (global $monitor_enum_thunk (mut i32) (i32.const 0))
+  (func $monitor_enum_continue
+    (local $frame i32) (local $ret i32) (local $esp i32)
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
+    (local.set $ret (call $gl32 (local.get $frame)))
+    (local.set $esp (call $gl32 (i32.add (local.get $frame) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp))
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
+    (global.set $eip (local.get $ret)))
+
   (func $handle_EnumDisplayMonitors (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $ret_addr i32) (local $callback i32) (local $data i32) (local $rect_guest i32) (local $screen i32)
-    ;; arg2 = lpfnEnum (callback), arg3 = dwData
-    (local.set $callback (local.get $arg2))
-    (local.set $data (local.get $arg3))
-    ;; If no callback, just return TRUE
-    (if (i32.eqz (local.get $callback))
+    (local $ret i32) (local $end i32) (local $frame i32) (local $rect i32)
+    (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
+    (local $clip_right i32) (local $clip_bottom i32)
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $end (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $end))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (i32.eqz (local.get $arg2))
+      (then (global.set $last_error (i32.const 87)) (return)))
+    ;; A monitor-specific clipped display DC is not implemented. Do not
+    ;; substitute NULL and report success for a different callback contract.
+    (if (local.get $arg0)
+      (then (global.set $last_error (i32.const 50)) (return)))
+    (local.set $right (call $screen_metric_w))
+    (local.set $bottom (call $screen_metric_h))
+    (if (local.get $arg1)
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-        (return)))
-    ;; Save original return address
-    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
-    ;; Pop EnumDisplayMonitors frame: ret + 4 args = 20 bytes
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-    ;; Allocate RECT {0, 0, screenW, screenH} on stack (16 bytes)
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-    (local.set $rect_guest (i32.add (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 0x12000)) (global.get $image_base)))
-    (local.set $screen (call $host_get_screen_size))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))         ;; left
-    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (i32.const 0))   ;; top
-    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.and (local.get $screen) (i32.const 0xFFFF))) ;; right
-    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.shr_u (local.get $screen) (i32.const 16))) ;; bottom
-    ;; Push callback args right-to-left: dwData, lprcMonitor, hdcMonitor, hMonitor
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $data))          ;; dwData
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $rect_guest))    ;; lprcMonitor (guest addr)
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))              ;; hdcMonitor = NULL
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00010001))     ;; hMonitor (fake handle)
-    ;; Push return address — callback is stdcall so it pops its own 16 bytes
-    ;; After callback returns, RECT (16 bytes on stack) remains — but caller's ESP is restored
-    ;; Actually the RECT sits below the callback frame, need to adjust:
-    ;; When callback returns (stdcall pops 16 bytes), ESP points to RECT.
-    ;; We need the original ret_addr AFTER the RECT is cleaned up.
-    ;; Solution: put a thunk return address that cleans up the RECT and returns.
-    ;; Simpler: just put the RECT in scratch memory instead of on the stack.
-    ;; Let's use WASM address 0xAD00 area which is below GUEST_BASE.
-    ;; Actually — store RECT at a fixed known location in the sub-GUEST_BASE region.
-    ;; Reset: undo stack RECT, use fixed scratch instead.
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))) ;; undo the 4 pushes + RECT
-    ;; Write RECT at WASM addr 0xAD40 (unused scratch below GUEST_BASE)
-    (i32.store (i32.const 0xAD40) (i32.const 0))       ;; left
-    (i32.store (i32.const 0xAD44) (i32.const 0))       ;; top
-    (i32.store (i32.const 0xAD48) (i32.const 640))     ;; right
-    (i32.store (i32.const 0xAD4C) (i32.const 480))     ;; bottom
-    ;; Guest address for 0xAD40: image_base + (0xAD40 - 0x12000) = image_base - 0x72C0
-    ;; Actually RECT needs to be at a guest-addressable address. g2w = guest - image_base + GUEST_BASE
-    ;; So guest = wasm - GUEST_BASE + image_base = 0xAD40 - 0x12000 + image_base
-    ;; If image_base=0x400000 -> guest = 0x3F8D40, which is below image_base but above 0.
-    ;; The callback reads RECT via the pointer — so it will do g2w(guest) and get 0xAD40. Should work.
-    (local.set $rect_guest (i32.add (i32.sub (i32.const 0xAD40) (i32.const 0x12000)) (global.get $image_base)))
-    ;; Push callback args right-to-left
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $data))          ;; dwData
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $rect_guest))    ;; lprcMonitor
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))              ;; hdcMonitor
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00010001))     ;; hMonitor
-    ;; Push return address — when stdcall callback pops 16 bytes and rets, goes to ret_addr
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
-    ;; Jump to callback
-    (global.set $eip (local.get $callback))
-    (global.set $steps (i32.const 0))
-  )
+        (local.set $left (call $gl32 (local.get $arg1)))
+        (local.set $top (call $gl32 (i32.add (local.get $arg1) (i32.const 4))))
+        (local.set $clip_right (call $gl32 (i32.add (local.get $arg1) (i32.const 8))))
+        (local.set $clip_bottom (call $gl32 (i32.add (local.get $arg1) (i32.const 12))))
+        (if (i32.lt_s (local.get $clip_right) (local.get $right))
+          (then (local.set $right (local.get $clip_right))))
+        (if (i32.lt_s (local.get $clip_bottom) (local.get $bottom))
+          (then (local.set $bottom (local.get $clip_bottom))))
+        (if (i32.lt_s (local.get $left) (i32.const 0))
+          (then (local.set $left (i32.const 0))))
+        (if (i32.lt_s (local.get $top) (i32.const 0))
+          (then (local.set $top (i32.const 0))))))
+    (if (i32.or (i32.ge_s (local.get $left) (local.get $right))
+                (i32.ge_s (local.get $top) (local.get $bottom)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 1)) (return)))
+    ;; With NULL HDC, clipping selects monitors; the callback still receives
+    ;; the full monitor rectangle, not the selection intersection.
+    (local.set $left (i32.const 0))
+    (local.set $top (i32.const 0))
+    (local.set $right (call $screen_metric_w))
+    (local.set $bottom (call $screen_metric_h))
+    (if (i32.eqz (global.get $monitor_enum_thunk))
+      (then (global.set $monitor_enum_thunk (call $com_cont_thunk (i32.const 0xCACA0036)))))
+    (local.set $frame (i32.sub (local.get $end) (i32.const 24)))
+    (local.set $rect (i32.add (local.get $frame) (i32.const 8)))
+    (call $gs32 (local.get $frame) (local.get $ret))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 4)) (local.get $end))
+    (call $gs32 (local.get $rect) (local.get $left))
+    (call $gs32 (i32.add (local.get $rect) (i32.const 4)) (local.get $top))
+    (call $gs32 (i32.add (local.get $rect) (i32.const 8)) (local.get $right))
+    (call $gs32 (i32.add (local.get $rect) (i32.const 12)) (local.get $bottom))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $frame) (i32.const 20)))
+    (call $gs32 (i32.sub (local.get $frame) (i32.const 20)) (global.get $monitor_enum_thunk))
+    (call $gs32 (i32.sub (local.get $frame) (i32.const 16)) (i32.const 0x10000))
+    (call $gs32 (i32.sub (local.get $frame) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.sub (local.get $frame) (i32.const 8)) (local.get $rect))
+    (call $gs32 (i32.sub (local.get $frame) (i32.const 4)) (local.get $arg3))
+    (global.set $eip (local.get $arg2))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $steps (i32.const 0)))
 
   ;; 91: GetClientRect
   (func $handle_GetClientRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2947,4 +2946,3 @@
     (i32.store offset=0 (global.get $reg_base) (call $common_dialog_extended_error))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
-
