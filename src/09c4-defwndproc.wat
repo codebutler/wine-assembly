@@ -736,8 +736,10 @@
                             (load.field PaintRect left (local.get $rect))))
     (local.set $h (i32.sub (load.field.memarg PaintRect bottom (local.get $rect))
                             (load.field.memarg PaintRect top (local.get $rect))))
-    (if (i32.or (i32.le_s (local.get $w) (i32.const 0))
-                (i32.le_s (local.get $h) (i32.const 0)))
+    ;; A collapsed dock has a valid zero extent. Recompute its empty client
+    ;; rectangle instead of leaving the pre-collapse area paintable.
+    (if (i32.or (i32.lt_s (local.get $w) (i32.const 0))
+                (i32.lt_s (local.get $h) (i32.const 0)))
       (then (return)))
     (if (call $wnd_region_get (local.get $hwnd))
       (then

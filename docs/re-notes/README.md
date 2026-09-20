@@ -9,6 +9,8 @@ These notes exist because the same disassembly keeps getting redone. Before
 starting an investigation on an app that has a file here, read it. When you
 finish one, add what you learned.
 
+Paint dock-collapse geometry and remaining repaint artifacts: [mspaint.md](mspaint.md).
+
 ## What belongs here
 
 - **Load bases and address arithmetic.** Runtime VA ↔ original VA per module.

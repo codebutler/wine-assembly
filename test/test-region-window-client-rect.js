@@ -81,6 +81,26 @@ const RegionMap = require('../lib/region-map.generated');
     rect: [4, 7, 271, 109],
   }, 'the caller-owned GetWindowRgn copy should remain independent');
 
+  // A dock collapsed along either axis must not retain its previous client
+  // extent. Paint collapses its Color Box dock to height zero when hidden.
+  const dock = 0x10002;
+  const dockStyle = 0x10000000; // borderless fixture; outer size owned by renderer
+  renderer.createWindow(dock, dockStyle, 0, 0, 267, 49, 'dock', 0, instance, memory);
+  e.wnd_table_set(dock, 0);
+  e.wnd_set_style_export(dock, dockStyle);
+  for (const [w, h] of [[267, 49], [267, 0], [0, 49], [0, 0], [267, 49]]) {
+    renderer.windows[dock].w = w;
+    renderer.windows[dock].h = h;
+    e.host_resize_commit(dock, 0, 0, w, h);
+    assert.deepStrictEqual([
+      e.get_client_rect_r(dock) - e.get_client_rect_l(dock),
+      e.get_client_rect_b(dock) - e.get_client_rect_t(dock),
+    ], [w, h], `collapsed dock client must track ${w}x${h}`);
+    renderer._computeClientRect(renderer.windows[dock]);
+    assert.strictEqual(renderer.windows[dock].clientRect.w, w);
+    assert.strictEqual(renderer.windows[dock].clientRect.h, h);
+  }
+
   console.log('PASS  regioned window client rect survives move/resize nccalc');
 })().catch(err => {
   console.error(err && err.stack || err);
