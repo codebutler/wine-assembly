@@ -416,6 +416,19 @@
     ;; SetWindowPos can resize retained-DC controls; refresh after NCCALCSIZE.
     (if (i32.ne (local.get $new_wh) (local.get $old_wh))
       (then (call $gdi_refresh_window_dc_system_clips)))
+    ;; USER's MDICLIENT re-sizes its maximized child to its new client area.
+    ;; This path is how an MFC frame resizes its MDICLIENT -- RecalcLayout
+    ;; batches the control bars and the client into one DeferWindowPos, and
+    ;; EndDeferWindowPos replays them through SetWindowPos -- and it delivers
+    ;; no WM_SIZE to $mdiclient_wndproc, so route that one effect directly.
+    ;; Without it a child that was already zoomed kept the rect it had at the
+    ;; old frame size: maximizing SimCity 2000's frame left its city window at
+    ;; 392x254 in the corner of a full-screen frame, with its own maximize
+    ;; button apparently dead, because the child already believed it was
+    ;; maximized. It has to run after the NCCALCSIZE above, which is what
+    ;; gives the client its new CLIENT_RECT -- the child is sized from that.
+    ;; The helper is a no-op for a window with no maximized MDI children.
+    (call $mdi_client_size_children (local.get $arg0))
     (call $windowpos_message_update
       (local.get $windowpos) (local.get $arg0) (local.get $insert_after)
       (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)

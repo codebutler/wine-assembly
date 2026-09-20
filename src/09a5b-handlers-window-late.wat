@@ -1586,6 +1586,30 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; destruction, and menu replacement. Arrangement is intentionally left to
   ;; a later child-aware renderer path: the generic arrange host API targets
   ;; desktop top-level windows, not children of one MDICLIENT.
+  ;; USER's MDICLIENT re-sizes a *maximized* child to whatever its client area
+  ;; has just become. Nothing else in this emulator does: $mdi_child_maximize
+  ;; runs only from the child's own SC_MAXIMIZE, so a child that was already
+  ;; zoomed when the frame grew kept the rect it was given at the old frame
+  ;; size. Maximizing SimCity 2000's MDI frame to the full desktop left its
+  ;; city window at the 392x254 it had when the frame was 400x300, and the
+  ;; child's own maximize button then did nothing visible because the child
+  ;; already believed it was maximized.
+  (func $mdi_client_size_children (param $client i32)
+    (local $child i32) (local $next i32) (local $guard i32)
+    (local.set $child (call $wnd_find_first_child (local.get $client)))
+    (local.set $guard (i32.const 256)) ;; one WND_RECORDS' worth of siblings
+    (block $done
+      (loop $walk
+        (br_if $done (i32.eqz (local.get $child)))
+        (br_if $done (i32.eqz (local.get $guard)))
+        (local.set $guard (i32.sub (local.get $guard) (i32.const 1)))
+        ;; Read the next sibling first: re-maximizing may reorder the list.
+        (local.set $next (call $wnd_find_next_sibling (local.get $child)))
+        (if (call $wnd_max_get (local.get $child))
+          (then (drop (call $mdi_child_maximize (local.get $child)))))
+        (local.set $child (local.get $next))
+        (br $walk))))
+
   (func $mdiclient_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $state i32) (local $ccs i32) (local $child i32) (local $next i32)
     (local $frame i32) (local $old_menu i32) (local $new_menu i32)
@@ -1615,6 +1639,10 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then
         (local.set $child (call $mdi_client_active (local.get $hwnd)))
         (if (local.get $child) (then (call $mdi_set_focus (local.get $child))))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0005)) ;; WM_SIZE
+      (then
+        (call $mdi_client_size_children (local.get $hwnd))
         (return (i32.const 0))))
     (if (i32.eq (local.get $msg) (i32.const 0x0222)) ;; WM_MDIACTIVATE
       (then
@@ -1722,6 +1750,12 @@ GetTopWindow(hWnd) — 1 arg stdcall
           (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 4))
         (call $ctrl_geom_sync (local.get $client)
           (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 4))
+        ;; This is the path that actually resizes the client for an MFC frame:
+        ;; the WM_SIZE sent below goes to the application's own window
+        ;; procedure, not to $mdiclient_wndproc, so the maximized-child
+        ;; relayout has to be invoked here as well. Do it before the send, so
+        ;; the guest's handler sees the finished layout.
+        (call $mdi_client_size_children (local.get $client))
         (drop (call $wnd_send_message
           (local.get $client) (i32.const 0x0005) (local.get $wParam) (local.get $lParam)))
         (return (i32.const 1))))

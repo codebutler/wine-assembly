@@ -71,6 +71,7 @@ room have to share a wall clock: [blobby-volley.md](blobby-volley.md).
 | Ultima IV: Quest of the Avatar (GOG) | [ultima4-gog.md](ultima4-gog.md) |
 | Quake II (demo) | [quake2-demo.md](quake2-demo.md) |
 | Rodent's Revenge (Win16) | [wep16-rodent.md](wep16-rodent.md) |
+| SimCity 2000 Win95 Demo | [simcity-2000-demo.md](simcity-2000-demo.md) |
 | SkiFree (Entertainment Pack) | [skifree.md](skifree.md) |
 | Snood 2.2W | [snood.md](snood.md) |
 | Worms 2 October demo | [worms2-demo.md](worms2-demo.md) |
