@@ -8394,66 +8394,98 @@
     (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000))
       (then (call $host_set_window_zorder (local.get $hwnd) (local.get $after)))))
 
-  ;; USER.259 BeginDeferWindowPos(nNumWindows) -> HDWP,
-  ;; USER.260 DeferWindowPos(hdwp, hWnd, hWndInsertAfter, x, y, cx, cy, flags),
-  ;; USER.261 EndDeferWindowPos(hdwp).
-  ;;
-  ;; Windows batches the moves so a multi-window relayout lands in one paint;
-  ;; FIXME: each one is applied as it arrives here instead. This exposes
-  ;; premature geometry/messages and does not model real transactions.
-  ;; MFC's CFrameWnd::RecalcLayout arranges a frame's
-  ;; control bars this way, so a 16-bit MFC app reaches this on its first
-  ;; WM_SIZE — Hearts does, positioning its status bar.
+  ;; USER.259/260/261 share the Win32 HDWP queue and validator. Only the
+  ;; commit loop differs: each entry uses the Pascal SetWindowPos bridge so
+  ;; far-procedure size callbacks finish before this End returns.
+  (global $WIN16_CONT_DEFER i32 (i32.const 0xFF9C))
+
   (func $win16_BeginDeferWindowPos
-    ;; The handle only has to be non-zero and survive to EndDeferWindowPos.
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (local $count i32)
+    (local.set $count (call $win16_coord (call $win16_arg16 (i32.const 0))))
+    (call $win16_call32_begin (i32.const 1))
+    (call $handle_BeginDeferWindowPos (local.get $count)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store (global.get $reg_base) (call $win16_h16 (i32.load (global.get $reg_base))))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_DeferWindowPos
-    (local $hwnd i32) (local $after i32) (local $x i32) (local $y i32)
-    (local $cx i32) (local $cy i32) (local $flags i32) (local $hdwp i32)
-    (local $hwnd16 i32) (local $proc i32) (local $old_cs i32) (local $cs i32)
-    (local.set $hdwp (call $win16_arg16 (i32.const 7)))
-    (local.set $hwnd16 (call $win16_arg16 (i32.const 6)))
-    (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
-    (local.set $after (call $win16_arg16 (i32.const 5)))
+    (local $hdwp i32) (local $hwnd i32) (local $after i32) (local $record i32)
+    (local $x i32) (local $y i32) (local $cx i32) (local $cy i32) (local $flags i32)
+    (local.set $hdwp (call $win16_h32 (call $win16_arg16 (i32.const 7))))
+    (local.set $record (call $hdwp_find (local.get $hdwp)))
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 6))))
+    (local.set $flags (call $win16_arg16 (i32.const 0)))
+    (local.set $after (call $win16_position_insert_after (call $win16_arg16 (i32.const 5)) (local.get $flags)))
     (local.set $x (call $win16_coord (call $win16_arg16 (i32.const 4))))
     (local.set $y (call $win16_coord (call $win16_arg16 (i32.const 3))))
     (local.set $cx (call $win16_coord (call $win16_arg16 (i32.const 2))))
     (local.set $cy (call $win16_coord (call $win16_arg16 (i32.const 1))))
-    (local.set $flags (call $win16_arg16 (i32.const 0)))
-    (local.set $after (call $win16_position_insert_after (local.get $after) (local.get $flags)))
-    (local.set $proc (call $wnd_table_get (local.get $hwnd)))
-    (local.set $old_cs (call $host_get_window_client_size (local.get $hwnd)))
-    (call $win16_call32_begin (i32.const 7))
-    (call $win16_call32_arg (i32.const 5) (local.get $cy))
-    (call $win16_call32_arg (i32.const 6) (local.get $flags))
-    (call $handle_SetWindowPos (local.get $hwnd) (local.get $after)
-      (local.get $x) (local.get $y) (local.get $cx) (i32.const 0))
+    (call $win16_call32_begin (i32.const 8))
+    (call $win16_call32_arg (i32.const 5) (local.get $cx))
+    (call $win16_call32_arg (i32.const 6) (local.get $cy))
+    (call $win16_call32_arg (i32.const 7) (local.get $flags))
+    (call $handle_DeferWindowPos (local.get $hdwp) (local.get $hwnd)
+      (local.get $after) (local.get $x) (local.get $y) (i32.const 0))
     (call $win16_call32_end)
-    (call $win16_position_zorder (local.get $hwnd) (local.get $after) (local.get $flags))
-    (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
-    ;; This immediate compatibility path sends size changes before returning.
-    ;; Real deferred positioning must move these callbacks to EndDeferWindowPos.
-    ;; VBRUN caches PictureBox ScaleWidth/ScaleHeight in that notification;
-    ;; posting it leaves the old design-time 32x32 scale visible to the next
-    ;; Basic statement even though the HWND has already been resized.
-    (if (i32.and
-          (call $win16_is_far_proc (local.get $proc))
-          (i32.ne (local.get $cs) (local.get $old_cs)))
-      (then
-        (call $win16_cont_push
-          (call $win16_take_return (i32.const 16)) (local.get $hdwp))
-        (call $win16_enter_wndproc (local.get $proc) (local.get $hwnd16)
-          (i32.const 0x0005) (i32.const 0) (local.get $cs)
-          (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_OFFSET))
-        (return)))
-    (i32.store offset=0 (global.get $reg_base) (local.get $hdwp))
+    (if (i32.and (i32.ne (local.get $record) (i32.const 0))
+                (i32.eqz (call $hdwp_find (local.get $hdwp))))
+      (then (call $win16_h16_forget (local.get $hdwp))))
+    (i32.store (global.get $reg_base) (call $win16_h16 (i32.load (global.get $reg_base))))
     (call $win16_api_return (i32.const 16)))
 
+  ;; Stack at continuation: record, next-index, ordinary six-byte far-return
+  ;; continuation. Nested End calls build independent frames below this one.
+  (func $win16_defer_continue
+    (local $sp i32) (local $record i32) (local $i i32) (local $entry i32) (local $after i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $record (call $gl32 (local.get $sp)))
+    (local.set $i (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+    (if (i32.ge_u (local.get $i) (call $gl32 (i32.add (local.get $record) (i32.const 8))))
+      (then
+        (call $win16_h16_forget (call $gl32 (local.get $record)))
+        (call $hdwp_release (local.get $record))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 8)))
+        (call $win16_cont_resume)
+        (return)))
+    (local.set $entry (i32.add (call $gl32 (i32.add (local.get $record) (i32.const 4)))
+      (i32.mul (local.get $i) (i32.const 32))))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.add (local.get $i) (i32.const 1)))
+    (local.set $after (call $gl32 (i32.add (local.get $entry) (i32.const 4))))
+    (if (i32.and (i32.gt_u (local.get $after) (i32.const 1))
+                (i32.lt_u (local.get $after) (i32.const -2)))
+      (then (local.set $after (call $win16_h16 (local.get $after)))))
+    (call $win16_push16 (call $win16_h16 (call $gl32 (local.get $entry))))
+    (call $win16_push16 (local.get $after))
+    (call $win16_push16 (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
+    (call $win16_push16 (call $gl32 (i32.add (local.get $entry) (i32.const 12))))
+    (call $win16_push16 (call $gl32 (i32.add (local.get $entry) (i32.const 16))))
+    (call $win16_push16 (call $gl32 (i32.add (local.get $entry) (i32.const 20))))
+    (call $win16_push16 (call $gl32 (i32.add (local.get $entry) (i32.const 24))))
+    (call $win16_push16 (global.get $WIN16_THUNK_SEL))
+    (call $win16_push16 (global.get $WIN16_CONT_DEFER))
+    (call $win16_SetWindowPos))
+
   (func $win16_EndDeferWindowPos
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-    (call $win16_api_return (i32.const 2)))
+    (local $handle i32) (local $record i32) (local $had_record i32) (local $ret i32) (local $sp i32)
+    (local.set $handle (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (local.set $had_record (call $hdwp_find (local.get $handle)))
+    (local.set $record (call $hdwp_prepare_end (local.get $handle)))
+    (if (i32.eqz (local.get $record))
+      (then
+        (if (i32.and (i32.ne (local.get $had_record) (i32.const 0))
+                    (i32.eqz (call $hdwp_find (local.get $handle))))
+          (then (call $win16_h16_forget (local.get $handle))))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (call $win16_api_return (i32.const 2))
+        (return)))
+    (local.set $ret (call $win16_take_return (i32.const 2)))
+    (call $win16_cont_push (local.get $ret) (i32.const 1))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $record))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 0))
+    (call $win16_defer_continue))
 
   ;; USER.232 SetWindowPos(hWnd, hWndInsertAfter, x, y, cx, cy, wFlags) — the
   ;; ungathered form of DeferWindowPos above, and the same call underneath.
@@ -12830,6 +12862,8 @@
     ;; table, so no import can ever be assigned it.
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_OFFSET))
       (then (call $win16_cont_resume) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_DEFER))
+      (then (call $win16_defer_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took
     ;; its own arguments off the stack; the CWPSTRUCT and CREATESTRUCT built
     ;; underneath them are this side's to drop.
