@@ -928,17 +928,15 @@
     (call $heap_free (local.get $state))
     (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0)))
 
-  ;; Mark a registered native status-bar window without classifying it as a
-  ;; WAT control. Its guest comctl32/MFC wndproc must remain authoritative for
-  ;; CCS_BOTTOM layout, while the shared renderer surface still needs WAT to
-  ;; cover stale pixels when WM_PAINT is dispatched.
-  (func $statusbar_native_mark_slot (param $slot i32) (param $marked i32)
+  ;; Both hybrid control families keep one bit per window slot. Keep bounds
+  ;; and bit addressing in one place; the family wrappers own the region.
+  (func $native_control_mark_slot (param $base i32) (param $slot i32) (param $marked i32)
     (local $addr i32) (local $mask i32) (local $value i32)
     (if (i32.or (i32.lt_s (local.get $slot) (i32.const 0))
                 (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS)))
       (then (return)))
     (local.set $addr
-      (i32.add (global.get $NATIVE_STATUS_BITS)
+      (i32.add (local.get $base)
         (i32.shr_u (local.get $slot) (i32.const 3))))
     (local.set $mask
       (i32.shl (i32.const 1) (i32.and (local.get $slot) (i32.const 7))))
@@ -948,7 +946,7 @@
         (then (i32.or (local.get $value) (local.get $mask)))
         (else (i32.and (local.get $value) (i32.xor (local.get $mask) (i32.const 0xFF)))))))
 
-  (func $statusbar_native_is (param $hwnd i32) (result i32)
+  (func $native_control_is_marked (param $base i32) (param $hwnd i32) (result i32)
     (local $slot i32)
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (if (i32.lt_s (local.get $slot) (i32.const 0))
@@ -956,43 +954,31 @@
     (i32.and
       (i32.shr_u
         (i32.load8_u
-          (i32.add (global.get $NATIVE_STATUS_BITS)
+          (i32.add (local.get $base)
             (i32.shr_u (local.get $slot) (i32.const 3))))
         (i32.and (local.get $slot) (i32.const 7)))
       (i32.const 1)))
+
+  ;; Mark a registered native status-bar window without classifying it as a
+  ;; WAT control. Its guest comctl32/MFC wndproc remains authoritative for
+  ;; CCS_BOTTOM layout; WAT paints the shared renderer surface.
+  (func $statusbar_native_mark_slot (param $slot i32) (param $marked i32)
+    (call $native_control_mark_slot (global.get $NATIVE_STATUS_BITS)
+      (local.get $slot) (local.get $marked)))
+
+  (func $statusbar_native_is (param $hwnd i32) (result i32)
+    (call $native_control_is_marked (global.get $NATIVE_STATUS_BITS) (local.get $hwnd)))
 
   ;; Hybrid SysTabControl32 marker. The real COMCTL32 wndproc remains installed
   ;; for TCM_ADJUSTRECT, page switching, and hit-testing; WAT mirrors only the
   ;; short tab labels/selection needed to paint Win98 chrome on the shared
   ;; parent surface.
   (func $tab_native_mark_slot (param $slot i32) (param $marked i32)
-    (local $addr i32) (local $mask i32) (local $value i32)
-    (if (i32.or (i32.lt_s (local.get $slot) (i32.const 0))
-                (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS)))
-      (then (return)))
-    (local.set $addr
-      (i32.add (global.get $NATIVE_TAB_BITS)
-        (i32.shr_u (local.get $slot) (i32.const 3))))
-    (local.set $mask
-      (i32.shl (i32.const 1) (i32.and (local.get $slot) (i32.const 7))))
-    (local.set $value (i32.load8_u (local.get $addr)))
-    (i32.store8 (local.get $addr)
-      (if (result i32) (local.get $marked)
-        (then (i32.or (local.get $value) (local.get $mask)))
-        (else (i32.and (local.get $value) (i32.xor (local.get $mask) (i32.const 0xFF)))))))
+    (call $native_control_mark_slot (global.get $NATIVE_TAB_BITS)
+      (local.get $slot) (local.get $marked)))
 
   (func $tab_native_is (param $hwnd i32) (result i32)
-    (local $slot i32)
-    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
-    (if (i32.lt_s (local.get $slot) (i32.const 0))
-      (then (return (i32.const 0))))
-    (i32.and
-      (i32.shr_u
-        (i32.load8_u
-          (i32.add (global.get $NATIVE_TAB_BITS)
-            (i32.shr_u (local.get $slot) (i32.const 3))))
-        (i32.and (local.get $slot) (i32.const 7)))
-      (i32.const 1)))
+    (call $native_control_is_marked (global.get $NATIVE_TAB_BITS) (local.get $hwnd)))
 
   ;; COMCTL32 owns the ordinary per-window state pointer. Keep our paint mirror
   ;; separate so observing TCM_* messages cannot corrupt its WM_CREATE state.
