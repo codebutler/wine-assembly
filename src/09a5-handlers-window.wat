@@ -911,6 +911,14 @@
   (func $handle_CreateDialogParamA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $hwnd i32) (local $dlg_wndproc i32)
     (local $ctrl_count i32) (local $i i32) (local $ctrl_hwnd i32) (local $dlg_rec i32)
+    (local $from_indirect i32)
+    ;; $dlg_load consumes $dlg_indirect_template_ptr, so snapshot it here: it
+    ;; is the only thing that separates an in-memory template
+    ;; (CreateDialogIndirectParam*, which is what MFC's modal path builds)
+    ;; from a plain resource-id CreateDialogParam*. The force-visible block
+    ;; below needs that distinction.
+    (local.set $from_indirect
+      (i32.ne (global.get $dlg_indirect_template_ptr) (i32.const 0)))
     ;; Allocate HWND from next_hwnd
     (local.set $hwnd (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
@@ -983,9 +991,17 @@
     ;; CreateDialogIndirectParam without a later explicit ShowWindow call.
     ;; A hidden top-level dialog then traps the app in an invisible modal loop.
     ;; Child dialog pages remain hidden until their container shows them.
+    ;; Restricted to the indirect (in-memory template) entry: a plain
+    ;; CreateDialogParamA on a resource id is the ordinary modeless API, and an
+    ;; app that creates such a dialog without WS_VISIBLE means it. SimCity
+    ;; 2000 builds its Graph/Population/City Map/SimNation panels that way at
+    ;; startup and shows them from its View menu; force-showing them put four
+    ;; opaque panels over the city view on every launch.
     (if (i32.and
-          (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)))
-          (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
+          (local.get $from_indirect)
+          (i32.and
+            (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)))
+            (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000)))))
       (then
         (drop (call $wnd_set_style (local.get $hwnd)
           (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
@@ -1380,6 +1396,13 @@
         ;; $wnd_apply_show_state above; this block owns only the resize pair.
         (global.set $pending_wm_size (i32.const 0))
         (call $post_resize_messages (local.get $arg0) (i32.const 2))))
+    ;; The same command on an MDI child: USER fills the MDI client area. The
+    ;; host's showWindow ignores cmd===3 for a child, so without this the
+    ;; child keeps its creation rect and its view never gets a WM_SIZE.
+    ;; $mdi_child_maximize answers 0 for any child that is not an MDI child.
+    (if (i32.and (i32.eq (local.get $arg1) (i32.const 3))
+                 (i32.ne (local.get $arg0) (global.get $main_hwnd)))
+      (then (drop (call $mdi_child_maximize (local.get $arg0)))))
     ;; First ShowWindow on main_hwnd (non-hide) drives the synchronous activation
     ;; chain: WM_ACTIVATEAPP → WM_ACTIVATE → WM_SETFOCUS. Non-maximized
     ;; startup still uses pending_wm_size; maximized startup queued resize above.

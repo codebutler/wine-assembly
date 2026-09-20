@@ -1988,6 +1988,67 @@
     (global.set $dlg_init_focus_hwnd (local.get $ctrl_hwnd))
     (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (global.get $dlg_init_focus_hwnd)) ;; wParam (focus hwnd)
     (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $init_param))   ;; lParam
+    ;; Fire WH_CBT/HCBT_CREATEWND before WM_INITDIALOG, exactly as the modeless
+    ;; $handle_CreateDialogParamA path does. MFC's modal creation installs a CBT
+    ;; hook and attaches the freshly created HWND to the CDialog object from it,
+    ;; so a modal dialog that never sees the hook leaves CWnd::FromHandlePermanent
+    ;; returning NULL. AfxDlgProc does not check: it calls pWnd->WindowProc
+    ;; through the object's vtable, which is a call through address 0. SimCity
+    ;; 2000's demo died on its first DialogBoxParamA that way.
+    ;;
+    ;; The WM_INITDIALOG frame built above stays where it is; the hook frame goes
+    ;; on top of it, and CACA0028's "CBTM" branch pops the three private words
+    ;; and jumps to the DLGPROC with that frame already in place.
+    (if (global.get $cbt_hook_proc)
+      (then
+        (local.set $dlg_rec (call $dlg_record_for_hwnd (local.get $hwnd)))
+        ;; CREATESTRUCT at image_base+0x100, CBT_CREATEWND at image_base+0x140.
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x100)) (local.get $init_param)) ;; lpCreateParams
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x104)) (local.get $arg0))      ;; hInstance
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x108)) (i32.const 0))          ;; hMenu
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x10c)) (local.get $arg2))      ;; hwndParent
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x110))
+          (select (i32.load16_s (i32.add (local.get $dlg_rec) (i32.const 18))) (i32.const 0) (local.get $dlg_rec)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x114))
+          (select (i32.load16_s (i32.add (local.get $dlg_rec) (i32.const 16))) (i32.const 0) (local.get $dlg_rec)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x118))
+          (select (i32.load16_s (i32.add (local.get $dlg_rec) (i32.const 14))) (i32.const 0) (local.get $dlg_rec)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x11c))
+          (select (i32.load16_s (i32.add (local.get $dlg_rec) (i32.const 12))) (i32.const 0) (local.get $dlg_rec)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x120)) (call $wnd_get_style (local.get $hwnd)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x124))
+          (select (i32.load (i32.add (local.get $dlg_rec) (i32.const 20))) (i32.const 0) (local.get $dlg_rec)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x128)) (i32.const 0))          ;; lpszClass
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x12c))
+          (select (i32.load (i32.add (local.get $dlg_rec) (i32.const 8))) (i32.const 0) (local.get $dlg_rec)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x140)) (i32.add (global.get $image_base) (i32.const 0x100)))
+        (call $gs32 (i32.add (global.get $image_base) (i32.const 0x144)) (i32.const 0))
+        ;; Private words under the hook's own stdcall frame: the DLGPROC to
+        ;; resume into, the outer hook-dispatch node, and the marker that tells
+        ;; CACA0028 this was the modal path. Keeping the DLGPROC on the stack
+        ;; instead of in a global is what makes a dialog created from inside
+        ;; another dialog's hook safe.
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg3))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $hook_active_node))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x4D544243)) ;; "CBTM"
+        ;; CBTProc(nCode=HCBT_CREATEWND, wParam=hwnd, lParam=&CBT_CREATEWND)
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.add (global.get $image_base) (i32.const 0x140)))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $hwnd))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 3))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dialog_cbt_ret_thunk))
+        (i32.store offset=0 (global.get $reg_base) (local.get $hwnd))
+        (global.set $eip (call $hook_dispatch_enter (i32.const 5)))
+        (global.set $dlg_callback_yield_pending (i32.const 1))
+        (global.set $yield_flag (i32.const 1))
+        (global.set $steps (i32.const 0))
+        (return)))
     ;; Set EIP to dialog proc and signal redirection (don't let caller override EIP)
     (global.set $eip (local.get $arg3))
     ;; Let the host observe/show the modal shell before WM_INITDIALOG starts,

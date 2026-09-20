@@ -1727,6 +1727,47 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (return (i32.const 1))))
     (i32.const 0))
 
+  ;; DefMDIChildProc's SC_MAXIMIZE geometry: USER sizes a maximized MDI child
+  ;; to the whole MDI client area. Nothing else in this emulator does it --
+  ;; the renderer's showWindow gates its cmd===3 resize on !win.isChild, and
+  ;; $handle_ShowWindow posts the maximize move/size pair only for main_hwnd --
+  ;; so a child asked to maximize kept its creation rect and never saw a
+  ;; WM_SIZE. MFC's CMDIChildWnd::ActivateFrame is exactly that call, and a
+  ;; view sized from that missing WM_SIZE (SimCity 2000's AfxFrameOrView)
+  ;; stayed at the 0x0 it was created with. Returns 0 when $child is not an
+  ;; MDI child, so an ordinary child costs one parent lookup.
+  (func $mdi_child_maximize (param $child i32) (result i32)
+    (local $client i32) (local $w i32) (local $h i32)
+    (local.set $client (call $wnd_get_parent (local.get $child)))
+    (if (i32.eqz (call $mdi_client_state (local.get $client)))
+      (then (return (i32.const 0))))
+    (local.set $w (i32.sub (call $client_rect_get_r (local.get $client))
+                           (call $client_rect_get_l (local.get $client))))
+    (local.set $h (i32.sub (call $client_rect_get_b (local.get $client))
+                           (call $client_rect_get_t (local.get $client))))
+    (if (i32.or (i32.le_s (local.get $w) (i32.const 0))
+                (i32.le_s (local.get $h) (i32.const 0)))
+      (then (return (i32.const 0))))
+    ;; SWP_NOZORDER | SWP_NOACTIVATE -- maximizing does not reorder the MDI
+    ;; child list, and the frame owns activation.
+    (call $host_move_window (local.get $child) (i32.const 0) (i32.const 0)
+      (local.get $w) (local.get $h) (i32.const 0x0014))
+    (call $ctrl_geom_sync (local.get $child) (i32.const 0) (i32.const 0)
+      (local.get $w) (local.get $h) (i32.const 0x0014))
+    (call $defwndproc_do_nccalcsize (local.get $child))
+    (call $host_sync_window_client
+      (local.get $child)
+      (call $wnd_client_screen_x (local.get $child))
+      (call $wnd_client_screen_y (local.get $child))
+      (i32.sub (call $client_rect_get_r (local.get $child))
+               (call $client_rect_get_l (local.get $child)))
+      (i32.sub (call $client_rect_get_b (local.get $child))
+               (call $client_rect_get_t (local.get $child))))
+    ;; wParam 2 = SIZE_MAXIMIZED. $post_resize_messages recomputes the
+    ;; non-client area itself and queues the matching erase/paint.
+    (call $post_resize_messages (local.get $child) (i32.const 2))
+    (i32.const 1))
+
   ;; MDI-child messages that add behavior beyond DefWindowProc. The caller
   ;; owns the encoding-specific fallback and stdcall cleanup.
   (func $mdi_child_message (param $child i32) (param $msg i32)
@@ -1763,7 +1804,12 @@ GetTopWindow(hWnd) — 1 arg stdcall
             (drop (call $mdiclient_wndproc
               (local.get $client) (i32.const 0x0224) (local.get $child)
               (i32.eq (local.get $cmd) (i32.const 0xF050))))
-            (return (i32.const 1))))))
+            (return (i32.const 1))))
+        (if (i32.eq (local.get $cmd) (i32.const 0xF030)) ;; SC_MAXIMIZE
+          (then
+            (call $wnd_apply_show_state (local.get $child) (i32.const 3))
+            (if (call $mdi_child_maximize (local.get $child))
+              (then (return (i32.const 1))))))))
     (i32.const 0))
 
   ;; Default MDI frame processing. The MDI-specific branches are filled in

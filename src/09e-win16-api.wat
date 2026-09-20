@@ -399,7 +399,10 @@
   ;; significant for Win95-era 16-bit bootstrap programs: InstallShield's
   ;; launcher rejects 3.10 before it starts the bundled 32-bit installer.
   (func $win16_GetVersion
-    (i32.store offset=0 (global.get $reg_base) (i32.and (global.get $winver) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base)
+      (if (result i32) (i32.ge_u (i32.and (global.get $winver) (i32.const 0xFF)) (i32.const 4))
+        (then (i32.const 0x5F03))
+        (else (i32.and (global.get $winver) (i32.const 0xFFFF)))))
     (i32.store offset=8 (global.get $reg_base) (i32.const 0x070A))  ;; DH=7 major, DL=10 minor
     (call $win16_api_return (i32.const 0)))
 
@@ -5957,6 +5960,8 @@
       (then (call $win16_CopyRect) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 75))
       (then (call $win16_IsRectEmpty) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 244))
+      (then (call $win16_EqualRect) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 77))
       (then (call $win16_OffsetRect) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 80))
@@ -8165,6 +8170,28 @@
       (i32.le_s (call $win16_rect_get (local.get $r) (i32.const 3))
                 (call $win16_rect_get (local.get $r) (i32.const 1)))))
     (call $win16_api_return (i32.const 4)))
+
+  ;; USER.244 EqualRect(lpRect1, lpRect2) -> are all four fields equal? Pure
+  ;; arithmetic like its neighbours, so it reads both rectangles at the 16-bit
+  ;; width rather than widening them. The 16-bit InstallShield wizard calls
+  ;; this while preparing itself, so leaving the ordinal out stopped the
+  ;; SimCity 2000 installer before it unpacked anything.
+  (func $win16_EqualRect
+    (local $a i32) (local $b i32) (local $i i32) (local $eq i32)
+    (local.set $a (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
+    (local.set $b (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+    (local.set $eq (i32.const 1))
+    (block $done (loop $cmp
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 4)))
+      (if (i32.ne (call $win16_rect_get (local.get $a) (local.get $i))
+                  (call $win16_rect_get (local.get $b) (local.get $i)))
+        (then (local.set $eq (i32.const 0)) (br $done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $cmp)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $eq))
+    (call $win16_api_return (i32.const 8)))
 
   ;; USER.80 UnionRect(lpDestRect, lpSrc1Rect, lpSrc2Rect) -> non-empty? An
   ;; empty source contributes nothing, which is what keeps the union of an

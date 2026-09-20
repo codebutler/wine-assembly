@@ -606,6 +606,19 @@
     ;; direct path, but lets MFC's WH_CBT hook attach m_hWnd first.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0028))
       (then
+        ;; "CBTM": the modal DialogBoxParam path. $handle_DialogBoxParamA has
+        ;; already built the WM_INITDIALOG frame underneath these three private
+        ;; words, so there is nothing to push -- leave the hook, drop the
+        ;; marker, the outer hook node and the saved DLGPROC, and enter it.
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x4D544243))
+          (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+            (local.set $arg0 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+            (global.set $eip (local.get $arg0))
+            (global.set $steps (i32.const 0))
+            (return)))
         (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x31544243))
           (then
             (call $hook_dispatch_leave
