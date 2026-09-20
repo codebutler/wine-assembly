@@ -133,11 +133,11 @@ Neither assertion was weakened. The subsequent Chip's Challenge investigation
 found a flawed mouse/timing workflow: a clock-only change falsely passes even
 without Right. The corrected keyboard workflow now requires a pixel-identical
 idle control and >10,000 changed board pixels under Right, excluding counters;
-see [the findings](re-notes/wep16-chips.md). Tetris remains open: its startup
-capture shows an inactive caption while About is open and an active caption
-after dismissal; the old test requires active color during About and also
-assumes fixed random piece colors. Do not infer a runtime paint defect solely
-from that first failed assertion.
+see [the findings](re-notes/wep16-chips.md). Tetris's test is subsequently
+corrected against the saved native Win98 inactive-caption reference and
+sampled active/Next piece colors, with a shorter guest-time window and a
+no-Down negative check. See [the evidence and threshold changes](re-notes/wep16-tetris.md).
+Neither finding required a runtime paint change.
 Local logs: `/private/tmp/wa-png-wep1.log`, `wa-png-wep2.log`,
 `wa-png-wep4.log`, `wa-png-vb.log`, `wa-png-idlewild.log`,
 `wa-png-wep4-remaining.log`, and `wa-png-wep{1,4}-baseline.log`.

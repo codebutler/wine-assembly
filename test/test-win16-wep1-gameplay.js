@@ -38,11 +38,11 @@ function matchingPixels(png, rect, predicate) {
   return count;
 }
 
-function runGame(app, input, maxBatches) {
+function runGame(app, input, maxBatches, extra = []) {
   const args = [
     RUN, `--app=${app}`, '--no-close', '--batch-size=20000',
     `--max-batches=${maxBatches}`, '--quiet-api', '--quiet-blocks',
-    '--repaint-every=10', `--input=${input}`,
+    '--repaint-every=10', ...extra, `--input=${input}`,
   ];
   if (OPTIONAL_WASM) args.splice(2, 0, '--no-build', `--wasm=${OPTIONAL_WASM}`);
   return execFileSync(process.execPath, args, {
@@ -169,8 +169,8 @@ function testTetris(outDir) {
   // cannot exercise.
   const output = runGame('wep16_tetris',
     `25:png:${opening},40:dlg-cmd:1,55:keydown:113,56:keyup:113,` +
-    `75:png:${started},90:keydown:40,91:keyup:40,` +
-    `105:png:${dropped},115:stop`, 120);
+    `150:png:${started},170:keydown:40,171:keyup:40,` +
+    `230:png:${dropped},245:stop`, 250, ['--tick-ms-per-batch=20']);
   assertHealthy(output, 'Tetris');
   assert.match(output, /keyboard → focus 0x10001/,
     'Tetris keyboard input must return to the live main window after About');
@@ -179,8 +179,25 @@ function testTetris(outDir) {
   const after = readPng(dropped);
   const startup = readPng(opening);
   const magenta = (r, g, b) => r > 160 && g < 80 && b > 120;
-  const green = (r, g, b) => r < 80 && g > 100 && b < 80;
+  const piecePixel = (r, g, b) => r !== 0 || g !== 0 || b !== 0;
+  // Pieces are random. Track the colors actually drawn for the active piece
+  // and Next preview, not a particular deal's magenta/green sequence.
+  function pieceColors(rect, preview = false) {
+    const colors = new Set();
+    matchingPixels(before, rect, (r, g, b) => {
+      if (piecePixel(r, g, b) && !(preview && r === 192 && g === 192 && b === 192)) {
+        colors.add((r << 16) | (g << 8) | b);
+      }
+      return false;
+    });
+    return (r, g, b) => colors.has((r << 16) | (g << 8) | b);
+  }
+  const top = { x: 159, y: 61, w: 157, h: 140 };
+  const bottom = { x: 159, y: 240, w: 157, h: 40 };
+  const firstPiece = pieceColors(top);
+  const nextPiece = pieceColors({ x: 16, y: 215, w: 85, h: 45 }, true);
   const activeCaption = (r, g, b) => b > 90 && b > r * 1.5 && b > g * 1.5;
+  const inactiveCaption = (r, g, b) => r === g && g === b && r >= 128 && r <= 192;
   const logoRect = { x: 190, y: 32, w: 260, h: 65 };
   const logoFace = matchingPixels(startup, logoRect,
     (r, g, b) => r === 192 && g === 192 && b === 192);
@@ -190,19 +207,25 @@ function testTetris(outDir) {
     (r, g, b) => r === 128 && g === 128 && b === 128);
   const logoFrame = matchingPixels(startup, logoRect,
     (r, g, b) => r === 0 && g === 0 && b === 0);
-  assert(matchingPixels(startup, { x: 4, y: 3, w: 570, h: 16 }, activeCaption) > 5000,
-    'Tetris maximized startup must retain its visible active title bar');
+  const caption = { x: 4, y: 3, w: 570, h: 16 };
+  assert(matchingPixels(startup, caption, inactiveCaption) > 5000 &&
+    matchingPixels(startup, caption, activeCaption) === 0,
+    'Tetris caption must remain visible but inactive behind modal About, as on Win98');
+  assert(matchingPixels(before, caption, activeCaption) > 5000,
+    'Tetris caption must activate after About closes');
   assert(matchingPixels(startup, { x: 0, y: 38, w: 640, h: 415 }, magenta) > 30000,
     'Tetris must be maximized and tile the exposed client behind its About dialog');
   assert(logoFace > 12000 && logoHighlight > 800 && logoShadow > 900 && logoFrame > 500,
     `Tetris About must emboss the Microsoft mask on a button-face panel ` +
     `(face=${logoFace}, highlight=${logoHighlight}, shadow=${logoShadow}, frame=${logoFrame})`);
-  assert(matchingPixels(before, { x: 153, y: 60, w: 165, h: 100 }, magenta) > 250,
+  assert(matchingPixels(before, top, firstPiece) > 100,
     'Tetris should paint a colored active piece near the top of the playfield');
-  assert(matchingPixels(after, { x: 153, y: 240, w: 165, h: 45 }, magenta) > 100,
+  assert.strictEqual(matchingPixels(before, bottom, piecePixel), 0,
+    'the bottom of a new game must be empty before the hard drop');
+  assert(matchingPixels(after, bottom, firstPiece) > 500,
     'Tetris Down should settle the active piece at the bottom of the playfield');
-  assert(matchingPixels(after, { x: 153, y: 60, w: 165, h: 100 }, green) > 400,
-    'Tetris should spawn and paint the next colored piece after a hard drop');
+  assert(matchingPixels(after, top, nextPiece) > 100,
+    'Tetris should spawn the piece shown in its Next preview after a hard drop');
   assert(changedPixels(started, dropped, { x: 153, y: 55, w: 165, h: 230 }) > 600,
     'Tetris playfield should visibly advance after keyboard input');
   assert(matchingPixels(after, { x: 330, y: 50, w: 300, h: 390 }, magenta) > 40000,
