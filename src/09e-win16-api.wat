@@ -10387,6 +10387,12 @@
 
   ;; GDI.24 Ellipse(hDC, X1, Y1, X2, Y2) — the bounding box, same as Win32.
   (func $win16_Ellipse
+    (call $win16_gdi_rect_bridge (i32.const 24)))
+
+  ;; GDI's four hDC/rectangle APIs have the same Pascal word frame. Read
+  ;; every argument before opening the 32-bit scratch stack, and share the
+  ;; signed coordinate, handle, AX and far-return conversion in one place.
+  (func $win16_gdi_rect_bridge (param $ordinal i32)
     (local $hdc i32) (local $x1 i32) (local $y1 i32) (local $x2 i32) (local $y2 i32)
     (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 4))))
     (local.set $x1 (call $win16_coord (call $win16_arg16 (i32.const 3))))
@@ -10396,8 +10402,17 @@
     (call $win16_call32_begin (i32.const 5))
     (call $win16_call32_arg (i32.const 3) (local.get $x2))
     (call $win16_call32_arg (i32.const 4) (local.get $y2))
-    (call $handle_Ellipse (local.get $hdc) (local.get $x1) (local.get $y1)
-      (local.get $x2) (local.get $y2) (i32.const 0))
+    (if (i32.eq (local.get $ordinal) (i32.const 21))
+      (then (call $handle_ExcludeClipRect (local.get $hdc) (local.get $x1) (local.get $y1)
+        (local.get $x2) (local.get $y2) (i32.const 0)))
+      (else (if (i32.eq (local.get $ordinal) (i32.const 22))
+        (then (call $handle_IntersectClipRect (local.get $hdc) (local.get $x1) (local.get $y1)
+          (local.get $x2) (local.get $y2) (i32.const 0)))
+        (else (if (i32.eq (local.get $ordinal) (i32.const 24))
+          (then (call $handle_Ellipse (local.get $hdc) (local.get $x1) (local.get $y1)
+            (local.get $x2) (local.get $y2) (i32.const 0)))
+          (else (call $handle_Rectangle (local.get $hdc) (local.get $x1) (local.get $y1)
+            (local.get $x2) (local.get $y2) (i32.const 0))))))))
     (call $win16_call32_end)
     (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
@@ -10745,56 +10760,17 @@
 
   ;; GDI.21 ExcludeClipRect(hDC, X1, Y1, X2, Y2) -> the new clip region's type.
   (func $win16_ExcludeClipRect
-    (local $hdc i32) (local $x1 i32) (local $y1 i32) (local $x2 i32) (local $y2 i32)
-    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 4))))
-    (local.set $x1 (call $win16_coord (call $win16_arg16 (i32.const 3))))
-    (local.set $y1 (call $win16_coord (call $win16_arg16 (i32.const 2))))
-    (local.set $x2 (call $win16_coord (call $win16_arg16 (i32.const 1))))
-    (local.set $y2 (call $win16_coord (call $win16_arg16 (i32.const 0))))
-    (call $win16_call32_begin (i32.const 5))
-    (call $win16_call32_arg (i32.const 3) (local.get $x2))
-    (call $win16_call32_arg (i32.const 4) (local.get $y2))
-    (call $handle_ExcludeClipRect (local.get $hdc) (local.get $x1) (local.get $y1)
-      (local.get $x2) (local.get $y2) (i32.const 0))
-    (call $win16_call32_end)
-    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
-    (call $win16_api_return (i32.const 10)))
+    (call $win16_gdi_rect_bridge (i32.const 21)))
 
   ;; GDI.22 IntersectClipRect(hDC, X1, Y1, X2, Y2) -> the new clip region's
   ;; type. Pipe Dream intersects the cell rectangle before drawing the first
   ;; placed tile, so this is a gameplay path rather than startup decoration.
   (func $win16_IntersectClipRect
-    (local $hdc i32) (local $x1 i32) (local $y1 i32) (local $x2 i32) (local $y2 i32)
-    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 4))))
-    (local.set $x1 (call $win16_coord (call $win16_arg16 (i32.const 3))))
-    (local.set $y1 (call $win16_coord (call $win16_arg16 (i32.const 2))))
-    (local.set $x2 (call $win16_coord (call $win16_arg16 (i32.const 1))))
-    (local.set $y2 (call $win16_coord (call $win16_arg16 (i32.const 0))))
-    (call $win16_call32_begin (i32.const 5))
-    (call $win16_call32_arg (i32.const 3) (local.get $x2))
-    (call $win16_call32_arg (i32.const 4) (local.get $y2))
-    (call $handle_IntersectClipRect (local.get $hdc) (local.get $x1) (local.get $y1)
-      (local.get $x2) (local.get $y2) (i32.const 0))
-    (call $win16_call32_end)
-    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
-    (call $win16_api_return (i32.const 10)))
+    (call $win16_gdi_rect_bridge (i32.const 22)))
 
   ;; GDI.27 Rectangle(hDC, X1, Y1, X2, Y2).
   (func $win16_Rectangle
-    (local $hdc i32) (local $x1 i32) (local $y1 i32) (local $x2 i32) (local $y2 i32)
-    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 4))))
-    (local.set $x1 (call $win16_coord (call $win16_arg16 (i32.const 3))))
-    (local.set $y1 (call $win16_coord (call $win16_arg16 (i32.const 2))))
-    (local.set $x2 (call $win16_coord (call $win16_arg16 (i32.const 1))))
-    (local.set $y2 (call $win16_coord (call $win16_arg16 (i32.const 0))))
-    (call $win16_call32_begin (i32.const 5))
-    (call $win16_call32_arg (i32.const 3) (local.get $x2))
-    (call $win16_call32_arg (i32.const 4) (local.get $y2))
-    (call $handle_Rectangle (local.get $hdc) (local.get $x1) (local.get $y1)
-      (local.get $x2) (local.get $y2) (i32.const 0))
-    (call $win16_call32_end)
-    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
-    (call $win16_api_return (i32.const 10)))
+    (call $win16_gdi_rect_bridge (i32.const 27)))
 
   ;; GDI.23 Arc(hDC, X1, Y1, X2, Y2, X3, Y3, X4, Y4) — bounding box, then the
   ;; two radial points that cut the start and end of the arc out of it.

@@ -42,3 +42,10 @@ tests above completed before that concurrent resize. Logs are
 `/private/tmp/wa-toolbar-width-build-final.log` (map freshness rejection),
 `/private/tmp/wa-toolbar-width-insert.log`, and
 `/private/tmp/wa-toolbar-width-wordpad.log`.
+
+Follow-up: the DX owner regenerated the map. The subsequent full build during
+the Win16 rectangle-bridge follow-up passed both canonical and compatibility
+artifacts, including this toolbar refactor and its corrected attribution.
+Log: `/private/tmp/wa-win16-rect-build.log`, layout `da439e4cfa25a28d`.
+The shared-build limitation above is resolved; the earlier failures remain
+recorded as such.
