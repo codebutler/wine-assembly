@@ -47,3 +47,22 @@ the status pixels. Do not infer from that trace alone that the guard is wrong.
 
 Next: trace invalidation/non-client repaint of the canvas scrollbar and the
 old palette footprint on dock collapse, then add assertions for those regions.
+
+## Shared geometry cleanup: NOREDRAW (follow-up)
+
+While tracing the repaint path, `$ctrl_geom_sync` proved to ignore
+`SWP_NOREDRAW`: it immediately erased the old parent rectangle for a moved or
+shrunk native control, then invalidated the parent and siblings. This is a
+separate shared-path bug, not a confirmed cause of the custom Paint palette
+artifacts. The cleanup now returns **after** committing geometry when the
+flag is set. Both SetWindowPos and MoveWindow(FALSE) use this path.
+
+[Microsoft's SetWindowPos contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos)
+explicitly includes uncovered parent areas in the redraw suppression.
+The regression in `test-movewindow-child-size.js` checks both APIs, a
+shrink-only move, and an ordinary redraw-enabled move that must still queue
+parent/sibling paints. With the current test and the HEAD version of the
+control helper compiled in memory, it fails; the patched helper passes.
+WINDOWPOS mutation and parent-first paint tests also pass. Full build and
+Paint dock-toggle (0/0) / drawing (9/9) remain green. Palette remnants and
+scrollbar repaint remain open.

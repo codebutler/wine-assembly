@@ -744,6 +744,11 @@
           (i32.lt_s (local.get $h) (local.get $oh))))
         (i32.store16 offset=4 (local.get $a) (local.get $w))
         (i32.store16 offset=6 (local.get $a) (local.get $h))))
+    ;; Geometry still commits under SWP_NOREDRAW, but neither the old parent
+    ;; pixels nor sibling update regions may change. MoveWindow(FALSE) and
+    ;; deferred SetWindowPos batches share this path too.
+    (if (i32.and (local.get $flags) (i32.const 0x0008))
+      (then (return)))
     (if (i32.and
           (i32.and
             (i32.or (local.get $moved) (local.get $shrank))

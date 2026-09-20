@@ -37,6 +37,13 @@ const extraWat = String.raw`
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_get_parent") (param $hwnd i32) (result i32)
     (call $wnd_get_parent (local.get $hwnd)))
+  (func (export "test_clear_paints") (param $parent i32)
+    (call $paint_clear_subtree (local.get $parent))
+    (global.set $paint_pending (i32.const 0)))
+  (func (export "test_paint_pending") (param $hwnd i32) (result i32)
+    (call $paint_flag_test_hwnd (local.get $hwnd)))
+  (func (export "test_reparent") (param $hwnd i32) (param $parent i32)
+    (call $wnd_set_parent (local.get $hwnd) (local.get $parent)))
 `;
 
 (async () => {
@@ -121,6 +128,28 @@ const extraWat = String.raw`
   e.test_call_SetWindowPos(first, 0, 0, 20, 10, 0x03);
   assert.deepStrictEqual(zOrders, [[top, 0]],
     'child z-order stays in the retained sibling model, not the host global list');
+
+  // Native control geometry cleanup must not enqueue parent/sibling paints
+  // when the public API explicitly suppresses redraw.
+  e.test_reparent(second, top);
+  for (const move of [
+    () => e.test_call_SetWindowPos(first, 40, 42, 90, 35, 0x1c),
+    () => e.test_call_MoveWindow(first, 50, 52, 80, 30, 0),
+    () => e.test_call_SetWindowPos(first, 0, 0, 70, 25, 0x1e), // shrink, NOMOVE
+  ]) {
+    e.test_clear_paints(top);
+    assert.strictEqual(move(), 1);
+    for (const hwnd of [top, first, second]) {
+      assert.strictEqual(e.test_paint_pending(hwnd), 0,
+        `NOREDRAW must not invalidate HWND ${hwnd.toString(16)} (parent=${top.toString(16)}, moved=${first.toString(16)}, sibling=${second.toString(16)})`);
+    }
+  }
+  e.test_clear_paints(top);
+  e.test_call_SetWindowPos(first, 60, 62, 60, 20, 0x14);
+  assert.strictEqual(e.test_paint_pending(top), 1,
+    'ordinary move still invalidates the exposed parent');
+  assert.strictEqual(e.test_paint_pending(second), 1,
+    'ordinary move still invalidates overlapping sibling coverage');
 
   console.log('PASS MoveWindow/SetWindowPos preserve geometry, repaint, and z-order flags');
 })().catch(err => {
