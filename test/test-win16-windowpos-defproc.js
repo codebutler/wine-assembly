@@ -92,6 +92,25 @@ const extraWat = `
   (func (export "test_post_count") (result i32) (call $post_queue_total_count))
   (func (export "test_post_msg") (param $i i32) (result i32)
     (call $post_queue_peek_field (local.get $i) (i32.const 1)))
+  (func (export "test_begin_core") (param $h i32) (result i32)
+    (i32.store (global.get $reg_base) (i32.const 0x12345678))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0x23456789))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (drop (call $begin_paint_core (local.get $h) (i32.const 0x110e00) (i32.const 1)))
+    (i32.and
+      (i32.eq (i32.load (global.get $reg_base)) (i32.const 0x12345678))
+      (i32.and
+        (i32.eq (i32.load offset=8 (global.get $reg_base)) (i32.const 0x23456789))
+        (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.const 0x110800)))))
+  (func (export "test_begin16") (param $h i32) (param $caller i32)
+    (call $gs32 (global.get $GUEST_STACK) (i32.const 0x76543210))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (local.get $caller))
+    (call $gs16 (i32.const 0x110802) (i32.const 0xf))
+    (call $gs32 (i32.const 0x110804) (i32.const 0x00170e00))
+    (call $gs16 (i32.const 0x110808) (call $win16_h16 (local.get $h)))
+    (call $win16_BeginPaint))
+  (func (export "test_bridge_scratch") (result i32) (call $gl32 (global.get $GUEST_STACK)))
 `;
 
 // Pascal far wndproc, recording {message,wParam,lParam} into SS:0904.
@@ -352,5 +371,21 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.deepStrictEqual(runShow(showNested, 3, 0x70), [5, 0x14, 0x0f],
     'UpdateWindow inside maximize consumes initial erase; ShowWindow must not erase again afterward');
   assert.strictEqual(e.test_dirty(showNested), 0);
+  const corePaint = e.test_window(0x900);
+  e.test_damage(corePaint, 0);
+  assert.strictEqual(e.test_begin_core(corePaint), 1, 'paint core must not change EAX, EDX or ESP');
+  assert.deepStrictEqual([0, 1, 2, 3].map(i => e.guest_read32(0x110e08 + 4 * i)), [3, 4, 12, 15]);
+  const directPaint = e.test_window(0x900);
+  e.test_damage(directPaint, 0);
+  e.guest_write32(0x110dfe, 0xabcdef01);
+  e.guest_write32(0x110e20, 0x13579bdf);
+  e.test_begin16(directPaint, 0x80);
+  assert.strictEqual(e.get_eip(), 0x100080);
+  assert.strictEqual(e.get_esp(), 0x11080a, 'BeginPaint consumes exactly six Pascal argument bytes');
+  assert.strictEqual(e.test_bridge_scratch(), 0x76543210, 'Win16 BeginPaint must not overwrite shared bridge scratch');
+  assert.strictEqual(e.guest_read32(0x110dfe) & 0xffff, 0xef01);
+  assert.strictEqual(e.guest_read32(0x110e20), 0x13579bdf);
+  assert.deepStrictEqual([0, 1, 2, 3].map(i => e.guest_read32(0x110e04 + 2 * i) & 0xffff), [3, 4, 12, 15]);
+  assert.strictEqual(e.test_result() & 0xffff, e.guest_read32(0x110e00) & 0xffff, 'returned HDC matches narrowed PAINTSTRUCT');
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

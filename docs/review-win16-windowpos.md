@@ -334,3 +334,33 @@ failure), `wa-update16-show-wep1.log`, `wa-update16-show-vb.log`,
 `wa-update16-final-hearts.log`, `wa-update16-final-win32.log`,
 `wa-update16-final-defer.log`, `wa-update16-show-solitaire.log`,
 `wa-update16-show-solitaire-baseline.log`, `wa-update16-final-build.log`.
+
+## 2026-09-20: BeginPaint bridge ownership prerequisite
+
+Extracted `begin_paint_core(hwnd, paintstruct, win16_bridge) -> HDC`. The
+Win32 handler now owns only its ABI result/stack cleanup; Win16 calls the
+same stack-neutral core directly instead of constructing a synthetic Win32
+frame. The Win16 canonical PAINTSTRUCT occupies 64 bytes on that invocation's
+guest stack, replacing global `GUEST_STACK` scratch. The temporary global
+`win16_beginpaint_call32` is removed; bridge-specific policy is an explicit
+argument. Existing Win16 child-fill and clip behavior is preserved even
+though calling the core no longer temporarily changes `code16` to zero.
+
+This is preparation for BeginPaint-owned erase callbacks, **not** a fix for
+their timing/result semantics. The current brush-derived fErase shortcut,
+last-registered class-style lookup and empty-region fallback are still
+present. In particular, the Diablo warning attached to the fErase shortcut
+must be investigated with real paint sequencing, not removed blindly or
+treated as the Windows contract.
+
+The focused test now checks that the core preserves EAX/EDX/ESP, and that
+the real Pascal bridge preserves global scratch, adjacent output guards,
+partial rectangle, narrowed HDC and far return/argument cleanup. The
+existing actual nested paint callbacks also pass. An in-memory mutation
+restoring global scratch fails the new scratch-preservation assertion.
+WEP1 passes 8/8, Rodent/Rattler pass, shared Win32 parent/child painting passes,
+and the normal/compatibility builds pass.
+
+Evidence: `/private/tmp/wa-begin-core-far-final.log`,
+`wa-begin-core-scratch-negative.log`, `wa-begin-core-win32.log`,
+`wa-begin-core-wep1.log`, `wa-begin-core-vb.log`, `wa-begin-core-build.log`.

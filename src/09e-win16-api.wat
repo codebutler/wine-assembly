@@ -7914,25 +7914,26 @@
   ;; fIncUpdate(W) rgbReserved(16); the 32-bit one is the same fields at
   ;; double the width for the first six.
   (func $win16_BeginPaint
-    (local $hwnd i32) (local $dst i32) (local $tmp i32)
+    (local $hwnd i32) (local $dst i32) (local $tmp i32) (local $sp i32) (local $hdc i32)
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 2))))
     (local.set $dst (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
-    (local.set $tmp (global.get $GUEST_STACK))
-    (call $win16_call32_begin (i32.const 2))
-    (global.set $win16_beginpaint_call32 (i32.const 1))
-    (call $handle_BeginPaint (local.get $hwnd) (local.get $tmp)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $win16_beginpaint_call32 (i32.const 0))
-    (call $win16_call32_end)
-    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
-    (call $gs16 (local.get $dst) (i32.load offset=0 (global.get $reg_base)))
+    ;; This invocation owns its canonical PAINTSTRUCT. Do not borrow the
+    ;; global bridge scratch or call a second ABI's stack-cleaning handler.
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $tmp (i32.sub (local.get $sp) (i32.const 64)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $tmp))
+    (local.set $hdc (call $win16_h16
+      (call $begin_paint_core (local.get $hwnd) (local.get $tmp) (i32.const 1))))
+    (call $gs16 (local.get $dst) (local.get $hdc))
     (call $gs16 (i32.add (local.get $dst) (i32.const 2))
       (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
     (call $win16_rect_narrow (i32.add (local.get $dst) (i32.const 4))
                              (i32.add (local.get $tmp) (i32.const 8)))
     (call $gs16 (i32.add (local.get $dst) (i32.const 12)) (i32.const 0))
     (call $gs16 (i32.add (local.get $dst) (i32.const 14)) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hdc))
     (call $win16_api_return (i32.const 6)))
 
   (func $win16_EndPaint
