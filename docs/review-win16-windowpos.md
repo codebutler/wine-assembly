@@ -1451,3 +1451,40 @@ No production behavior changed in this reference-probe step. Still to test:
 filtered nonmatching hardware, actual child/caption input, GetMessage,
 cross-thread/cross-app activation, nested pumps/destruction and Win16 far
 callbacks. Do not extrapolate their ordering from this same-thread trace.
+
+### Default mouse-activation response implemented (2026-09-20)
+
+DefWindowProc now implements the measured default: a WS_CHILD first sends
+WM_MOUSEACTIVATE synchronously to its parent with unchanged top-level HWND
+and lParam; a nonzero parent LONG passes through, and zero falls back to
+MA_ACTIVATE except for HTCAPTION/WM_LBUTTONDOWN (MA_NOACTIVATE). Merely owned
+popups do not use the child forwarding path. The fallback and parent lookup
+are shared helpers, not separate Win32/Win16 policy copies.
+
+The Win16 adapter enters a far parent procedure using an invocation-owned
+stack continuation containing the original lParam. It preserves a nonzero
+full DX:AX response and returns to the original Pascal caller; it does not
+post a query whose answer would arrive too late. Nested parent default calls
+retain separate frames. This implements explicit default processing only:
+GetMessage/PeekMessage still do not run a mouse-activation transaction.
+
+Tests extend the existing OpenIcon and Win16 window/default matrices with
+all 15 native default combinations, parent answers 0–4 plus 0x10000,
+client/caption fallback, unchanged parameters and once-only parent calls.
+The Win32 test uses executable x86 callbacks and checks that owned popups do
+not forward. The far test checks stack/result restoration and a two-level
+far parent chain. Both pass (`/private/tmp/wa-mouse-default32.log` and
+`/private/tmp/wa-mouse-default16-nested.log`). Disabling the Win32 branch
+fails the default-response assertion; disabling only the far branch fails
+the synchronous parent-query count (the two `wa-mouse-default-negative*`
+logs). These negative controls validate behavior, not just source presence.
+
+Full gated normal/compat build passes (`/private/tmp/wa-mouse-default-build.log`),
+retaining layout `6ee344b49d5799cb`. Completed-artifact Notepad taskbar
+minimize/restore passes in cooperative and Worker Chrome
+(`/private/tmp/wa-mouse-default-browser.log`), and the Win16 WEP3 gameplay
+suite passes all seven cases (`/private/tmp/wa-mouse-default-wep3.log`). These
+are regression checks, not proof of the still-unimplemented input activation
+transaction. Next integrate query/activation/eat at removal, with
+WA_CLICKACTIVE and far-safe pump completion, before removing eager renderer
+focus/raise behavior.

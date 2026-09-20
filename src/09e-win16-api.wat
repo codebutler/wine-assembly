@@ -8087,6 +8087,22 @@
       (then (call $window_system_show_commit (local.get $hwnd) (local.get $sc))))
     (call $win16_cont_resume))
 
+  ;; Parent WM_MOUSEACTIVATE must return synchronously, including nested far
+  ;; DefWindowProc calls. The fallback lParam belongs to this invocation.
+  (global $WIN16_CONT_MOUSEACTIVATE i32 (i32.const 0xFFBC))
+  (func $win16_mouseactivate_continue
+    (local $sp i32) (local $answer i32)
+    (local.set $answer (i32.or
+      (i32.and (i32.load (global.get $reg_base)) (i32.const 0xFFFF))
+      (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (if (i32.eqz (local.get $answer))
+      (then (local.set $answer (call $mouse_activate_default (call $gl32 (local.get $sp))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 4)))
+    (call $win16_cont_resume)
+    (i32.store (global.get $reg_base) (i32.and (local.get $answer) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $answer) (i32.const 16))))
+
   ;; USER.107 DefWindowProc(hWnd, message, wParam, lParam) -> LONG.
   ;;
   ;; This is also the procedure a task gets back when it subclasses one of our
@@ -8098,11 +8114,33 @@
   ;; did nothing at all until this was here.
   (func $win16_DefWindowProc
     (local $hwnd i32) (local $message i32) (local $wparam i32) (local $lparam i32)
-    (local $class i32) (local $sp i32) (local $flags i32)
+    (local $class i32) (local $sp i32) (local $flags i32) (local $parent i32)
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 4))))
     (local.set $message (call $win16_arg16 (i32.const 3)))
     (local.set $wparam (call $win16_arg16 (i32.const 2)))
     (local.set $lparam (call $win16_arg32 (i32.const 0)))
+    (if (i32.eq (local.get $message) (i32.const 0x0021))
+      (then
+        (local.set $parent (call $mouse_activate_parent (local.get $hwnd)))
+        (if (local.get $parent)
+          (then
+            (if (call $win16_is_far_proc (call $wnd_table_get (local.get $parent)))
+              (then
+                (call $win16_cont_push (call $win16_take_return (i32.const 10)) (i32.const 0))
+                (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+                (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+                (call $gs32 (local.get $sp) (local.get $lparam))
+                (call $win16_enter_wndproc (call $wnd_table_get (local.get $parent))
+                  (call $win16_h16 (local.get $parent)) (local.get $message)
+                  (local.get $wparam) (local.get $lparam)
+                  (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_MOUSEACTIVATE))
+                (return)))))
+        (local.set $flags (call $mouse_activate_defproc (local.get $hwnd)
+          (call $win16_h32 (local.get $wparam)) (local.get $lparam)))
+        (i32.store (global.get $reg_base) (i32.and (local.get $flags) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $flags) (i32.const 16)))
+        (call $win16_api_return (i32.const 10))
+        (return)))
     (if (i32.and (i32.eq (local.get $message) (i32.const 0x0112))
           (call $window_system_show_needs_query (local.get $hwnd) (local.get $wparam)))
       (then
@@ -13834,6 +13872,8 @@
       (then (call $win16_activate_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_QUERYOPEN))
       (then (call $win16_queryopen_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_MOUSEACTIVATE))
+      (then (call $win16_mouseactivate_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_BEGINPAINT))
       (then (call $win16_beginpaint_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took

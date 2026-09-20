@@ -3021,9 +3021,38 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
+  ;; Native Win98 reference: only caption + client LBUTTONDOWN declines
+  ;; activation here. The high word is the originating mouse message, not
+  ;; its later non-client translation. Keep this shared with the far adapter.
+  (func $mouse_activate_default (param $lp i32) (result i32)
+    (select (i32.const 3) (i32.const 1)
+      (i32.eq (local.get $lp) (i32.const 0x02010002))))
+
+  (func $mouse_activate_parent (param $hwnd i32) (result i32)
+    (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000))
+      (then (return (call $wnd_get_parent (local.get $hwnd)))))
+    (i32.const 0))
+
+  (func $mouse_activate_defproc (param $hwnd i32) (param $top i32) (param $lp i32) (result i32)
+    (local $parent i32) (local $answer i32)
+    (local.set $parent (call $mouse_activate_parent (local.get $hwnd)))
+    (if (local.get $parent)
+      (then
+        (local.set $answer (call $wnd_send_message (local.get $parent)
+          (i32.const 0x21) (local.get $top) (local.get $lp)))
+        (if (local.get $answer) (then (return (local.get $answer))))))
+    (call $mouse_activate_default (local.get $lp)))
+
   ;; 78: DefWindowProcA
   (func $handle_DefWindowProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $text_wa i32) (local $text_len i32)
+    (if (i32.eq (local.get $arg1) (i32.const 0x0021))
+      (then
+        (i32.store (global.get $reg_base) (call $mouse_activate_defproc
+          (local.get $arg0) (local.get $arg2) (local.get $arg3)))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (return)))
     ;; WM_WINDOWPOSCHANGED: USER derives WM_MOVE/WM_SIZE only when the
     ;; application passes this message to DefWindowProc. A wndproc that
     ;; consumes it intentionally suppresses both legacy messages.

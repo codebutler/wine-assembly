@@ -14,6 +14,16 @@ const { bootRenderHarness } = require('./render-helper');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_mouse_default") (param $h i32) (param $top i32) (param $lp i32) (result i32)
+    (local $saved i32)
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DefWindowProcA (local.get $h) (i32.const 0x21) (local.get $top)
+      (local.get $lp) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load (global.get $reg_base)))
+  (func (export "test_mouse_parent") (param $h i32) (param $p i32) (param $style i32)
+    (call $wnd_set_parent (local.get $h) (local.get $p))
+    (drop (call $wnd_set_style (local.get $h) (local.get $style))))
   (func (export "test_thunk") (param $id i32) (result i32)
     (local $p i32)
     (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
@@ -121,6 +131,35 @@ const u32 = value => [value, value >>> 8, value >>> 16, value >>> 24]
   const imageBase = e.get_image_base() >>> 0;
   const guestBase = e.get_guest_base() >>> 0;
   const toWasm = guest => (guest - imageBase + guestBase) >>> 0;
+  const mouseChild = e.test_make_icon_window(0);
+  for (const hit of [1, 2, 3, 8, 9]) for (const msg of [0x201, 0x204, 0xa1]) {
+    assert.strictEqual(e.test_mouse_default(mouseChild, mouseChild, (msg << 16) | hit),
+      hit === 2 && msg === 0x201 ? 3 : 1, `native default hit=${hit} msg=${msg}`);
+  }
+  const mouseRecord = e.guest_alloc(20);
+  for (const answer of [0, 1, 2, 3, 4, 0x10000]) {
+    const proc = e.guest_alloc(64);
+    const code = [];
+    const dword = n => [n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255];
+    // Record actual stdcall args before returning the selected LONG.
+    for (let i = 0; i < 4; i++) code.push(0x8b, 0x44, 0x24, 4 + i * 4,
+      0xa3, ...dword(mouseRecord + i * 4));
+    code.push(0xff, 0x05, ...dword(mouseRecord + 16), 0xb8, ...dword(answer), 0xc2, 16, 0);
+    new Uint8Array(memory.buffer).set(code, toWasm(proc));
+    const parent = e.test_make_icon_window(proc);
+    for (const hit of [1, 2]) {
+      new Uint8Array(memory.buffer).fill(0, toWasm(mouseRecord), toWasm(mouseRecord) + 20);
+      e.test_mouse_parent(mouseChild, parent, 0x50000000);
+      const lp = 0x02010000 | hit;
+      assert.strictEqual(e.test_mouse_default(mouseChild, parent, lp), answer || (hit === 2 ? 3 : 1));
+      const data = new DataView(memory.buffer, toWasm(mouseRecord), 20);
+      assert.deepStrictEqual(Array.from({length: 5}, (_, i) => data.getUint32(i * 4, true)),
+        [parent, 0x21, parent, lp, 1], 'parent called once with unchanged parameters');
+    }
+    e.test_mouse_parent(mouseChild, parent, 0x90000000);
+    assert.strictEqual(e.test_mouse_default(mouseChild, parent, 0x02010001), 1,
+      'owned popup does not forward as a WS_CHILD');
+  }
   const allowProc = e.guest_alloc(8) >>> 0;
   new Uint8Array(memory.buffer).set(Uint8Array.from([
     0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax,1

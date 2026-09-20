@@ -4,6 +4,18 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  (func (export "test_mouse") (param $h i32) (param $top i32) (param $lp i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (i32.const 0x90))
+    (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
+    (call $gs32 (i32.const 0x110804) (local.get $lp))
+    (call $gs16 (i32.const 0x110808) (call $win16_h16 (local.get $top)))
+    (call $gs16 (i32.const 0x11080a) (i32.const 0x21))
+    (call $gs16 (i32.const 0x11080c) (call $win16_h16 (local.get $h)))
+    (call $win16_DefWindowProc))
+  (func (export "test_long_result") (result i32)
+    (i32.or (i32.and (i32.load (global.get $reg_base)) (i32.const 0xFFFF))
+      (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))
   (func (export "test_init")
     (global.set $WIN16_THUNK_SEL (call $win16_index_to_sel (i32.const 3)))
     (call $win16_seg_set (i32.const 1) (i32.const 0x100000) (i32.const 65536) (i32.const 0) (i32.const 1))
@@ -652,6 +664,55 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     return Array.from({length: e.guest_read32(0x110900)}, (_, i) =>
       e.guest_read32(0x110904 + i * 8) & 0xffff);
   };
+  const mouseChild = e.test_window(0x200);
+  const runMouse = (target, top, lp) => {
+    e.guest_write32(0x110900, 0);
+    writeCode(0x90, [0xeb, 0xfe]);
+    e.test_mouse(target, top, lp);
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 30; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090, 'mouse default returns to far caller');
+    assert.strictEqual(e.get_esp(), 0x11080e, 'mouse default preserves Pascal stack');
+    return e.test_long_result();
+  };
+  for (const hit of [1, 2, 3, 8, 9]) for (const msg of [0x201, 0x204, 0xa1]) {
+    assert.strictEqual(runMouse(mouseChild, mouseChild, (msg << 16) | hit),
+      hit === 2 && msg === 0x201 ? 3 : 1);
+    assert.strictEqual(e.guest_read32(0x110900), 0, 'top-level default does not query itself');
+  }
+  for (const [idx, answer] of [0, 1, 2, 3, 4, 0x10000].entries()) {
+    const off = 0x6000 + idx * 0x100;
+    writeCode(off, queryProc(answer & 0xffff, answer >>> 16));
+    const parent = e.test_window(off);
+    e.test_as_child(mouseChild, parent);
+    for (const hit of [1, 2]) {
+      const lp = 0x02010000 | hit;
+      assert.strictEqual(runMouse(mouseChild, parent, lp), answer || (hit === 2 ? 3 : 1));
+      assert.strictEqual(e.guest_read32(0x110900), 1, 'one synchronous parent query');
+      assert.strictEqual(e.guest_read32(0x110904) & 0xffff, 0x21);
+      assert.strictEqual(e.guest_read32(0x110904) >>> 16, e.test_narrow(parent));
+      assert.strictEqual(e.guest_read32(0x110908), lp);
+    }
+  }
+  // A far parent chains to DefWindowProc, which asks its own far parent.
+  // Two live continuation frames must retain the original top/lParam/result.
+  writeCode(0x6700, [
+    ...recorder().slice(0, -9),
+    ...[14, 12, 10, 8, 6].flatMap(offset => [0xff, 0x76, offset]),
+    0x9a, ...word(e.test_thunk()), 0x1f, 0,
+    0x5b, 0x5d, 0xca, 0x0a, 0,
+  ]);
+  const forwardingParent = e.test_window(0x6700);
+  const grandparent = e.test_window(0x6500); // returns DX:AX = 0001:0000
+  e.test_as_child(forwardingParent, grandparent);
+  e.test_as_child(mouseChild, forwardingParent);
+  assert.strictEqual(runMouse(mouseChild, grandparent, 0x02010002), 0x10000);
+  assert.strictEqual(e.guest_read32(0x110900), 2, 'nested far parent chain');
+  for (const offset of [0x110904, 0x11090c]) {
+    assert.strictEqual(e.guest_read32(offset), (e.test_narrow(grandparent) << 16) | 0x21);
+    assert.strictEqual(e.guest_read32(offset + 4), 0x02010002);
+  }
   writeCode(0x5400, queryProc(1));
   writeCode(0x5500, queryProc(0));
   writeCode(0x5800, queryProc(0, 1)); // WM_QUERYOPEN accepts a nonzero LONG.
