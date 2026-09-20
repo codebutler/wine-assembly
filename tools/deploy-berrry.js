@@ -224,6 +224,11 @@ const NOT_REDISTRIBUTABLE = new Set([
 const NEVER_PUBLISH_PREFIXES = [
   'test/binaries/candidates/morrowind/',
   'binaries/candidates/morrowind/',
+  // A promotional Maxis/EA demo off a third-party compilation CD. Its media
+  // carries no redistribution grant at all, so unlike the StarCraft and Diablo
+  // demos above it is local-only whatever the registry says (test/binaries/SOURCES.md).
+  'test/binaries/candidates/simcity-2000-demo/',
+  'binaries/candidates/simcity-2000-demo/',
   'downloads/',
 ];
 const neverPublish = p => {

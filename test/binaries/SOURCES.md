@@ -362,6 +362,39 @@ tests beneath the ignored local candidate pool, but their files must not be
 committed, deployed, or rehosted. The remaining packages stay external
 research references unless a rights holder supplies broader terms.
 
+## SimCity 2000 Win95 Interactive Demo (`candidates/simcity-2000-demo/`)
+
+Source: `https://archive.org/details/over-1000-games-for-windows`
+File: `Over1000GamesForWindows.iso` — 719,095,808 bytes, MD5
+`5ca6eb1fd39c4374e76ddad7da56d804`, SHA-1
+`1509d3a5605bf5ebfee1f6119568de2c6187e565` (downloaded 2026-09-19). A 2001
+shovelware compilation CD; its Win32 content is thin, but it carries ~1,160
+16-bit NE binaries and a handful of 32-bit demos.
+
+The demo lives at `STRATEGY/SCITY2K/` on the mounted image: a 16-bit
+InstallShield 3 package (`SETUP.EXE`, `_INST32I.EX_`, `DATA.Z`, `SETUP.INS`).
+It installs in two stages inside the emulator — the 16-bit `SETUP.EXE` unpacks
+the 32-bit engine members into `C:\WINDOWS\TEMP\` and runs `_ins0432._mp`,
+which writes `C:\Program Files\Maxis\SimCity 2000 Demo\` (45 data files plus
+`simdemo.exe`, 4.3 MB) and the `HKCU\Software\Maxis\SimCity 2000 Win95 Demo`
+key. The working tree keeps the *installed* result under
+`candidates/simcity-2000-demo/installed/`;
+`tools/gen-simcity2000-manifest.js` writes the browser/CLI manifest beside it,
+including the registry block, because the game refuses to start without that
+key ("Sim City 2000 has not been properly registered with the system") and
+resolves every asset directory through its `Paths` values rather than through
+its own directory. Registered as the local candidate `simcity2000_demo`; it
+reaches gameplay (`node test/run.js --app=simcity2000_demo`).
+
+**Not redistributable.** `README.TXT` and `NOD.TXT` on the media are marketing
+copy — product description, Maxis support phone number, BBS, "Run Setup.exe" —
+and carry no redistribution grant of any kind. This is a promotional
+interactive demo of Maxis/EA property obtained from a third-party compilation
+CD, which is not an authoritative license source, so it does **not** qualify as
+freely-copyable shareware the way the StarCraft and Diablo demos do. It stays a
+localhost-only candidate: the installed tree is ignored by git and must not be
+committed, deployed to the live site, or rehosted.
+
 ## Candidate corpus (`candidates/`)
 
 The optional CLI-only candidate pool is described by
