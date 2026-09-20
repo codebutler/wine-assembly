@@ -1177,7 +1177,9 @@
         (local.get $packed) (local.get $dwVertexCount))
       (call $heap_free (local.get $packed))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    ;; 6 dwords with `this` (primType, fvf, lpvVerts, dwVtxCount, dwFlags), so
+    ;; 28 -- the same arity the hand-written Device3 twin above already pops.
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; IDirect3DDevice7_DrawIndexedPrimitive — 7 args (incl. this)
   (func $handle_IDirect3DDevice7_DrawIndexedPrimitive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1196,7 +1198,10 @@
         (local.get $lpwIndices) (local.get $dwIndexCount))
       (call $heap_free (local.get $packed))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
+    ;; 8 dwords with `this` (…, lpwIndices, dwIndexCount, dwFlags), so 36 --
+    ;; matching the Device3 twin, and matching this handler's own reads, which
+    ;; already go out to esp+28 for the seventh argument.
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
 
   ;; IDirect3DDevice7_SetClipStatus — 2 args (incl. this)
   (func $handle_IDirect3DDevice7_SetClipStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1216,10 +1221,13 @@
 
   ;; IDirect3DDevice7_DrawIndexedPrimitiveStrided — 8 args (incl. this)
   (func $handle_IDirect3DDevice7_DrawIndexedPrimitiveStrided (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; Sixth and seventh arguments (lpwIndices, dwIndexCount) are esp+24 and
+    ;; esp+28; esp+20 is $arg4, already passed above. The pop here was always
+    ;; 36, so only the reads were short.
     (call $d3dim_draw_indexed_primitive_strided
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
 
   ;; IDirect3DDevice7_DrawPrimitiveVB — 6 args (incl. this)
@@ -1228,13 +1236,18 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
-  ;; IDirect3DDevice7_DrawIndexedPrimitiveVB — 7 args (incl. this)
+  ;; IDirect3DDevice7_DrawIndexedPrimitiveVB — 8 args (incl. this)
+  ;; (primType, lpVB, dwStartVertex, dwNumVertices, lpwIndices, dwIndexCount,
+  ;; dwFlags). $arg0..$arg4 are esp+4..esp+20, so the sixth and seventh
+  ;; arguments are esp+24 and esp+28 -- reading esp+20 handed the core a copy
+  ;; of $arg4 (dwNumVertices) where it wanted lpwIndices, and dropped
+  ;; dwIndexCount entirely.
   (func $handle_IDirect3DDevice7_DrawIndexedPrimitiveVB (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_vb_draw_indexed_primitive
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
 
   ;; IDirect3DDevice7_ComputeSphereVisibility — 6 args (incl. this)
   (func $handle_IDirect3DDevice7_ComputeSphereVisibility (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

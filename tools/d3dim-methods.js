@@ -133,14 +133,19 @@ const interfaces = [
     { name: 'BeginStateBlock',               nargs: 1 },
     { name: 'EndStateBlock',                 nargs: 2 },
     { name: 'PreLoad',                       nargs: 2 },
-    { name: 'DrawPrimitive',                 nargs: 5 },
-    { name: 'DrawIndexedPrimitive',          nargs: 7 },
+    // These three were one dword short. Cross-check: the hand-written
+    // IDirect3DDevice3 twins in 09a8-handlers-directx.wat pop 28 and 36 for
+    // the same two signatures, and DrawPrimitiveStrided/DrawPrimitiveVB here
+    // already carry the 6/8 shape. A short pop is not cosmetic -- the caller
+    // returns through its own first argument.
+    { name: 'DrawPrimitive',                 nargs: 6 },
+    { name: 'DrawIndexedPrimitive',          nargs: 8 },
     { name: 'SetClipStatus',                 nargs: 2 },
     { name: 'GetClipStatus',                 nargs: 2 },
     { name: 'DrawPrimitiveStrided',          nargs: 6 },
     { name: 'DrawIndexedPrimitiveStrided',   nargs: 8 },
     { name: 'DrawPrimitiveVB',               nargs: 6 },
-    { name: 'DrawIndexedPrimitiveVB',        nargs: 7 },
+    { name: 'DrawIndexedPrimitiveVB',        nargs: 8 },
     { name: 'ComputeSphereVisibility',       nargs: 6 },
     { name: 'GetTexture',                    nargs: 3 },
     { name: 'SetTexture',                    nargs: 3, body: 'SET_TEX' },

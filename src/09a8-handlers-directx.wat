@@ -11724,24 +11724,13 @@
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
+  ;; Same eight-argument ABI as Device7, and the same FVF packing. Once the
+  ;; two pops agreed these bodies were byte-identical, which the duplicate-WAT
+  ;; gate caught; share one so a fix to either cannot drift by revision.
   (func $handle_IDirect3DDevice3_DrawIndexedPrimitive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dwVertexCount i32) (local $lpwIndices i32) (local $dwIndexCount i32) (local $vtxType i32) (local $packed i32)
-    (local.set $dwVertexCount (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
-    (local.set $lpwIndices    (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (local.set $dwIndexCount  (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
-    (local.set $vtxType (call $d3dim_fvf_vtxtype (local.get $arg2)))
-    (local.set $packed
-      (call $d3dim_pack_fvf_vertices
-        (local.get $arg2) (local.get $arg3) (local.get $dwVertexCount)
-        (call $d3dim_texcoord_index (local.get $arg0))))
-    (if (local.get $packed) (then
-      (call $d3dim_draw_indexed_primitive
-        (local.get $arg0) (local.get $arg1) (local.get $vtxType)
-        (local.get $packed) (local.get $dwVertexCount)
-        (local.get $lpwIndices) (local.get $dwIndexCount))
-      (call $heap_free (local.get $packed))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
+    (call $handle_IDirect3DDevice7_DrawIndexedPrimitive
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (local.get $name_ptr)))
 
   (func $handle_IDirect3DDevice3_SetClipStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_set_clip_status (local.get $arg0) (local.get $arg1))
@@ -11767,9 +11756,17 @@
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
+  ;; IDirect3DDevice3::DrawIndexedPrimitiveVB(primType, lpVB, lpwIndices,
+  ;; dwIndexCount, dwFlags) — 6 dwords with `this`, so 28. The v3 form has no
+  ;; dwStartVertex/dwNumVertices; that pair is what makes the v7 form 8. This
+  ;; popped 32, and four bytes is not a cosmetic error: the caller's epilogue
+  ;; then pops one slot too high, `ret` takes the caller's first argument as a
+  ;; return address, and the guest jumps to whatever that was. Diablo II's
+  ;; Direct3D backend hits this during the Act I load and lands on 0x140 or
+  ;; 0x280 -- its own screen coordinates, 320 and 640.
   (func $handle_IDirect3DDevice3_DrawIndexedPrimitiveVB (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   (func $handle_IDirect3DDevice3_ComputeSphereVisibility (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $out i32) (local $i i32)

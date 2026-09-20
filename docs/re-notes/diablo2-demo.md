@@ -751,3 +751,50 @@ jumps into blank memory, `prev_eip` is *already inside* the blank run and the
 block that jumped is one further back. The crash dump simply never printed
 them. It does now, and disassembles `prev2_eip` too, so the next trap into
 nothing names its own caller instead of costing a session.
+
+With that printed, `prev2_eip` landed on `d2direct3d+0x645d` immediately — a
+function *epilogue*:
+
+```
+1000643a  mov  eax, [0x1001aa74]      ; the D3D device
+1000643f  mov  ecx, [0x1001b138]      ; a vertex buffer
+10006445  push 0x1c / 0x96 / 0x1001af94 / ecx / 4 / eax
+10006457  call [edx+0x8c]             ; vtable slot 35
+1000645d  pop edi / pop esi / pop ebp / pop ebx / pop ecx
+10006462  ret  0x1c
+```
+
+Six pushes, vtable slot 35: `IDirect3DDevice3::DrawIndexedPrimitiveVB`. (The
+other call on `0x1001b138` — slot 3, four pushes, flags 0x21 — is
+`IDirect3DVertexBuffer::Lock`, which is what fixes the object types.) **Our
+handler popped 32 bytes for a 28-byte frame.** The v3 signature is
+`(primType, lpVB, lpwIndices, dwIndexCount, dwFlags)`; only v7 inserts
+`dwStartVertex`/`dwNumVertices` to make it eight dwords, and the v3 handler had
+been given the v7 count.
+
+So the epilogue above ran one slot high: the five `pop`s took the wrong saved
+registers and `ret` took **the caller's own first argument** as a return
+address. That is why the two runs jumped to `0x140` and `0x280` — 320 and 640,
+the screen coordinates d2gfx passes its renderer. Nothing was corrupt; the
+stack was simply off by one dword, and every downstream symptom was a
+consequence of reading it at the wrong offset.
+
+Auditing the rest of the draw family (`$arg0..$arg4` are `esp+4..esp+20`, so a
+sixth argument lives at `esp+24`) found four more, each cross-checked against
+the hand-written Device3 twins that already pop 28 and 36 for the same
+signatures: `Device7_DrawPrimitive` popped 24 for 28, `Device7_`
+`DrawIndexedPrimitive` 32 for 36, `Device7_DrawIndexedPrimitiveVB` 32 for 36
+*and* read `esp+20/+24`, and `Device7_DrawIndexedPrimitiveStrided` read
+`esp+20/+24` — those two short reads handed the core a second copy of `$arg4`
+where it wanted `lpwIndices`, and dropped `dwIndexCount` entirely.
+
+With that fixed the route runs clean past the old crash to the Rogue
+Encampment: batch 2996, zero faults, `cacheA_256` at capacity 38 and filling,
+`vidFree` 39.8 MB. Diablo II now reaches gameplay on `Render=1`.
+
+**Two lessons worth keeping.** A wrong stdcall pop does not fail where it
+happens — it fails in the *caller's* epilogue, arbitrarily far away, with a
+register set that belongs to nobody, and it reads convincingly as memory
+corruption. And the tell is cheap once you know it: the bogus "return address"
+is one of the caller's own arguments, so a suspiciously round value like 320
+or 640 is not garbage, it is data being executed.

@@ -262,6 +262,28 @@ const digest = crypto.createHash('sha256')
 // 2026-09-11: 332 -> 331. keybd_event now synchronously enters the ordinary
 // hardware-input FIFO with Win98 keyboard-message state instead of succeeding
 // without generating input.
+// 2026-09-11: 329 -> 335. The rest of the IMM32 surface Warcraft III imports:
+// ImmGet/SetOpenStatus, ImmGet/SetConversionStatus, ImmGetCompositionStringA,
+// ImmGetCandidateListA. These are constant because the answer does not vary,
+// not because the work was skipped. This machine has no IME installed, so
+// $handle_ImmGetContext returns NULL exactly as Windows does there, and every
+// one of these is then reached with a context that does not exist -- for which
+// each of them has a documented result. ImmGetCompositionStringA returns
+// IMM_ERROR_GENERAL (-2) rather than 0 for precisely this reason: its return is
+// a byte count, so 0 would claim an empty composition string and a valid
+// buffer. ImmGetConversionStatus deliberately does not write its two output
+// DWORDs, because a failing call on Windows leaves them untouched.
+// 2026-09-11: 335 -> 334. IDirect3DDevice9::GetAvailableTextureMem answered 0,
+// which tells a caller there is no texture memory at all. It now reports what
+// the sparse backing pool can still commit, rounded down to a megabyte the way
+// a real driver does -- the same pool GlobalMemoryStatusEx now describes.
+// 2026-09-12: 334 -> 333. IDirect3D9::CheckDeviceFormat answered S_OK to every
+// question. For a plain texture that is a lie the very next call contradicts:
+// the app creates one, CreateTexture refuses the format and the app is left
+// holding a NULL it never checked for. It now answers D3DRTYPE_TEXTURE with no
+// usage bits from the same list the create gate reads, so a format fallback
+// chain walks down to something we really do store. Other resource types keep
+// the permissive answer, which is still a stub and still counted as one.
 // 2026-09-15: 283 -> 282. GetKeyboardType now rejects selector values outside
 // the documented 0..2 range instead of misreporting every one as an enhanced
 // keyboard-type query. The modeled US 101/102-key answers remain 4/0/12.
@@ -291,8 +313,8 @@ const digest = crypto.createHash('sha256')
 // and stored by the renderer instead of promising every combination works.
 // 2026-09-15: 267 -> 266. GetOutlineTextMetricsA/W now return selected
 // TrueType outline metrics and bounded name data instead of always failing.
-// 2026-09-15: 266 -> 265. D3D8/9 ValidateDevice now validates the current
-// one-pass pipeline and writes pNumPasses instead of returning false success.
+// 2026-09-15: 266 -> 265. D3D9 ValidateDevice now validates the live device,
+// output and one-pass texture-stage state and writes the required pass count.
 // 2026-09-18: 265 -> 266. SwapMouseButton records the primary-button setting,
 // returns the previous one, and SM_SWAPBUTTON reads it back. Morrowind calls
 // it twice at startup to read and restore the setting; that round trip is the
@@ -301,8 +323,14 @@ const digest = crypto.createHash('sha256')
 // CreatePixelShader fails loudly, so 0 (fixed function) is the only handle
 // that can exist; it succeeds and every other handle is D3DERR_INVALIDCALL.
 // GetPixelShader reports that same 0. Morrowind saves and restores it.
+// 2026-09-20: 266 -> 266, text only. IDirect3DDevice3_DrawIndexedPrimitiveVB
+// is still a quiet handler, but it now pops 28 rather than 32: the v3 form
+// takes 6 dwords with `this`, not 7 (dwStartVertex/dwNumVertices are the v7
+// addition). Popping one dword too many left the caller's epilogue a slot
+// high, so its `ret` took the caller's own first argument as a return address
+// -- Diablo II's Direct3D backend jumped to 320/640 during the Act I load.
 const EXPECTED_COUNT = 266;
-const EXPECTED_SHA256 = 'b9e37457b8861df7fe8c59a322c2fa73146022e808bb15aa8301041d5e4bb441';
+const EXPECTED_SHA256 = '88125e7030ff3f2df792da32ac8e5762d644c7278b8d443f61c14d746f9526b8';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
