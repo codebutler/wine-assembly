@@ -1563,18 +1563,14 @@
       (then (global.set $last_error (i32.const 1816)))) ;; ERROR_NOT_ENOUGH_QUOTA
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return))
 
-  ;; 72: UpdateWindow
-  (func $handle_UpdateWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  ;; Shared by UpdateWindow and MoveWindow(TRUE); no API stack cleanup here.
+  (func $update_window_now (param $arg0 i32)
     (local $wp i32)
     ;; UpdateWindow consumes existing damage; it is not InvalidateRect.
     ;; In particular a clean window sends no WM_PAINT, and a partial update
     ;; must not be expanded to the entire client before BeginPaint sees it.
     (if (i32.eqz (call $update_get_rect (local.get $arg0) (call $paint_scratch_take)))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-        (i32.store offset=16 (global.get $reg_base)
-          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-        (return)))
+      (then (return)))
     (call $paint_flag_set (local.get $arg0))
     (call $defwndproc_do_ncpaint (local.get $arg0))
     ;; Built-in controls do not need a guest callback trampoline. Complete
@@ -1594,9 +1590,6 @@
         (call $nc_flags_clear (local.get $arg0) (i32.const 2))
         (drop (call $control_wndproc_dispatch
           (local.get $arg0) (i32.const 0x000F) (i32.const 0) (i32.const 0)))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-        (i32.store offset=16 (global.get $reg_base)
-          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     ;; UpdateWindow does not return until WM_PAINT has been handled, and
     ;; BeginPaint runs the window's pending WM_ERASEBKGND on the way in.
@@ -1604,7 +1597,7 @@
     ;; a GetDC handle on the line after UpdateWindow, so an erase and paint
     ;; left queued for the pump land on top of the splash and wipe it.
     ;;
-    ;; Restricted to a visible top-level window with a real x86 wndproc, and
+    ;; Restricted to a visible guest-owned window with a real x86 wndproc, and
     ;; never while another synchronous send is already unwinding. That is the
     ;; hazard this call used to defer around: a dialog or control procedure
     ;; re-entered before its own initialization has finished.
@@ -1634,7 +1627,11 @@
           (then (global.set $paint_pending (i32.const 0))))
         (drop (call $paint_seed_child_paints (local.get $arg0)))
         (drop (call $wnd_send_message
-          (local.get $arg0) (i32.const 0x000F) (i32.const 0) (i32.const 0)))))
+          (local.get $arg0) (i32.const 0x000F) (i32.const 0) (i32.const 0))))))
+
+  ;; 72: UpdateWindow
+  (func $handle_UpdateWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $update_window_now (local.get $arg0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )

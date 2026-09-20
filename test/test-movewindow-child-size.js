@@ -9,6 +9,7 @@ const sizes = new Map();
 const positions = new Map();
 const moveFlags = [];
 const zOrders = [];
+const painted = [];
 const pack = (w, h) => ((w & 0xffff) | ((h & 0xffff) << 16)) >>> 0;
 
 const extraWat = String.raw`
@@ -55,6 +56,9 @@ const extraWat = String.raw`
   const { exports: e, memory } = await bootRenderHarness({
     extraWat,
     extraHostOverrides: {
+      ctrl_paint_trace(hwnd, classAndReason) {
+        if ((classAndReason >>> 8) === 0) painted.push(hwnd >>> 0);
+      },
       get_window_client_size(hwnd) {
         return sizes.get(hwnd >>> 0) || 0;
       },
@@ -172,13 +176,18 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_take_nc_paint(first), 0,
     'a hidden ancestor suppresses exposure repaint until the tree is shown');
   e.wnd_set_style_export(top, e.wnd_get_style_export(top) | 0x10000000);
+  painted.length = 0;
   e.test_call_MoveWindow(first, 80, 82, 110, 60, 1);
+  assert.deepStrictEqual(painted, [first],
+    'MoveWindow(TRUE) completes the native target paint before returning');
   assert.strictEqual(e.test_take_nc_paint(first), 1,
     'MoveWindow(TRUE) also queues non-client repaint after resizing');
   e.test_call_MoveWindow(first, 80, 82, 110, 60, 1);
   assert.strictEqual(e.test_take_nc_paint(first), 0,
     'same-geometry MoveWindow does not queue non-client repaint');
+  painted.length = 0;
   e.test_call_MoveWindow(first, 90, 92, 120, 70, 0);
+  assert.deepStrictEqual(painted, [], 'MoveWindow(FALSE) must not paint');
   assert.strictEqual(e.test_take_nc_paint(first), 0,
     'MoveWindow(FALSE) suppresses non-client repaint');
 

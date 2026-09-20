@@ -2542,6 +2542,10 @@
               ;; way USER's invalidate-on-resize does.
               (if (local.get $repaint)
                 (then (call $nc_flags_set (local.get $arg0) (i32.const 2))))))))
+    ;; MoveWindow(TRUE) includes UpdateWindow after its geometry transaction.
+    ;; Share the paint core without invoking a second API's stdcall epilogue.
+    (if (local.get $repaint)
+      (then (call $update_window_now (local.get $arg0))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (return)
   )

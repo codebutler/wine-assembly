@@ -67,6 +67,13 @@ const extraWat = String.raw`
   (func (export "test_order_partial_child")
     (call $update_invalidate_rect (global.get $test_order_child)
       (i32.const 3) (i32.const 4) (i32.const 12) (i32.const 15)))
+  (func (export "test_order_move_parent") (param $w i32) (param $repaint i32)
+    (local $esp i32)
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.add (local.get $esp) (i32.const 24)) (local.get $repaint))
+    (call $handle_MoveWindow (global.get $test_order_parent)
+      (i32.const 0) (i32.const 0) (local.get $w) (i32.const 80) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp)))
   (func (export "test_order_update_rect") (param $dst i32) (result i32)
     (call $update_get_rect (global.get $test_order_child) (call $g2w (local.get $dst))))
 
@@ -157,6 +164,14 @@ const extraWat = String.raw`
   e.test_order_update(parent);
   assert.strictEqual(e.guest_read32(calls), 1,
     'dirty UpdateWindow must enter the guest procedure before returning');
+  e.test_order_clear();
+  e.guest_write32(calls, 0);
+  e.test_order_move_parent(220, 0);
+  assert.strictEqual(e.guest_read32(calls), 0,
+    'MoveWindow(FALSE) must not send guest WM_PAINT');
+  e.test_order_move_parent(240, 1);
+  assert.strictEqual(e.guest_read32(calls), 1,
+    'MoveWindow(TRUE) must send guest WM_PAINT before returning');
   e.test_order_clear();
 
   assert.strictEqual(e.test_cycle_parent(), 0,

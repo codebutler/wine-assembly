@@ -144,3 +144,22 @@ control trace import before UpdateWindow returns, plus empty update and paint
 state afterward. Hidden partial damage is preserved without expansion.
 Full build, guest callback/paint-order checks, Paint status/scrollbar 0/0, and
 Calculator pressed-button 8/8 pass. MoveWindow's synchronous call remains open.
+
+## MoveWindow uses the shared update core
+
+`$update_window_now` now holds the existing UpdateWindow behavior without an
+API-specific stdcall epilogue. Both UpdateWindow and MoveWindow(TRUE) call
+it; MoveWindow(FALSE) does not. This removes the missing call without a
+copied painter or an artificial nested API stack frame.
+
+Regression: before the change a native MoveWindow(TRUE) returned without
+invoking its painter. It now invokes exactly the target painter before
+returning, while FALSE invokes none. The executable guest callback test
+likewise records one WM_PAINT for TRUE and none for FALSE. Existing clean,
+partial, hidden, WINDOWPOS mutation, and native/guest UpdateWindow checks
+pass. Full build and Paint draw 9/9, status 0/0, scrollbar 0/0 pass.
+
+The missing MoveWindow call is resolved for paths already supported by the
+shared core. Reentrant x86 sends, subclassed native controls and Win16 remain
+restricted there; those require separate callback/reentrancy work, not another
+MoveWindow-specific shortcut.
