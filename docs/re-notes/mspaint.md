@@ -108,3 +108,23 @@ test crops with `PNG.bitblt` and compares with the shared `diffPng`: the
 identical (**0/0 changed pixels**). Status pixels also remain **0/0**.
 This resolves the palette-remnant/missing-scrollbar observation above;
 full Win98 repaint timing and other unrelated Paint behaviors are not claimed.
+
+## UpdateWindow prerequisite
+
+Before reusing UpdateWindow for MoveWindow's synchronous repaint, inspection
+found that it unconditionally called `$paint_flag_set_inv`, creating a full
+client update even on a clean window. The
+[official UpdateWindow contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-updatewindow)
+sends WM_PAINT only for an existing nonempty update region. The handler now
+returns without painting on empty damage and marks only the paint flag for
+existing damage, preserving its original bounds.
+
+The parent/child paint test first failed on the clean native child; it now
+checks empty damage, a partial 3,4–12,15 region on the still-deferred native
+path, and an executable guest callback that receives no WM_PAINT when clean
+and exactly one before return when dirty. Build and Paint draw 9/9 pass;
+status and scrollbar toggle comparisons remain 0/0.
+
+Remaining: the existing synchronous-send depth/Win16/native restrictions in
+UpdateWindow and MoveWindow's missing synchronous call are unchanged. Do not
+equate the existing-damage fix with complete repaint/reentrancy semantics.

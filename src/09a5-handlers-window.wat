@@ -1566,7 +1566,16 @@
   ;; 72: UpdateWindow
   (func $handle_UpdateWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wp i32)
-    (call $paint_flag_set_inv (local.get $arg0))
+    ;; UpdateWindow consumes existing damage; it is not InvalidateRect.
+    ;; In particular a clean window sends no WM_PAINT, and a partial update
+    ;; must not be expanded to the entire client before BeginPaint sees it.
+    (if (i32.eqz (call $update_get_rect (local.get $arg0) (call $paint_scratch_take)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
+    (call $paint_flag_set (local.get $arg0))
     (call $defwndproc_do_ncpaint (local.get $arg0))
     ;; UpdateWindow does not return until WM_PAINT has been handled, and
     ;; BeginPaint runs the window's pending WM_ERASEBKGND on the way in.

@@ -58,6 +58,18 @@ const extraWat = String.raw`
   (func (export "test_order_first_pending") (result i32)
     (call $paint_flag_first))
 
+  (func (export "test_order_update") (param $hwnd i32)
+    (local $esp i32)
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_UpdateWindow (local.get $hwnd)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp)))
+  (func (export "test_order_partial_child")
+    (call $update_invalidate_rect (global.get $test_order_child)
+      (i32.const 3) (i32.const 4) (i32.const 12) (i32.const 15)))
+  (func (export "test_order_update_rect") (param $dst i32) (result i32)
+    (call $update_get_rect (global.get $test_order_child) (call $g2w (local.get $dst))))
+
   (func (export "test_cycle_parent") (result i32)
     (local $a i32) (local $b i32)
     (local.set $a (global.get $next_hwnd))
@@ -92,6 +104,43 @@ const extraWat = String.raw`
     'native child paints after the ancestor update is consumed');
   assert.strictEqual(e.test_order_first_pending() >>> 0, 0,
     'parent and child paint state should be fully consumed');
+
+  e.test_order_clear();
+  e.test_order_update(child);
+  assert.strictEqual(e.test_order_first_pending(), 0,
+    'UpdateWindow on a clean window must not invent pending paint');
+  const rect = e.guest_alloc(16);
+  assert.strictEqual(e.test_order_update_rect(rect), 0,
+    'UpdateWindow on a clean window must leave its update region empty');
+  e.test_order_partial_child();
+  e.test_order_update(child);
+  assert.strictEqual(e.test_order_update_rect(rect), 1);
+  assert.deepStrictEqual([0, 4, 8, 12].map(o => e.guest_read32(rect + o)),
+    [3, 4, 12, 15], 'deferred native UpdateWindow must not expand a partial update');
+  e.test_order_clear();
+
+  // A real guest callback proves the clean-window case sends no message,
+  // while an existing update still follows the synchronous guest path.
+  const calls = e.guest_alloc(4);
+  const proc = e.guest_alloc(16);
+  e.guest_write32(calls, 0);
+  // cmp dword [esp+8],WM_PAINT; jne ret; inc dword [calls]; ret 16
+  const code = [0x83, 0x7c, 0x24, 0x08, 0x0f, 0x75, 0x06,
+    0xff, 0x05, calls & 255, (calls >>> 8) & 255,
+    (calls >>> 16) & 255, calls >>> 24, 0xc2, 0x10, 0x00];
+  for (let i = 0; i < code.length; i += 4) {
+    e.guest_write32(proc + i, code[i] | code[i + 1] << 8 |
+      code[i + 2] << 16 | code[i + 3] << 24);
+  }
+  e.wnd_table_set(parent, proc);
+  e.test_order_update(parent);
+  assert.strictEqual(e.guest_read32(calls), 0,
+    'clean UpdateWindow must not enter the guest window procedure');
+  e.test_order_queue_both();
+  e.test_order_update(parent);
+  assert.strictEqual(e.guest_read32(calls), 1,
+    'dirty UpdateWindow must enter the guest procedure before returning');
+  e.test_order_clear();
 
   assert.strictEqual(e.test_cycle_parent(), 0,
     'window parenting rejects an edge that would create a cycle');
