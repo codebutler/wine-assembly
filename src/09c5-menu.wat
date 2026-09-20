@@ -3482,6 +3482,25 @@
   ;; (eager path in $handle_CreateWindowExA, lazy path from renderer
   ;; _ensureWatMenu) and the first load wins so mutable state such as
   ;; CheckMenuItem's bit2 flag survives subsequent calls.
+  ;; Why a window ended up with no menu. Every failure below is a plain
+  ;; `return` that leaves the window looking like one that never asked for a
+  ;; menu, and the app then paints an empty strip -- which reads as a painting
+  ;; bug rather than a load that declined. $stage names the step that gave up:
+  ;;   1 no window slot yet   2 cleared (menu_id 0)   3 already has a menu
+  ;;   4 resource not found   5 header too small or unknown version
+  ;;   6 parsed zero bar items   7 installed ($a = bar count)
+  ;; Gated on --trace-win16 with the NE resource trace it pairs with; a Win32
+  ;; app's menus resolve through the same function and trace the same way.
+  (func $menu_load_trace (param $hwnd i32) (param $menu_id i32) (param $stage i32)
+        (param $a i32) (param $b i32)
+    (if (i32.eqz (global.get $win16_trace)) (then (return)))
+    (call $host_log_i32 (i32.const 0xCA16A9E3))
+    (call $host_log_i32 (local.get $hwnd))
+    (call $host_log_i32 (local.get $menu_id))
+    (call $host_log_i32 (local.get $stage))
+    (call $host_log_i32 (local.get $a))
+    (call $host_log_i32 (local.get $b)))
+
   (func $menu_load (export "menu_load") (param $hwnd i32) (param $menu_id i32)
     (local $slot i32) (local $tbl i32) (local $old i32)
     (local $entry i32) (local $bytes_g i32) (local $bytes_w i32)
@@ -3495,7 +3514,11 @@
     (local.set $ctx_hinst (global.get $class_menu_hinst))
     (global.set $class_menu_hinst (i32.const 0))
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
-    (if (i32.eq (local.get $slot) (i32.const -1)) (then (return)))
+    (if (i32.eq (local.get $slot) (i32.const -1))
+      (then
+        (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+          (i32.const 1) (i32.const 0) (i32.const 0))
+        (return)))
     (local.set $tbl (call $menu_data_table_addr (local.get $slot)))
     (local.set $old (i32.load (local.get $tbl)))
     (if (i32.eqz (local.get $menu_id))
@@ -3505,8 +3528,14 @@
             (call $resource_submenu_bindings_drop_parent (local.get $old))
             (call $heap_free (i32.sub (local.get $old) (i32.const 8)))))
         (i32.store (local.get $tbl) (i32.const 0))
+        (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+          (i32.const 2) (i32.const 0) (i32.const 0))
         (return)))
-    (if (local.get $old) (then (return)))
+    (if (local.get $old)
+      (then
+        (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+          (i32.const 3) (local.get $old) (i32.const 0))
+        (return)))
     ;; LoadMenuA returns `resId | 0x00BE0000` as a fake handle. When MFC's
     ;; CreateWindowExA(hMenu=...) forwards that value through to us, strip
     ;; the tag so find_resource sees the raw resource ID.
@@ -3535,7 +3564,11 @@
           (else
             (local.set $bytes_w (call $win16_find_resource
               (i32.const 4) (local.get $menu_id)))))
-        (if (i32.eqz (local.get $bytes_w)) (then (return)))
+        (if (i32.eqz (local.get $bytes_w))
+          (then
+            (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+              (i32.const 4) (i32.const 0) (i32.const 0))
+            (return)))
         (local.set $size (global.get $win16_res_len)))
       (else
         (global.set $ml_char_stride (i32.const 2))
@@ -3569,10 +3602,18 @@
         (local.set $bytes_w (call $g2w (local.get $bytes_g)))
         (if (i32.or (local.get $from_last_load) (i32.ne (local.get $ctx_hinst) (i32.const 0)))
           (then (call $pop_rsrc_ctx)))))
-    (if (i32.lt_u (local.get $size) (i32.const 8)) (then (return)))
+    (if (i32.lt_u (local.get $size) (i32.const 8))
+      (then
+        (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+          (i32.const 5) (local.get $size) (i32.const 0))
+        (return)))
     (local.set $version (i32.load16_u (local.get $bytes_w)))
     (local.set $headerOffset (i32.load16_u (i32.add (local.get $bytes_w) (i32.const 2))))
-    (if (i32.gt_u (local.get $version) (i32.const 1)) (then (return)))
+    (if (i32.gt_u (local.get $version) (i32.const 1))
+      (then
+        (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+          (i32.const 5) (local.get $size) (local.get $version))
+        (return)))
     (local.set $items_w
       (i32.add (local.get $bytes_w) (i32.add (i32.const 4) (local.get $headerOffset))))
     ;; --- Pass 1: count ---
@@ -3584,7 +3625,11 @@
     (if (local.get $version)
       (then (call $mlex_pass1))
       (else (call $ml_pass1)))
-    (if (i32.eqz (global.get $ml_bar_count)) (then (return)))
+    (if (i32.eqz (global.get $ml_bar_count))
+      (then
+        (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+          (i32.const 6) (local.get $size) (local.get $items_w))
+        (return)))
     ;; --- Allocate blob and run pass 2 ---
     (local.set $total (i32.add (global.get $ml_struct_size) (global.get $ml_string_size)))
     (local.set $newg (call $heap_alloc (i32.add (local.get $total) (i32.const 8)))) (local.set $neww (call $g2w (local.get $newg)))
@@ -3603,7 +3648,9 @@
     (global.set $ml_pos (local.get $items_w))
     (if (local.get $version)
       (then (call $mlex_pass2))
-      (else (call $ml_pass2))))
+      (else (call $ml_pass2)))
+    (call $menu_load_trace (local.get $hwnd) (local.get $menu_id)
+      (i32.const 7) (global.get $ml_bar_count) (i32.load (local.get $tbl))))
 
   ;; ============================================================
   ;; Menu tracking — JS shells out raw mouse / keyboard events to

@@ -720,7 +720,31 @@
 
   ;; `name_wa` is the WASM address of a NUL-terminated name to match instead of
   ;; `res_id`; zero means match by id as before.
+  ;;
+  ;; --trace-win16 reports every lookup and what it found, because a resource
+  ;; that misses is silent at every layer above: $menu_load returns without
+  ;; installing a bar, the window simply has no menu, and the app looks like
+  ;; one that never had one. Moraff's Jiggler hangs its whole game menu off a
+  ;; named RT_MENU and paints an empty strip when the lookup fails, with
+  ;; nothing anywhere to say the name was the thing that missed.
   (func $win16_find_resource_ex (export "win16_find_resource_ex")
+        (param $type_id i32) (param $res_id i32) (param $name_wa i32) (result i32)
+    (local $found i32)
+    (local.set $found (call $win16_find_resource_scan
+      (local.get $type_id) (local.get $res_id) (local.get $name_wa)))
+    (if (global.get $win16_trace)
+      (then
+        (call $host_log_i32 (i32.const 0xCA16A9E4))
+        (call $host_log_i32 (local.get $type_id))
+        (call $host_log_i32 (local.get $res_id))
+        (call $host_log_i32 (local.get $name_wa))
+        (call $host_log_i32 (local.get $found))))
+    (local.get $found))
+
+  ;; The table walk itself. Separated only so the wrapper above can trace it;
+  ;; the nametable fallback below deliberately re-enters through the wrapper,
+  ;; so a trace shows the second lookup the miss turned into.
+  (func $win16_find_resource_scan
         (param $type_id i32) (param $res_id i32) (param $name_wa i32) (result i32)
     (local $p i32) (local $shift i32) (local $type i32) (local $count i32)
     (local $q i32) (local $i i32) (local $end i32) (local $ne_off i32) (local $img i32)
