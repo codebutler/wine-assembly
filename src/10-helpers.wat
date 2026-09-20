@@ -6370,36 +6370,14 @@
       (br $ancestors))))
 
   (func $dc_exclude_children_for_clip (param $hdc i32) (param $hwnd i32) (param $origin_x i32) (param $origin_y i32)
-    (local $style i32) (local $slot i32) (local $ch i32) (local $cstyle i32)
-    (local $xy i32) (local $wh i32) (local $cx i32) (local $cy i32) (local $cw i32) (local $chh i32)
+    (local $style i32)
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
     (if (i32.eqz (i32.and (local.get $style) (i32.const 0x02000000))) ;; WS_CLIPCHILDREN
       (then (return)))
-    (local.set $slot (i32.const 0))
-    (block $done (loop $scan
-      (local.set $slot (call $wnd_next_child_slot (local.get $hwnd) (local.get $slot)))
-      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
-      (local.set $ch (call $wnd_slot_hwnd (local.get $slot)))
-      (local.set $cstyle (call $wnd_get_style (local.get $ch)))
-      (if (i32.and (local.get $cstyle) (i32.const 0x10000000)) ;; WS_VISIBLE
-        (then
-          (local.set $wh (call $ctrl_get_wh_packed (local.get $ch)))
-          (local.set $cx (call $ctrl_get_x_s (local.get $ch)))
-          (local.set $cy (call $ctrl_get_y_s (local.get $ch)))
-          (local.set $cw (i32.and (local.get $wh) (i32.const 0xFFFF)))
-          (local.set $chh (i32.shr_u (local.get $wh) (i32.const 16)))
-          (if (i32.and (i32.gt_s (local.get $cw) (i32.const 0))
-                       (i32.gt_s (local.get $chh) (i32.const 0)))
-            (then
-              (drop (call $gdi_dc_system_clip_rect
-                (local.get $hdc)
-                (i32.add (local.get $origin_x) (local.get $cx))
-                (i32.add (local.get $origin_y) (local.get $cy))
-                (i32.add (i32.add (local.get $origin_x) (local.get $cx)) (local.get $cw))
-                (i32.add (i32.add (local.get $origin_y) (local.get $cy)) (local.get $chh))
-                (i32.const 4)))))))
-      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
-      (br 0))))
+    ;; Once policy permits exclusion, use the same visible-child scan as
+    ;; background erase. Keep the style gate here, outside that shared scan.
+    (call $dc_exclude_visible_children_for_erase
+      (local.get $hdc) (local.get $hwnd) (local.get $origin_x) (local.get $origin_y)))
 
   ;; WM_ERASEBKGND on a parent must not clear visible child windows. On real
   ;; USER/GDI this is enforced by the visible region. Our child dialogs and
@@ -6408,7 +6386,7 @@
   ;; carry WS_CLIPCHILDREN.
   (func $dc_exclude_visible_children_for_erase (param $hdc i32) (param $hwnd i32) (param $origin_x i32) (param $origin_y i32)
     (local $slot i32) (local $ch i32) (local $cstyle i32)
-    (local $xy i32) (local $wh i32) (local $cx i32) (local $cy i32) (local $cw i32) (local $chh i32)
+    (local $wh i32) (local $cx i32) (local $cy i32) (local $cw i32) (local $chh i32)
     (local.set $slot (i32.const 0))
     (block $done (loop $scan
       (local.set $slot (call $wnd_next_child_slot (local.get $hwnd) (local.get $slot)))
