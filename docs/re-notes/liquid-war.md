@@ -81,7 +81,9 @@ emulator process, so that address cannot reach the separate server process.
 
 For headless input, a one-batch `keydown` followed by `di-keyup` releases the
 DirectInput state without leaving a delayed `WM_KEYUP`. This reaches the
-settings screen, where `10.77.0.1` can be entered before Start game. The fixed
+settings screen, where the room host address can be entered before Start game —
+`10.0.0.1`, or the short form `10.1`, which `$vsock_parse_ipv4` widens the same
+way real Winsock does, so there is less to type into a guest menu. The fixed
 reproduction is encoded in `test/test-vlan-match.js`.
 
 The current two-process path reaches the waiting room with the player listed,

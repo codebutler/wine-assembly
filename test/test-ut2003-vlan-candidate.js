@@ -11,8 +11,8 @@ const { PNG } = require('pngjs');
 const { ProcessHub } = require('../lib/vlan-wire');
 
 const ROOT = path.join(__dirname, '..');
-const SERVER_IP = '10.77.0.1';
-const CLIENT_IP = '10.77.0.2';
+const SERVER_IP = '10.0.0.1';
+const CLIENT_IP = '10.0.0.2';
 const TMP = process.env.TMPDIR || '/private/tmp';
 const WINDOW_BYTES = 128 * 1024;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -234,7 +234,7 @@ async function main() {
       // 100k retires 18.5% more guest blocks per fixed minute than 20k during
       // this CPU-bound precache, and matches the browser's normal run slice.
       ...common(CLIENT_IP, 480, true, 100000),
-      '--args=10.77.0.1 -d3d -window -nosound',
+      '--args=10.0.0.1 -d3d -window -nosound',
     ], [clientSend, clientReady]);
     hub.add(client.child);
     await waitFor(client, clientSend, 'the client to send a datagram');

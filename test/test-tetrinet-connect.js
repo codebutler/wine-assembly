@@ -27,7 +27,7 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
 const EXE = path.join(__dirname, 'binaries', 'candidates', 'tetrinet', 'TETRINET.EXE');
-const ADDRESS = '10.77.0.1';
+const ADDRESS = '10.0.0.1';
 
 // Batch numbers are spaced out because each step has to reach the app's
 // message pump before the next one means anything.
@@ -35,7 +35,7 @@ const INPUT = [
   '1200:click:319:284',        // dismiss the first-run dialog
   '1600:click:57:455',         // toolbar: the connect screen
   '1750:click:455:186',        // focus the Server field
-  ...[...'10.77.0.1'].map((ch, i) => `${1800 + i * 10}:keypress:${ch.charCodeAt(0)}`),
+  ...[...'10.0.0.1'].map((ch, i) => `${1800 + i * 10}:keypress:${ch.charCodeAt(0)}`),
   '1900:click:455:213',        // focus the nickname field
   '1920:keypress:98',          // "b"
   '1930:keypress:111',         // "o"
@@ -50,7 +50,7 @@ function main() {
   }
 
   const result = spawnSync('node', [RUN, `--exe=${EXE}`,
-    '--max-batches=6000', '--batch-size=25000', '--vlan-ip=10.77.0.2',
+    '--max-batches=6000', '--batch-size=25000', '--vlan-ip=10.0.0.2',
     `--input=${INPUT}`,
     '--trace-api=socket,connect,WSAAsyncSelect,getservbyname,getprotobyname,inet_addr'], {
     cwd: ROOT, encoding: 'utf8', timeout: 300000, maxBuffer: 96 * 1024 * 1024,

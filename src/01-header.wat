@@ -3477,7 +3477,7 @@
   ;; WsControl's view of the virtual adapter (src/09d-winsock.wat): subnet mask
   ;; and default gateway, both host byte order.
   (global $wsctl_mask (mut i32) (i32.const 0xFFFFFF00))
-  (global $wsctl_gateway (mut i32) (i32.const 0x0A4D0001))
+  (global $wsctl_gateway (mut i32) (i32.const 0x0A000001))  ;; 10.0.0.1
   ;; SetUnhandledExceptionFilter's top-level filter, as a guest address. Zero
   ;; means no filter is installed, which is also the value the first caller
   ;; gets back as "the previous filter" -- CRTs save that return value and put

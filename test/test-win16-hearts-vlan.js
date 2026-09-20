@@ -76,8 +76,8 @@ const ROOT = path.join(__dirname, '..');
 const EXE = path.join(ROOT, 'test', 'binaries', 'win98-16bit', 'MSHEARTS.EXE');
 const RUN = path.join(ROOT, 'test', 'run.js');
 const OUT = path.join(ROOT, 'test', 'output', 'win16-hearts-vlan');
-const DEALER_IP = '10.77.0.1';
-const CLIENT_IP = '10.77.0.2';
+const DEALER_IP = '10.0.0.1';
+const CLIENT_IP = '10.0.0.2';
 
 const arg = (name, dflt) => {
   const hit = process.argv.find(a => a.startsWith(`--${name}=`));

@@ -109,8 +109,8 @@ function settle(a, b, pumpNode, batches = 200) {
 
   for (const accept of [true, false]) {
     const segment = new LoopbackSegment();
-    const server = await makeNode(wasm, segment.attach(), '10.77.0.1');
-    const client = await makeNode(wasm, segment.attach(), '10.77.0.2');
+    const server = await makeNode(wasm, segment.attach(), '10.0.0.1');
+    const client = await makeNode(wasm, segment.attach(), '10.0.0.2');
     boot(server, bytes, 400);
     boot(client, bytes, 50);
 
@@ -171,8 +171,8 @@ function settle(a, b, pumpNode, batches = 200) {
   // the wire. Hearts' first item is "Join".
   {
     const segment = new LoopbackSegment();
-    const server = await makeNode(wasm, segment.attach(), '10.77.0.1');
-    const client = await makeNode(wasm, segment.attach(), '10.77.0.2');
+    const server = await makeNode(wasm, segment.attach(), '10.0.0.1');
+    const client = await makeNode(wasm, segment.attach(), '10.0.0.2');
     boot(server, bytes, 400);
     boot(client, bytes, 50);
     server.wat.test_dde_instance(0, 1);
@@ -222,8 +222,8 @@ function settle(a, b, pumpNode, batches = 200) {
   // answer is pushed to the client without anyone waiting on it.
   {
     const segment = new LoopbackSegment();
-    const server = await makeNode(wasm, segment.attach(), '10.77.0.1');
-    const client = await makeNode(wasm, segment.attach(), '10.77.0.2');
+    const server = await makeNode(wasm, segment.attach(), '10.0.0.1');
+    const client = await makeNode(wasm, segment.attach(), '10.0.0.2');
     boot(server, bytes, 400);
     boot(client, bytes, 400);
     server.wat.test_dde_instance(0, 1);
@@ -297,8 +297,8 @@ function settle(a, b, pumpNode, batches = 200) {
   // serve this. Any instance with a service to offer is a candidate.
   {
     const segment = new LoopbackSegment();
-    const server = await makeNode(wasm, segment.attach(), '10.77.0.1');
-    const client = await makeNode(wasm, segment.attach(), '10.77.0.2');
+    const server = await makeNode(wasm, segment.attach(), '10.0.0.1');
+    const client = await makeNode(wasm, segment.attach(), '10.0.0.2');
     boot(server, bytes, 400);
     boot(client, bytes, 50);
     server.wat.test_dde_instance(0, 1);
@@ -316,7 +316,7 @@ function settle(a, b, pumpNode, batches = 200) {
 
     // And a room with nothing registered still answers nobody, so "wild" does
     // not mean "anyone will do".
-    const bare = await makeNode(wasm, segment.attach(), '10.77.0.3');
+    const bare = await makeNode(wasm, segment.attach(), '10.0.0.3');
     boot(bare, bytes, 50);
     bare.wat.test_dde_instance(0, 1);
     installCallback(bare, true);

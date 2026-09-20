@@ -3,8 +3,8 @@
 // Slice 2 gate: two operating-system processes, one room.
 //
 // The original Liquid War server binary runs in its own emulator process at
-// 10.77.0.1 and never learns that it is not on a real network. A second
-// process at 10.77.0.2 opens a TCP connection to it over the frame wire.
+// 10.0.0.1 and never learns that it is not on a real network. A second
+// process at 10.0.0.2 opens a TCP connection to it over the frame wire.
 // The connection has to be accepted by the *guest's* own accept() call, not
 // merely completed inside the switch, which is why this test reads the
 // server's API trace rather than only its own return codes.
@@ -21,8 +21,8 @@ const { ProcessWire } = require('../lib/vlan-wire');
 const { compile, makeNode, AF_INET, SOCK_STREAM, INVALID_SOCKET } = require('./vlan-node');
 
 const SERVER_EXE = 'test/binaries/candidates/liquid-war/LW5/lwwinsrv.exe';
-const HOST_IP = '10.77.0.1';
-const PEER_IP = '10.77.0.2';
+const HOST_IP = '10.0.0.1';
+const PEER_IP = '10.0.0.2';
 const GAME_PORT = 8035;
 const TIMEOUT_MS = 120000;
 
@@ -125,7 +125,7 @@ async function main() {
       peer.pump();
     }
     assert(connected, `connect never completed\n${state.tail()}`);
-    check('a connection opens from another process to 10.77.0.1:8035');
+    check('a connection opens from another process to 10.0.0.1:8035');
 
     beginPhase("waiting for the server guest's own accept()");
     await waitFor(state, /accept\(s=0x[0-9a-f]+/, "the server's own accept() call");

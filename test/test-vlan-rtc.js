@@ -221,41 +221,62 @@ async function main() {
 
     // ---- presence, addresses, and directed offers -----------------------
     const {
-      joinNetwork, inboxKeyFor, pickAddress, randomAddress, claimLoses,
+      joinNetwork, inboxKeyFor, pickAddress, seatAddress, claimLoses, MAX_SEATS,
       PRESENCE_TTL_MS,
     } = rtc;
     const { newIdentity, sharedKeyWith } = _internals;
 
-    await check('a random address is inside the segment and never .0/.255', () => {
-      for (let i = 0; i < 500; i++) {
-        const a = randomAddress().split('.').map(Number);
-        assert.strictEqual(a[0], 10);
-        assert.strictEqual(a[1], 77);
-        assert.ok(a[3] >= 2 && a[3] <= 254, `bad host octet ${a[3]}`);
-      }
+    // The host's address is the one a person types into a 1998 dialog, so an
+    // empty room must always produce the same one -- "10.1" only works
+    // because the first arrival is 10.0.0.1 every single time.
+    await check('the first seat in an empty room is always the host address', () => {
+      assert.strictEqual(pickAddress([]), '10.0.0.1');
+      assert.strictEqual(seatAddress(1), '10.0.0.1');
     });
 
-    await check('a claimed address is not handed out again', () => {
+    await check('seats are handed out in order and stay dense', () => {
+      const taken = [];
+      for (let i = 0; i < 5; i++) taken.push(pickAddress(taken));
+      assert.deepStrictEqual(taken,
+        ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4', '10.0.0.5']);
+    });
+
+    // A seat freed by someone leaving is reused rather than skipped, so the
+    // host address comes back when the host does.
+    await check('a freed seat is reused, including seat 1', () => {
+      assert.strictEqual(pickAddress(['10.0.0.2', '10.0.0.3']), '10.0.0.1');
+      assert.strictEqual(pickAddress(['10.0.0.1', '10.0.0.3']), '10.0.0.2');
+    });
+
+    await check('a claimed seat is not handed out again', () => {
       const taken = [];
       for (let i = 0; i < 200; i++) taken.push(pickAddress(taken));
       assert.strictEqual(new Set(taken).size, taken.length);
     });
 
+    // Refusing is the only safe answer: a duplicate address makes two peers
+    // answer to one name, and the switch has no way to tell them apart.
+    await check('a full segment refuses rather than duplicating a seat', () => {
+      const full = [];
+      for (let seat = 1; seat <= MAX_SEATS; seat++) full.push(seatAddress(seat));
+      assert.throws(() => pickAddress(full), /no free address/);
+    });
+
     await check('exactly one side yields when two claim the same address', () => {
-      const a = { address: '10.77.1.5', userId: 'aaa' };
-      const b = { address: '10.77.1.5', userId: 'bbb' };
+      const a = { address: '10.0.0.5', userId: 'aaa' };
+      const b = { address: '10.0.0.5', userId: 'bbb' };
       // Both peers evaluate the same pair and must not both move, or both stay.
       assert.strictEqual(claimLoses(a, b) !== claimLoses(b, a), true);
     });
 
     await check('different addresses never collide', () => {
       assert.strictEqual(
-        claimLoses({ address: '10.77.1.5', userId: 'zzz' },
-                   { address: '10.77.1.6', userId: 'aaa' }), false);
+        claimLoses({ address: '10.0.0.5', userId: 'zzz' },
+                   { address: '10.0.0.6', userId: 'aaa' }), false);
     });
 
     await check('an unaddressed claim does not collide with anything', () => {
-      assert.strictEqual(claimLoses({ userId: 'z' }, { address: '10.77.1.5', userId: 'a' }), false);
+      assert.strictEqual(claimLoses({ userId: 'z' }, { address: '10.0.0.5', userId: 'a' }), false);
     });
 
     await check('a peer inbox key is specific to the recipient', async () => {
@@ -278,8 +299,15 @@ async function main() {
     let alpha = await netFor('alpha');
     const beta = await netFor('beta');
 
-    await check('joining claims an address on the segment', () => {
-      assert.ok(/^10\.77\.\d+\.\d+$/.test(alpha.address), alpha.address);
+    await check('joining claims a seat on the segment', () => {
+      assert.ok(/^10\.0\.0\.\d+$/.test(alpha.address), alpha.address);
+    });
+
+    // Whoever got there first is the host, and the host is 10.0.0.1 — the
+    // address every game's connect box is going to be handed.
+    await check('one of the two peers holds the host address', () => {
+      assert.ok([alpha.address, beta.address].includes('10.0.0.1'),
+        `${alpha.address} / ${beta.address}`);
     });
 
     await check('two peers on one segment get different addresses', () => {

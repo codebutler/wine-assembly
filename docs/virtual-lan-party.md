@@ -27,7 +27,7 @@ Neither Berrry nor the relay understands or simulates Liquid War.
   │                                                │
   │  lwwin.exe ─┐                                  │
   │              ├─ virtual switch ─ lwwinsrv.exe │
-  │  10.77.0.1 ─┘                    TCP :8035    │
+  │  10.0.0.1 ─┘                    TCP :8035    │
   └──────────────────────┬─────────────────────────┘
                          │
                encrypted peer connections
@@ -39,10 +39,10 @@ Neither Berrry nor the relay understands or simulates Liquid War.
   ┌───────────┴──────────┐  ┌────────┴─────────────┐
   │ Bob                  │  │ Carol                │
   │ lwwin.exe            │  │ lwwin.exe            │
-  │ virtual IP 10.77.0.2 │  │ virtual IP 10.77.0.3 │
+  │ virtual IP 10.0.0.2 │  │ virtual IP 10.0.0.3 │
   └──────────────────────┘  └──────────────────────┘
 
-  All clients connect to 10.77.0.1:8035.
+  All clients connect to 10.0.0.1:8035.
   The game believes this is a physical LAN.
 ```
 
@@ -101,7 +101,7 @@ Choose Liquid War
 └──────────────────────────────────────────────────────────────┘
        │
        ├─ starts lwwinsrv.exe -private -6 -nobeep
-       ├─ assigns this browser 10.77.0.1
+       ├─ assigns this browser 10.0.0.1
        └─ copies an invite link
 ```
 
@@ -126,13 +126,13 @@ Verify capability                    Choose room
       │                         │                       │
       └─────────────────────────┴───────────────────────┘
                                 │
-                         receive 10.77.0.x
+                         receive 10.0.0.x
                                 │
                          [ Launch game ]
 ```
 
 The launcher should prefill the host address and port when a safe configuration
-path is available. Until then, the game UI can use `10.77.0.1` and `8035`.
+path is available. Until then, the game UI can use `10.0.0.1` and `8035`.
 
 ### Room types and admission
 
@@ -198,12 +198,12 @@ link, and advances the membership epoch so stale signaling cannot reopen it.
 ┌─ MOLTEN-MOON ────────────────────────────────────────────────┐
 │ Liquid War 5.6.2                              [Copy invite] │
 │                                                              │
-│  ● You (host)   10.77.0.1   local        0 ms   SERVER ✓   │
-│  ● Maya         10.77.0.2   direct      28 ms   [Kick] ✓   │
-│  ● Leo          10.77.0.3   relayed     61 ms   [Kick] ✓   │
+│  ● You (host)   10.0.0.1   local        0 ms   SERVER ✓   │
+│  ● Maya         10.0.0.2   direct      28 ms   [Kick] ✓   │
+│  ● Leo          10.0.0.3   relayed     61 ms   [Kick] ✓   │
 │  ◌ Sam          approval pending          [Accept] [Reject] │
 │                                                              │
-│  Game server       10.77.0.1:8035                            │
+│  Game server       10.0.0.1:8035                            │
 │  Players ready     3 / 6                                    │
 │  Transport         healthy                                  │
 │                                                              │
@@ -251,7 +251,7 @@ log.
                     ┌─────────▼─────────┐
                     │ Virtual socket   │
                     │ switch           │
-                    │ 10.77.0.0/24     │
+                    │ 10.0.0.0/24     │
                     └─────────┬─────────┘
                               │
                   narrow host imports / yield
@@ -280,11 +280,11 @@ requires only `N - 1` browser connections, and avoids a full-mesh negotiation
 storm.
 
 ```text
-                   Bob / 10.77.0.2
+                   Bob / 10.0.0.2
                          │
                          │ one WebRTC peer connection
                          │
-  Carol / 10.77.0.3 ── HOST SWITCH ── Dev / 10.77.0.4
+  Carol / 10.0.0.3 ── HOST SWITCH ── Dev / 10.0.0.4
                          │
                          │ local in-memory route
                          │
@@ -317,10 +317,10 @@ uses an in-memory transport rather than serializing through WebRTC.
 Each room owns an isolated virtual `/24`:
 
 ```text
-10.77.0.0       reserved network identity
-10.77.0.1       room host and game server
-10.77.0.2-.254  members, allocated for the room lifetime
-10.77.0.255     future broadcast address; rejected in version 1
+10.0.0.0       reserved network identity
+10.0.0.1       room host and game server
+10.0.0.2-.254  members, allocated for the room lifetime
+10.0.0.255     future broadcast address; rejected in version 1
 ```
 
 These addresses exist only inside the room. They are never bound to a host
@@ -340,8 +340,8 @@ It rejects external IPs with `WSAENETUNREACH`, unsupported socket types with
 The first game endpoint is fixed by convention:
 
 ```text
-liquidwar-host.vlan  -> 10.77.0.1   (optional future room DNS)
-Liquid War server   -> 10.77.0.1:8035/TCP
+liquidwar-host.vlan  -> 10.0.0.1   (optional future room DNS)
+Liquid War server   -> 10.0.0.1:8035/TCP
 ```
 
 Ephemeral client ports are allocated from a room-local range such as
@@ -466,10 +466,10 @@ real client/server path, not a special `connect()` success stub.
 lwwinsrv.exe                              lwwin.exe
      │                                        │
  socket()                                socket()
- bind(10.77.0.1:8035)                        │
+ bind(10.0.0.1:8035)                        │
  listen(backlog)                             │
  select(read listener)                       │
-     │                              connect(10.77.0.1:8035)
+     │                              connect(10.0.0.1:8035)
      │                                        │
      ├── create connected socket pair ────────┤
      ├── enqueue server half                  │
@@ -517,7 +517,7 @@ friend-to-host peer link. Virtual TCP streams are multiplexed over it.
 ```text
 Bob guest              Bob switch          Host switch       Server guest
    │                        │                    │                  │
-connect(10.77.0.1:8035)     │                    │                  │
+connect(10.0.0.1:8035)     │                    │                  │
    ├───────────────────────▶│                    │                  │
    │                        ├── OPEN ───────────▶│                  │
    │                        │                    ├─ find listener   │
@@ -673,7 +673,7 @@ address exchange, and it happens only when two people actually try to connect:
   presence  (public, one key per scope)      inbox  (one key per recipient)
   ┌───────────────────────────────┐          ┌──────────────────────────────┐
   │ name      "alpha"             │          │ from       <sender user id>  │
-  │ address   10.77.3.47          │          │ publicKey  <sender's key>    │
+  │ address   10.0.0.47           │          │ publicKey  <sender's key>    │
   │ publicKey <ephemeral ECDH>    │  ─────▶  │ iv, ct     sealed to the     │
   │ status    available           │          │            recipient alone   │
   └───────────────────────────────┘          └──────────────────────────────┘
@@ -719,11 +719,17 @@ that actually matters — post-dated to stay listed long after the person has
 gone.
 
 Addresses are claimed rather than assigned, because there is no server to hand
-them out. A joining peer reads the presence list, picks a random free address
-in `10.77.0.0/16` (last octet 2–254, so an address never looks like a network
-or broadcast address), publishes the claim, then reads the list again — random
-choice makes collisions rare, and the re-read catches the ones that happen
-anyway.
+them out. A joining peer reads the presence list and takes the **lowest free
+seat** in `10.0.0.0/24`: the first peer in an empty room is always the host
+address, the next is `.2`, and so on to `.254` (`.0` and `.255` are not seats).
+It publishes the claim, then reads the list again.
+
+Seats are dense and predictable on purpose. The host is always the same
+address, so a game that asks for a server address can be told one short string
+and nothing has to be copied between players. The cost is that collisions stop
+being rare — two peers joining an empty room at the same moment both take seat
+1 — so the re-read is the hot path rather than a long shot, and it repeats
+until the claim sticks.
 
 When two peers do land on the same address, the tiebreak is **not** "who was
 first". Arrival order is not recoverable: the store's timestamp is rewritten by
@@ -753,7 +759,7 @@ agreement, not fairness.
 Membership readiness and game readiness are separate. A peer can have a
 healthy encrypted transport while its game is still at the menu. The room UI
 must not claim `SERVER READY` until the virtual listener is actually bound and
-listening on `10.77.0.1:8035`.
+listening on `10.0.0.1:8035`.
 
 ### Berrry records
 
@@ -824,7 +830,7 @@ Friend                       Berrry public data                    Host
    ├──────── encrypted ANSWER ─────▶│                               │
    │                                                                │
    ╞════════════ authenticated encrypted DataChannel ═══════════════╡
-   │◀──────────── assigned peer ID and 10.77.0.x ────────────────────┤
+   │◀──────────── assigned peer ID and 10.0.0.x ────────────────────┤
 ```
 
 Rotating the capability increments the room epoch and rejects new proofs made
@@ -1074,7 +1080,7 @@ action, nor embed WebRTC concepts in WAT.
   `FIONREAD`), `setsockopt`, `htons`/`ntohs`, `inet_addr`/`inet_ntoa`,
   `gethostbyname`, and the `WSA*` lifecycle run against that switch.
 - All 21 WSOCK32 ordinals both Liquid War binaries import now resolve.
-- Isolation is enforced at `bind` and `connect`: only `10.77.0.0/24` and
+- Isolation is enforced at `bind` and `connect`: only `10.0.0.0/24` and
   loopback are routable, everything else is `WSAENETUNREACH`.
 - `test/test-wat-winsock.js` — 37 checks covering invalid handles, illegal
   state transitions, partial send, fragmented recv, orderly EOF versus reset,
@@ -1137,8 +1143,8 @@ Gates met:
   the frame limit, orderly EOF, abortive reset, refusal, foreign and malformed
   frames, and the three parking paths.
 - `test/test-vlan-loopback.js` — 5 checks, two operating-system processes.
-  `lwwinsrv.exe -private -6 -nobeep` runs at `10.77.0.1` and a second process
-  at `10.77.0.2` opens a connection to port 8035. The server's own trace shows
+  `lwwinsrv.exe -private -6 -nobeep` runs at `10.0.0.1` and a second process
+  at `10.0.0.2` opens a connection to port 8035. The server's own trace shows
   it calling `accept()`, then reading the peer's bytes one at a time through
   its protocol parser, then `closesocket` when the peer goes away.
 
@@ -1230,7 +1236,7 @@ bounded delay, reports resets accurately, and never exceeds queue limits.
 - Run two real browsers on separate networks with no manual port forwarding.
 
 Exit gate: both clients connect to the host's original `lwwinsrv.exe` at
-`10.77.0.1:8035` and complete a match over a direct path.
+`10.0.0.1:8035` and complete a match over a direct path.
 
 #### Backend surface and the local development server
 
@@ -1336,7 +1342,7 @@ not depend on wall-clock races.
 
 The decisive acceptance test is concrete: two browsers, zero port forwarding,
 the host runs the bundled original server, both clients connect to
-`10.77.0.1:8035`, and a complete match succeeds over both a direct and a forced
+`10.0.0.1:8035`, and a complete match succeeds over both a direct and a forced
 relay route.
 
 ## Decisions and open questions
@@ -1379,5 +1385,5 @@ relay route.
 
 These questions do not change the architecture. The next useful engineering
 step remains the same: build real loopback Winsock semantics, launch the
-bundled server beside the client, and make `10.77.0.1:8035` work before adding
+bundled server beside the client, and make `10.0.0.1:8035` work before adding
 an Internet transport.

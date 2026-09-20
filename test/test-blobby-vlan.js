@@ -153,7 +153,7 @@ function check(what, ok) {
 
 async function main() {
   const hub = new ProcessHub();
-  const host = spawn('host', '10.77.0.1', HOST_KEYS, {
+  const host = spawn('host', '10.0.0.1', HOST_KEYS, {
     waiting: /\[sched\].*T1:\w+@0x44b5de/,
     enumReply: /\[net\] -> dpl ENUM_REPLY/,
     joinAck: /\[net\] -> dpl JOIN_ACK/,
@@ -169,7 +169,7 @@ async function main() {
     check('host opened a session and waits for a guest', opened);
     if (!opened) throw new Error(`host never opened\n${host.tail()}`);
 
-    guest = spawn('guest', '10.77.0.2', GUEST_KEYS, {
+    guest = spawn('guest', '10.0.0.2', GUEST_KEYS, {
       enumReq: /\[net\] -> dpl ENUM_REQ/,
       joinReq: /\[net\] -> dpl JOIN_REQ/,
       playerAdd: /\[net\] <- dpl PLAYER_ADD/,

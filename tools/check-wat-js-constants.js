@@ -178,4 +178,36 @@ assert.deepStrictEqual(argWords, gpuWords,
 assert(require('./gen-gl-encoder-abi').check(),
   'native GL stack lengths/barriers are stale; run node tools/gen-gl-encoder-abi.js');
 
-console.log(`check-wat-js-constants: OK (${dxSlots} DX slots, ${gpuWords.length} GPU opcodes)`);
+// The virtual LAN's room subnet is an ABI across three files. WAT owns it
+// twice — the address it answers getsockname with, and the /24 that
+// $vsock_addr_in_room will route to at all — and JavaScript hands out the
+// seats inside it, in the WebRTC lobby and again in the one-page loopback
+// segment. A drifted JS copy is close to undebuggable: the lobby seats
+// everybody on a subnet the guest's own room check refuses, so every connect
+// fails with no wrong address printed anywhere, because each half is
+// internally consistent.
+const winsock = source('src/09d-winsock.wat');
+const roomHost = one(winsock,
+  /\(global \$vsock_local_ip \(mut i32\) \(i32\.const (0x[0-9a-f]+)\)/i,
+  '$vsock_local_ip default in src/09d-winsock.wat');
+const roomNet = one(winsock,
+  /\(i32\.const (0x[0-9a-f]+)\)+\s*;; \d+\.\d+\.\d+\.\d+\/24/i,
+  'the room /24 in $vsock_addr_in_room');
+equal(roomHost & 0xFFFFFF00, roomNet,
+  'src/09d-winsock.wat: the host address must lie inside the room it routes');
+
+const prefixMatch = source('lib/vlan-rtc.js')
+  .match(/const ADDR_PREFIX = \[\s*([0-9]+),\s*([0-9]+),\s*([0-9]+)\s*\]/);
+assert(prefixMatch, 'cannot find ADDR_PREFIX in lib/vlan-rtc.js');
+const seatOctets = prefixMatch.slice(1, 4).map(number);
+equal((seatOctets[0] << 24 | seatOctets[1] << 16 | seatOctets[2] << 8 | 1) >>> 0, roomHost,
+  'lib/vlan-rtc.js ADDR_PREFIX seat 1 must be the WAT room host');
+
+const shellPrefix = source('lib/browser-shell.js')
+  .match(/address: `([0-9]+\.[0-9]+\.[0-9]+)\.\$\{nextLocalHost/);
+assert(shellPrefix, 'cannot find the loopback segment address in lib/browser-shell.js');
+assert.strictEqual(shellPrefix[1], seatOctets.join('.'),
+  'lib/browser-shell.js loopback seats must use the same prefix as the lobby');
+
+console.log(`check-wat-js-constants: OK (${dxSlots} DX slots, ${gpuWords.length} GPU opcodes, ` +
+  `vlan room ${seatOctets.join('.')}.0/24)`);

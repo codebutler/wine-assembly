@@ -5,19 +5,19 @@ Two copies of a 1990s Windows game can play each other inside Wine-Assembly: Win
 
 ## What "virtual LAN" means here
 
-The emulator does not expose real sockets to the guest, and a browser could not offer them anyway. Instead `src/09d-winsock.wat` implements the Winsock 1.1 surface a game uses (`socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `select`, `WSAAsyncSelect`, host and address helpers) over a WAT-owned socket table, and everything below the socket layer is a small Ethernet-like segment with its own addressing: each emulator instance gets an address in a `10.77.0.0/24` room, and a frame is opaque bytes plus source and destination.
+The emulator does not expose real sockets to the guest, and a browser could not offer them anyway. Instead `src/09d-winsock.wat` implements the Winsock 1.1 surface a game uses (`socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `select`, `WSAAsyncSelect`, host and address helpers) over a WAT-owned socket table, and everything below the socket layer is a small Ethernet-like segment with its own addressing: each emulator instance gets an address in a `10.0.0.0/24` room, and a frame is opaque bytes plus source and destination.
 
 The routing all lives in WAT. The JavaScript side, `lib/vlan-wire.js`, is a transport that carries opaque frames and knows nothing about ports or connections. There are two transports:
 
 - **LoopbackSegment**: every emulator instance in one page shares a segment, so two desktop windows running the same game can find each other with no network at all.
-- **The `vln/1` wire**: the headless CLI can run two emulator processes and join them across child IPC with `--vlan-wire`, each given its own `--vlan-ip`. `--trace-net` prints every frame decoded (`-> SYN 10.77.0.2:49152 -> 10.77.0.1:8035`), which is the tool for "who is not answering".
+- **The `vln/1` wire**: the headless CLI can run two emulator processes and join them across child IPC with `--vlan-wire`, each given its own `--vlan-ip`. `--trace-net` prints every frame decoded (`-> SYN 10.0.0.2:49152 -> 10.0.0.1:8035`), which is the tool for "who is not answering".
 
 ```mermaid
 flowchart LR
-    subgraph A["Emulator instance 10.77.0.1"]
+    subgraph A["Emulator instance 10.0.0.1"]
         GA["Hearts / Liquid War"] --> WSA["Winsock in WAT<br/>socket table, connect, select"]
     end
-    subgraph B["Emulator instance 10.77.0.2"]
+    subgraph B["Emulator instance 10.0.0.2"]
         GB["Hearts / Liquid War"] --> WSB["Winsock in WAT"]
     end
     WSA <-->|"opaque frames<br/>src, dst, bytes"| T{"Transport<br/>lib/vlan-wire.js"}

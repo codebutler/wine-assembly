@@ -81,10 +81,18 @@
   (global $VSOCK_RX_CAP i32 (i32.const 16384))
   (global $VSOCK_HANDLE_TAG i32 (i32.const 0x53000000))
 
-  ;; Room addressing. The host of the room owns 10.77.0.1; every record
-  ;; created by this process binds there until multi-process rooms assign
-  ;; per-member addresses.
-  (global $vsock_local_ip (mut i32) (i32.const 0x0A4D0001))  ;; 10.77.0.1
+  ;; Room addressing. The host of the room owns 10.0.0.1 and every other
+  ;; member takes the next free seat, .2 and .3, so the address a person has
+  ;; to type into a game's host-IP box is always the same four characters:
+  ;; "10.1", which inet_addr widens to 10.0.0.1.
+  ;;
+  ;; This deliberately overlaps the range a real home LAN often uses. It
+  ;; cannot collide with one: $vsock_addr_in_room below refuses every address
+  ;; outside the room and loopback, so no guest packet reaches a real 10.0.0.x
+  ;; machine whatever the guest asks for. The only cost is that a log line
+  ;; naming 10.0.0.2 reads like a real host, and an address a person can say
+  ;; out loud is worth that.
+  (global $vsock_local_ip (mut i32) (i32.const 0x0A000001))  ;; 10.0.0.1
   ;; The ephemeral-port cursor is at $VSOCK_NEXT_PORT_SHARED — process-wide, not
   ;; per instance. See $vsock_alloc_port.
   (global $wsa_last_error (mut i32) (i32.const 0))
@@ -181,7 +189,7 @@
   ;; Everything else is refused so the guest cannot reach the host LAN.
   (func $vsock_addr_in_room (param $ip i32) (result i32)
     (if (i32.eq (i32.and (local.get $ip) (i32.const 0xFFFFFF00))
-                (i32.const 0x0A4D0000))
+                (i32.const 0x0A000000))                      ;; 10.0.0.0/24
       (then (return (i32.const 1))))
     (if (i32.eq (i32.and (local.get $ip) (i32.const 0xFF000000))
                 (i32.const 0x7F000000))

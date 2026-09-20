@@ -28,8 +28,8 @@ const WSAEALREADY = 10037;
 const WSAECONNRESET = 10054;
 const WSAECONNREFUSED = 10061;
 
-const HOST_IP = '10.77.0.1';
-const PEER_IP = '10.77.0.2';
+const HOST_IP = '10.0.0.1';
+const PEER_IP = '10.0.0.2';
 const GAME_PORT = 8035;
 
 const VLN_MAGIC = 0x314e4c56;
@@ -218,9 +218,9 @@ async function main() {
     const v = new DataView(f.buffer);
     v.setUint32(0, VLN_MAGIC, true);
     v.setUint32(4, 5, true);                    // RST
-    v.setUint32(8, ip2int('10.77.0.9'), true);
+    v.setUint32(8, ip2int('10.0.0.9'), true);
     v.setUint32(12, 1234, true);
-    v.setUint32(16, ip2int('10.77.0.7'), true); // not this process
+    v.setUint32(16, ip2int('10.0.0.7'), true); // not this process
     v.setUint32(20, GAME_PORT, true);
     v.setUint32(24, 0, true);
     host.wire.deliver(f);

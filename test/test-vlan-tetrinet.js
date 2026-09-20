@@ -25,8 +25,8 @@ const { ProcessHub } = require('../lib/vlan-wire');
 
 const ROOT = path.join(__dirname, '..');
 const EXE = path.join(ROOT, 'test', 'binaries', 'candidates', 'tetrinet', 'TETRINET.EXE');
-const HOST_IP = '10.77.0.1';
-const PEER_IP = '10.77.0.2';
+const HOST_IP = '10.0.0.1';
+const PEER_IP = '10.0.0.2';
 const SERVER_PNG = process.env.VLAN_SERVER_PNG || '';
 const CLIENT_PNG = process.env.VLAN_CLIENT_PNG || '';
 

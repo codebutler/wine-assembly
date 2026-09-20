@@ -3702,14 +3702,14 @@
     (global.set $wsa_last_error (i32.const 0))
     (global.set $wsa_started (i32.const 0))
     (global.set $vsock_sel_waiting (i32.const 0))
-    (global.set $vsock_local_ip (i32.const 0x0A4D0001))
+    (global.set $vsock_local_ip (i32.const 0x0A000001))  ;; 10.0.0.1
     ;; The cursor moved into shared memory (one per process, not one per
     ;; instance), so the reset has to clear it there or a fresh test inherits the
     ;; previous one's port.
     (i32.store (global.get $VSOCK_NEXT_PORT_SHARED) (i32.const 49152)))
 
-  ;; Room address of this process. The host of the room keeps 10.77.0.1;
-  ;; every other member is assigned its own address before the guest runs.
+  ;; Room address of this process. The host of the room keeps 10.0.0.1;
+  ;; every other member takes the next free seat before the guest runs.
   (func (export "set_vlan_local_ip") (param $ip i32) (global.set $vsock_local_ip (local.get $ip)))
   (func (export "get_vlan_local_ip") (result i32) (global.get $vsock_local_ip))
   ;; Drain the wire without going through a guest API call, so a host that

@@ -18,8 +18,8 @@ const ROOT = path.join(__dirname, '..');
 const LW = path.join(ROOT, 'test', 'binaries', 'candidates', 'liquid-war', 'LW5');
 const CLIENT_EXE = path.join(LW, 'lwwin.exe');
 const SERVER_EXE = path.join(LW, 'lwwinsrv.exe');
-const HOST_IP = '10.77.0.1';
-const PEER_IP = '10.77.0.2';
+const HOST_IP = '10.0.0.1';
+const PEER_IP = '10.0.0.2';
 
 let failures = 0;
 function check(what, ok = true) {
@@ -54,8 +54,9 @@ function keystrokes() {
   tap(FIELD_FOCUS, 40);             // Down -> Server addr field
   let batch = TYPE_START;
   for (let i = 0; i < 9; i++) { tap(batch, 8); batch += 100; }  // erase 127.0.0.1
-  // 10.77.0.1 — digits are their own VK, '.' is VK_OEM_PERIOD.
-  for (const vk of [0x31, 0x30, 0xBE, 0x37, 0x37, 0xBE, 0x30, 0xBE, 0x31]) {
+  // 10.0.0.1 — digits are their own VK, '.' is VK_OEM_PERIOD. The room host is
+  // always seat .1, so this is the same string for every session.
+  for (const vk of [0x31, 0x30, 0xBE, 0x30, 0xBE, 0x30, 0xBE, 0x31]) {
     tap(batch, vk);
     batch += 100;
   }

@@ -69,8 +69,8 @@ function acceptEverything(node) {
   node.wat.test_dde_set_callback(1, ((SEL << 16) | STUB_OFF) >>> 0);
 }
 
-const DEALER_IP = '10.77.0.1';
-const PLAYER_IP = '10.77.0.2';
+const DEALER_IP = '10.0.0.1';
+const PLAYER_IP = '10.0.0.2';
 
 let passed = 0;
 function check(name, cond, detail) {

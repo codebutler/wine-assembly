@@ -38,7 +38,7 @@ const WSAESOCKTNOSUPPORT = 10044;
 const WSAEAFNOSUPPORT = 10047;
 const WSAEINVAL = 10022;
 
-const ROOM_HOST = '10.77.0.1';
+const ROOM_HOST = '10.0.0.1';
 const GAME_PORT = 8035;
 
 async function main() {
@@ -247,7 +247,11 @@ async function main() {
     assert.strictEqual(v.getUint16(10, true), 4);
     const list = v.getUint32(12, true) >>> 0;
     const addrPtr = new DataView(memory.buffer, wa(list), 8).getUint32(0, true) >>> 0;
-    assert.strictEqual(new DataView(memory.buffer, wa(addrPtr), 4).getUint32(0, true) >>> 0, 0x01004d0a);
+    // Network order, derived from ROOM_HOST rather than written out, so the
+    // room can move without this becoming a puzzle.
+    const hostBytes = ROOM_HOST.split('.').map(Number);
+    const hostNet = new DataView(new Uint8Array(hostBytes).buffer).getUint32(0, true) >>> 0;
+    assert.strictEqual(new DataView(memory.buffer, wa(addrPtr), 4).getUint32(0, true) >>> 0, hostNet);
     assert.strictEqual(readCstr(v.getUint32(0, true) >>> 0), ROOM_HOST);
     assert.strictEqual(wat.test_call_gethostbyname(cstr('liquidwar.example')) | 0, 0);
   });

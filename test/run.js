@@ -187,6 +187,23 @@ const MAX_BATCHES = getArg('max-batches', null) !== null
 // instead and read the batch count as the throughput: same wall clock on both
 // sides of an A/B, and the faster build is simply the one that got further.
 const MAX_SECONDS = parseFloat(getArg('max-seconds', '0')) || 0;
+// --memory-mb=N: size of the shared linear memory, from 512 (the default every
+// host has always used) to 2048. The module imports (memory 8192 32768
+// shared), so all of them satisfy it, and everything above 0x20000000 is the
+// $VIRTUAL_BACKING_EXT sparse window -- nothing else is ever placed there.
+// Raise it only for an app that genuinely exhausts the 316MB primary pool
+// (Black & White 2's land load needs 2048), because the pages are committed up
+// front and a phone has to keep the 512MB.
+//
+// 2048 is the ceiling because $virtual_backing_ext_end is
+// (i32.shl (memory.size) 16): correct up to 3GB because every comparison it
+// feeds is unsigned, wrapping to 0 at exactly 4GB. 2048 is the last value that
+// is safe without auditing that arithmetic again.
+const MEMORY_PAGES = (() => {
+  const mb = parseInt(getArg('memory-mb', '512'), 10);
+  if (!(mb >= 512 && mb <= 2048)) { console.error(`--memory-mb must be 512..2048, got ${mb}`); process.exit(2); }
+  return mb * 16; // a wasm page is 64KB
+})();
 // Composite the screen only every Nth batch. Nobody watches a headless run, so
 // intermediate frames exist only to be overwritten -- and they are not free:
 // skia-canvas 3.0.8 leaks roughly 320 bytes of unreclaimable native memory per
@@ -314,8 +331,9 @@ const TRACE_WIN16_DDE = (getArg('trace-win16', '') || '').split(',').includes('d
 // can be an arbitrary distance from the divide that set ZE.
 const TRACE_FPU = hasFlag('trace-fpu');
 const TRACE_NET = hasFlag('trace-net');   // --trace-net: log every vln/1 frame on the virtual LAN wire
-// --vlan-ip=10.77.0.2: this process's room address (host of the room keeps
-// 10.77.0.1). --vlan-wire joins the segment offered by the parent process
+// --vlan-ip=10.0.0.2: this process's room address (host of the room keeps
+// 10.0.0.1, which a guest can reach by typing "10.1"). --vlan-wire joins the
+// segment offered by the parent process
 // over child IPC, which is how two emulators share one room switch.
 const VLAN_IP = getArg('vlan-ip', null);
 const VLAN_WIRE = hasFlag('vlan-wire');
@@ -521,7 +539,7 @@ const TRACE_CALLSTACK_DEPTH = TRACE_CALLSTACK_RAW && TRACE_CALLSTACK_RAW.include
 // whatever corrupted the pointer.
 const FAULT_NULL_RAW = args.find(a => a === '--fault-null' || a.startsWith('--fault-null='));
 const FAULT_NULL = !FAULT_NULL_RAW ? 0
-  : (FAULT_NULL_RAW.split('=')[1] === 'stop' ? 2 : 1);
+  : ({ stop: 2, raise: 3 }[FAULT_NULL_RAW.split('=')[1]] || 1);
 // Offline census mode requires the separately built instrumented artifact from
 // tools/build-page-translation-stats.js. The canonical WASM has no counter
 // branch in $g2w, so profiling cannot perturb ordinary production runs.
@@ -1280,7 +1298,21 @@ async function main() {
   //   B:mousedown:X:Y       — handleMouseDown at canvas (X,Y)
   //   B:mouseup:X:Y         — handleMouseUp at canvas (X,Y)
   //   B:mousemove:X:Y       — handleMouseMove at canvas (X,Y)
-  //   B:relmousemove:DX:DY  — feed a pointer-lock relative delta
+  //   B:relmousemove:DX:DY[:STEPS]  — feed a pointer-lock relative delta,
+  //     optionally spread over STEPS consecutive batches. Note the unit:
+  //     a batch, which on a fast-looping guest can be far shorter than one
+  //     of its frames -- and a DirectInput poll happens per frame, so steps
+  //     finer than a frame coalesce back into the lump they were splitting.
+  //     When the guest presents slowly, pace the steps on the wall clock
+  //     instead, one command per step.
+  //     A DirectInput game reads the whole delta accumulated since its last
+  //     poll, and headless frames are seconds apart, so one of these arrives
+  //     as a single lump no hand could produce. A 2D menu clamps it at the
+  //     screen edge; a 3D scene feeds it to a camera or a terrain pick and a
+  //     value like -2000 can send the game into an unbounded world query it
+  //     never returns from (measured on Black & White 2's land picker, see
+  //     docs/re-notes/black-white-2.md). Move in small steps, and photograph
+  //     a small nudge before trusting a big one.
   //   B:wheel:X:Y:DELTA     — handleWheel at canvas (X,Y)
   //   B:dump-find           — log current find dialog edit state
   //   B:dump-main-edit      — log main edit text
@@ -1834,8 +1866,14 @@ async function main() {
         scheduledInput.push({ batch, action: 'caption-click',
           target: parts[2] || '', part: parts[3] || 'close' });
       } else if (kind === 'relmousemove') {
+        // The optional fourth field spreads the delta over that many batches
+        // instead of handing it over in one lump. See the flag comment above:
+        // a DirectInput game reads everything accumulated since its last poll,
+        // and a headless batch is roughly one of its frames, so `:20` is what
+        // makes an injected move look like a hand rather than a teleport.
         scheduledInput.push({ batch, action: kind,
-          x: parseInt(parts[2]), y: parseInt(parts[3]) });
+          x: parseInt(parts[2]), y: parseInt(parts[3]),
+          steps: Math.max(1, parseInt(parts[4]) || 1) });
       } else if (kind === 'click') {
         scheduledInput.push({ batch, action: 'click', x: parseInt(parts[2]), y: parseInt(parts[3]) });
       } else if (kind === 'mousedown') {
@@ -2552,10 +2590,25 @@ async function main() {
 
   // --- Override logging ---
   let criticalTracePending = null;
+  // Decoded API names, keyed by the guest pointer they were read from. This
+  // runs on EVERY api call -- 904,207 of them in a 55s Black & White 2 window --
+  // and it ran unconditionally, building a fresh Uint8Array view and
+  // concatenating the name a character at a time even under --quiet-api, where
+  // nothing downstream ever reads the string. It measured 1403ms of a 55769ms
+  // CPU profile (2.5%), plus its share of the 903ms spent in GC, which made it
+  // the largest single JS cost in the run. The bytes at a given pointer are a
+  // static string in the guest image and the memory is created with
+  // initial === maximum so the buffer is never detached, so one decode per
+  // distinct pointer is enough.
+  const apiNameCache = new Map();
   h.log = (ptr, len) => {
-    const b = new Uint8Array(memory.buffer, ptr, Math.min(len, 256));
-    let t = '';
-    for (let i = 0; i < b.length && b[i]; i++) t += String.fromCharCode(b[i]);
+    let t = apiNameCache.get(ptr);
+    if (t === undefined) {
+      const b = new Uint8Array(memory.buffer, ptr, Math.min(len, 256));
+      t = '';
+      for (let i = 0; i < b.length && b[i]; i++) t += String.fromCharCode(b[i]);
+      apiNameCache.set(ptr, t);
+    }
     // COM ordinal dispatch: 09b-dispatch.wat emits the api_id marker via
     // host_log_i32 IMMEDIATELY before this log of the '<ord>' placeholder.
     // Resolve the real method name now so all downstream tracing
@@ -3475,7 +3528,7 @@ async function main() {
   }
 
   // Create shared memory externally (WASM module imports it)
-  const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
+  const memory = new WebAssembly.Memory({ initial: MEMORY_PAGES, maximum: MEMORY_PAGES, shared: true });
   ctx._memory = memory;
   h.memory = memory;
 
@@ -4128,6 +4181,7 @@ async function main() {
   // and has to be propagated like every other one.
   if (NO_SPIN_PARK) inheritWasm('set_spin_park_k', 0);
   else if (Number.isFinite(SPIN_PARK_K)) inheritWasm('set_spin_park_k', SPIN_PARK_K);
+
   threadManager = new ThreadManager(wasmModule, memory, instance, makeWorkerImports, {
     workerBackend: guestThreadHost,
     serialSlices: THREADS_SERIAL,
@@ -4921,7 +4975,7 @@ async function main() {
     return lines.join('\n');
   };
 
-  let prevEip = 0, stuckCount = 0, prevApiCount = 0, prevRegFp = 0, prevWin16Calls = 0;
+  let prevEip = 0, stuckCount = 0, eipZeroReported = false, prevApiCount = 0, prevRegFp = 0, prevWin16Calls = 0;
   let prevWorkerFp = 0;
   // x86 steps the worker instances have retired. A render thread that parks in
   // Sleep at the end of every frame shows the SAME eip at every batch boundary,
@@ -4989,7 +5043,9 @@ async function main() {
   if (FAULT_NULL && instance.exports.set_fault_unmapped) {
     instance.exports.set_fault_unmapped(FAULT_NULL);
     console.log(`[fault] --fault-null armed (mode=${FAULT_NULL}: `
-      + `${FAULT_NULL === 2 ? 'log and trap' : 'log and continue'})`);
+      + `${FAULT_NULL === 2 ? 'log and trap'
+          : FAULT_NULL === 3 ? 'log and raise a guest access violation'
+          : 'log and continue'})`);
   }
   // Exclude PE/DLL load from the offline translation-path census.
   if (GUEST_PAGE_STATS) instance.exports.reset_guest_page_stats();
@@ -5674,7 +5730,15 @@ async function main() {
         try { cmd = JSON.parse(text); } catch (_) { cmd = { cmd: text }; }
         const list = Array.isArray(cmd) ? cmd : [cmd];
         for (const one of list) {
-          stdinCommands = stdinCommands.then(() => Promise.resolve(handleControlCommand(one)).then(
+          // `new Promise(r => r(f()))`, not `Promise.resolve(f())`: the latter
+          // evaluates f() *before* the promise exists, so a synchronous throw
+          // escapes into the enclosing .then callback, where the rejection
+          // handler below cannot see it — it only covers the promise it is
+          // attached to. That is an unhandled rejection, and node exits 1 on
+          // it, so one bad `eval` expression killed a 38-minute B&W2 run that
+          // was sitting on the profile dialog. A control command must never be
+          // able to take the run down with it.
+          stdinCommands = stdinCommands.then(() => new Promise(r => r(handleControlCommand(one))).then(
             value => console.log(`[ctl] ${JSON.stringify({ ok: true, id: one.id, value })}`),
             error => console.log(`[ctl] ${JSON.stringify({ ok: false, id: one.id, error: String(error && error.message || error) })}`)));
         }
@@ -6653,6 +6717,16 @@ async function main() {
       } else if (ev.action === 'dlg-cmd') {
         const we = instance.exports;
         let dlg = 0;
+        // A WAT-native modal (MessageBox, the common dialogs) owns the
+        // CACA0006 pump, and nothing else can complete it. It is the target
+        // whatever the renderer's z-order says, and it is not necessarily
+        // flagged isDialog there, so ask WAT first.
+        if (we.modal_dialog_hwnd) dlg = we.modal_dialog_hwnd() | 0;
+        if (dlg) {
+          we.send_message(dlg, 0x0111, ev.cmdId, 0);
+          logs.push(`[input] dlg-cmd: cmd=${ev.cmdId} modal hwnd=0x${dlg.toString(16)} at batch ${batch}`);
+          continue;
+        }
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
@@ -8383,8 +8457,21 @@ async function main() {
         renderer.handleMouseMove(ev.x, ev.y);
         logs.push(`[input] mousemove ${ev.x},${ev.y} at batch ${batch}`);
       } else if (ev.action === 'relmousemove' && renderer && renderer.handleRelativeMouseMove) {
-        renderer.handleRelativeMouseMove(ev.x, ev.y);
-        logs.push(`[input] relmousemove ${ev.x},${ev.y} at batch ${batch}`);
+        // With `steps`, deliver one step's worth now and leave the remainder
+        // for the next batch. Integer division would lose the remainder on a
+        // delta that does not divide evenly, so each step takes what is left
+        // divided by the steps that are left -- the total always arrives.
+        const steps = Math.max(1, ev.steps | 0);
+        const dx = Math.trunc(ev.x / steps);
+        const dy = Math.trunc(ev.y / steps);
+        renderer.handleRelativeMouseMove(dx, dy);
+        logs.push(`[input] relmousemove ${dx},${dy} at batch ${batch}`
+          + (steps > 1 ? ` (step ${steps} of ${ev.x},${ev.y} remaining)` : ''));
+        if (steps > 1) {
+          scheduledInput.push({ batch: batch + 1, action: ev.action,
+            x: ev.x - dx, y: ev.y - dy, steps: steps - 1 });
+          scheduledInput.sort((a, b) => a.batch - b.batch);
+        }
       } else if (ev.action === 'wheel' && renderer && renderer.handleWheel) {
         renderer.handleWheel(ev.x, ev.y, ev.delta);
         logs.push(`[input] wheel ${ev.x},${ev.y} delta=${ev.delta} at batch ${batch}`);
@@ -9116,6 +9203,34 @@ if (VERBOSE) {
             workerFp = (workerFp ^ t.instance.exports.get_eip()) | 0;
           }
         }
+      }
+      // EIP 0 is a guest that called through a NULL pointer, and the next
+      // thing worth knowing is always which pointer. The stuck detector prints
+      // that chain, but it is disabled for --control/--control-stdin sessions
+      // (they idle by design between agent commands), so a driven run used to
+      // reach the end with nothing but a zero in a status sample. Report it
+      // once, here, whatever the mode, and do not end the run: the harness may
+      // still want screenshots of whatever is left on screen.
+      if (eip === 0 && !eipZeroReported) {
+        eipZeroReported = true;
+        console.log(`[eip-zero] guest called through NULL at batch ${batch}`);
+        if (instance.exports.get_dbg_prev_eip) {
+          console.log(`  dbg_prev_eip=${hex(instance.exports.get_dbg_prev_eip())}`);
+        }
+        try {
+          const dv = new DataView(memory.buffer);
+          for (const [name, ptr] of [
+            ['eax', instance.exports.get_eax()], ['ecx', instance.exports.get_ecx()],
+            ['edx', instance.exports.get_edx()], ['esi', instance.exports.get_esi()],
+            ['edi', instance.exports.get_edi()],
+          ]) {
+            if (!ptr) continue;
+            const words = [];
+            for (let i = 0; i < 6; i++) words.push(hex(dv.getUint32(g2w((ptr + i * 4) >>> 0), true)));
+            console.log(`  ${name}[${hex(ptr)}]: ${words.join(' ')}`);
+          }
+        } catch (_) {}
+        dumpStack();
       }
       if (injectedInputThisBatch || eip !== prevEip || apiCount !== prevApiCount
           || regFp !== prevRegFp || win16Calls !== prevWin16Calls
