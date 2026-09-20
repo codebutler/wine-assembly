@@ -211,18 +211,13 @@
       (call $wnd_destroy_recursive (local.get $arg0))
       (i32.store offset=0 (global.get $reg_base) (i32.const 0))
       (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
-    ;; WM_ERASEBKGND (0x14): fill client area with background brush
+    ;; Background erasing has no text encoding; share HDC ownership, clipping
+    ;; and return semantics with the ANSI default procedure.
     (if (i32.eq (local.get $arg1) (i32.const 0x0014))
-    (then
-    ;; Reaching here is the window saying that USER owns its background: it was
-    ;; sent the erase and handed it straight back. NC_FLAGS bit 3 records that,
-    ;; and $handle_BeginPaint uses it to decide whether to repaint the class
-    ;; brush on later paints. A window that erases for itself never gets here,
-    ;; and must not have its own background overwritten -- Hearts fills its
-    ;; baize green and was registered with WHITE_BRUSH.
-    (call $nc_flags_set (local.get $arg0) (i32.const 8))
-    (i32.store offset=0 (global.get $reg_base) (call $host_erase_background (local.get $arg0) (call $wnd_get_bg_brush (local.get $arg0))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
+      (then
+        (call $handle_DefWindowProcA (local.get $arg0) (local.get $arg1)
+          (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+        (return)))
     ;; WM_PAINT: default handling is an empty paint cycle that validates the
     ;; update region, identical to DefWindowProcA.
     (if (i32.eq (local.get $arg1) (i32.const 0x000F))

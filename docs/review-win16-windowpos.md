@@ -364,3 +364,39 @@ and the normal/compatibility builds pass.
 Evidence: `/private/tmp/wa-begin-core-far-final.log`,
 `wa-begin-core-scratch-negative.log`, `wa-begin-core-win32.log`,
 `wa-begin-core-wep1.log`, `wa-begin-core-vb.log`, `wa-begin-core-build.log`.
+
+## 2026-09-20: default erasing borrows the supplied DC
+
+The next erase-path audit found that DefWindowProc ignored WM_ERASEBKGND's
+wParam HDC, allocated a different window DC, and returned success with no
+class brush. That made a future BeginPaint callback unable to honor its
+update-region clip or distinguish an unhandled erase. Microsoft's
+[WM_ERASEBKGND contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd)
+defines the supplied DC and requires a nonzero result only when erasing is
+handled; a NULL class brush leaves the application responsible.
+
+`erase_background_dc(hwnd, hdc, brush)` now performs the shared fill using
+the borrowed DC's existing clip/mapping and returns the rasterizer's result.
+It neither allocates a substitute nor releases the supplied handle. Missing
+DC or NULL class brush returns zero. DefWindowProcA uses it; the encoding-
+neutral W branch delegates to A instead of maintaining another erase policy.
+The Win16 bridge already widens the DC and therefore shares the fix too.
+Internal exposure callers retain their owned-DC wrapper, including its
+intentional no-op success for a NULL brush (used by the list-view, which
+paints its background itself); that is separate from the public default
+procedure's NULL-class-brush result.
+
+`test-default-erase-dc.js` checks all 768 pixels of a caller-supplied memory
+DC with a restricted clip, through A/W and the real Pascal Win16 bridge.
+It checks NULL brush/missing DC results, unchanged pixels on failure, caller
+DC reuse and ABI stack cleanup. The original code fails at the first pixel
+inside the clip: it painted a different surface and left the supplied DC
+white. The fixed version passes. Existing far positioning/painting and
+Win32 parent/child tests pass; WEP1 passes 8/8 and Rodent/Rattler pass.
+Normal and compatibility builds pass.
+
+Logs: `/private/tmp/wa-erase-dc-before.log`, `wa-erase-dc-all-abi.log`,
+`wa-erase-dc-far.log`, `wa-erase-dc-win32.log`, `wa-erase-dc-wep1.log`,
+`wa-erase-dc-vb.log`, `wa-erase-dc-final-build.log`.
+BeginPaint callback timing and propagation of the result to fErase remain
+open; this corrects the default callee, not the entire paint transaction.

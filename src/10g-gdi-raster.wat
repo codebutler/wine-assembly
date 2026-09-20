@@ -1231,34 +1231,46 @@
         (local.get $x0) (local.get $y0) (local.get $x1) (local.get $y1))))
     (i32.const 1))
 
-  ;; Default WM_ERASEBKGND over the canonical window surface. Creating the DC
-  ;; before filling guarantees that early dialog erases are not stranded on a
-  ;; renderer canvas which a later WAT surface attachment would replace.
-  (func $host_erase_background (param $hwnd i32) (param $brush i32) (result i32)
-    (local $hdc i32) (local $desc i32) (local $w i32) (local $h i32)
+  ;; WM_ERASEBKGND borrows wParam's DC, including its selected clip and mapping.
+  ;; Never replace it with a fresh window DC or release the caller's handle.
+  (func $erase_background_dc (param $hwnd i32) (param $hdc i32) (param $brush i32) (result i32)
+    (local $desc i32) (local $result i32)
     (call $host_erase_trace (local.get $hwnd) (local.get $brush)
       (call $wnd_client_w_for_clip (local.get $hwnd))
       (call $wnd_client_h_for_clip (local.get $hwnd)))
+    (if (i32.or (i32.eqz (local.get $brush)) (i32.eqz (local.get $hdc)))
+      (then (return (i32.const 0))))
+    (local.set $desc (global.get $GDI_LINE_DESC))
+    (if (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc))
+      (then
+        (local.set $result (call $gdi_fill_rect_desc
+          (local.get $hdc) (local.get $desc)
+          (i32.const 0) (i32.const 0)
+          (call $wnd_client_w_for_clip (local.get $hwnd))
+          (call $wnd_client_h_for_clip (local.get $hwnd))
+          (local.get $brush)))))
+    ;; The fill can cover children already painted into this window's
+    ;; surface, and a control clears its own update flag as it
+    ;; paints -- so without this, anything painted before the erase is gone
+    ;; for good. See $invalidate_child_controls for the case that found it.
+    (if (local.get $result)
+      (then (call $invalidate_child_controls (local.get $hwnd))))
+    (local.get $result))
+
+  ;; Internal exposure callers need an owned DC over the canonical surface.
+  ;; Only this wrapper establishes an erase clip and releases that DC.
+  (func $host_erase_background (param $hwnd i32) (param $brush i32) (result i32)
+    (local $hdc i32) (local $result i32)
+    ;; Internal callers can request an intentional no-op (the list-view
+    ;; paints its background itself). Public default erasing uses the borrowed
+    ;; DC helper above, where a NULL class brush must decline the message.
     (if (i32.eqz (local.get $brush)) (then (return (i32.const 1))))
     (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 0)))
     (if (i32.eqz (local.get $hdc)) (then (return (i32.const 0))))
     (call $dc_apply_client_erase_clip (local.get $hdc) (local.get $hwnd))
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc))
-      (then
-        (local.set $w (call $wnd_client_w_for_clip (local.get $hwnd)))
-        (local.set $h (call $wnd_client_h_for_clip (local.get $hwnd)))
-        (drop (call $gdi_fill_rect_desc
-          (local.get $hdc) (local.get $desc)
-          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
-          (local.get $brush)))))
+    (local.set $result (call $erase_background_dc (local.get $hwnd) (local.get $hdc) (local.get $brush)))
     (drop (call $host_release_dc (local.get $hdc)))
-    ;; The fill just covered every child that had already painted into this
-    ;; window's surface, and a control clears its own update flag as it
-    ;; paints -- so without this, anything painted before the erase is gone
-    ;; for good. See $invalidate_child_controls for the case that found it.
-    (call $invalidate_child_controls (local.get $hwnd))
-    (i32.const 1))
+    (local.get $result))
 
   (func $gdi_frame_rect_desc (param $hdc i32) (param $desc i32)
         (param $left i32) (param $top i32) (param $right i32) (param $bottom i32)

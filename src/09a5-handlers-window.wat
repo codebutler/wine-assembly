@@ -3182,7 +3182,8 @@
     ;; path forgot the ownership bit that DefWindowProcW already records, so
     ;; the old copyright strip remained under the active game board.
     (call $nc_flags_set (local.get $arg0) (i32.const 8))
-    (i32.store offset=0 (global.get $reg_base) (call $host_erase_background (local.get $arg0) (call $wnd_get_bg_brush (local.get $arg0))))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $erase_background_dc (local.get $arg0) (local.get $arg2) (call $wnd_get_bg_brush (local.get $arg0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_PAINT (0x0F): the default procedure performs an empty BeginPaint /
     ;; EndPaint cycle. Its visible effect is validation: runtimes such as VB6
