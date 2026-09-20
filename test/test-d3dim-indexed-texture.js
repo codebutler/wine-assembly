@@ -617,8 +617,18 @@ function writeFloat(wat, addr, value) {
   assert.strictEqual(wat.guest_read32(out + 20), 1, 'extended TEXCOORDINDEX state did not round-trip');
   clearRt(0);
   wat.test_diptex_draw(device, vertices, indices);
-  assert.strictEqual(mem.getUint16(rtDib, true), 0x001f,
+  // The strip this leaves runs between the two vertices in front of the eye,
+  // at x=1 and x=6: a screen-space vertex is covered from the pixel whose
+  // CENTRE it passes, so the clipper's fractional endpoints round rather than
+  // truncate, and column 0 stays clear. Probing the strip's interior for the
+  // texture's constant .25/.50 texel keeps this an assertion about
+  // TEXCOORDINDEX while still pinning that coverage rule: the old probe at
+  // pixel 0 only ever passed because truncation biased every fractional
+  // vertex half a pixel to the left.
+  assert.strictEqual(mem.getUint16(rtDib + 3 * 2, true), 0x001f,
     'TEXCOORDINDEX=1 did not select the second FVF coordinate set');
+  assert.strictEqual(mem.getUint16(rtDib, true), 0,
+    'a fractional clipped vertex covered the pixel to its left');
 
   // Coordinate 1.0 wraps to the first row but clamps to the final row. This
   // catches the old unconditional-wrap sampler independently of UV selection.
@@ -627,7 +637,7 @@ function writeFloat(wat, addr, value) {
   wat.test_diptex_set_tss(device, 14, 3); // ADDRESSV=CLAMP
   clearRt(0);
   wat.test_diptex_draw(device, vertices, indices);
-  assert.strictEqual(mem.getUint16(rtDib, true), 0xffe0,
+  assert.strictEqual(mem.getUint16(rtDib + 3 * 2, true), 0xffe0,
     'D3DTADDRESS_CLAMP sampled the wrapped edge texel');
 
   // Linear filtering at the exact centre averages all four texels. Keep the
@@ -641,7 +651,7 @@ function writeFloat(wat, addr, value) {
   wat.test_diptex_set_tss(device, 17, 2); // MINFILTER=LINEAR
   clearRt(0);
   wat.test_diptex_draw(device, vertices, indices);
-  const filtered = mem.getUint16(rtDib, true);
+  const filtered = mem.getUint16(rtDib + 3 * 2, true);
   assert(filtered === 0x7be7 || filtered === 0x8408,
     `linear centre sample was not the four-texel average (0x${filtered.toString(16)})`);
 

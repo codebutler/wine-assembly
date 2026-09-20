@@ -3255,9 +3255,19 @@
   ;; Repro before this existed: the DX SDK viewer.exe on any real Mesh .x file
   ;; crashed in $d3dim_draw_tl_triangle with "float unrepresentable in integer
   ;; range" as soon as d3drm handed the first triangle to Execute.
+  ;; A pre-transformed vertex names a point on the screen grid, and a pixel is
+  ;; covered when that point passes its CENTRE -- so 300.6 belongs to pixel
+  ;; 301, not 300. Truncating biased every fractional vertex half a pixel up
+  ;; and left, which is 62% of GTA2's menu-text disagreement with the WebGL
+  ;; executor (0.7223% of pixels -> 0.2744%); every other app in the corpus
+  ;; that draws D3DIM triangles puts its vertices on integers and is
+  ;; pixel-identical either way. The rest of the gap is the span interpolating
+  ;; its attributes at pixel corners, which is a separate change.
   (func $d3dim_coord_i (param $f f32) (result i32)
     (i32.trunc_sat_f32_s
-      (f32.min (f32.max (local.get $f) (f32.const -1000000.0)) (f32.const 1000000.0))))
+      (f32.floor (f32.add
+        (f32.min (f32.max (local.get $f) (f32.const -1000000.0)) (f32.const 1000000.0))
+        (f32.const 0.5)))))
 
   (func $d3dim_texture_sample_rgb (param $tex_entry i32) (param $u f32) (param $v f32) (result i32)
     (local $tw i32) (local $th i32) (local $bpp i32) (local $pitch i32) (local $dib_wa i32)

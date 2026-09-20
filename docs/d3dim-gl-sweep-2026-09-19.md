@@ -26,6 +26,9 @@ wrong arm and reports a rendering catastrophe that does not exist.
 | dx_flip3dtl | IDENTICAL | 0% | 0% | 0% | 666 | 0 |
 | mw3 | IDENTICAL | 0% | 0% | 0% | 26 | 0 |
 | gta2_demo | **DIFFERENT** | **0.7223%** | 0% | 0% | 72373 | 0 |
+
+(The gta2 row reads 0.2744% on a build after the vertex-rounding fix below; the
+0.7223% is what the first sweep measured and what the chase started from.)
 | dx_twist | NODRAW-DIFF | 71.9118% | 71.9111% | 0.0322% | 0 | 0 |
 | dx_tunnel | NODRAW-DIFF | 0.0163% | 0.0153% | 0.0098% | 0 | 0 |
 | dx_globe, dx_viewer, mcm, jazz2_demo, heroes3_demo, darkstone_demo, spider, pocket_tanks, captain_claw_demo, aoe2 | NODRAW | 0% | 0% (spider 5.78%, = its own null band) | 0% | 0 | 0 |
@@ -42,7 +45,42 @@ pixel-identical, including MechWarrior 3, and no app crashed only on the GL arm.
 pixels, against a null band of 0%, with the changed box at `300,255 133x218`:
 the main menu's PLAY/OPTIONS/QUIT text. It is the only app in the corpus that
 puts a five-figure draw count through the executor, so it is also the only one
-whose agreement is worth much — and that is the next thing to look at.
+whose agreement is worth much. **It was our software rasterizer that was
+wrong** — see below.
+
+## The GTA2 row, chased (same day)
+
+The disagreement is a rasterization-convention difference, and the executor was
+the one following D3D.
+
+`$d3dim_coord_i` converted each pre-transformed vertex to an integer pixel with
+`i32.trunc_sat_f32_s`, so a vertex at x=300.6 landed on pixel 300 — every
+fractional vertex biased half a pixel up and to the left. GL keeps the float
+position and covers a pixel when the edge passes its *centre*, which is what
+D3D specifies.
+
+Measured, in this order:
+
+1. Snapping the executor's vertices with `Math.trunc` before upload — a probe,
+   not a change — took the diff from **2219 to 639 pixels**. So ~71% of it was
+   the snapping and the rest is elsewhere.
+2. Rounding instead of truncating in `$d3dim_coord_i` took the *software* arm
+   from **0.7223% to 0.2744%** against the unchanged executor.
+3. Gate: every other app in the corpus that draws D3DIM triangles — dx_boids,
+   dx_flip3dtl, MechWarrior 3, MechCommander — is **pixel-identical** either
+   way. They put their vertices on integers, where the two agree.
+
+What is left (0.27%) is `$viewport_draw_textured_span` interpolating u/v at
+pixel *corners* — it walks `(x - x0) / (x1 - x0)` over integer endpoints — plus
+a one-step 565 rounding difference worth ~52 pixels (the diff only falls from
+2219 to 2167 as tolerance goes 0 → 8, so quantization was never the story).
+Moving the span to pixel centres is a separate change with its own sweep.
+
+`test/test-d3dim-indexed-texture.js` moved three probes for this: they read
+pixel 0 of a strip whose left edge comes from a far-plane-clipped fractional
+vertex, and only truncation's bias ever covered it. The probes now read the
+strip's interior, and one new assertion holds column 0 clear, so a regression
+to truncation fails there.
 
 **Eleven of sixteen apps never drew a triangle.** A headless startup slice
 reaches a 2D menu, not gameplay; most of these need input to get into a 3D
