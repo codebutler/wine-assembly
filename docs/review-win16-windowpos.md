@@ -784,3 +784,15 @@ source far regression passes with a new class-brush exposure assertion.
 Trace, artifact and capture paths are recorded in
 [the Go Figure note](re-notes/wep16-gofigure.md). Fuji Golf remains open;
 this does not establish native-equivalent parent-exposure message timing.
+
+## 2026-09-20: Fuji Golf failure refined, geometry still open
+
+The reported missing player-name control was a harness startup error: the
+game was still asking to copy its DAT file to the Windows directory. After
+accepting that prompt, the old physical click also missed the Start New
+Round button because the clubhouse scene is too short. The gate now accepts
+the prompt and clicks the real control ID, preserving its independent strict
+geometry checks. Name entry and the first-tee transition work; the test
+remains red for scene bounds 360x291 (height must exceed 310), not a missing
+dialog. No runtime change or relaxed visual threshold. Evidence and next
+investigation are in [the Fuji Golf note](re-notes/wep16-fujigolf.md).

@@ -194,12 +194,17 @@ function testTetraVex(outDir) {
 function testFujiGolf(outDir) {
   const clubhouse = path.join(outDir, 'fuji-clubhouse.png');
   const course = path.join(outDir, 'fuji-course.png');
+  // Fresh VFS runs ask to copy FUJIGOLF.DAT to the Windows directory before
+  // opening the clubhouse. Click its real button by ID: scene geometry is
+  // asserted separately below and must not prevent exercising the round.
   const output = runGame('wep16_fujigolf',
-    `45:png:${clubhouse},60:mousedown:220:409,61:mouseup:220:409,` +
+    `20:dlg-cmd:1,45:png:${clubhouse},60:ctrl-click:4,` +
     `100:dlg-set-edit:100:Codex,110:dlg-cmd:1,220:png:${course},250:stop`, 280);
   assertHealthy(output, 'Fuji Golf');
   assert.match(output, /dlg-set-edit: id=100 text="Codex"/,
     'Fuji Golf should accept a player name for the new round');
+  assert(changedPixels(clubhouse, course, { x: 12, y: 55, w: 605, h: 395 }) > 30000,
+    'Fuji Golf should leave the clubhouse and render a playable course');
   const caption = colorBounds(clubhouse, { x: 0, y: 0, w: 640, h: 20 },
     (r, g, b) => b > r + 20 && b > g + 10);
   assert(caption.width > 620,
@@ -208,8 +213,6 @@ function testFujiGolf(outDir) {
     (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) > 45);
   assert(scene.width > 350 && scene.height > 310,
     `Fuji Golf clubhouse scene should retain native depth (bounds=${scene.width}x${scene.height})`);
-  assert(changedPixels(clubhouse, course, { x: 12, y: 55, w: 605, h: 395 }) > 30000,
-    'Fuji Golf should leave the clubhouse and render a playable course');
   console.log('PASS  Win16 Fuji Golf starts a round and renders the first tee');
 }
 
