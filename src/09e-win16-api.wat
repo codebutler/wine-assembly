@@ -7078,8 +7078,8 @@
   ;;
   ;; Deliberately not $handle_ShowWindow: that one hands WM_ACTIVATEAPP to the
   ;; window procedure by redirecting EIP into a 32-bit frame, which is the one
-  ;; thing a 16-bit task cannot survive. A Win16 app pumps messages for those
-  ;; anyway, so this does the state change and lets the queue deliver the rest.
+  ;; thing a 16-bit task cannot survive. Activation/restored-size delivery
+  ;; still uses the queue; maximize and initial erase use a far continuation.
   ;;
   ;; Note on ordering: Windows sends WM_SIZE from inside ShowWindow, so
   ;; anything WinMain posts afterwards arrives behind it, while here it waits
@@ -7090,7 +7090,7 @@
   ;; understood before the order moves.
   (func $win16_ShowWindow
     (local $hwnd16 i32) (local $hwnd i32) (local $show i32)
-    (local $proc i32) (local $client_size i32) (local $was_visible i32)
+    (local $proc i32) (local $client_size i32) (local $was_visible i32) (local $sp i32)
     (local.set $hwnd16 (call $win16_arg16 (i32.const 1)))
     (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
     (local.set $show (call $win16_arg16 (i32.const 0)))
@@ -7154,22 +7154,12 @@
         ;; the only place it gets to is WM_ERASEBKGND — FreeCell's green baize
         ;; is a PATCOPY over GetClientRect there, and without the message the
         ;; client stays whatever the surface was cleared to.
-        ;; Queued here rather than left to the non-client flag, because *when*
-        ;; it arrives decides whether it helps or hurts. The flag is drained
-        ;; after the post queue, so the erase landed behind whatever the app
-        ;; had posted for itself — and Solitaire posts its deal, deals from the
-        ;; command, and draws each card as it deals rather than from WM_PAINT.
-        ;; The erase then painted the table green over a hand already laid out,
-        ;; and nothing asked for it back: the cards only appeared once
-        ;; something else invalidated the window, which is why opening a menu
-        ;; brought them out. Posted from here it arrives with ShowWindow's own
-        ;; messages, ahead of the app's, which is the order Windows gives it —
-        ;; there the erase happens inside ShowWindow before the task's message
-        ;; loop runs at all.
-        (if (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd))
-                              (i32.const 0x10000000)))
-          (then (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x0014)
-                  (i32.add (local.get $hwnd) (i32.const 0x40000)) (i32.const 0)))))
+        ;; Complete the erase synchronously below. Posting it lets a later
+        ;; UpdateWindow paint first, then wipes that work when the queue runs
+        ;; (Tetris). Leaving it behind app-posted commands also wipes cards
+        ;; drawn by Solitaire's deal command.
+        (if (i32.eqz (local.get $was_visible))
+          (then (call $nc_flags_set (local.get $hwnd) (i32.const 2))))
         (drop (call $wnd_set_style (local.get $hwnd)
           (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
         ;; Re-arm deferred child creation work only on an actual hidden-to-
@@ -7195,27 +7185,115 @@
         ;; synchronous SIZE_MAXIMIZED below (Tetris opens About immediately).
         (global.set $pending_wm_size (i32.const 0))
         (call $defwndproc_do_nccalcsize (local.get $hwnd))
-        (local.set $client_size (call $client_rect_wh_packed (local.get $hwnd)))
-        (local.set $proc (call $wnd_table_get (local.get $hwnd)))
-        (if (call $win16_is_far_proc (local.get $proc))
-          (then
-            (call $win16_cont_push
-              (call $win16_take_return (i32.const 4)) (i32.const 1))
-            (call $win16_enter_wndproc (local.get $proc) (local.get $hwnd16)
-              (i32.const 0x0005) (i32.const 2) (local.get $client_size)
-              (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_OFFSET))
-            (return)))
-        (drop (call $wnd_send_message (local.get $hwnd)
-          (i32.const 0x0005) (i32.const 2) (local.get $client_size)))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-    (call $win16_api_return (i32.const 4)))
+        (local.set $client_size (call $client_rect_wh_packed (local.get $hwnd)))))
+    (call $win16_cont_push (call $win16_take_return (i32.const 4)) (i32.const 1))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $client_size))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 8))
+      (i32.or (i32.eq (local.get $show) (i32.const 3))
+        (select (i32.const 2) (i32.const 0)
+          (i32.and (i32.ne (local.get $show) (i32.const 0)) (i32.eqz (local.get $was_visible))))))
+    (call $win16_show_continue))
+
+  ;; Invocation-owned {hwnd, client-size, pending-bits} across far callbacks.
+  ;; Clear each bit before entry so nested ShowWindow/UpdateWindow is safe.
+  (global $WIN16_CONT_SHOW i32 (i32.const 0xFFAC))
+  (func $win16_show_continue
+    (local $sp i32) (local $hwnd i32) (local $pending i32)
+    (local $proc i32) (local $msg i32) (local $wp i32) (local $lp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $hwnd (call $gl32 (local.get $sp)))
+    (block $done (loop $next
+      (br_if $done (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      (local.set $pending (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
+      (br_if $done (i32.eqz (local.get $pending)))
+      (if (i32.and (local.get $pending) (i32.const 1))
+        (then
+          (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.and (local.get $pending) (i32.const -2)))
+          (local.set $msg (i32.const 5)) (local.set $wp (i32.const 2))
+          (local.set $lp (call $gl32 (i32.add (local.get $sp) (i32.const 4)))))
+        (else
+          (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
+          (br_if $done (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd))))
+          ;; A nested UpdateWindow may have already consumed this erase.
+          (br_if $done (i32.eqz (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2))))
+          (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
+          (local.set $msg (i32.const 0x14))
+          (local.set $wp (i32.add (local.get $hwnd) (i32.const 0x40000)))
+          (local.set $lp (i32.const 0))))
+      (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+      (if (call $win16_is_far_proc (local.get $proc))
+        (then
+          (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+            (local.get $msg)
+            (if (result i32) (i32.eq (local.get $msg) (i32.const 0x14))
+              (then (call $win16_h16 (local.get $wp))) (else (local.get $wp)))
+            (local.get $lp) (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_SHOW))
+          (return)))
+      (drop (call $wnd_send_message (local.get $hwnd) (local.get $msg) (local.get $wp) (local.get $lp)))
+      (br $next)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 12)))
+    (call $win16_cont_resume))
 
   ;; USER.124 UpdateWindow(hWnd).
   (func $win16_UpdateWindow
-    (call $invalidate_hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
-    (global.set $paint_pending (i32.const 1))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (call $win16_api_return (i32.const 2)))
+    (local $hwnd i32)
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (call $win16_cont_push (call $win16_take_return (i32.const 2)) (i32.const 0))
+    (call $win16_update_window_start (local.get $hwnd)))
+
+  ;; Called with the caller's ordinary return continuation already stacked.
+  ;; Reuse damage/native preparation; only the far ABI needs a separate send.
+  (global $WIN16_CONT_UPDATE i32 (i32.const 0xFFA8))
+  (func $win16_update_window_start (param $hwnd i32)
+    (local $proc i32) (local $sp i32)
+    (local.set $proc (call $update_window_prepare (local.get $hwnd)))
+    (if (i32.eqz (call $win16_is_far_proc (local.get $proc)))
+      (then (call $win16_cont_resume) (return)))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 0))
+    (call $win16_update_window_continue))
+
+  (func $win16_update_window_continue
+    (local $sp i32) (local $hwnd i32) (local $stage i32) (local $proc i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $hwnd (call $gl32 (local.get $sp)))
+    (local.set $stage (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+    (block $done
+      (br_if $done (i32.ge_u (local.get $stage) (i32.const 2)))
+      (br_if $done (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      (br_if $done (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd))))
+      (br_if $done (i32.eqz (call $update_get_rect (local.get $hwnd) (i32.const 0))))
+      (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+      (if (i32.eqz (call $win16_is_far_proc (local.get $proc)))
+        (then (call $update_window_now (local.get $hwnd)) (br $done)))
+      (if (i32.eqz (local.get $stage))
+        (then
+          (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 1))
+          (if (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2))
+            (then
+              (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
+              (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+                (i32.const 0x14) (call $win16_h16 (i32.add (local.get $hwnd) (i32.const 0x40000))) (i32.const 0)
+                (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_UPDATE))
+              (return)))))
+      (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 2))
+      (call $paint_flag_clear_hwnd (local.get $hwnd))
+      (if (i32.eq (local.get $hwnd) (global.get $main_hwnd))
+        (then (global.set $paint_pending (i32.const 0))))
+      (drop (call $paint_seed_child_paints (local.get $hwnd)))
+      ;; BeginPaint/EndPaint, not this sender, validates the damage. A guest
+      ;; that declines to validate must still see it on its next update.
+      (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+        (i32.const 0x0f) (i32.const 0) (i32.const 0)
+        (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_UPDATE))
+      (return))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 8)))
+    (call $win16_cont_resume))
 
   ;; USER.108 GetMessage(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax).
   ;;
@@ -8655,7 +8733,13 @@
       (then
         (local.set $flags (call $gl32 (i32.add (local.get $sp) (i32.const 56))))
         (if (call $gl32 (i32.add (local.get $sp) (i32.const 12)))
-          (then (call $move_window_finish (local.get $hwnd) (local.get $flags)))
+          (then
+            (call $move_window_finish (local.get $hwnd) (local.get $flags))
+            (if (i32.eqz (i32.and (local.get $flags) (i32.const 8)))
+              (then
+                (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 60)))
+                (call $win16_update_window_start (local.get $hwnd))
+                (return))))
           (else (call $windowpos_finish_paint (local.get $hwnd) (local.get $flags))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 60)))
     (call $win16_cont_resume))
@@ -13050,6 +13134,10 @@
       (then (call $win16_defpos_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_WINDOWPOS))
       (then (call $win16_windowpos_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_UPDATE))
+      (then (call $win16_update_window_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_SHOW))
+      (then (call $win16_show_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took
     ;; its own arguments off the stack; the CWPSTRUCT and CREATESTRUCT built
     ;; underneath them are this side's to drop.

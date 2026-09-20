@@ -279,3 +279,58 @@ Win16 deferred callbacks, parent/child paint ordering, Rodent/Rattler gameplay
 and normal/compatibility builds pass. Default CHANGING min/max behavior,
 minimized/maximized size classifications and native Win98 event comparison
 remain open alongside far synchronous paint.
+
+## 2026-09-20: synchronous Win16 UpdateWindow and initial erase
+
+Win16 UpdateWindow no longer invalidates the entire window and returns before
+painting. It shares damage/native-control preparation with Win32, then uses
+an eight-byte invocation-owned `{hwnd, stage}` guest-stack frame (FFA8) for
+far erase/paint callbacks. MoveWindow(TRUE) enters the same path after its
+position notifications. Clean windows send nothing; partial damage remains
+partial; BeginPaint/EndPaint own validation, not the sender. Each callback
+stage advances before entry and revalidates the target on return.
+
+This follows the direct, non-queued paint contract in Microsoft's
+[UpdateWindow documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-updatewindow).
+It is not a claim of complete Win98 painting equivalence: pending erase is
+still sent before WM_PAINT, following the existing Win32 implementation,
+rather than entered from within BeginPaint. Erase-return/fErase handling and
+an exact native event trace remain follow-ups. Microsoft's
+[WM_ERASEBKGND documentation](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd)
+specifies that the callback result controls whether further erasing is needed;
+this change does not implement that missing result handling.
+
+The real-game check caught a second shortcut: ShowWindow posted its initial
+WM_ERASEBKGND. Tetris's newly synchronous UpdateWindow tiled its client, then
+the posted erase wiped those tiles with the gray class brush. The old build
+passed the existing screenshot assertion; the first candidate failed it.
+No assertion was weakened. ShowWindow now completes the initial erase before
+returning through a twelve-byte `{hwnd, client-size, pending-bits}` frame
+(FFAC), also retaining its synchronous maximize callback. A nested
+UpdateWindow can consume the erase; the outer ShowWindow then skips it.
+Queued activation/restored-size behavior and child exposure handling remain
+separate limitations, not implicitly fixed by this change.
+
+Coverage and outcomes:
+
+- Actual far BeginPaint/EndPaint, original partial rectangle, clean/hidden
+  updates, nested UpdateWindow, MoveWindow(TRUE) completion, destruction in
+  erase, narrowed HDC and exact far-return/stack restoration pass.
+- ShowWindow completes initial erase without posting one, does not repeat it
+  on an already-visible window, and tolerates UpdateWindow inside maximize.
+- Restoring the old UpdateWindow body fails the clean-damage test. Restoring
+  the old ShowWindow body fails the synchronous initial-erase assertion.
+- WEP1 gameplay passes **8/8**, including Tetris's original About-background
+  and hard-drop checks. Rodent/Rattler and Hearts startup pass. Shared Win32
+  parent/child painting and Win16 deferred/nested transactions pass.
+- Solitaire's opening deal and all seven columns render. Its drag assertion
+  fails on both candidate and pre-change baseline (unchanged column pixel
+  count); that separate failure is recorded, not suppressed or called a pass.
+
+Evidence: `/private/tmp/wa-update16-clean-negative.log`,
+`wa-update16-show-negative.log`, `wa-update16-show-final.log`,
+`wa-update16-tetris-baseline.log`, `wa-update16-wep1.log` (first-candidate
+failure), `wa-update16-show-wep1.log`, `wa-update16-show-vb.log`,
+`wa-update16-final-hearts.log`, `wa-update16-final-win32.log`,
+`wa-update16-final-defer.log`, `wa-update16-show-solitaire.log`,
+`wa-update16-show-solitaire-baseline.log`, `wa-update16-final-build.log`.

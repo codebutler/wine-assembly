@@ -1586,14 +1586,14 @@
       (then (global.set $last_error (i32.const 1816)))) ;; ERROR_NOT_ENOUGH_QUOTA
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return))
 
-  ;; Shared by UpdateWindow and MoveWindow(TRUE); no API stack cleanup here.
-  (func $update_window_now (param $arg0 i32)
-    (local $wp i32)
+  ;; Shared preparation for both ABIs. Native controls complete here; return
+  ;; a guest wndproc only when the caller must send synchronous paint.
+  (func $update_window_prepare (param $arg0 i32) (result i32)
     ;; UpdateWindow consumes existing damage; it is not InvalidateRect.
     ;; In particular a clean window sends no WM_PAINT, and a partial update
     ;; must not be expanded to the entire client before BeginPaint sees it.
     (if (i32.eqz (call $update_get_rect (local.get $arg0) (call $paint_scratch_take)))
-      (then (return)))
+      (then (return (i32.const 0))))
     (call $paint_flag_set (local.get $arg0))
     (call $defwndproc_do_ncpaint (local.get $arg0))
     ;; Built-in controls do not need a guest callback trampoline. Complete
@@ -1607,7 +1607,14 @@
       (then
         (drop (call $control_wndproc_dispatch
           (local.get $arg0) (i32.const 0x000F) (i32.const 0) (i32.const 0)))
-        (return)))
+        (return (i32.const 0))))
+    (if (i32.eqz (call $wnd_is_effectively_visible (local.get $arg0)))
+      (then (return (i32.const 0))))
+    (call $wnd_table_get (local.get $arg0)))
+
+  ;; Shared by UpdateWindow and MoveWindow(TRUE); no API stack cleanup here.
+  (func $update_window_now (param $arg0 i32)
+    (local $wp i32)
     ;; UpdateWindow does not return until WM_PAINT has been handled, and
     ;; BeginPaint runs the window's pending WM_ERASEBKGND on the way in.
     ;; Apps depend on that ordering: Taipei paints its splash screen through
@@ -1617,9 +1624,9 @@
     ;; A visible guest-owned window uses the synchronous sender's saved
     ;; register/stack context even inside another send. Deferring solely on
     ;; nesting depth lets the outer wndproc resume before this paint finishes.
-    ;; This includes native controls with guest subclasses. Win16 still
-    ;; needs its distinct far-procedure calling convention.
-    (local.set $wp (call $wnd_table_get (local.get $arg0)))
+    ;; This includes native controls with guest subclasses. Win16 calls
+    ;; win16_update_window_start for its distinct far-procedure ABI.
+    (local.set $wp (call $update_window_prepare (local.get $arg0)))
     (if (i32.and
           (i32.eqz (global.get $code16))
           (i32.and

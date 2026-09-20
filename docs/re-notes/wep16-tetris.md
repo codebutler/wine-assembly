@@ -47,3 +47,18 @@ passes. Logs: `/private/tmp/wa-tetris-wep1-suite.log` and
 ```sh
 node test/test-win16-wep1-gameplay.js tetris
 ```
+
+## Initial erase versus synchronous UpdateWindow — 2026-09-20
+
+Enabling synchronous Win16 UpdateWindow exposed a runtime ordering bug:
+USER.42 ShowWindow(SW_MAXIMIZE) posted WM_ERASEBKGND for main HWND 0x10001;
+USER.124 then painted the tiled client immediately; the queued erase later
+reached USER.107 DefWindowProc and covered the tiles with the gray class
+brush. The opening About logo survived, but its exposed parent was flat gray.
+Trace: `/private/tmp/wa-update16-tetris-trace.log`; before/after captures:
+`wa-update16-tetris-before.png`, `wa-update16-tetris-after.png`.
+
+ShowWindow now completes its initial erase through a far continuation rather
+than posting it. Tetris's existing startup-background and hard-drop checks
+pass again, as does the full eight-game WEP1 suite. This was an emulator
+ordering regression, not a reason to relax the native-reference assertions.

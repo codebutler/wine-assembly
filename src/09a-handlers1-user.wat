@@ -1561,7 +1561,9 @@
     (if (i32.eqz (local.get $result_pos))
       (then
         (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
-        (call $move_window_finish (local.get $arg0) (local.get $flags))))
+        (call $move_window_finish (local.get $arg0) (local.get $flags))
+        (if (i32.eqz (i32.and (local.get $flags) (i32.const 8)))
+          (then (call $update_window_now (local.get $arg0))))))
     (i32.const 1))
 
   (func $move_window_finish (param $arg0 i32) (param $flags i32)
@@ -1603,10 +1605,8 @@
               ;; way USER's invalidate-on-resize does.
               (if (local.get $repaint)
                 (then (call $nc_flags_set (local.get $arg0) (i32.const 2))))))))
-    ;; MoveWindow(TRUE) includes UpdateWindow after its geometry transaction.
-    ;; Share the paint core without invoking a second API's stdcall epilogue.
-    (if (local.get $repaint)
-      (then (call $update_window_now (local.get $arg0))))
+    ;; The ABI caller performs UpdateWindow after this preparation: Win16
+    ;; must enter a far callback instead of the Win32 synchronous sender.
   )
 
  123: CheckRadioButton(hDlg, firstId, lastId, checkId) — clear all in

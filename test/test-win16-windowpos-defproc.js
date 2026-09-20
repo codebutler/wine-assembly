@@ -67,6 +67,31 @@ const extraWat = `
     (call $win16_MoveWindow))
   (func (export "test_dirty") (param $h i32) (result i32)
     (call $update_get_rect (local.get $h) (i32.const 0)))
+  (func (export "test_damage") (param $h i32) (param $erase i32)
+    (call $update_invalidate_rect (local.get $h) (i32.const 3) (i32.const 4) (i32.const 12) (i32.const 15))
+    (call $paint_flag_set (local.get $h))
+    (if (local.get $erase) (then (call $nc_flags_set (local.get $h) (i32.const 2)))))
+  (func (export "test_visible") (param $h i32) (param $visible i32)
+    (drop (call $wnd_set_style (local.get $h) (select (i32.const 0x10000000) (i32.const 0) (local.get $visible)))))
+  (func (export "test_update") (param $h i32) (param $caller i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (local.get $caller))
+    (call $gs16 (i32.const 0x110802) (i32.const 0xf))
+    (call $gs16 (i32.const 0x110804) (call $win16_h16 (local.get $h)))
+    (call $win16_UpdateWindow))
+  (func (export "test_user_thunk") (param $ordinal i32) (result i32)
+    (call $win16_thunk_for (i32.const 2) (local.get $ordinal) (i32.const 0)))
+  (func (export "test_show") (param $h i32) (param $cmd i32) (param $caller i32)
+    (call $post_queue_reset)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (local.get $caller))
+    (call $gs16 (i32.const 0x110802) (i32.const 0xf))
+    (call $gs16 (i32.const 0x110804) (local.get $cmd))
+    (call $gs16 (i32.const 0x110806) (call $win16_h16 (local.get $h)))
+    (call $win16_ShowWindow))
+  (func (export "test_post_count") (result i32) (call $post_queue_total_count))
+  (func (export "test_post_msg") (param $i i32) (result i32)
+    (call $post_queue_peek_field (local.get $i) (i32.const 1)))
 `;
 
 // Pascal far wndproc, recording {message,wParam,lParam} into SS:0904.
@@ -228,10 +253,10 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.deepStrictEqual(runSet(noRepaint, 0, 0x120, 1, true), [0x46, 0x47, 3, 5]);
   assert.strictEqual(moves[0].flags, 0x1c, 'MoveWindow(FALSE) begins with NOREDRAW');
   assert.strictEqual(e.test_dirty(noRepaint), 0, 'NOREDRAW creates no update region');
-  assert.deepStrictEqual(runSet(repaint, 1, 0x130, 1, true), [0x46, 0x47, 3, 5]);
+  assert.deepStrictEqual(runSet(repaint, 1, 0x130, 1, true), [0x46, 0x47, 3, 5, 0x14, 0x0f],
+    'MoveWindow(TRUE) finishes pending erase/paint after its geometry notifications');
   assert.strictEqual(moves[0].flags, 0x14, 'MoveWindow(TRUE) enables repaint');
-  // This verifies repaint flags, not synchronous far WM_PAINT delivery;
-  // UpdateWindow's separate Win16 paint limitation is still open.
+  assert.strictEqual(e.test_dirty(repaint), 1, 'a wndproc that never calls BeginPaint does not validate damage');
   const moveDoomed = e.test_window(0x700);
   assert(!runSet(moveDoomed, 1, 0x140, 0, true).includes(0x47));
   assert.deepStrictEqual(moves, [], 'destroyed MoveWindow target is not committed');
@@ -239,5 +264,93 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     assert.deepStrictEqual(runSet(target, 1, 0x150 + i * 16, 0, true), []);
     assert.deepStrictEqual(moves, [], 'native bridge preserves invalid MoveWindow failure');
   }
+  const runUpdate = (target, caller) => {
+    e.guest_write32(0x110900, 0);
+    writeCode(caller, [0xeb, 0xfe]);
+    e.test_update(target, caller);
+    e.set_bp(0x100000 + caller);
+    for (let i = 0; e.get_eip() !== 0x100000 + caller && i < 30; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100000 + caller);
+    assert.strictEqual(e.get_esp(), 0x110806, 'UpdateWindow consumes only its own Pascal and continuation frames');
+    return Array.from({ length: e.guest_read32(0x110900) }, (_, i) => e.guest_read32(0x110904 + i * 8) & 0xffff);
+  };
+  const clean = e.test_window(0x200);
+  assert.deepStrictEqual(runUpdate(clean, 0x180), [], 'clean UpdateWindow does not send paint');
+  assert.strictEqual(e.test_dirty(clean), 0, 'clean UpdateWindow must not invent damage');
+  const begin = e.test_user_thunk(39), end = e.test_user_thunk(40), update = e.test_user_thunk(124);
+  const paintCall = thunk => [0xff, 0x76, 0x0e, 0x16, 0x8d, 0x46, 0xde, 0x50,
+    0x9a, ...word(thunk), 0x1f, 0];
+  const paintBody = nested => [0x83, 0xec, 32, ...paintCall(begin),
+    ...[0, 1, 2, 3].flatMap(i => [0x8b, 0x46, 0xe2 + i * 2, 0x36, 0xa3, ...word(0xd00 + i * 2)]),
+    ...nested, ...paintCall(end), 0x83, 0xc4, 32];
+  const paintProc = nested => {
+    const body = paintBody(nested);
+    return recorder([0x83, 0x7e, 0x0c, 0x0f, 0x75, body.length, ...body]);
+  };
+  writeCode(0x900, paintProc([]));
+  const painter = e.test_window(0x900);
+  e.test_damage(painter, 0);
+  assert.deepStrictEqual(runUpdate(painter, 0x190), [0x0f], 'dirty UpdateWindow completes real BeginPaint/EndPaint before return');
+  assert.strictEqual(e.test_dirty(painter), 0);
+  assert.deepStrictEqual([0, 1, 2, 3].map(i => (e.guest_read32(0x110d00 + i * 2) & 0xffff)), [3, 4, 12, 15],
+    'BeginPaint sees the original partial region, not an expanded client');
+  assert.deepStrictEqual(runUpdate(painter, 0x1a0), [], 'completed paint is not delivered again');
+  e.test_damage(painter, 1);
+  assert.deepStrictEqual(runUpdate(painter, 0x1b0), [0x14, 0x0f], 'pending erase precedes paint');
+  assert.strictEqual(e.guest_read32(0x110904) >>> 16, e.test_narrow(painter + 0x40000),
+    'WM_ERASEBKGND receives a narrowed DC handle');
+  const innerPaint = e.test_window(0x900);
+  const nestedUpdate = [0x68, ...word(e.test_narrow(innerPaint)), 0x9a, ...word(update), 0x1f, 0,
+    0x36, 0xff, 0x06, 0x10, 0x0d];
+  writeCode(0xa00, paintProc(nestedUpdate));
+  const outerPaint = e.test_window(0xa00);
+  e.test_damage(innerPaint, 0); e.test_damage(outerPaint, 0);
+  e.guest_write32(0x110d10, 0);
+  assert.deepStrictEqual(runUpdate(outerPaint, 0x1c0), [0x0f, 0x0f]);
+  assert.strictEqual(e.guest_read32(0x110d10), 1, 'outer WM_PAINT resumes after inner UpdateWindow completes');
+  assert.strictEqual(e.test_dirty(innerPaint), 0);
+  assert.strictEqual(e.test_dirty(outerPaint), 0);
+  const movingPainter = e.test_window(0x900);
+  assert.deepStrictEqual(runSet(movingPainter, 1, 0x1d0, 1, true), [0x46, 0x47, 0x14, 0x0f]);
+  assert.strictEqual(e.test_dirty(movingPainter), 0, 'MoveWindow(TRUE) waits for BeginPaint/EndPaint validation');
+  const hidden = e.test_window(0x900);
+  e.test_visible(hidden, 0); e.test_damage(hidden, 0);
+  assert.deepStrictEqual(runUpdate(hidden, 0x1e0), [], 'hidden window does not paint');
+  assert.strictEqual(e.test_dirty(hidden), 1, 'hidden update retains its damage');
+  e.test_visible(hidden, 1);
+  assert.deepStrictEqual(runUpdate(hidden, 0x1f0), [0x0f]);
+  assert.deepStrictEqual([0, 1, 2, 3].map(i => e.guest_read32(0x110d00 + i * 2) & 0xffff), [3, 4, 12, 15]);
+  writeCode(0xb00, recorder([0x83, 0x7e, 0x0c, 0x14, 0x75, destroy.length, ...destroy]));
+  const eraseDoomed = e.test_window(0xb00);
+  e.test_damage(eraseDoomed, 1);
+  assert(!runUpdate(eraseDoomed, 0x30).includes(0x0f), 'destruction during erase prevents painting the stale target');
+  const runShow = (target, cmd, caller) => {
+    e.guest_write32(0x110900, 0);
+    writeCode(caller, [0xeb, 0xfe]);
+    e.test_show(target, cmd, caller);
+    e.set_bp(0x100000 + caller);
+    for (let i = 0; e.get_eip() !== 0x100000 + caller && i < 30; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100000 + caller);
+    assert.strictEqual(e.get_esp(), 0x110808, 'ShowWindow restores its Pascal and nested callback frames');
+    assert(!Array.from({length: e.test_post_count()}, (_, i) => e.test_post_msg(i)).includes(0x14),
+      'ShowWindow must not leave a posted erase to overwrite later UpdateWindow painting');
+    return Array.from({length: e.guest_read32(0x110900)}, (_, i) => e.guest_read32(0x110904 + i * 8) & 0xffff);
+  };
+  const showing = e.test_window(0x900);
+  e.test_visible(showing, 0);
+  assert.deepStrictEqual(runShow(showing, 1, 0x40), [0x14], 'initial erase completes before ShowWindow returns');
+  assert.deepStrictEqual(runUpdate(showing, 0x50), [0x0f]);
+  assert.strictEqual(e.test_dirty(showing), 0);
+  assert.deepStrictEqual(runShow(showing, 1, 0x60), [], 'showing an already visible window does not repeat initial erase');
+  const updateSelf = [0xff, 0x76, 0x0e, 0x9a, ...word(update), 0x1f, 0];
+  writeCode(0xc00, recorder([0x83, 0x7e, 0x0c, 5, 0x75, updateSelf.length, ...updateSelf,
+    0x83, 0x7e, 0x0c, 0x0f, 0x75, paintBody([]).length, ...paintBody([])]));
+  const showNested = e.test_window(0xc00);
+  e.test_visible(showNested, 0);
+  assert.deepStrictEqual(runShow(showNested, 3, 0x70), [5, 0x14, 0x0f],
+    'UpdateWindow inside maximize consumes initial erase; ShowWindow must not erase again afterward');
+  assert.strictEqual(e.test_dirty(showNested), 0);
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });
