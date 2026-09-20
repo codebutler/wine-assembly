@@ -7542,16 +7542,8 @@
       (local.set $proc (call $wnd_table_get (local.get $hwnd)))
       (if (i32.eqz (call $win16_is_far_proc (local.get $proc)))
         (then (call $update_window_now (local.get $hwnd)) (br $done)))
-      (if (i32.eqz (local.get $stage))
-        (then
-          (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 1))
-          (if (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2))
-            (then
-              (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
-              (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
-                (i32.const 0x14) (call $win16_h16 (i32.add (local.get $hwnd) (i32.const 0x40000))) (i32.const 0)
-                (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_UPDATE))
-              (return)))))
+      ;; BeginPaint sends any erase from inside WM_PAINT with its clipped DC.
+      ;; Merely requesting synchronous painting must not erase in advance.
       (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 2))
       (call $paint_flag_clear_hwnd (local.get $hwnd))
       (if (i32.eq (local.get $hwnd) (global.get $main_hwnd))
@@ -8209,28 +8201,63 @@
   ;; The 16-bit PAINTSTRUCT is hdc(W) fErase(W) rcPaint(4 ints) fRestore(W)
   ;; fIncUpdate(W) rgbReserved(16); the 32-bit one is the same fields at
   ;; double the width for the first six.
+  (global $WIN16_CONT_BEGINPAINT i32 (i32.const 0xFFB0))
   (func $win16_BeginPaint
-    (local $hwnd i32) (local $dst i32) (local $tmp i32) (local $sp i32) (local $hdc i32)
+    (local $hwnd i32) (local $dst i32) (local $tmp i32) (local $sp i32) (local $hdc i32) (local $proc i32)
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 2))))
     (local.set $dst (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
-    ;; This invocation owns its canonical PAINTSTRUCT. Do not borrow the
-    ;; global bridge scratch or call a second ABI's stack-cleaning handler.
+    ;; Own {hwnd, destination, canonical PAINTSTRUCT[64]} on this invocation's
+    ;; stack across the far erase callback. Nested painting cannot reuse it.
+    (call $win16_cont_push (call $win16_take_return (i32.const 6)) (i32.const 0))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 72)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $dst))
+    (local.set $tmp (i32.add (local.get $sp) (i32.const 8)))
+    (local.set $hdc (call $begin_paint_core (local.get $hwnd) (local.get $tmp) (i32.const 1)))
+    (call $gs16 (i32.add (local.get $sp) (i32.const 72)) (call $win16_h16 (local.get $hdc)))
+    (if (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2))
+      (then
+        ;; Consume before entry, retaining any new invalidation by the guest.
+        (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
+        (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+        (if (call $win16_is_far_proc (local.get $proc))
+          (then
+            (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+              (i32.const 0x14) (call $win16_h16 (local.get $hdc)) (i32.const 0)
+              (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_BEGINPAINT))
+            (return)))
+        (call $win16_beginpaint_finish
+          (call $wnd_send_message (local.get $hwnd) (i32.const 0x14) (local.get $hdc) (i32.const 0)))
+        (return)))
+    (call $win16_beginpaint_finish (i32.const 1)))
+
+  (func $win16_beginpaint_continue
+    ;; A far wndproc returns a LONG in DX:AX, not a BOOL in AX alone.
+    (call $win16_beginpaint_finish
+      (i32.or (i32.and (i32.load (global.get $reg_base)) (i32.const 65535))
+        (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16)))))
+
+  (func $win16_beginpaint_finish (param $handled i32)
+    (local $sp i32) (local $hwnd i32) (local $dst i32) (local $tmp i32) (local $hdc i32)
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
-    (local.set $tmp (i32.sub (local.get $sp) (i32.const 64)))
-    (i32.store offset=16 (global.get $reg_base) (local.get $tmp))
-    (local.set $hdc (call $win16_h16
-      (call $begin_paint_core (local.get $hwnd) (local.get $tmp) (i32.const 1))))
+    (local.set $hwnd (call $gl32 (local.get $sp)))
+    (local.set $dst (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+    (local.set $tmp (i32.add (local.get $sp) (i32.const 8)))
+    (local.set $hdc (call $gl16 (i32.add (local.get $sp) (i32.const 72))))
+    (if (i32.and (i32.eqz (local.get $handled))
+          (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      (then (call $nc_flags_set (local.get $hwnd) (i32.const 2))))
     (call $gs16 (local.get $dst) (local.get $hdc))
     (call $gs16 (i32.add (local.get $dst) (i32.const 2))
-      (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
+      (i32.eqz (local.get $handled)))
     (call $win16_rect_narrow (i32.add (local.get $dst) (i32.const 4))
                              (i32.add (local.get $tmp) (i32.const 8)))
     (call $gs16 (i32.add (local.get $dst) (i32.const 12)) (i32.const 0))
     (call $gs16 (i32.add (local.get $dst) (i32.const 14)) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
-    (i32.store offset=0 (global.get $reg_base) (local.get $hdc))
-    (call $win16_api_return (i32.const 6)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 72)))
+    (call $win16_cont_resume))
 
   (func $win16_EndPaint
     (local $hwnd i32) (local $src i32) (local $tmp i32)
@@ -13611,6 +13638,8 @@
       (then (call $win16_update_window_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_SHOW))
       (then (call $win16_show_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_BEGINPAINT))
+      (then (call $win16_beginpaint_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took
     ;; its own arguments off the stack; the CWPSTRUCT and CREATESTRUCT built
     ;; underneath them are this side's to drop.

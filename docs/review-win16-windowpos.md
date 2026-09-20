@@ -626,3 +626,53 @@ and remove its legacy class-brush policy; audit modal/default-dialog erase
 consumers; move damage validation to the correct lifecycle point and test
 callback reinvalidation through EndPaint. Empty-update rcPaint fallback and
 the global last-registered redraw-class style are separate known shortcuts.
+
+## 2026-09-20: Win16 BeginPaint far callbacks, legacy erase block removed
+
+Win16 BeginPaint now prepares the same canonical paint DC/rectangle, then
+sends a pending WM_ERASEBKGND through a far-callback continuation at FFB0.
+The invocation owns a 72-byte guest-stack record (`hwnd`, destination pointer,
+64-byte canonical PAINTSTRUCT) above its ordinary six-byte return record.
+The narrowed HDC is saved with that return record, so nested callbacks cannot
+replace the outer caller's result. No global bridge scratch or ABI mode flag
+is introduced. The returned **DX:AX LONG**, including high-word-only nonzero
+values, decides fErase. A declined erase is rearmed only if its window still
+exists; clearing before callback entry leaves subsequent invalidations intact.
+
+Win16 UpdateWindow now sends WM_PAINT without erasing ahead of it, matching
+the Win32 change. BeginPaint owns the nested erase and passes its actual DC,
+not `hwnd + 0x40000`. The old class-brush/ownership-bit fill and NULL-brush
+fErase heuristic have been removed from the shared core, along with their
+obsolete Diablo-specific rationale. Existing Win16 clip preparation is
+unchanged; replacing that application-clip compatibility path requires its
+own GetClipBox/visible-region checks.
+
+The expanded real-x86 far regression checks:
+
+- MoveWindow/UpdateWindow paint-before-BeginPaint-erase ordering; no erase
+  when an application never calls BeginPaint.
+- Actual returned narrow DC, partial PAINTSTRUCT, no-erase damage, NULL and
+  non-NULL brushes, zero, low-word nonzero and high-word-only callback results.
+- Same-window recursive BeginPaint does not resend the in-flight erase;
+  different-window recursion gets distinct DCs and preserves both frames.
+- Destruction during erase does not rearm the retired HWND; both nested
+  return frames unwind correctly. Caller guards and shared-scratch checks
+  remain covered.
+
+The previous runtime fails the new ordering assertion
+(`/private/tmp/wa-win16-beginpaint-red.log`); current source passes the full
+matrix and nested cases (`contract` and `nested` logs with the same prefix).
+The Win32 callback regression also passes (`win32`). WEP1 8/8, Hearts startup,
+normal/compatibility builds pass (`wep1`, `hearts`, `final-build`). The current-
+source lifecycle probe now records a separate `far-result` after the callback,
+rather than mistaking the core's pre-callback fErase for the final Win16
+result; a Tetris trace confirms the event (`trace`).
+The completed final build also passes Diablo's full six-stage browser flow
+(`/private/tmp/wa-win16-beginpaint-diablo.log`, captures in the matching
+directory without `.log`). Rodent's previously recorded baseline failure
+remains open; this turn does not claim to resolve it.
+
+This does not finish painting fidelity: ShowWindow's separate initial-erase
+continuation still needs a declined-result ownership audit, as do native
+modal/default-dialog consumers. Damage validation/reinvalidation through
+EndPaint, empty-update rcPaint and per-class redraw lookup remain open.

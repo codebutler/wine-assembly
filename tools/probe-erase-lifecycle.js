@@ -50,7 +50,7 @@ function instrument(file, source) {
     if (start < 0 || end < 0) throw Error('missing BeginPaint core');
     let body = source.slice(start, end);
     body = replaceOnce(body, '    ;; Fill PAINTSTRUCT:',
-      `    (call $host_erase_trace (local.get $arg0) (local.get $brush)
+      `    (call $host_erase_trace (local.get $arg0) (call $wnd_get_bg_brush (local.get $arg0))
       (i32.const -1003) (call $nc_flags_test (local.get $arg0)))
     ;; Fill PAINTSTRUCT:`, 'begin entry');
     const trace = `(call $host_erase_trace (local.get $arg0)
@@ -60,6 +60,15 @@ function instrument(file, source) {
     body = replaceOnce(body, '(return (local.get $hdc))))',
       `${trace}\n        (return (local.get $hdc))))`, 'Win32 result');
     source = source.slice(0, start) + body + source.slice(end);
+  }
+  if (file === '09e-win16-api.wat') {
+    const start = source.indexOf('(func $win16_beginpaint_finish ');
+    const end = source.indexOf('\n  (func ', start + 1);
+    const body = source.slice(start, end);
+    source = source.slice(0, start) + replaceOnce(body, '(call $win16_cont_resume)',
+      `(call $host_erase_trace (local.get $hwnd) (i32.eqz (local.get $handled))
+        (i32.const -1006) (call $nc_flags_test (local.get $hwnd)))
+      (call $win16_cont_resume)`, 'far BeginPaint result') + source.slice(end);
   }
   return source;
 }
@@ -73,7 +82,7 @@ const create = imports.createHostImports;
 imports.createHostImports = ctx => {
   const result = create(ctx), ordinary = result.host.erase_trace;
   result.host.erase_trace = (hwnd, value, event, flags) => {
-    const names = { '-1001': 'set', '-1002': 'clear', '-1003': 'begin', '-1004': 'result', '-1005': 'hidden-scan' };
+    const names = { '-1001': 'set', '-1002': 'clear', '-1003': 'begin', '-1004': 'result', '-1005': 'hidden-scan', '-1006': 'far-result' };
     const name = names[event];
     if (!name) return ordinary(hwnd, value, event, flags);
     const e = ctx.exports || ctx.instance?.exports;

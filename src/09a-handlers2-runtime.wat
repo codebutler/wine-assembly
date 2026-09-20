@@ -746,20 +746,13 @@
   )
 
   ;; Shared paint preparation; the ABI caller owns its frame and result.
-  ;; win16_bridge preserves the existing clip/erase policy explicitly, without
-  ;; changing a global mode while another ABI handler runs.
+  ;; win16_bridge selects the far caller's clip preparation and leaves erase
+  ;; dispatch to its continuation, without a mutable global ABI mode.
   (func $begin_paint_core (param $arg0 i32) (param $arg1 i32) (param $win16_bridge i32) (result i32)
-    (local $cs i32) (local $brush i32) (local $hdc i32) (local $wa i32) (local $partial i32) (local $desc i32)
+    (local $cs i32) (local $hdc i32) (local $wa i32) (local $partial i32)
     (local $erase_pending i32) (local $erase_result i32)
-    ;; Win98: BeginPaint sends WM_ERASEBKGND before returning. The default
-    ;; handler fills the client area with this hwnd's registered class
-    ;; hbrBackground. A NULL hbrBackground means no default erase; the app owns
-    ;; the pixels. Do not use the last-registered class here: Solitaire's
-    ;; custom "Stat" child is created after the main class and must not change
-    ;; how unrelated hwnds erase.
-    (local.set $brush (call $wnd_get_bg_brush (local.get $arg0)))
-    ;; Whether an erase is still owed for this window, read before the fill
-    ;; below clears it. fErase is decided from this at the end.
+    ;; The window procedure, not the class brush alone, decides whether an
+    ;; outstanding erase is handled. Its default procedure owns brush lookup.
     (local.set $erase_pending
       (i32.ne (i32.and (call $nc_flags_test (local.get $arg0)) (i32.const 2))
               (i32.const 0)))
@@ -840,8 +833,8 @@
     ;; Consume this cycle's erase request before entry so nested BeginPaint
     ;; cannot recursively redispatch the same request. Reinvalidations made
     ;; by the callback retain their newly set erase bit.
-    ;; Win16 still uses the legacy block below until its far continuation is
-    ;; connected; a 32-bit synchronous sender cannot enter a far procedure.
+    ;; The Win16 caller owns its far callback continuation. Leave its pending
+    ;; request intact here; it uses the prepared DC after this helper returns.
     (if (i32.and (i32.eqz (local.get $win16_bridge)) (i32.eqz (global.get $code16)))
       (then
         (if (local.get $erase_pending)
@@ -856,117 +849,6 @@
                   (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)))
               (then (call $nc_flags_set (local.get $arg0) (i32.const 2))))))
         (return (local.get $hdc))))
-    ;; Legacy Win16 policy only: replace with a far-callback continuation.
-    ;; Erase through the same clipped paint HDC. Win98's BeginPaint/WM_ERASEBKGND
-    ;; is constrained by the update/visible region; erasing before the clip is
-    ;; installed wipes too much during small invalidations (Spider card drags).
-    (local.set $cs (call $host_get_window_client_size (local.get $arg0)))
-    ;; Whose background is it? Filling here unconditionally is right for a
-    ;; window that lets USER paint its background, and destroys one that paints
-    ;; its own: Hearts fills its baize green in WM_ERASEBKGND and was registered
-    ;; with WHITE_BRUSH, so every paint turned the table white -- and which of
-    ;; the two won depended on the order the pump happened to run them in, so it
-    ;; flickered between green and white as the game went on.
-    ;;
-    ;; The window itself has already answered the question. NC_FLAGS bit 3 is
-    ;; set when a WM_ERASEBKGND reaches DefWindowProc, which only happens for a
-    ;; window that did not want it. Bit 1 means an erase is still outstanding
-    ;; and nobody has been given it yet -- the first paint of a window's life --
-    ;; and the class brush is the right answer there too.
-    ;;
-    ;; Bit 1 is a child's answer only. A top-level window is offered its
-    ;; WM_ERASEBKGND by the pump (GetMessageA's startup phase, and
-    ;; $host_erase_background after it), so by the time it reaches BeginPaint
-    ;; the question has already been put to its wndproc and bit 3 records the
-    ;; answer. Honouring the creation-time bit 1 here as well erases a second
-    ;; time, with the class brush, on top of whatever the app painted in
-    ;; between -- and a VB form registers its class with COLOR_WINDOW+1 while
-    ;; painting its real BackColor itself, so that second erase is white.
-    ;; Rodent's Revenge is the visible case: its whole status panel, mouse
-    ;; count, timer and score came out as a white band (7645 px against the
-    ;; reviewed Win98 capture) once this fill started firing.
-    ;;
-    ;; Children have no pump-delivered erase, so for them the creation seed is
-    ;; still the only background they would ever get -- IdleWild's IWINFO pane
-    ;; is white in Win98 for exactly that reason (test-win16-wep1-gameplay).
-    ;; They are also no longer filled on every single paint, which used to
-    ;; black out Diablo's burning logo on 13 frames of every 15: the sibling
-    ;; frame below it repaints on its own InvalidateRect(rc, FALSE), and that
-    ;; leaves bit 1 clear.
-    ;; Same --trace-erase line as $host_erase_background: this is the other
-    ;; place a window's background gets filled, and telling the two apart is
-    ;; the whole point of the trace. Negative height marks the BeginPaint one.
-    ;; The trace fires whether or not the fill below runs -- it reports the
-    ;; question, not the answer.
-    (call $host_erase_trace (local.get $arg0) (local.get $brush)
-      (i32.and (local.get $cs) (i32.const 0xFFFF))
-      (i32.sub (i32.const 0) (i32.shr_u (local.get $cs) (i32.const 16))))
-    (if (i32.and (i32.ne (local.get $brush) (i32.const 0))
-          (i32.or
-            (i32.ne (i32.and (call $nc_flags_test (local.get $arg0))
-                             (i32.const 8)) (i32.const 0))
-            (i32.and
-              (i32.ne (i32.and (call $wnd_get_style (local.get $arg0))
-                               (i32.const 0x40000000)) (i32.const 0))
-              (i32.or
-                (i32.and (global.get $code16) (i32.eqz (local.get $win16_bridge)))
-                (i32.and
-                  (i32.ne (i32.and (call $nc_flags_test (local.get $arg0))
-                                   (i32.const 2)) (i32.const 0))
-                  ;; A Win16 custom child (VB ThunderPictureBox et al.) can
-                  ;; draw into its visible DC before it validates with
-                  ;; BeginPaint. Treating that later BeginPaint as a request
-                  ;; to repaint the class brush puts USER's background on top
-                  ;; of the app pixels. WAT-native controls paint through
-                  ;; their own path rather than the Win16 BeginPaint thunk, and
-                  ;; first exposure is already erased when the parent becomes
-                  ;; visible.
-                  (i32.eqz (local.get $win16_bridge)))))))
-      (then
-        (call $nc_flags_clear (local.get $arg0) (i32.const 2))
-        (local.set $desc (global.get $GDI_LINE_DESC))
-        (if (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc))
-          (then (drop (call $gdi_fill_rect_desc
-            (local.get $hdc) (local.get $desc)
-            (i32.const 0) (i32.const 0)
-            (i32.and (local.get $cs) (i32.const 0xFFFF))
-            (i32.shr_u (local.get $cs) (i32.const 16))
-            (local.get $brush)))))))
-    ;; fErase is the answer to "did anyone erase the background for you?", and
-    ;; it is the only way an app finds out that it has to do it itself. USER
-    ;; erases from the class brush; a window whose class has none gets a
-    ;; WM_ERASEBKGND that DefWindowProc declines, and BeginPaint then reports
-    ;; TRUE so the app paints its own background.
-    ;;
-    ;; Storm builds every Diablo menu on exactly that contract: its paint
-    ;; wrapper saves GCL_HBRBACKGROUND, sets it to NULL, calls BeginPaint, puts
-    ;; the brush back -- and draws the whole menu background only when the
-    ;; returned ps.fErase is non-zero. Answering 0 unconditionally here left
-    ;; Diablo a black screen with five invisible buttons on it.
-    ;;
-    ;; Two things have to be true before the answer is TRUE: an erase was owed
-    ;; at all, and nothing performed it. Win98 only sends WM_ERASEBKGND when
-    ;; the update region was invalidated with bErase, and only then can fErase
-    ;; come back TRUE; InvalidateRect(hwnd, NULL, FALSE) means "keep what is
-    ;; on screen" and reports FALSE.
-    ;;
-    ;; The brush test is load-bearing for Diablo: dropping it left the menu a
-    ;; black screen with five invisible buttons. Do NOT additionally require
-    ;; erase_pending here (tried twice now): storm creates its 640x480 menu
-    ;; dialog hidden, shows it, and paints it only through the flame
-    ;; animation's InvalidateRect(NULL, FALSE) cycle — the erase-owed bit is
-    ;; consumed by the first paint and never set again, so gating fErase on it
-    ;; answers 0 to every later full-menu paint and storm never draws the
-    ;; background again: black menu with faint text (36c78d79 regressed this).
-    ;; Answering 1 whenever the class brush is NULL is what real USER's
-    ;; DefWindowProc contract degenerates to for these apps, and the verified
-    ;; retail-Diablo-to-Tristram run was made on exactly this shape.
-    (if (i32.eqz (local.get $brush))
-      (then (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (i32.const 1))))
-    (if (i32.and
-          (i32.or (i32.eqz (global.get $code16)) (local.get $win16_bridge))
-          (local.get $erase_pending))
-      (then (call $nc_flags_clear (local.get $arg0) (i32.const 2))))
     (local.get $hdc))
 
   ;; 243: BeginPaint
