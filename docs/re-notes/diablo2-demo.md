@@ -584,3 +584,74 @@ Open, and the next lead: it clears but never draws. 120000 batches at
 `--batch-size=200000` finish in 24s with a uniformly black frame, so it is idle
 rather than working. The wipe and the assert are both gone; what remains is a
 present/draw question, not a memory one.
+
+### 2026-09-20: it is not a draw question — the game is spinning, forever
+
+"Clears but never draws" was the wrong reading, and it is worth saying why it
+was convincing: the frame is black, nothing is presented, and a fixed batch
+budget finishes in the usual wall time. All three are equally true of a guest
+executing a two-instruction loop it can never leave, because **batches retire
+normally while the guest makes no progress** — a batch is a budget of blocks,
+and a tight loop retires blocks as fast as anything else.
+
+Driving the verified route (SINGLE PLAYER, Barbarian, name, OK — see
+*Character creation and gameplay*) to Act I on `Render=1` and taking a
+snapshot at the black frame puts EIP at **`d2direct3d+0x10009561`**, inside
+the texture cache's eviction loop. Disassembled, that loop cannot terminate
+for the state it is in:
+
+```
+10009561  cmp  [ecx+0x4], esi      ; esi==0 here: count == 0 ?
+10009564  jz   0x100095c0          ;   ... then skip the evict AND the dec
+          <evict the LRU item>
+100095bd  dec  [ecx+0x4]           ; count--
+100095c0  mov  eax, [ecx+0x4]      ; count
+100095c3  mov  edx, [ecx]          ; nMaxNumItems
+100095c5  cmp  eax, edx
+100095c7  jz   0x10009561          ; full? evict again
+```
+
+With `count == 0` the body is skipped *including the decrement*, and with
+`nMaxNumItems == 0` the exit test `count == nMaxNumItems` is always true. A
+cache of capacity zero is simultaneously empty and full, so the loop evicts
+nothing and re-tests forever. It writes no memory, so nothing in a snapshot
+changes and every heuristic that looks for progress reports "idle".
+
+The state was read straight out of the live hang rather than inferred
+(`exports.get_ecx()` → the cache, then its first six fields):
+
+```
+eip=17d0561  ecx=17f2218  nMaxNumItems=0  count=0  head=7ee30604  tail=7ee305e4
+```
+
+`head`/`tail` are real heap pointers, so this cache *had* been populated: the
+capacity was zeroed by a later re-size, not left uninitialized from the start.
+That matches the two-round behaviour documented above — the second round is
+carved from a `dwFree` we have already billed the first round against — and it
+means the remaining work is still the video-memory question, not a draw one.
+
+Two things make this newly tractable:
+
+* **The three caches are one global each**, at `d2direct3d+0x1002b218`
+  (256x256), `+0x1002b234` (128x128) and `+0x1002b250` (32x32), 0x1c apart,
+  laid out `[nMaxNumItems, count, freeHead, freeTail, lruHead, lruTail,
+  items]` with 32-byte items. They are passed by pointer, so a VA xref scan
+  shows only loads and `mov ecx, imm` — there are no stores to find, which is
+  what made the initializer look absent.
+* **Both `GetAvailableVidMem` calls are visible in the init**, and they ask
+  for *different pools*: `d2direct3d+0x1000248b` passes
+  `dwCaps = 0x10005000` (`LOCALVIDMEM|VIDEOMEMORY|TEXTURE`) and
+  `+0x1000252e` passes `0x20005000` (`NONLOCALVIDMEM|…`, i.e. AGP), into
+  separate `dwTotal`/`dwFree` pairs at `0x10019964/68` and `0x1001996c/70`.
+  D2 then takes `edi = max(localFree, min(agpFree, 32 MB))` as the arena end.
+  `$handle_IDirectDraw2_GetAvailableVidMem` ignores `lpDDSCaps` entirely and
+  answers both from one pool, so a first round billed against local memory
+  also shrinks the AGP answer the second round depends on. On real hardware
+  those are physically distinct memories and the second answer does not move.
+
+A probe for this is `tools/ctl.js eval`, whose scope now carries `va()` and
+`mods` so `va("d2direct3d+0x1002b218")` resolves against the load address this
+run happened to pick. Reading a guest module's global used to mean grepping
+the run log for its load line and pasting a base into the expression, which is
+silently wrong on the next run — a bad base still reads *some* memory and
+returns plausible numbers.

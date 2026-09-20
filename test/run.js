@@ -5606,9 +5606,18 @@ async function main() {
   const controlEval = (code) => {
     // Direct eval inside a non-strict function body: the params are in
     // scope, statements work, and the last expression's value comes back.
+    // `va` and `mods` are here for the same reason --trace-at takes
+    // `module+0xVA`: a DLL's load address is picked at load time, so a probe
+    // that wants a global out of a guest module cannot write its address
+    // down. Without these, reading one means grepping the run log for the
+    // load line and pasting a base into the expression -- which is wrong
+    // again on the next run, silently, because a bad base still reads
+    // *some* memory and returns plausible numbers.
     const fn = new Function('instance', 'exports', 'renderer', 'memory', 'g2w', 'tickState', 'ctx',
+      'va', 'mods',
       'return eval(' + JSON.stringify(String(code)) + ')');
-    return controlSafeValue(fn(instance, instance.exports, renderer, memory, g2w, tickState, ctx));
+    return controlSafeValue(fn(instance, instance.exports, renderer, memory, g2w, tickState, ctx,
+      resolveAddr, moduleBases));
   };
   const controlPng = (filename) => {
     if (!renderer || !renderer.canvas) throw new Error('renderer is unavailable');
