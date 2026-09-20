@@ -104,7 +104,22 @@ Fresh serial verification after those corrections: dirty-document **11/11**,
 
 ## Remaining work
 
+### Win16 WEP follow-up (2026-09-19)
+
+`test/test-win16-wep-gameplay.js` now delegates its rectangle comparison to
+`diffPng`, explicitly including alpha. The existing 50x50 Pipe Dream cell
+region, exact changed-pixel metric, >100 threshold, and rejection of different
+image dimensions are preserved. No runtime behavior changed.
+
+Validation: shared PNG helper tests PASS; old/new wrapper comparison agrees
+on 16 synthetic cases (each RGBA channel separately, full/inset/single-pixel/
+empty regions), and both reject dimension mismatch. The real gameplay test
+passes Pipe Dream first-tile placement and Chrome Blackjack disabled-button
+input. Log: `/private/tmp/wa-win16-png-gameplay.log` (local evidence).
+
 This does not close the whole PNG-helper item. A broader name/body search
+also finds `changedPixels` copies in the Win16 WEP1, WEP2, WEP4 and VB gameplay
+tests; these remain to be reviewed and migrated with their own contracts.
 The named Node comparator inventory above is migrated, including Spider's
 different-sized-image overlap policy. This is not a proof that every pixel
 loop in the repository is redundant or removed: Icewind Dale combines frame

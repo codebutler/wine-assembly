@@ -11,7 +11,7 @@ const { startStaticServer: startSharedStaticServer } = require('./static-server'
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const puppeteer = require('puppeteer');
 
 const ROOT = path.join(__dirname, '..');
@@ -20,17 +20,12 @@ const PIPE = path.join(ROOT, 'test', 'binaries', 'wep16', 'WEP2', 'PIPE.EXE');
 const BLACKJACK = path.join(ROOT, 'test', 'binaries', 'wep16', 'WEP4', 'BLAKJAK.EXE');
 
 function changedPixels(beforePath, afterPath, x0, y0, x1, y1) {
-  const before = PNG.sync.read(fs.readFileSync(beforePath));
-  const after = PNG.sync.read(fs.readFileSync(afterPath));
-  assert.strictEqual(after.width, before.width);
-  assert.strictEqual(after.height, before.height);
-  let changed = 0;
-  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = (y * before.width + x) * 4;
-    if (before.data[i] !== after.data[i] || before.data[i + 1] !== after.data[i + 1] ||
-        before.data[i + 2] !== after.data[i + 2] || before.data[i + 3] !== after.data[i + 3]) changed++;
-  }
-  return changed;
+  const diff = diffPng(beforePath, afterPath, {
+    includeAlpha: true,
+    region: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 },
+  });
+  assert.strictEqual(diff.sizeMismatch, false, 'gameplay capture dimensions must match');
+  return diff.changed;
 }
 
 function testPipeDream() {
