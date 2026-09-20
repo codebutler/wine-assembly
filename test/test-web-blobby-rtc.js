@@ -106,6 +106,34 @@ const snapWindow = () => {
   return { lit: lit / (d.length / 4), png: copy.toDataURL('image/png') };
 };
 
+// Is the main menu actually drawn yet? The key script below walks a menu by
+// position and is meaningless if it arrives before there is a menu to walk,
+// so this is the precondition for sending it -- and it cannot be `lit`,
+// because Blobby's menu is a night beach and is barely brighter than nothing
+// at all (measured: its commonest colour is #14130a, so under 3% of it clears
+// the `lit` threshold). What separates the two screens is variety, not
+// brightness: before the menu the window is one flat colour, and the menu
+// itself carries ~3000 in a 640x480 CLI capture. Sampling every 37th pixel is
+// far more than enough to tell 1 from 3000. Returns the count once it is
+// past the bar and 0 below it, so it reads as a milestone to H.until while
+// still printing something a person can judge.
+const menuDrawn = () => {
+  const win = Object.values(sharedRenderer.windows || {})
+    .filter(w => w && w.visible && !w.isChild)
+    .sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  if (!win) return 0;
+  const surface = sharedRenderer.getWindowCanvas(win.hwnd);
+  if (!surface || !surface.canvas) return 0;
+  const c = surface.canvas;
+  const d = surface.ctx.getImageData(0, 0, c.width, c.height).data;
+  const seen = new Set();
+  for (let i = 0; i < d.length; i += 4 * 37) {
+    seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+    if (seen.size > 64) return seen.size;
+  }
+  return 0;
+};
+
 // Real DOM key events, not sharedRenderer.handleKeyDown().
 //
 // Driving the renderer directly skips the page's own key listener, which is
@@ -238,6 +266,30 @@ const blobsAt = (band) => {
 
     // Each side walks its own copy into network play; that call is what opens
     // the lobby, and it parks until the lobby answers.
+    //
+    // Waiting a flat MENU_MS here is what made this test flaky: the key script
+    // below walks the menu by position, so a DOWN that lands before the menu
+    // is drawn is simply lost, the side never reaches NETZWERKSPIEL, its
+    // DirectPlay call never asks for a room, and the failure surfaces 60s
+    // later as "no peer" -- a discovery symptom with a navigation cause. The
+    // boot check above is no protection: `runningApps.length > 0` means the
+    // app object exists, not that it has painted anything. This box runs at
+    // load 10-40, so the margin a fixed 20s leaves is not the same margin
+    // twice. Wait for the menu itself; MENU_MS stays as the settle time once
+    // it is up, since a menu that has just appeared is still mid-fade.
+    const menuUp = async ({ page, label }) => {
+      const t0 = Date.now();
+      const colours = await H.until(page, `${label}: no main menu`,
+        menuDrawn, null, MILESTONE_MS);
+      // Printed on every run, green ones included: this is the margin the old
+      // fixed wait was spending, and it is the number that says whether this
+      // box has quietly got slow enough to threaten the rest of the timings.
+      console.log(`  ${label}: main menu after ${((Date.now() - t0) / 1000).toFixed(1)}s`
+        + ` (${colours || 0} colours)`);
+      return colours;
+    };
+    check('both browsers reached the main menu before any key was sent',
+      !!(await menuUp(host)) && !!(await menuUp(guest)));
     await H.sleep(MENU_MS);
     await snap(host, 'host-menu');
     // --host-setup walks EINSTELLUNGEN first and is now only for a profile
@@ -254,6 +306,21 @@ const blobsAt = (band) => {
     await keys(host.page, [...toNetwork, ENTER, ENTER, DOWN, DOWN, ENTER]);
     await keys(guest.page, [DOWN, ENTER, DOWN, ENTER, DOWN, DOWN, ENTER]);
 
+    // The lobby opening is the guest's own DirectPlay call asking for a room,
+    // so it is the first observable proof that the key script above landed
+    // where it was aimed. Gating on it here separates navigation from
+    // discovery at the moment each fails, rather than letting both arrive as
+    // one "no peer" a minute later.
+    const lobbyOpen = ({ page, label }) => H.until(page, `${label}: no lobby`,
+      () => document.querySelectorAll('.vln-lobby').length > 0, null, 60000);
+    const bothAsked = !!(await lobbyOpen(host)) && !!(await lobbyOpen(guest));
+    if (!bothAsked) for (const side of [host, guest]) await snap(side, `${side.label}-no-lobby`);
+    check('both browsers asked for a room (the key script reached NETZWERKSPIEL)',
+      bothAsked);
+    // Nothing below can pass without a lobby, and each of those checks would
+    // spend its own timeout proving it. Stop here with the cause named.
+    if (!bothAsked) throw new Error('no lobby to discover in; see the -no-lobby captures');
+
     const peerRows = ({ page }) => page.evaluate(
       () => document.querySelectorAll('.vln-peer').length);
     for (let i = 0; i < 60 && !(await peerRows(host) && await peerRows(guest)); i++) {
@@ -267,10 +334,32 @@ const blobsAt = (band) => {
       // signaling. Those are opposite, and the only snapshot taken so far is
       // from before the navigation, so it shows a healthy main menu either
       // way. Photograph both pages here and say which state they are in.
+      //
+      // The rows alone still leave three causes standing, so ask the page for
+      // the state underneath them: who the signaling service thinks this tab
+      // is, and who has published under the key both tabs derive from the
+      // executable name. That separates "the two tabs are the same user"
+      // (peers() excludes self by userId, so each would see nobody and the
+      // dev server's own identity log is suppressed by quiet:true here) from
+      // "one of them never published" and from "both published and the
+      // records were filtered", which look identical from the DOM.
       for (const side of [host, guest]) {
         await snap(side, `${side.label}-no-peers`);
+        const who = await side.page.evaluate(async () => {
+          try {
+            const sig = new VlanRtc.SignalingClient('');
+            const me = await sig.whoami();
+            const key = await VlanRtc.signalKeyFor(
+              VlanRtc.scopeFor({ exe: 'volley.exe' }), null);
+            const list = await sig.publishers(key);
+            return { me: me && me.id, users: ((list && list.users) || []).map(u => u.userId) };
+          } catch (e) { return { error: String(e) }; }
+        });
         console.log(`  ${side.label}: lobby open=${await lobbyUp(side.page)}`
-          + `  peer rows=${await peerRows(side)}`);
+          + `  peer rows=${await peerRows(side)}`
+          + `  i am=${String(who.me).slice(0, 8)}`
+          + `  published=[${(who.users || []).map(u => String(u).slice(0, 8)).join(' ')}]`
+          + (who.error ? `  probe failed: ${who.error}` : ''));
       }
     }
     check('each browser saw the other in the lobby', sawEachOther);

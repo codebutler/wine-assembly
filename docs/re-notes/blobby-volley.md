@@ -321,6 +321,52 @@ Two things measured on the way that are worth keeping:
   dev-server files were clean in git at the time, so it is not someone's
   half-finished edit.
 
+#### Lobby discovery: what the mechanism read says, and what is still open
+
+Read end to end 2026-09-20 without reproducing it. **Three hypotheses died on
+the source, and they are the obvious three:**
+
+- *The two pages compute different presence keys.* They cannot. Both derive it
+  from the executable name alone -- `lib/browser-shell.js` passes
+  `{exe: app.lan.exe}` and nothing else, and `scopeFor()` takes no room or
+  secret here -- so the key is a constant per app.
+- *The two pages are the same user, so `peers()` filters each other out.*
+  `peers()` does drop `userId === this.userId`, and `tools/dev-server.js`
+  hands out identity by cookie, but the test opens each page in its own
+  browser context, which is its own jar. The one way to mint two ids in one
+  jar is two `/api/*` requests racing before either response lands, and
+  `joinNetwork` awaits `whoami()` before anything else. The injected agent-hub
+  client cannot do it either: `/api/agent/*` is routed *above* `handleApi`, so
+  it never calls `identify()`.
+- *One poll threw and the lobby stopped looking.* `tick()` catches, renders
+  `lobby error: ...` and re-arms unconditionally; a transient miss self-heals
+  within `POLL_MS`, which is why a **persistent** 60s failure is the thing to
+  explain and a flaky one is not.
+
+**The navigation hypothesis is also weak, measured.** The keys were sent on a
+flat 20s timer after a boot check (`runningApps.length > 0`) that only means
+the app object exists -- but the menu is in fact up within a poll interval of
+it, so the 20s was ample. Ruling that out needed a signal for "the menu is
+drawn", and `lit` is not it: Blobby's menu is a night beach whose commonest
+colour is `#14130a`, dimmer than the threshold, while the court is 92% lit.
+*Variety* separates them -- before the menu the window is one flat colour
+(`#008080`, 100% of a CLI capture at batch 30), the menu carries ~3000 -- and
+that is what `menuDrawn()` in the test samples for.
+
+Three runs green after that, at load 10.2, 17.8 and 47.5, so the flake is
+still unreproduced. What the test now does instead of guessing:
+
+| gate | separates |
+|---|---|
+| `menuDrawn()` before any key | a key that arrived before there was a menu |
+| `.vln-lobby` open on both sides | navigation failed vs discovery failed |
+| on failure, each page's own `whoami()` + `publishers(key)` | same user vs nobody published vs published-then-filtered |
+
+That last one is the decisive read and the reason it has to come from inside
+the page: the dev server prints exactly this on every `/api/*` call, and this
+test constructs it with `quiet: true`, so the server-side copy is not there
+when it is wanted.
+
 The measurement that settles it: reach the client's settings screen, read
 `[0x978220+4]` out of guest memory to see what CONTROL actually holds there,
 then hold player two's keys and watch the blob. Note that the browser pair was
