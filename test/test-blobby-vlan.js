@@ -41,6 +41,14 @@ if (!fs.existsSync(EXE)) {
 fs.mkdirSync(OUT, { recursive: true });
 
 const DOWN = 40, UP = 38, ENTER = 13, LEFT = 37, RIGHT = 39;
+// The guest's own player, from settings.dat. These happen to be the same
+// arrows the menu above is driven with, and that is now deliberate rather
+// than a coincidence: the shipped file puts BOTH players on the arrow keys
+// (tools/blobby-settings.js) so one on-screen pad works the menu and the
+// match, on whichever side of the wire it lands. Named separately because
+// they are a different fact -- a remap of the player keys must change these
+// and leave the menu constants alone.
+const P2_LEFT = LEFT, P2_RIGHT = RIGHT;
 const key = (batch, vk) => [`${batch}:keydown:${vk}`, `${batch + 10}:keyup:${vk}`];
 
 // Finding the host's player in a screenshot. Player one is a flat saturated
@@ -50,11 +58,13 @@ const key = (batch, vk) => [`${batch}:keydown:${vk}`, `${batch + 10}:keyup:${vk}
 // coordinates: the CLI renders 640x480 and the browser 800x600, and a band
 // measured off one is nowhere near the players in the other.
 // The guest is player two, the right-hand green blob, and in a NETWORK game
-// it is driven by the arrow keys, not the mouse: Instructions.txt 3.2.2 says
-// the client "always gets the keys you specified for player two", so the
-// mouse that moves player two in a local game does nothing here -- measured,
-// the commands arrive and the blob ignores them. Holding RIGHT takes green
-// from x=479 to x=626 and leaves red at 159.
+// it is driven by the KEYS, not the mouse: Instructions.txt 3.2.2 says the
+// client "always gets the keys you specified for player two", so the mouse
+// that moves player two in a local game does nothing here -- measured, the
+// commands arrive and the blob ignores them. Holding player two's right key
+// walks green tens of pixels up-court and leaves red where it was; the exact
+// distance depends on how long the hold lands, so the checks below compare
+// directions against MOVED_PX rather than pinning a coordinate.
 // Green is also the colour of every palm tree, so the band is the strip the
 // players stand in rather than the whole picture; the CLI renders 640x480 and
 // the blob sits at y 329..399 at rest.
@@ -216,17 +226,18 @@ async function main() {
 
     // Two moves, because one is not evidence: a blob that happens to drift
     // the right way once proves nothing, and the second move is back.
-    const hold = async (vk, tag) => {
-      control(guest, { cmd: `keydown:${vk}` });
+    const holdOn = async (side, vk, tag) => {
+      control(side, { cmd: `keydown:${vk}` });
       await sleep(4000);
       const shot = await shoot(tag);
-      control(guest, { cmd: `keyup:${vk}` });
+      control(side, { cmd: `keyup:${vk}` });
       await sleep(2000);
       return shot;
     };
+    const hold = (vk, tag) => holdOn(guest, vk, tag);
     const before = await shoot('before');
-    const right = await hold(RIGHT, 'right');
-    const after = await hold(LEFT, 'left');
+    const right = await hold(P2_RIGHT, 'right');
+    const after = await hold(P2_LEFT, 'left');
 
     const moved = (a, b) => (a.cx === null || b.cx === null) ? null : b.cx - a.cx;
     const dHost = moved(before.host, right.host);
@@ -242,6 +253,30 @@ async function main() {
     check('both screens agree where that player ended up',
       after.host.cx !== null && after.guest.cx !== null
         && Math.abs(after.host.cx - after.guest.cx) < AGREE_PX);
+
+    // The other half of "whose keys are whose": the HOST holding player two's
+    // key must not move player two, because on this machine that player is
+    // remote and its position comes off the wire. This is what lets one phone
+    // pad send both players' keys at once -- the machine keeps the set it
+    // owns and drops the rest -- so if this check ever fails, a dual-key pad
+    // would be fighting the remote records instead of being ignored by them.
+    // An idle control of the same length first, because a released blob
+    // drifts back towards its serve position on its own (see the note above
+    // the captures). Without it this check reads that drift as input: the
+    // first version of it held RIGHT, measured -125px, and "failed" on a blob
+    // that was simply walking home in the opposite direction.
+    await sleep(4000);
+    const idle = await shoot('host-idle');
+    const hostHeld = await holdOn(host, P2_RIGHT, 'host-holds-p2');
+    const dDrift = moved(after.host, idle.host);
+    const dStray = moved(idle.host, hostHeld.host);
+    console.log(`  player two while the host presses its key: idle drift `
+      + `${dDrift === null ? 'n/a' : fmt(dDrift)}, then ${dStray === null ? 'n/a' : fmt(dStray)}`
+      + ` with the host holding RIGHT (a hold that drove it would be > +${MOVED_PX})`);
+    // Only rightward motion would mean the key landed; drifting further left
+    // is the blob still going home.
+    check('the host cannot drive the remote player with its own keyboard',
+      dStray !== null && dStray < MOVED_PX);
 
     for (const s of [host, guest]) {
       control(s, { action: 'png', path: path.join(OUT, `${s.name}.png`) });
