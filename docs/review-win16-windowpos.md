@@ -518,3 +518,57 @@ Diablo's six-stage browser flow through gameplay, WEP1 8/8, Rodent/Rattler
 and shared parent/child paint ordering pass. Logs:
 `/private/tmp/wa-hidden-erase-{build,diablo,wep1,vb,order}.log`;
 browser captures: `/private/tmp/wa-hidden-erase-diablo/`.
+
+## 2026-09-20: message retrieval no longer consumes pending erase
+
+Removed the GetMessage/PeekMessage branches that manufactured queued
+WM_ERASEBKGND from NC_FLAGS bit 2, then cleared the request on retrieval.
+An outstanding erase belongs to the paint lifecycle, not to the posted FIFO.
+Explicitly posted WM_ERASEBKGND still travels through that FIFO unchanged.
+The message-wait wake mask now includes only NC calculation/paint (5), not
+erase (2) or persistent default-erase ownership (8), so retaining a declined
+erase cannot itself create a permanent wake/retry loop.
+The wake check also explicitly recognizes the legacy main-window
+`paint_pending` global, before the paint selector mirrors it into per-window
+flags. The regression caught that omission: such a paint previously depended
+on its erase bit to wake, and must continue waking without that accidental
+dependency. Both main-global and per-window paint wake cases are covered.
+
+This distinction follows Microsoft's [WM_ERASEBKGND contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd)
+(sent, and an unhandled erase leaves the window marked for erasing) and
+[PeekMessage contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-peekmessagea)
+(dispatch sent messages, retrieve posted messages). It is not a claim that
+every other painting path now matches Win98.
+
+The expanded `test/test-nc-flags-message-wake.js` fails before the fix because
+PM_NOREMOVE retrieves an erase that was never posted. It passes after the fix:
+both peek modes and GetMessage preserve the request; erase-only state stays
+idle; explicitly posted erase wakes, survives PM_NOREMOVE, and is removed by
+either API with its HWND/wParam/lParam intact and without validating erase.
+
+The same isolated candidate trace command above now reports no erase clears
+at Storm's PeekMessage caller 0x7a8b48; repeated 0x10004 BeginPaint results
+retain fErase=1 and flags=2. Log:
+`/private/tmp/wa-queued-erase-candidate-trace.log`. This is lifecycle evidence,
+not browser validation of the saved BeginPaint candidate, which remains
+**unintegrated**. Its next gate is the completed-artifact browser flow.
+
+Verification logs in `/private/tmp/wa-queued-erase-*.log`: `before` fails the
+new retrieval assertion, `after` passes retrieval and wake cases; `filter`,
+`order`, `far`, and `hidden` pass; `wep1` passes all eight games. `build` and
+`final-build` pass normal/compatibility builds. `diablo` passes the six-stage
+browser flow before the additional main-global wake check.
+`final-diablo` also passes all six stages on the completed final build,
+including the main-global wake check; captures are in
+`/private/tmp/wa-queued-erase-final-diablo/`.
+
+Rodent2000 is **not green in this shared-tree run**: `vb` fails its board
+color assertion (floor/tiles/tileInk/frame all zero). An isolated artifact
+built from the same source tree but replacing both edited runtime fragments
+with their `7471c624` contents fails identically (`vb-baseline`). The baseline
+artifact is `/private/tmp/wa-queued-erase-baseline.wasm`; no production files
+were reverted to produce it. This comparison does not identify the cause;
+retain the failure rather than claiming that the earlier Rodent pass still
+applies to today's shared worktree.
+The final pinned shipping artifact repeats the same Rodent failure
+(`vb-final`), consistent with that baseline comparison.

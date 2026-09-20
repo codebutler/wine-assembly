@@ -2323,12 +2323,14 @@
     (if (call $shared_post_queue_read (i32.const 0) (i32.const 0))
       (then (return (i32.const 1))))
     (if (global.get $pending_wm_size) (then (return (i32.const 1))))
-    ;; Bit 3 is persistent state: it records that DefWindowProc owns the
-    ;; window's background erase. Only bits 0..2 represent queued NC work.
-    ;; Treating any non-zero slot as pending parks GetMessage in a permanent
-    ;; wake/retry loop after the first default WM_ERASEBKGND.
-    (if (call $nc_flags_scan (i32.const 7))
+    ;; Only NC calculation/paint (bits 2/0) are retrieved as messages.
+    ;; Pending erase (bit 1) is paint lifecycle state, and bit 3 records
+    ;; default erase ownership. Neither alone may spin the message waiter.
+    (if (call $nc_flags_scan (i32.const 5))
       (then (return (i32.const 1))))
+    ;; The selector mirrors the legacy main-window flag into PAINT_FLAGS
+    ;; only when retrieval runs. Wake for it even before that mirror exists.
+    (if (global.get $paint_pending) (then (return (i32.const 1))))
     (if (call $paint_flag_any) (then (return (i32.const 1))))
     (if (call $timer_check_due (call $paint_scratch_take) (i32.const 0))
       (then (return (i32.const 1))))

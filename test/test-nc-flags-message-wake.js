@@ -16,19 +16,42 @@ const extraWat = String.raw`
     (call $nc_flags_set (i32.const 0x10001) (local.get $bits)))
   (func (export "test_nc_wake_clear") (param $bits i32)
     (call $nc_flags_clear (i32.const 0x10001) (local.get $bits)))
+  (func (export "test_nc_erase_pending") (result i32)
+    (i32.and (call $nc_flags_test (i32.const 0x10001)) (i32.const 2)))
+  (func (export "test_nc_message") (param $get i32) (param $remove i32) (result i32)
+    (local $sp i32) (local $ip i32) (local $result i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $ip (global.get $eip))
+    (if (local.get $get)
+      (then (call $handle_GetMessageA (i32.const 0x3000) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+      (else (call $handle_PeekMessageA (i32.const 0x3000) (i32.const 0)
+        (i32.const 0) (i32.const 0) (local.get $remove) (i32.const 0))))
+    (local.set $result (i32.load (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (global.set $eip (local.get $ip))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $handler_set_eip (i32.const 0))
+    (local.get $result))
   (func (export "test_nc_main_paint_pending") (param $pending i32) (result i32)
     (global.set $paint_pending (local.get $pending))
     (call $paint_flag_test_hwnd (i32.const 0x10001)))
+  (func (export "test_nc_paint_work") (param $pending i32)
+    (if (local.get $pending)
+      (then (call $paint_flag_set (i32.const 0x10001)))
+      (else (call $paint_flag_clear_hwnd (i32.const 0x10001)))))
 `;
 
 (async () => {
-  const { exports: wat } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const { exports: wat, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const msg = new DataView(memory.buffer, wat.get_guest_base() + 0x3000, 28);
 
   wat.test_nc_wake_setup();
   assert.strictEqual(wat.has_pending_message(), 0,
     'persistent background-erase ownership must not wake GetMessage');
 
-  for (const bit of [1, 2, 4]) {
+  for (const bit of [1, 4]) {
     wat.test_nc_wake_set(bit);
     assert.strictEqual(wat.has_pending_message(), 1,
       `transient NC flag ${bit} must wake GetMessage`);
@@ -37,10 +60,48 @@ const extraWat = String.raw`
       `clearing transient NC flag ${bit} must leave persistent bit 8 idle`);
   }
 
+  wat.test_nc_wake_set(2);
+  for (const remove of [0, 1]) {
+    assert.strictEqual(wat.test_nc_message(0, remove), 0,
+      'PeekMessage must not manufacture a queued erase from pending paint state');
+    assert.strictEqual(wat.test_nc_erase_pending(), 2,
+      'neither peek mode consumes pending erase');
+  }
+  msg.setUint32(4, 0xDEADBEEF, true);
+  wat.test_nc_message(1, 1);
+  assert.notStrictEqual(msg.getUint32(4, true), 0x14,
+    'GetMessage must not manufacture a queued erase');
+  assert.strictEqual(wat.test_nc_erase_pending(), 2);
+  assert.strictEqual(wat.has_pending_message(), 0,
+    'pending erase without paint damage must not spin the message waiter');
+
+  for (const get of [0, 1]) {
+    assert.strictEqual(wat.post_message_q(0x10001, 0x14, 0x1234, 0x5678), 1);
+    assert.strictEqual(wat.has_pending_message(), 1,
+      'an explicitly posted erase still wakes the waiter');
+    assert.strictEqual(wat.test_nc_message(0, 0), 1);
+    assert.strictEqual(wat.post_queue_depth(), 1, 'PM_NOREMOVE retains a posted erase');
+    assert.strictEqual(wat.test_nc_message(get, 1), 1);
+    assert.deepStrictEqual([0, 4, 8, 12].map(off => msg.getUint32(off, true)),
+      [0x10001, 0x14, 0x1234, 0x5678], 'posted erase parameters pass through intact');
+    assert.strictEqual(wat.post_queue_depth(), 0);
+    assert.strictEqual(wat.test_nc_erase_pending(), 2,
+      'dequeueing an explicit message does not validate pending erase');
+    assert.strictEqual(wat.has_pending_message(), 0);
+  }
+
   assert.strictEqual(wat.test_nc_main_paint_pending(1), 1,
-    'the erase scheduler must see the main window global paint state');
+    'the paint scheduler must see the main window global paint state');
+  assert.strictEqual(wat.has_pending_message(), 1,
+    'main-window paint wakes before the selector mirrors it into per-window flags');
   assert.strictEqual(wat.test_nc_main_paint_pending(0), 0,
     'clearing the main paint state must leave no per-window paint behind');
+  wat.test_nc_paint_work(1);
+  assert.strictEqual(wat.has_pending_message(), 1,
+    'per-window paint work still wakes the waiter while erase is pending');
+  wat.test_nc_paint_work(0);
+  assert.strictEqual(wat.has_pending_message(), 0,
+    'only the erase request remains after paint is cleared');
 
   console.log('PASS  persistent NC state does not masquerade as queued message work');
 })().catch(error => {

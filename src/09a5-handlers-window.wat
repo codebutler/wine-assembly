@@ -1915,36 +1915,9 @@
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (i32.const 0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))))
-    ;; WM_ERASEBKGND (0x14) — bit 1
-    (if (global.get $nc_flags_count)
-    (then
-    (local.set $tmp (call $nc_flags_scan (i32.const 2)))
-    ;; An erase belongs to the paint cycle it precedes. Win98 sends
-    ;; WM_ERASEBKGND from inside BeginPaint, so an application gets to arrange
-    ;; the background *in* its WM_PAINT and still have that arrangement apply:
-    ;; Storm's DiabloUI nulls each dialog control's class hbrBackground with
-    ;; SetClassLongA(-10, 0) immediately before BeginPaint, precisely so the
-    ;; default erase paints nothing over its artwork. Handing the queued erase
-    ;; out ahead of the WM_PAINT runs it while the class brush is still
-    ;; LTGRAY_BRUSH, and Diablo's menus came out as grey slabs over the art.
-    ;;
-    ;; So while the window is still owed a WM_PAINT, leave bit 1 set and say
-    ;; nothing. $handle_BeginPaint already treats bit 1 as "an erase is still
-    ;; outstanding" and fills with whatever brush is current at that moment.
-    (if (call $paint_flag_test_hwnd (local.get $tmp))
-      (then (local.set $tmp (i32.const 0))))
-    (if (local.get $tmp)
-    (then
-    (call $nc_flags_clear (local.get $tmp) (i32.const 2))
-    (call $gs32 (local.get $msg_ptr) (local.get $tmp))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (i32.const 0x0014))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (i32.add (local.get $tmp) (i32.const 0x40000))) ;; hdc
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (i32.const 0))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))))
-    ;; msg_phase 5/6 (WM_ERASEBKGND + WM_PAINT bootstrap) retired in Phase 2;
-    ;; initial WM_ERASEBKGND arrives via NC_FLAGS bit 1 seeded in CreateWindowExA,
-    ;; initial WM_PAINT arrives via $paint_pending set at end of CACA0023 thunk.
+    ;; Pending background erase belongs to the paint lifecycle, not the
+    ;; posted queue. Only explicit PostMessage(WM_ERASEBKGND) is retrieved
+    ;; as MSG; polling must not consume an unhandled erase request.
     ;; Hardware input was consumed at top of fn; no second poll here.
     ;; Native child controls consume their own WM_PAINT internally after
     ;; any parent paint already delivered by prior pump iterations.
@@ -2123,37 +2096,9 @@
     (call $gs32 (i32.add (local.get $arg0) (i32.const 12)) (i32.const 0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (return)))))
-    (if (global.get $nc_flags_count)
-    (then
-    (local.set $tmp (call $nc_flags_scan (i32.const 2)))
-    ;; An erase belongs to the paint cycle it precedes. Win98 sends
-    ;; WM_ERASEBKGND from inside BeginPaint, so an application gets to arrange
-    ;; the background *in* its WM_PAINT and still have that arrangement apply:
-    ;; Storm's DiabloUI nulls each dialog control's class hbrBackground with
-    ;; SetClassLongA(-10, 0) immediately before BeginPaint, precisely so the
-    ;; default erase paints nothing over its artwork. Handing the queued erase
-    ;; out ahead of the WM_PAINT runs it while the class brush is still
-    ;; LTGRAY_BRUSH, and Diablo's menus came out as grey slabs over the art.
-    ;;
-    ;; So while the window is still owed a WM_PAINT, leave bit 1 set and say
-    ;; nothing. $handle_BeginPaint already treats bit 1 as "an erase is still
-    ;; outstanding" and fills with whatever brush is current at that moment.
-    (if (call $paint_flag_test_hwnd (local.get $tmp))
-      (then (local.set $tmp (i32.const 0))))
-    (if (local.get $tmp)
-    (then
-    (if (i32.and (local.get $arg4) (i32.const 1))
-      (then (call $nc_flags_clear (local.get $tmp) (i32.const 2))))
-    (call $gs32 (local.get $arg0) (local.get $tmp))
-    (call $gs32 (i32.add (local.get $arg0) (i32.const 4)) (i32.const 0x0014))
-    (call $gs32 (i32.add (local.get $arg0) (i32.const 8)) (i32.add (local.get $tmp) (i32.const 0x40000)))
-    (call $gs32 (i32.add (local.get $arg0) (i32.const 12)) (i32.const 0))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (return)))))
-    ;; Phase-based initial message delivery
-    ;; Phases 0-4 (activation) delivered synchronously during CreateWindowExA.
-    ;; Phases 5/6 (WM_ERASEBKGND/WM_PAINT bootstrap) retired in Phase 2 —
-    ;; NC_FLAGS bit 1 + $paint_pending provide equivalent delivery.
+    ;; Pending background erase belongs to the paint lifecycle, not the
+    ;; posted queue. Only explicit PostMessage(WM_ERASEBKGND) is retrieved
+    ;; as MSG; polling must not consume an unhandled erase request.
     ;;
     ;; Hardware input (host_check_input) is checked BEFORE post_queue because
     ;; apps like pinball self-post WM_USER physics ticks at a high rate; if
