@@ -129,7 +129,7 @@ const u32 = v => [v, v >>> 8, v >>> 16, v >>> 24].map(b => b & 255);
   // A newly requested erase belongs to the next cycle even when the current
   // callback reports success. Clearing after the callback would lose it.
   const invalidate = e.test_thunk(apiTable.find(a => a.name === 'InvalidateRect').id);
-  const renew = [0x6a, 1, 0x6a, 0, 0xff, 0x74, 0x24, 12,
+  const renew = [0x6a, 2, 0x6a, 0, 0xff, 0x74, 0x24, 12, // any nonzero BOOL requests erase
     0xb8, ...u32(invalidate), 0xff, 0xd0, 0xb8, ...u32(7), 0xc2, 16, 0];
   const renewProc = e.guest_alloc(renew.length);
   renew.forEach((b, i) => e.guest_write8(renewProc + i, b));

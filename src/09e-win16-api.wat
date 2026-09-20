@@ -7471,11 +7471,29 @@
   ;; Invocation-owned {hwnd, client-size, pending-bits} across far callbacks.
   ;; Clear each bit before entry so nested ShowWindow/UpdateWindow is safe.
   (global $WIN16_CONT_SHOW i32 (i32.const 0xFFAC))
+  ;; Bit 2 of this invocation's pending word marks an outstanding erase
+  ;; callback result, not a second erase to send. Retain a declined request
+  ;; without clearing any fresh invalidation made by a successful callback.
+  (func $win16_show_erase_result (param $handled i32)
+    (local $sp i32) (local $hwnd i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $hwnd (call $gl32 (local.get $sp)))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 8))
+      (i32.and (call $gl32 (i32.add (local.get $sp) (i32.const 8))) (i32.const -5)))
+    (if (i32.and (i32.eqz (local.get $handled))
+          (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      (then (call $nc_flags_set (local.get $hwnd) (i32.const 2)))))
+
   (func $win16_show_continue
     (local $sp i32) (local $hwnd i32) (local $pending i32)
     (local $proc i32) (local $msg i32) (local $wp i32) (local $lp i32)
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (local.set $hwnd (call $gl32 (local.get $sp)))
+    (if (i32.and (call $gl32 (i32.add (local.get $sp) (i32.const 8))) (i32.const 4))
+      (then
+        (call $win16_show_erase_result
+          (i32.or (i32.and (i32.load (global.get $reg_base)) (i32.const 65535))
+            (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))))
     (block $done (loop $next
       (br_if $done (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
       (local.set $pending (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
@@ -7491,6 +7509,7 @@
           ;; A nested UpdateWindow may have already consumed this erase.
           (br_if $done (i32.eqz (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2))))
           (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
+          (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 4))
           (local.set $msg (i32.const 0x14))
           (local.set $wp (i32.add (local.get $hwnd) (i32.const 0x40000)))
           (local.set $lp (i32.const 0))))
@@ -7503,7 +7522,11 @@
               (then (call $win16_h16 (local.get $wp))) (else (local.get $wp)))
             (local.get $lp) (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_SHOW))
           (return)))
-      (drop (call $wnd_send_message (local.get $hwnd) (local.get $msg) (local.get $wp) (local.get $lp)))
+      (if (i32.eq (local.get $msg) (i32.const 0x14))
+        (then (call $win16_show_erase_result
+          (call $wnd_send_message (local.get $hwnd) (local.get $msg) (local.get $wp) (local.get $lp))))
+        (else (drop (call $wnd_send_message
+          (local.get $hwnd) (local.get $msg) (local.get $wp) (local.get $lp)))))
       (br $next)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 12)))
     (call $win16_cont_resume))

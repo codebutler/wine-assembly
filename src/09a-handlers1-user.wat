@@ -1337,25 +1337,11 @@
         (local.set $r (i32.and (local.get $cs) (i32.const 0xFFFF)))
         (local.set $b (i32.shr_u (local.get $cs) (i32.const 16)))))
     (call $update_invalidate_rect (local.get $arg0) (local.get $l) (local.get $t) (local.get $r) (local.get $b))
-    ;; bErase is deliberately not turned into a queued WM_ERASEBKGND here.
-    ;; Windows erases from inside BeginPaint, in the same breath as the paint;
-    ;; a separately queued erase arrives whenever the pump gets to it, and Hearts
-    ;; draws a dealt hand with its own DC outside WM_PAINT -- so the erase landed
-    ;; after the cards and wiped four of them off the table. See $handle_BeginPaint
-    ;; for where the background is decided instead.
-    ;;
-    ;; Win32 bErase is still recorded, because BeginPaint has to report it back
-    ;; as ps.fErase: an app that asked for an erase and has no class brush is
-    ;; the app that paints its own background. bErase = FALSE never clears a
-    ;; pending erase -- the flag accumulates until a paint consumes it.
-    ;;
-    ;; Keep Win16 on its historical USER path. Windows 3.x games including
-    ;; Klotski use InvalidateRect(TRUE) as a continuous redraw request while
-    ;; also painting with window DCs outside BeginPaint. Turning every request
-    ;; into a new queued erase wipes that artwork once per pump iteration.
-    (if (i32.and
-          (i32.eqz (global.get $code16))
-          (local.get $arg2))
+    ;; Both ABIs record bErase for BeginPaint's synchronous callback, never
+    ;; as a separately queued erase. FALSE leaves an existing request intact.
+    ;; Win16 used to discard TRUE to avoid the old queued-erase shortcut;
+    ;; that shortcut is gone and its BeginPaint now owns the far callback.
+    (if (local.get $arg2)
       (then (call $nc_flags_set (local.get $arg0) (i32.const 2))))
     (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
       (then (global.set $paint_pending (i32.const 1)))

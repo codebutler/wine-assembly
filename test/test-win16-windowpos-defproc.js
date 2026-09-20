@@ -370,7 +370,8 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   const showing = e.test_window(0x900);
   e.test_visible(showing, 0);
   assert.deepStrictEqual(runShow(showing, 1, 0x40), [0x14], 'initial erase completes before ShowWindow returns');
-  assert.deepStrictEqual(runUpdate(showing, 0x50), [0x0f]);
+  assert.strictEqual(e.test_erase_pending(showing), 2, 'ShowWindow retains a declined erase for BeginPaint');
+  assert.deepStrictEqual(runUpdate(showing, 0x50), [0x0f, 0x14]);
   assert.strictEqual(e.test_dirty(showing), 0);
   assert.deepStrictEqual(runShow(showing, 1, 0x60), [], 'showing an already visible window does not repeat initial erase');
   const updateSelf = [0xff, 0x76, 0x0e, 0x9a, ...word(update), 0x1f, 0];
@@ -471,5 +472,43 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.strictEqual(e.guest_read32(0x11090c) >>> 16, e.guest_read32(0x110d08) & 0xffff);
   assert.notStrictEqual(e.guest_read32(0x110904) >>> 16, e.guest_read32(0x11090c) >>> 16);
   assert.strictEqual(e.guest_read32(0x110e02) & 0xffff, 0);
+  for (const [i, handled] of [0, 7, 0x10000].entries()) {
+    const off = 0x4000 + i * 128;
+    const body = recorder();
+    body.splice(-7, 4, 0xb8, ...word(handled), 0xba, ...word(handled >>> 16));
+    writeCode(off, body);
+    const h = e.test_window(off);
+    e.test_visible(h, 0);
+    assert.deepStrictEqual(runShow(h, 1, 0x90), [0x14]);
+    assert.strictEqual(e.test_erase_pending(h), handled ? 0 : 2,
+      `ShowWindow uses the complete DX:AX erase result ${handled}`);
+    assert.deepStrictEqual(runShow(h, 1, 0x90), []);
+    assert.strictEqual(e.test_erase_pending(h), handled ? 0 : 2,
+      'showing an already visible window cannot discard a declined erase');
+  }
+  const invalidate = e.test_user_thunk(125);
+  writeCode(0x4300, successProc([0xff, 0x76, 0x0e, 0x6a, 0, 0x6a, 0, 0x6a, 1,
+    0x9a, ...word(invalidate), 0x1f, 0]));
+  const renewShow = e.test_window(0x4300);
+  e.test_visible(renewShow, 0);
+  assert.deepStrictEqual(runShow(renewShow, 1, 0x90), [0x14]);
+  assert.strictEqual(e.test_erase_pending(renewShow), 2, 'successful show erase preserves callback reinvalidation');
+
+  const show = e.test_user_thunk(42);
+  const innerShow = e.test_window(0x4000); // declines erase
+  e.test_visible(innerShow, 0);
+  writeCode(0x4400, successProc([0x68, ...word(e.test_narrow(innerShow)), 0x6a, 1,
+    0x9a, ...word(show), 0x1f, 0]));
+  const outerShow = e.test_window(0x4400);
+  e.test_visible(outerShow, 0);
+  assert.deepStrictEqual(runShow(outerShow, 1, 0x90), [0x14, 0x14]);
+  assert.strictEqual(e.test_erase_pending(innerShow), 2);
+  assert.strictEqual(e.test_erase_pending(outerShow), 0, 'nested ShowWindow results remain invocation-owned');
+
+  const showDoomed = e.test_window(0xb00);
+  e.test_visible(showDoomed, 0);
+  assert.deepStrictEqual(runShow(showDoomed, 1, 0x90), [0x14]);
+  assert.strictEqual(e.test_alive(showDoomed), 0);
+  assert.strictEqual(e.test_erase_pending(showDoomed), 0, 'ShowWindow cannot rearm a destroyed HWND');
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

@@ -676,3 +676,64 @@ This does not finish painting fidelity: ShowWindow's separate initial-erase
 continuation still needs a declined-result ownership audit, as do native
 modal/default-dialog consumers. Damage validation/reinvalidation through
 EndPaint, empty-update rcPaint and per-class redraw lookup remain open.
+
+## 2026-09-20: ShowWindow erase results and Win16 InvalidateRect
+
+The Win16 show continuation used to clear the erase request before dispatch
+and discard the result. It now marks the outstanding callback in its own
+stack-resident pending word, consumes the full DX:AX result on far return,
+and rearms a declined erase only on a still-live window. Native synchronous
+dispatch uses the same result helper. A successful callback cannot clear a
+new erase request made inside it. No new global callback state or extra frame
+is introduced. This follows the documented
+[WM_ERASEBKGND result contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd).
+
+The regression first failed because ShowWindow lost the declined request
+(`/private/tmp/wa-show-erase-before.log`). After that fix, the new callback-
+reinvalidation case exposed a second, independent shortcut: shared
+InvalidateRect explicitly discarded bErase on Win16 (`code16 != 0`) to avoid
+the old queued-erase behavior. With queued erase removed and both BeginPaint
+ABIs now dispatching callbacks, the workaround is obsolete. Both ABIs now
+record nonzero bErase; FALSE does not remove an existing request.
+
+`test-win16-windowpos-defproc.js` covers zero/low/high-word-only callback
+results, repeated ShowWindow, the next UpdateWindow/BeginPaint after declined
+erase, new invalidation from a handled callback, nested shows with opposite
+results and destruction during erase. The final matrix passes
+(`wa-show-erase-final-contract.log`); `wa-show-erase-nested.log` records the
+intermediate reinvalidation failure rather than a final regression.
+
+Scope limits: ShowWindow still uses its existing compatibility erase DC and
+its existing show/activation scheduling. Its fixed nonzero return value is
+also a separate gap: the documented
+[ShowWindow return](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow)
+reports prior visibility. Do not add a test pinning that constant as correct.
+Damage validation and modal/default-dialog erase consumers remain open.
+
+Verification: both builds pass (`/private/tmp/wa-show-erase-final-build.log`),
+as do the far callback matrix, Win32 BeginPaint and message-wake tests.
+The Win32 reinvalidation fixture now passes BOOL value 2, not just 1: the old
+`(code16 == 0) & bErase` expression also incorrectly discarded even nonzero
+BOOLs on Win32. The new direct condition handles every nonzero value
+(`wa-show-erase-bool.log`).
+Compiling that fixture with only the old InvalidateRect fragment restored
+fails the retained-erase assertion, actual 0 versus expected 2
+(`wa-show-erase-bool-before.log`).
+
+Broader completed-build gameplay sweep: **21 pass, 3 fail**. WEP1 8/8 passes;
+WEP3 Klotski, TetraVex, LifeGenesis, SkiFree and WordZap pass; WEP4 Blackjack,
+Chess, Chip's Challenge, JezzBall, Maxwell and Tic Tac Drop pass; VB Rodent and
+Rattler pass. In particular Klotski, named in the removed workaround, passes
+its gameplay and background checks. Logs:
+`wa-show-erase-{wep1,wep3,wep3-rest,wep4,wep4-rest,vb}.log`.
+
+Do **not** call the whole sweep green: Fuji Golf cannot find its player-name
+edit control, Go Figure has zero white bordered-field pixels, and TriPeaks
+has zero white face-row pixels. All three fail the same assertions in an
+isolated WASM with **both edited runtime files restored to f6facca7** and all
+other current source/host files retained:
+`/private/tmp/wa-show-erase-baseline.wasm`, with
+`wa-show-erase-{fuji,gofigure,tripeaks}-baseline.log`. No worktree source was
+reverted for this comparison. These results rule out this turn's delta as
+the sole cause, not an earlier paint change. Investigate these broader-suite
+failures next; they were not exercised by the prior WEP1-only checks.
