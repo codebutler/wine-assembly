@@ -1881,15 +1881,37 @@
     )
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
-  ;; Parse a dotted quad at a guest pointer. Returns host byte order, or -1
-  ;; when the text is not four decimal octets.
+  ;; Parse an IPv4 address at a guest pointer. Returns host byte order, or -1
+  ;; when the text is not an address.
+  ;;
+  ;; Winsock's inet_addr takes FOUR forms, not just the dotted quad, and the
+  ;; short ones are the whole reason a person can type an address into a
+  ;; game's "host IP" box at all:
+  ;;
+  ;;   "a.b.c.d"   four octets                    10.0.0.1 -> 10.0.0.1
+  ;;   "a.b.c"     last part is the low 16 bits   10.0.1   -> 10.0.0.1
+  ;;   "a.b"       last part is the low 24 bits   10.1     -> 10.0.0.1
+  ;;
+  ;; So the room's host, at 10.0.0.1, is reachable by typing "10.1" — four
+  ;; characters into a Win98 dialog on a phone keyboard, and a number that
+  ;; survives being said out loud. We rejected every one of those short forms
+  ;; before, which real Windows accepts, so an app that offered the shorthand
+  ;; got INADDR_NONE here and "could not connect" with nothing to point at.
+  ;;
+  ;; Two of real inet_addr's behaviours are deliberately NOT here, because
+  ;; both are ambiguity rather than convenience: the bare "a" form (a whole
+  ;; 32-bit number with no dots), and C-style radix prefixes, where a leading
+  ;; 0 means octal, so "010.1" is 8.0.0.1 and "08.1" is not an address at
+  ;; all. Nothing types those on purpose. They parse as invalid here rather
+  ;; than as some other address, which is the safe direction to be wrong in:
+  ;; a refusal is visible, a silently different peer is not.
   (func $vsock_parse_ipv4 (param $ga i32) (result i32)
-    (local $wa i32) (local $ch i32) (local $val i32) (local $octet i32)
-    (local $digits i32) (local $acc i32)
+    (local $wa i32) (local $ch i32) (local $val i32) (local $nparts i32)
+    (local $digits i32)
+    (local $p0 i32) (local $p1 i32) (local $p2 i32) (local $p3 i32)
     (if (i32.eqz (local.get $ga)) (then (return (i32.const -1))))
     (local.set $wa (call $g2w (local.get $ga)))
-    (local.set $octet (i32.const 0))
-    (local.set $acc (i32.const 0))
+    (local.set $nparts (i32.const 0))
     (local.set $val (i32.const 0))
     (local.set $digits (i32.const 0))
     (block $done (loop $scan
@@ -1900,21 +1922,57 @@
           (local.set $val (i32.add (i32.mul (local.get $val) (i32.const 10))
             (i32.sub (local.get $ch) (i32.const 0x30))))
           (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
-          (if (i32.gt_u (local.get $val) (i32.const 255)) (then (return (i32.const -1)))))
+          ;; 24 bits is the widest any part may be (the last one of "a.b"),
+          ;; and checking here also keeps the running value far from an i32
+          ;; overflow however many digits are thrown at it.
+          (if (i32.gt_u (local.get $val) (i32.const 0xFFFFFF))
+            (then (return (i32.const -1)))))
         (else
           (if (i32.or (i32.eq (local.get $ch) (i32.const 0x2E)) (i32.eqz (local.get $ch)))
             (then
               (if (i32.eqz (local.get $digits)) (then (return (i32.const -1))))
-              (local.set $acc (i32.or (i32.shl (local.get $acc) (i32.const 8)) (local.get $val)))
-              (local.set $octet (i32.add (local.get $octet) (i32.const 1)))
+              (if (i32.ge_u (local.get $nparts) (i32.const 4))
+                (then (return (i32.const -1))))
+              (if (i32.eqz (local.get $nparts)) (then (local.set $p0 (local.get $val))))
+              (if (i32.eq (local.get $nparts) (i32.const 1)) (then (local.set $p1 (local.get $val))))
+              (if (i32.eq (local.get $nparts) (i32.const 2)) (then (local.set $p2 (local.get $val))))
+              (if (i32.eq (local.get $nparts) (i32.const 3)) (then (local.set $p3 (local.get $val))))
+              (local.set $nparts (i32.add (local.get $nparts) (i32.const 1)))
               (local.set $val (i32.const 0))
               (local.set $digits (i32.const 0))
               (br_if $done (i32.eqz (local.get $ch))))
             (else (return (i32.const -1))))))
       (local.set $wa (i32.add (local.get $wa) (i32.const 1)))
       (br $scan)))
-    (if (i32.ne (local.get $octet) (i32.const 4)) (then (return (i32.const -1))))
-    (local.get $acc))
+    ;; Every leading part is one octet; only the last part is widened, and by
+    ;; exactly the number of octets the missing parts would have filled.
+    (if (i32.eq (local.get $nparts) (i32.const 4))
+      (then
+        (if (i32.or (i32.or (i32.gt_u (local.get $p0) (i32.const 255))
+                            (i32.gt_u (local.get $p1) (i32.const 255)))
+                    (i32.or (i32.gt_u (local.get $p2) (i32.const 255))
+                            (i32.gt_u (local.get $p3) (i32.const 255))))
+          (then (return (i32.const -1))))
+        (return (i32.or (i32.or (i32.shl (local.get $p0) (i32.const 24))
+                                (i32.shl (local.get $p1) (i32.const 16)))
+                        (i32.or (i32.shl (local.get $p2) (i32.const 8))
+                                (local.get $p3))))))
+    (if (i32.eq (local.get $nparts) (i32.const 3))
+      (then
+        (if (i32.or (i32.or (i32.gt_u (local.get $p0) (i32.const 255))
+                            (i32.gt_u (local.get $p1) (i32.const 255)))
+                    (i32.gt_u (local.get $p2) (i32.const 0xFFFF)))
+          (then (return (i32.const -1))))
+        (return (i32.or (i32.or (i32.shl (local.get $p0) (i32.const 24))
+                                (i32.shl (local.get $p1) (i32.const 16)))
+                        (local.get $p2)))))
+    (if (i32.eq (local.get $nparts) (i32.const 2))
+      (then
+        (if (i32.or (i32.gt_u (local.get $p0) (i32.const 255))
+                    (i32.gt_u (local.get $p1) (i32.const 0xFFFFFF)))
+          (then (return (i32.const -1))))
+        (return (i32.or (i32.shl (local.get $p0) (i32.const 24)) (local.get $p1)))))
+    (i32.const -1))
 
   ;; inet_addr(cp) — returns network byte order, INADDR_NONE on failure.
   (func $handle_inet_addr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)

@@ -205,8 +205,29 @@ async function main() {
     assert.strictEqual(wat.test_call_inet_addr(cstr('0.0.0.0')) >>> 0, 0);
   });
 
+  // Winsock's inet_addr widens the LAST part to fill whatever octets the
+  // text left out, which is the whole reason a person can type four
+  // characters into a game's host-IP box instead of eleven.
+  check('inet_addr accepts the short forms real Winsock accepts', () => {
+    assert.strictEqual(wat.test_call_inet_addr(cstr('10.1')) >>> 0, 0x0100000a,
+      '"10.1" is 10.0.0.1: the last part fills the low 24 bits');
+    assert.strictEqual(wat.test_call_inet_addr(cstr('10.0.1')) >>> 0, 0x0100000a,
+      '"10.0.1" is 10.0.0.1: the last part fills the low 16 bits');
+    assert.strictEqual(wat.test_call_inet_addr(cstr('127.1')) >>> 0, 0x0100007f);
+    assert.strictEqual(wat.test_call_inet_addr(cstr('10.77.0')) >>> 0, 0x00004d0a,
+      '"10.77.0" is 10.77.0.0, not a malformed quad');
+    // The widened part is one number, not octets: 10.258 carries into the
+    // third byte the way the C library does it.
+    assert.strictEqual(wat.test_call_inet_addr(cstr('10.258')) >>> 0, 0x0201000a);
+    assert.strictEqual(wat.test_call_inet_addr(cstr('10.16777215')) >>> 0, 0xffffff0a);
+  });
+
   check('inet_addr rejects malformed input with INADDR_NONE', () => {
-    for (const bad of ['10.77.0', '10.77.0.1.2', '10.77.0.256', 'localhost', '', '10..0.1']) {
+    // A leading part is still one octet however short the text is, the
+    // widened part still has a ceiling, and the bare "a" form stays out —
+    // a number with no dots in a host box is a mistake, not an address.
+    for (const bad of ['10.77.0.1.2', '10.77.0.256', 'localhost', '', '10..0.1',
+      '256.1', '10.16777216', '10.0.65536', '10', '0x0a.1', '10.1.']) {
       assert.strictEqual(wat.test_call_inet_addr(cstr(bad)) | 0, -1, `expected failure for "${bad}"`);
     }
   });
