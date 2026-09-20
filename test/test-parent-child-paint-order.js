@@ -7,6 +7,7 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const extraWat = String.raw`
   (global $test_order_parent (mut i32) (i32.const 0))
@@ -76,6 +77,16 @@ const extraWat = String.raw`
     (i32.store offset=16 (global.get $reg_base) (local.get $esp)))
   (func (export "test_order_update_rect") (param $dst i32) (result i32)
     (call $update_get_rect (global.get $test_order_child) (call $g2w (local.get $dst))))
+  (func (export "test_order_api_thunk") (param $id i32) (result i32)
+    (local $addr i32)
+    (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
+    (local.set $addr (i32.add (global.get $THUNK_BASE)
+      (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $addr) (i32.const 0))
+    (i32.store offset=4 (local.get $addr) (local.get $id))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end)
+    (call $w2g (local.get $addr)))
 
   (func (export "test_cycle_parent") (result i32)
     (local $a i32) (local $b i32)
@@ -176,6 +187,31 @@ const extraWat = String.raw`
 
   assert.strictEqual(e.test_cycle_parent(), 0,
     'window parenting rejects an edge that would create a cycle');
+
+  // Enter an actual outer guest wndproc, which calls UpdateWindow through
+  // its Win32 thunk and observes the inner paint count before it returns.
+  const update = e.test_order_api_thunk(apiTable.find(a => a.name === 'UpdateWindow').id);
+  const observed = e.guest_alloc(4);
+  const u32 = v => [v, v >>> 8, v >>> 16, v >>> 24].map(b => b & 255);
+  const outerCode = [0x68, ...u32(parent), 0xb8, ...u32(update), 0xff, 0xd0,
+    0xa1, ...u32(calls), 0xa3, ...u32(observed), 0xc2, 0x10, 0x00];
+  while (outerCode.length % 4) outerCode.push(0x90);
+  const outerProc = e.guest_alloc(outerCode.length);
+  for (let i = 0; i < outerCode.length; i += 4) {
+    e.guest_write32(outerProc + i, outerCode[i] | outerCode[i + 1] << 8 |
+      outerCode[i + 2] << 16 | outerCode[i + 3] << 24);
+  }
+  const outer = 0x10050;
+  e.wnd_table_set(outer, outerProc);
+  e.guest_write32(calls, 0);
+  e.guest_write32(observed, 0);
+  e.test_order_queue_both();
+  const beforeNestedEsp = e.get_esp();
+  e.send_message(outer, 0x400, 0, 0);
+  assert.strictEqual(e.guest_read32(observed), 1,
+    'nested UpdateWindow must finish inner WM_PAINT before the outer wndproc resumes');
+  assert.strictEqual(e.get_sync_msg_depth(), 0, 'nested callback depth must unwind');
+  assert.strictEqual(e.get_esp(), beforeNestedEsp, 'nested callback must restore the outer stack');
 
   console.log('PASS  parent-first paint order and bounded ancestor traversal');
 })().catch(error => {

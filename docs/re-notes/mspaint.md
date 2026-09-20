@@ -163,3 +163,24 @@ The missing MoveWindow call is resolved for paths already supported by the
 shared core. Reentrant x86 sends, subclassed native controls and Win16 remain
 restricted there; those require separate callback/reentrancy work, not another
 MoveWindow-specific shortcut.
+
+## Nested x86 UpdateWindow
+
+The blanket `$sync_msg_depth == 0` restriction was independently reproduced
+with a real outer x86 wndproc calling UpdateWindow through its API thunk.
+The outer procedure read the target's WM_PAINT counter immediately after the
+call: it saw 0 before the fix instead of 1. Removing that restriction lets
+the existing synchronous sender preserve each frame's registers and stack.
+The regression now sees 1 before the outer procedure resumes, then verifies
+that ESP is restored and synchronous depth returns to zero.
+
+This resolves the nested x86 restriction described in earlier sections;
+subclassed native controls and Win16 remain separate limitations. No Wine
+source was used, and no app-name or initialization-phase exception was added.
+
+Validation: full build, nested/stack regression and WINDOWPOS mutation pass;
+Paint dock status and scrollbar remain 0/0. The tools test's normal 15-second
+subprocess run failed before screenshots; a serial diagnostic invocation
+overriding only that timeout to 120 seconds passed 22/22 (load average about
+20). The permanent test timeout was not changed. Do not report the default
+15-second invocation as passing.

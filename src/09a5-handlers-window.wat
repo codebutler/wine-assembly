@@ -1597,15 +1597,13 @@
     ;; a GetDC handle on the line after UpdateWindow, so an erase and paint
     ;; left queued for the pump land on top of the splash and wipe it.
     ;;
-    ;; Restricted to a visible guest-owned window with a real x86 wndproc, and
-    ;; never while another synchronous send is already unwinding. That is the
-    ;; hazard this call used to defer around: a dialog or control procedure
-    ;; re-entered before its own initialization has finished.
+    ;; A visible guest-owned window uses the synchronous sender's saved
+    ;; register/stack context even inside another send. Deferring solely on
+    ;; nesting depth lets the outer wndproc resume before this paint finishes.
+    ;; Win16 and subclassed native controls still need their distinct routes.
     (local.set $wp (call $wnd_table_get (local.get $arg0)))
     (if (i32.and
-          (i32.and
-            (i32.eqz (global.get $sync_msg_depth))
-            (i32.eqz (global.get $code16)))
+          (i32.eqz (global.get $code16))
           (i32.and
             (i32.and
               (i32.ne (local.get $wp) (i32.const 0))
