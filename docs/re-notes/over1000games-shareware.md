@@ -150,9 +150,46 @@ have computed, so the interesting question is which earlier write produced the
 bad pointer, not what the decoder did with it.
 
 ```
-node test/run.js --exe=<dir>/SOKOBAN.EXE --vfs-include='*' --max-batches=400 \
-  --no-close --trace-win16
+node test/run.js --exe=<dir>/SOKOBAN.EXE --vfs-include='*' \
+  --win16-lib=<dir>/VBRUN300.DLL --max-batches=400 --no-close --trace-win16
 ```
+
+**2026-09-20: it is a stack pivot through DI, not a decoder problem.** The
+marker payload is `0xCA002E20`, faulting EIP `0x002fec83`, previous EIP
+`0x002f5204` — same 64KB segment (selector `0x107`), so this is a *near*
+transfer inside one VBRUN300 segment, not a bad far call. `0x2f5204` is three
+instructions:
+
+```
+8b e7   mov sp, di
+9d      popf
+c3      ret
+```
+
+a longjmp-style pivot the segment's code `call`s outright (`0x2f4c1f:
+e8 e2 05`). It is reached from several callers and only one of them is fatal:
+
+| hit | prev_eip | DI |
+|---|---|---|
+| #2 | `0x2f4f0f` | `0x3ef8` — a real stack offset, returns fine |
+| #3 | `0x2f4c1f` | `0x01e8` — pivots SP into unmapped memory, `ret` lands at `0xec83` |
+
+So the corrupt value is **DI at the call**, and the decoder is only reporting
+where a garbage return address led. The surrounding code is the Microsoft
+floating-point emulator shipped inside VBRUN300 — `9b 36 dd 1c` (`fwait; ss:
+fstp qword [si]`), a `2e ff a7 …` CS-relative jump table, `ff e1` — so the
+next question is which earlier call fails to preserve DI across that segment's
+x87 paths. Reproduce the table above with:
+
+```
+node test/run.js --exe=<dir>/SOKOBAN.EXE --vfs-include='*' \
+  --win16-lib=<dir>/VBRUN300.DLL --max-batches=400 --no-close --quiet-api \
+  --trace-at=0x002f5204
+```
+
+Ruled out: the target is not a missing relocation (the whole region from
+`0x2fec60` on is zeros at batch 71, i.e. past the segment's real content), and
+it is not a far-call selector problem.
 
 ## ClockWerx (open)
 
