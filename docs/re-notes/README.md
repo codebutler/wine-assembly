@@ -12,8 +12,8 @@ finish one, add what you learned.
 Paint dock-collapse geometry and remaining repaint artifacts: [mspaint.md](mspaint.md).
 
 Blobby Volley's `settings.dat` format, the per-player CONTROL field, why player
-two must not be preset to the computer, and what still does not work in a live
-browser pair: [blobby-volley.md](blobby-volley.md).
+two must not be preset to the computer, and why two emulator processes in one
+room have to share a wall clock: [blobby-volley.md](blobby-volley.md).
 
 ## What belongs here
 

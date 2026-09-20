@@ -283,13 +283,43 @@ Every number here was taken at load 24-91 on a 34-user box. Pixel positions and
 frame counts are load-immune; batch rates are not, and are quoted only to show
 they stopped mattering.
 
-### Still open: the live browser pair
+### The live browser pair: closed, it was the settings file
 
-In a live browser pair (two pages, RTC wire, 2026-09-20) the client responded to
-**neither** arrows nor mouse, while the host's A/D/W drove red and the move
-rendered on both screens. The CLI pair above is green on the same code, so the
-wire, the sync and the host are all fine and this is something the browser path
-does to the client's input. Unresolved.
+This used to read "in a live browser pair the client responded to **neither**
+arrows nor mouse, while the host's A/D/W drove red -- unresolved". Re-measured
+2026-09-20 against the shipped file, `node test/test-web-blobby-rtc.js` is
+**20/20**, including the two checks that are exactly the old complaint:
+
+```
+PASS  the HOST can move its own player (the half that was stuck)
+PASS  the GUEST can move its own player
+PASS  both screens agree where player one is / where player two is
+```
+
+The cause was the one this file already listed as a candidate: that pair ran
+against a `settings.dat` whose player two was on the **mouse** with the old key
+set, and the mouse never reaches a network client. The shipped file has neither
+property now. No browser-path input bug was ever involved, which is worth
+stating plainly because "the browser eats the client's keys" was the working
+theory for a while and it was wrong.
+
+Two things measured on the way that are worth keeping:
+
+- **The browser never had the CLI's clock problem.** `host.js` hands the guest
+  a wall-clock `get_ticks`, so two tabs share time by construction, and the
+  single-tab match's ledger is symmetric (298/301 against 301/298) where the
+  CLI's was 152 against 2151. The fix in the section above is a *headless*
+  harness fix; nothing about it applies to the browser.
+- **Lobby discovery is intermittent.** One run in two, neither page saw the
+  other (`.vln-peer` never appeared inside 60s) and the test then threw
+  `TypeError: Cannot read properties of null (reading 'click')`, which buries
+  the diagnosis in a stack trace. That is now instrumented rather than fixed:
+  on the timeout both pages are photographed as `*-no-peers.png` and the run
+  prints whether `.vln-lobby` is open, which separates "the fixed key script
+  landed on the wrong menu entry" from "the lobby opened empty" -- opposite
+  bugs that the old failure could not tell apart. The lobby, RTC, wire and
+  dev-server files were clean in git at the time, so it is not someone's
+  half-finished edit.
 
 The measurement that settles it: reach the client's settings screen, read
 `[0x978220+4]` out of guest memory to see what CONTROL actually holds there,

@@ -259,8 +259,24 @@ const blobsAt = (band) => {
     for (let i = 0; i < 60 && !(await peerRows(host) && await peerRows(guest)); i++) {
       await H.sleep(1000);
     }
-    check('each browser saw the other in the lobby',
-      (await peerRows(host)) === 1 && (await peerRows(guest)) === 1);
+    const sawEachOther = (await peerRows(host)) === 1 && (await peerRows(guest)) === 1;
+    if (!sawEachOther) {
+      // "Saw the other" failing on its own cannot say WHICH bug this is: a
+      // lobby that never opened means the fixed key script landed on the
+      // wrong menu entry, and a lobby that opened empty means discovery or
+      // signaling. Those are opposite, and the only snapshot taken so far is
+      // from before the navigation, so it shows a healthy main menu either
+      // way. Photograph both pages here and say which state they are in.
+      for (const side of [host, guest]) {
+        await snap(side, `${side.label}-no-peers`);
+        console.log(`  ${side.label}: lobby open=${await lobbyUp(side.page)}`
+          + `  peer rows=${await peerRows(side)}`);
+      }
+    }
+    check('each browser saw the other in the lobby', sawEachOther);
+    // Clicking a peer that is not there throws an unhandled TypeError and
+    // buries the diagnosis above in a stack trace.
+    if (!sawEachOther) throw new Error('no peer to invite; see the -no-peers captures');
 
     // Only one side clicks; the other connects on the invite.
     await host.page.evaluate(() => document.querySelector('.vln-peer button').click());
