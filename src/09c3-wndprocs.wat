@@ -2568,10 +2568,10 @@
       (br $scan)))
     (i32.const 0))
 
-  ;; Return an item's unconstrained width without recursing through the
-  ;; large-combo negotiation below. This lets one large embedded control sum
-  ;; any large siblings safely before choosing its own cap.
-  (func $toolbar_button_raw_width (param $sw ptr<ToolbarState>) (param $idx i32) (result i32)
+  ;; Shared item sizing. Negotiation must use raw sibling widths, so the
+  ;; caller explicitly chooses whether embedded combo widths are constrained.
+  (func $toolbar_button_width_core (param $sw ptr<ToolbarState>) (param $idx i32)
+    (param $constrain i32) (result i32)
     (local $count i32) (local $rec i32) (local $width i32) (local $combo_width i32)
     (local.set $width (load.field.memarg ToolbarState button_w (local.get $sw)))
     (if (i32.le_s (local.get $width) (i32.const 0))
@@ -2582,12 +2582,17 @@
           (i32.ge_u (local.get $idx) (local.get $count)))
       (then (return (local.get $width))))
     (local.set $rec (call $toolbar_button_ptr (local.get $sw) (local.get $idx)))
+    ;; TBSTYLE_SEP uses iBitmap as its width unless a matching embedded combo
+    ;; supplies the width. Both modes share the same fallback bounds.
     (if (i32.and (i32.load8_u offset=9 (local.get $rec)) (i32.const 0x01))
       (then
         (local.set $combo_width
-          (call $toolbar_child_combo_raw_width_by_cmd
-            (load.field.memarg ToolbarState hwnd (local.get $sw))
-            (i32.load offset=4 (local.get $rec))))
+          (if (result i32) (local.get $constrain)
+            (then (call $toolbar_child_combo_width_by_cmd
+              (local.get $sw) (i32.load offset=4 (local.get $rec))))
+            (else (call $toolbar_child_combo_raw_width_by_cmd
+              (load.field.memarg ToolbarState hwnd (local.get $sw))
+              (i32.load offset=4 (local.get $rec))))))
         (if (i32.gt_s (local.get $combo_width) (i32.const 0))
           (then (return (local.get $combo_width))))
         (local.set $width (i32.load (local.get $rec)))
@@ -2596,6 +2601,10 @@
               (i32.gt_s (local.get $width) (i32.const 512)))
           (then (local.set $width (i32.const 8))))))
     (local.get $width))
+
+  ;; Unconstrained sizing breaks the large-combo negotiation's recursion.
+  (func $toolbar_button_raw_width (param $sw ptr<ToolbarState>) (param $idx i32) (result i32)
+    (call $toolbar_button_width_core (local.get $sw) (local.get $idx) (i32.const 0)))
 
   (func $toolbar_child_combo_width_by_cmd (param $sw ptr<ToolbarState>) (param $cmd i32) (result i32)
     (local $toolbar_hwnd i32) (local $combo_width i32)
@@ -2701,33 +2710,7 @@
     (i32.const -1))
 
   (func $toolbar_button_width (param $sw ptr<ToolbarState>) (param $idx i32) (result i32)
-    (local $count i32) (local $rec i32) (local $width i32) (local $combo_width i32)
-    (local.set $width (load.field.memarg ToolbarState button_w (local.get $sw)))
-    (if (i32.le_s (local.get $width) (i32.const 0))
-      (then (local.set $width (i32.const 23))))
-    (local.set $count (load.field ToolbarState button_count (local.get $sw)))
-    (if (i32.or
-          (i32.eqz (load.field.memarg ToolbarState buttons_guest (local.get $sw)))
-          (i32.ge_u (local.get $idx) (local.get $count)))
-      (then (return (local.get $width))))
-    (local.set $rec (call $toolbar_button_ptr (local.get $sw) (local.get $idx)))
-    ;; TBSTYLE_SEP uses TBBUTTON.iBitmap as the separator/control-slot width.
-    ;; WordPad embeds font and size comboboxes in these slots, so fixed button
-    ;; widths make MFC place both controls over the first button.
-    (if (i32.and (i32.load8_u offset=9 (local.get $rec)) (i32.const 0x01))
-      (then
-        (local.set $combo_width
-          (call $toolbar_child_combo_width_by_cmd
-            (local.get $sw)
-            (i32.load offset=4 (local.get $rec))))
-        (if (i32.gt_s (local.get $combo_width) (i32.const 0))
-          (then (return (local.get $combo_width))))
-        (local.set $width (i32.load (local.get $rec)))
-        (if (i32.or
-              (i32.lt_s (local.get $width) (i32.const 4))
-              (i32.gt_s (local.get $width) (i32.const 512)))
-          (then (local.set $width (i32.const 8))))))
-    (local.get $width))
+    (call $toolbar_button_width_core (local.get $sw) (local.get $idx) (i32.const 1)))
 
   (func $toolbar_layout_width (param $sw ptr<ToolbarState>) (result i32)
     (local $hwnd i32) (local $parent i32) (local $wh i32) (local $w i32) (local $parent_w i32)

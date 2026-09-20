@@ -186,9 +186,9 @@ add('TabNativeState', [
 ], 'the two readers of $tab_native_state_get\'s 128-byte block');
 
 add('ToolbarState', [
-  '$toolbar_ensure_state', '$toolbar_button_ptr', '$toolbar_button_raw_width',
+  '$toolbar_ensure_state', '$toolbar_button_ptr', '$toolbar_button_width_core',
   '$toolbar_child_combo_width_by_cmd', '$toolbar_ensure_capacity',
-  '$toolbar_find_command_index', '$toolbar_button_width', '$toolbar_layout_width',
+  '$toolbar_find_command_index', '$toolbar_layout_width',
   '$toolbar_button_rect', '$toolbar_calc_rows', '$toolbar_sync_child_combos',
   '$toolbar_hit_test', '$toolbar_autosize', '$toolbar_wndproc',
 ], 'every $toolbar_* function whose $sw is the 80-byte block $toolbar_ensure_state allocates. ' +
