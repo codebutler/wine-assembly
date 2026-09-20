@@ -1390,3 +1390,64 @@ their last-read globals remain independent. It passes
 (`/private/tmp/wa-input-flags-shared.log`). This is sequential cross-instance
 coverage, not concurrent stress. Next: per-event activation-processing state,
 parent/default query behavior, and Win16-safe pump continuation.
+
+### Native Win98 mouse-activation reference (2026-09-20)
+
+The new CRT-free `tools/v86-reference/probes/mouse-activate.c` runs against
+native USER in the pinned v86 Windows 98 profile, not Wine source or our
+emulator. Reproduce with:
+
+```sh
+node tools/v86-reference/capture.js --online \
+  --manifest tools/v86-reference/mouse-apps.json --app mouse-activate \
+  --output /private/tmp/wa-mouse-native.png \
+  --metadata /private/tmp/wa-mouse-native.json \
+  --serial-output /private/tmp/wa-mouse-native.serial
+```
+
+Full first-run output is preserved in
+[reference-mouse-activate-win98.txt](reference-mouse-activate-win98.txt).
+`GetVersion` returned `0xc0000a04` (4.10). The run reached
+`MOUSE_ACTIVATE_DONE`; source-only harness checks pass.
+The second run (`/private/tmp/wa-mouse-native-repeat.*`) produced byte-identical
+serial output and an identical screenshot SHA-256
+`1ec7c1d0ea91bafe98fe2e54d636fd1410fab6b08da248ee59abb2dcd93b3f90`.
+Runtime provenance:
+v86 `0.5.432+gf3d4472`, upstream commit
+`f3d4472a9c934b9ad78a311f5849ba711a296d23`, documented online disk/state and
+firmware from `tools/v86-reference/SOURCES.md`. Compiled probe SHA-256:
+`81b794db13a7c2f881135a6b897b06710c35a43f4cb4dc90d36439fb3a6e50f2`.
+Capture metadata and PNG remain in `/private/tmp`; neither OS assets nor
+compiled executable are committed.
+
+Observed results (two visible same-thread Win32 top-level windows):
+
+- Both `PM_NOREMOVE` calls return the button-down **without** issuing
+  WM_MOUSEACTIVATE or changing activation. `PM_REMOVE` issues the query
+  before returning. Thus the planned activation transaction belongs at
+  removal, not the first peek; source metadata alone is not permission to
+  activate a peeked message.
+- Answers 1/2 activate B, answers 3/4 retain A. Answers 2/4 eat button-down,
+  making this filtered remove return FALSE, but the subsequent drain still
+  delivers button-up. Answer 0 also activates and delivers on this profile;
+  it is an observed native fallback, not one of the four documented answers.
+- Activation delivers WM_ACTIVATE to B with `WA_CLICKACTIVE` (2), not
+  `WA_ACTIVE` (1). The observed sequence is old WM_ACTIVATE, new
+  WM_ACTIVATE, old WM_KILLFOCUS, new WM_SETFOCUS, then button-down delivery.
+- Explicit `PostMessage(WM_LBUTTONDOWN)` neither queries nor activates.
+- Direct top-level DefWindowProc returns MA_NOACTIVATE (3) for
+  `HTCAPTION + WM_LBUTTONDOWN`; it returns MA_ACTIVATE (1) for the other
+  14 tested hit-test/message combinations. In particular, substituting
+  WM_NCLBUTTONDOWN in the high word is **not** equivalent. These direct
+  calls do not yet establish the full caption drag/activation sequence.
+- Direct child DefWindowProc forwards the original top-level HWND and
+  lParam to its parent exactly once. Parent answers 1–4 pass through;
+  parent answer 0 falls back to 1 for HTCLIENT/WM_LBUTTONDOWN.
+
+This supersedes the earlier assumption that zero could not be an accepting
+pump result. It does **not** remove the need to implement the missing default
+procedure: the child fallback and caption exception have distinct behavior.
+No production behavior changed in this reference-probe step. Still to test:
+filtered nonmatching hardware, actual child/caption input, GetMessage,
+cross-thread/cross-app activation, nested pumps/destruction and Win16 far
+callbacks. Do not extrapolate their ordering from this same-thread trace.
