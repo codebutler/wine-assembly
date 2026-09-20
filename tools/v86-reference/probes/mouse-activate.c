@@ -5,13 +5,14 @@ static HANDLE serial;
 static HWND a, b, child, c;
 static int answer = -1, queries, recording;
 static int hook_mode, hook_armed;
+static int focus_recording;
 
 static void emit(const char *s) {
   DWORD written;
   if (serial != INVALID_HANDLE_VALUE)
     WriteFile(serial, s, lstrlenA(s), &written, NULL);
 }
-static int id(HWND h) { return h == a ? 1 : h == b ? 2 : h == child ? 3 : h == c ? 4 : 0; }
+static int id(HWND h) { return !h ? 0 : h == a ? 1 : h == b ? 2 : h == child ? 3 : h == c ? 4 : 0; }
 static void row(const char *label, int x, int y, int z, int w) {
   char buf[160];
   wsprintfA(buf, "%s %d %d %d %d\r\n", label, x, y, z, w);
@@ -26,6 +27,8 @@ static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (recording && (m == WM_ACTIVATE || m == WM_SETFOCUS ||
                     m == WM_KILLFOCUS || m == WM_LBUTTONDOWN || m == WM_LBUTTONUP))
     row("DISPATCH hwnd/msg/wp/active", id(h), m, (int)w, id(GetActiveWindow()));
+  if (focus_recording && (m == WM_ACTIVATE || m == WM_SETFOCUS || m == WM_KILLFOCUS))
+    row("FOCUS_STATE hwnd/msg/active/focus", id(h), m, id(GetActiveWindow()), id(GetFocus()));
   if (hook_armed && m == WM_ACTIVATE &&
       ((hook_mode <= 3 && h == a && LOWORD(w) == WA_INACTIVE) ||
        ((hook_mode == 4 || hook_mode == 5) && h == b && LOWORD(w) != WA_INACTIVE))) {
@@ -138,6 +141,29 @@ void WINAPI WinMainCRTStartup(void) {
     drain();
   }
   emit("ACTIVATION_REENTRY_DONE\r\n");
+  emit("FOCUS_DEFAULT_V1\r\n");
+  hook_armed = 0;
+  hook_mode = 0;
+  for (mode = 0; mode < 12; mode++) {
+    LRESULT result;
+    recording = focus_recording = 0;
+    if (mode >= 10) ShowWindow(b, SW_MINIMIZE);
+    SetActiveWindow(a);
+    SetFocus(a);
+    drain();
+    recording = focus_recording = 1;
+    row("FOCUS_CASE mode/active/focus", mode, id(GetActiveWindow()), id(GetFocus()), 0);
+    if (mode < 6 || mode == 10) {
+      WPARAM wp = mode == 10 ? WA_ACTIVE : mode < 3 ? mode : (mode - 3) | 0x10000;
+      result = DefWindowProcA(b, WM_ACTIVATE, wp, (LPARAM)a);
+    } else {
+      HWND target = mode == 6 ? a : (mode == 7 || mode == 11) ? b : mode == 8 ? child : NULL;
+      result = id(SetFocus(target));
+    }
+    row("FOCUS_RETURN result/active/focus", (int)result, id(GetActiveWindow()), id(GetFocus()), 0);
+    drain();
+  }
+  emit("FOCUS_DEFAULT_DONE\r\n");
   emit("MOUSE_ACTIVATE_DONE\r\n");
   CloseHandle(serial);
   ExitProcess(0);

@@ -1618,3 +1618,60 @@ as do all seven WEP3 gameplay cases (`wa-activation-serial-wep3.log`) and
 actual Notepad cooperative/Worker Chrome taskbar checks
 (`wa-activation-serial-browser.log`). These regression checks use the
 completed artifacts; they do not exercise unimplemented mouse-pump activation.
+
+### Focus/default activation reference (2026-09-20)
+
+The native probe additionally records GetFocus inside WM_ACTIVATE,
+WM_KILLFOCUS and WM_SETFOCUS. It directly invokes DefWindowProc(B,
+WM_ACTIVATE, ...) from active/focused A, then exercises SetFocus on A, B,
+B's child and NULL. This isolates default processing from the outer
+activation transaction.
+
+Observed on native Win98:
+
+- WA_INACTIVE is inert. Direct default processing with WA_ACTIVE or
+  WA_CLICKACTIVE activates B with an ordinary WA_ACTIVE notification and
+  transfers focus. Setting HIWORD(wParam) to 1 on this non-iconic window
+  does not suppress it: message bits alone do not establish iconic state.
+- GetFocus is still A inside B's initial WM_ACTIVATE; it is already B
+  inside A's WM_KILLFOCUS, and B inside B's WM_SETFOCUS.
+- Same-focus SetFocus(A) returns A without notifications. SetFocus(NULL)
+  returns A, synchronously sends A WM_KILLFOCUS with wParam=0, exposes NULL
+  to GetFocus in that callback, and leaves A active.
+- SetFocus(B) first activates B. Default activation focuses B; the outer
+  SetFocus then sends an additional B→B kill/set pair and returns B, not A.
+  The old-focus snapshot for that second transfer is therefore after
+  activation, not necessarily the focus HWND at API entry.
+- SetFocus(child of B) similarly activates/focuses B first, then transfers
+  B→child and returns B. Both child transfer callbacks see the child as
+  GetFocus. Active remains B.
+
+These observations expose concrete implementation gaps, not merely a
+missing WM_ACTIVATE branch: Win32 SetFocus snapshots focus on entry, posts
+WM_KILLFOCUS, synchronously redirects only WM_SETFOCUS, and does not activate
+the ancestor. Win16 posts both messages with a comment claiming that this
+is equivalent to synchronous delivery; it is not. The separate internal
+`$set_focus` sender does not itself publish focus state. A default-procedure
+patch that delegates to any of these unchanged paths would retain the
+wrong ordering. The next implementation needs a shared focus transaction
+with Win32/far callback adapters, correct post-activation return snapshot,
+and nested-callback lifetime guards.
+
+The final two cases actually minimize B: direct default WA_ACTIVE and
+SetFocus(B) both return zero without changing active/focus A or delivering
+focus messages. Thus the native default checks real iconic state, not only
+the caller-supplied minimized bit.
+
+Preserved focus-section output:
+[reference-focus-win98.txt](reference-focus-win98.txt). Cases 0–5 are direct
+defaults (reasons 0/1/2 without and with bit 16); cases 6–9 focus same/other/
+child/NULL; cases 10/11 are default/SetFocus on an actually minimized B.
+Raw captures and metadata: `/private/tmp/wa-focus-native-final.{serial,json,png}`,
+same pinned Win98/v86 profile, using the mouse manifest and `--wait-ms 45000`.
+Probe executable SHA-256:
+`9cea90f1a41474181d89bb77c078cdce5ca168d932040156bd9c5f6de6e2c8b8`.
+Both final markers are present; the first ten cases are byte-identical to
+the preceding native run (`wa-focus-native.serial`). The source-only
+reference harness test passes. Runtime remains unchanged in this reference
+step; focus reentry/destruction, disabled ancestors, cross-thread focus and
+Win16 public focus delivery still need regression coverage and implementation.
