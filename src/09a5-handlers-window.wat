@@ -1600,7 +1600,8 @@
     ;; A visible guest-owned window uses the synchronous sender's saved
     ;; register/stack context even inside another send. Deferring solely on
     ;; nesting depth lets the outer wndproc resume before this paint finishes.
-    ;; Win16 and subclassed native controls still need their distinct routes.
+    ;; This includes native controls with guest subclasses. Win16 still
+    ;; needs its distinct far-procedure calling convention.
     (local.set $wp (call $wnd_table_get (local.get $arg0)))
     (if (i32.and
           (i32.eqz (global.get $code16))
@@ -1608,9 +1609,7 @@
             (i32.and
               (i32.ne (local.get $wp) (i32.const 0))
               (i32.lt_u (local.get $wp) (i32.const 0xFFFE0000)))
-            (i32.and
-              (call $wnd_is_effectively_visible (local.get $arg0))
-              (i32.eqz (call $ctrl_table_get_class (local.get $arg0))))))
+            (call $wnd_is_effectively_visible (local.get $arg0))))
       (then
         ;; Erase first — this is BeginPaint's half of the sequence, and the
         ;; queued NC_FLAGS bit is where the pump would otherwise have found it.
@@ -3604,8 +3603,8 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; Paint for WAT-owned controls is rendered by our native control path.
-    ;; Do not enter an app-installed subclass proc just to chain back to the
-    ;; default marker; some NSIS treeview paints unwind with a corrupted frame.
+    ;; App-installed subclasses must receive paint first and may chain back
+    ;; to the default marker for the built-in appearance.
     (local.set $ctrl_class (call $ctrl_table_get_class (local.get $arg0)))
     (if (call $tab_native_is (local.get $arg0))
       (then

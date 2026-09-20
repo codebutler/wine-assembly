@@ -184,3 +184,41 @@ subprocess run failed before screenshots; a serial diagnostic invocation
 overriding only that timeout to 120 seconds passed 22/22 (load average about
 20). The permanent test timeout was not changed. Do not report the default
 15-second invocation as passing.
+
+## Subclassed native-control painting
+
+Three shared-path shortcuts prevented ordinary native controls with guest
+subclasses from owning their paint: UpdateWindow excluded every nonzero
+control class, the internal synchronous sender intercepted WM_PAINT even
+for subclasses, and CallWindowProc's built-in marker discarded a forwarded
+WM_PAINT. Those restrictions are removed. A real x86 subclass now receives
+the synchronous paint and can either replace it or chain to the native
+procedure. This follows Microsoft's
+[pre-ComCtl32 v6 subclassing contract](https://learn.microsoft.com/en-us/windows/win32/controls/subclassing-overview#subclassing-controls-prior-to-comctl32dll-version-6),
+not a Win98 reference screenshot or Wine-source implementation.
+
+The executable regression covers direct internal send, clean versus dirty
+UpdateWindow, replacement without native painting, and forwarding through
+both the fixture's original native procedure and WNDPROC_BUILTIN. Chaining
+paints exactly once and preserves ESP and synchronous-send depth. The old
+sender fails the subclass counter assertion; independently compiling the
+old CallWindowProc branch fails the built-in native-painter assertion.
+Independently restoring the old UpdateWindow core fails the dirty-subclass
+synchronous callback assertion as well.
+
+Full build, parent/child paint, MoveWindow and WINDOWPOS mutation tests pass.
+Paint dock status and relocated scrollbar remain exactly 0/0 changed pixels.
+Win16 far-procedure delivery and special native tab/status-bar interceptors
+are still separate limitations. This does not claim all common-control
+subclasses or update-region validation semantics are now correct.
+
+Installer regression comparison: `test-winamp-installers.js` reports **25
+passes / 28 failures** both with this fix and with all three touched WAT
+fragments replaced in memory by their `ec165107` versions. All 53 assertion
+lines (including pixel counts) match exactly. Both direct Winamp 2.91 silent
+runs hit unimplemented `DllUnregisterServer` at batch 536. Remaining installer
+failures include progress-fill/hidden-detail painting and completion; this
+suite is not green and is not counted as an acceptance pass. Candidate and
+baseline logs for this session are `/private/tmp/wa-subclass-nsis.log` and
+`/private/tmp/wa-subclass-nsis-suite-baseline.log`. CreateWindowEx creation
+failure/subclass transaction tests also pass.

@@ -34,6 +34,8 @@ const extraWat = String.raw`
 
   (func (export "test_order_child") (result i32)
     (global.get $test_order_child))
+  (func (export "test_order_builtin_proc") (result i32)
+    (global.get $WNDPROC_BUILTIN))
 
   (func (export "test_order_clear")
     (call $paint_flag_clear_hwnd (global.get $test_order_parent))
@@ -212,6 +214,50 @@ const extraWat = String.raw`
     'nested UpdateWindow must finish inner WM_PAINT before the outer wndproc resumes');
   assert.strictEqual(e.get_sync_msg_depth(), 0, 'nested callback depth must unwind');
   assert.strictEqual(e.get_esp(), beforeNestedEsp, 'nested callback must restore the outer stack');
+
+  // A subclass owns WM_PAINT, even when the underlying class is native.
+  e.test_order_clear();
+  const nativeProc = e.wnd_get_proc_export(child);
+  e.wnd_table_set(child, proc);
+  e.guest_write32(calls, 0);
+  painted.length = 0;
+  e.send_message(child, 0x000f, 0, 0);
+  assert.strictEqual(e.guest_read32(calls), 1,
+    'internal synchronous WM_PAINT must enter the subclass');
+  assert.deepStrictEqual(painted, [], 'a subclass may replace native painting entirely');
+  e.test_order_update(child);
+  assert.strictEqual(e.guest_read32(calls), 1, 'clean subclass UpdateWindow sends no paint');
+  e.test_order_partial_child();
+  e.test_order_update(child);
+  assert.strictEqual(e.guest_read32(calls), 2,
+    'dirty subclass UpdateWindow must finish before returning');
+  assert.deepStrictEqual(painted, [], 'UpdateWindow must not bypass the subclass');
+
+  // Forward all four incoming arguments to the original native procedure.
+  // Each push shifts the next original argument to [esp+16].
+  const callWindowProc = e.test_order_api_thunk(apiTable.find(a => a.name === 'CallWindowProcA').id);
+  for (const originalProc of new Set([nativeProc, e.test_order_builtin_proc()])) {
+    e.test_order_partial_child();
+    painted.length = 0;
+    const chainCode = [0xff, 0x05, ...u32(calls),
+      ...Array.from({ length: 4 }, () => [0xff, 0x74, 0x24, 0x10]).flat(),
+      0x68, ...u32(originalProc), 0xb8, ...u32(callWindowProc), 0xff, 0xd0,
+      0xc2, 0x10, 0x00];
+    while (chainCode.length % 4) chainCode.push(0x90);
+    const chainProc = e.guest_alloc(chainCode.length);
+    for (let i = 0; i < chainCode.length; i += 4) {
+      e.guest_write32(chainProc + i, chainCode[i] | chainCode[i + 1] << 8 |
+        chainCode[i + 2] << 16 | chainCode[i + 3] << 24);
+    }
+    e.wnd_table_set(child, chainProc);
+    e.guest_write32(calls, 0);
+    const beforeChainEsp = e.get_esp();
+    e.test_order_update(child);
+    assert.strictEqual(e.guest_read32(calls), 1, 'forwarding subclass runs once');
+    assert.deepStrictEqual(painted, [child], 'CallWindowProc reaches the native painter exactly once');
+    assert.strictEqual(e.get_esp(), beforeChainEsp, 'native chaining restores the guest stack');
+    assert.strictEqual(e.get_sync_msg_depth(), 0, 'native chaining unwinds synchronous depth');
+  }
 
   console.log('PASS  parent-first paint order and bounded ancestor traversal');
 })().catch(error => {

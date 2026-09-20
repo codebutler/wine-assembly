@@ -62,10 +62,12 @@
       (then (return (call $statusbar_wndproc
         (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; Keep the exported/test-driver path consistent with SendMessageA and
-    ;; DispatchMessageA: WAT-owned controls paint through the native control
-    ;; proc even if the app has subclassed the window.
-    (if (i32.and (i32.ne (local.get $ctrl_class) (i32.const 0))
-                 (i32.eq (local.get $msg) (i32.const 0x000F)))
+    ;; DispatchMessageA: only unsubclassed controls bypass the guest proc.
+    ;; A subclass owns WM_PAINT and may choose whether to chain to native.
+    (if (i32.and
+          (i32.and (i32.ne (local.get $ctrl_class) (i32.const 0))
+                   (i32.eq (local.get $msg) (i32.const 0x000F)))
+          (i32.eqz (call $ctrl_is_subclassed (local.get $hwnd))))
       (then (return (call $control_wndproc_dispatch
         (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; Do not bypass an app-installed EDIT subclass here. In particular,

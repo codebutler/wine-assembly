@@ -241,8 +241,7 @@
     ;; A system class marker handed out by GetClassInfo. The app subclassed one
     ;; of USER's controls and is chaining back to it for default handling, so
     ;; this is where the control actually gets drawn and where it learns about
-    ;; clicks. Unlike $WNDPROC_BUILTIN below, WM_PAINT belongs here: nothing
-    ;; else in the system knows this window is a button.
+    ;; clicks, including WM_PAINT when the subclass requests native painting.
     ;;
     ;; The window was created under the app's own class name, so it is not in
     ;; the control table yet. Adopt it on the first chained call — the app has
@@ -275,13 +274,12 @@
         (return)))
     ;; Sentinel 0xFFFE0001 = built-in control default wndproc.
     ;; Subclassed WAT controls chain here for stateful control messages such as
-    ;; BM_SETIMAGE; deliver those to the native control proc instead of dropping
-    ;; them as DefWindowProc.
+    ;; BM_SETIMAGE and WM_PAINT; the subclass, not the caller, decides whether
+    ;; native painting is wanted.
     (if (i32.eq (local.get $arg0) (global.get $WNDPROC_BUILTIN))
       (then
         (local.set $ctrl_class (call $ctrl_table_get_class (local.get $arg1)))
-        (if (i32.and (i32.ne (local.get $ctrl_class) (i32.const 0))
-                     (i32.ne (local.get $arg2) (i32.const 0x000F)))
+        (if (i32.ne (local.get $ctrl_class) (i32.const 0))
           (then
             (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
               (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4))))
