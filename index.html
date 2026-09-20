@@ -1774,6 +1774,8 @@ Resource-aware Win98 emulator
       "lib/watx-launcher.js",
       "lib/thread-manager.js",
       "lib/vlan-wire.js",
+      // Before vlan-rtc.js, which needs window.nacl at load.
+      "lib/vendor/tweetnacl.js",
       "lib/vlan-rtc.js",
       "lib/vlan-lobby.js",
       "lib/guest-rpc.js",

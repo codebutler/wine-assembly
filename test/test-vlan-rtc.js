@@ -115,6 +115,50 @@ async function main() {
       assert.notStrictEqual(a.ct, b.ct, 'a repeated nonce would leak equality');
     });
 
+    // ---- the insecure-context guarantee ---------------------------------
+    //
+    // The X25519 agreement itself, and the onlooker who cannot read a record
+    // addressed to someone else, are covered against the real signaling server
+    // further down ("an offer left for a peer is readable only by that peer").
+    // What is checked here is the part that has no other home: that none of it
+    // needs WebCrypto.
+    //
+    // This is the reason lib/vendor/tweetnacl.js exists. A phone loading the
+    // dev server over http://<lan-ip> gets no crypto.subtle at all -- measured
+    // on that origin: RTCPeerConnection and createDataChannel work,
+    // getRandomValues works, crypto.subtle is undefined. So the whole crypto
+    // path has to run without it, and the only honest way to assert that is to
+    // take it away and load the module again from scratch.
+    await check('the crypto path works with crypto.subtle removed', async () => {
+      const realSubtle = globalThis.crypto.subtle;
+      const path = require.resolve('../lib/vlan-rtc');
+      const naclPath = require.resolve('../lib/vendor/tweetnacl');
+      try {
+        Object.defineProperty(globalThis.crypto, 'subtle',
+          { value: undefined, configurable: true });
+        delete require.cache[path];
+        delete require.cache[naclPath];
+        const fresh = require('../lib/vlan-rtc');
+        assert.strictEqual(globalThis.crypto.subtle, undefined, 'subtle still present');
+        const i = fresh._internals;
+        const k = await i.cryptoKeyFor('a-secret');
+        const env = await i.sealed(k, { sdp: 'NO-SUBTLE' });
+        assert.deepStrictEqual(await i.opened(k, env), { sdp: 'NO-SUBTLE' });
+        const p = await i.newIdentity();
+        const q = await i.newIdentity();
+        const sealedForQ = await i.sealed(await i.sharedKeyWith(p, q.publicKey), { sdp: 'X' });
+        assert.deepStrictEqual(
+          await i.opened(await i.sharedKeyWith(q, p.publicKey), sealedForQ), { sdp: 'X' });
+        // And the record keys, which are hashes: derived without subtle too.
+        assert.match(await fresh.roomKeyFor('a-secret'), /^vln-signal-[\w-]{22}$/);
+      } finally {
+        Object.defineProperty(globalThis.crypto, 'subtle',
+          { value: realSubtle, configurable: true });
+        delete require.cache[path];
+        delete require.cache[naclPath];
+      }
+    });
+
     // ---- signaling against the real dev server --------------------------
     // Each client gets its own cookie jar, which is what makes them two users.
     function client() {

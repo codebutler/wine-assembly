@@ -683,7 +683,7 @@ address exchange, and it happens only when two people actually try to connect:
                                                read the SDP inside it
 ```
 
-Each peer advertises an **ephemeral ECDH public key** in its presence record.
+Each peer advertises an **ephemeral X25519 public key** in its presence record.
 To connect, a peer derives a shared key from its own private key and the
 recipient's advertised one, seals the offer under it, and writes it to a key
 derived from *the recipient's* user id. The recipient polls that one key to
@@ -694,6 +694,31 @@ The keypair is per session and is not an identity — the signaling service
 already says who each user is. It exists so an offer has exactly one reader,
 and being ephemeral means yesterday's published records cannot be decrypted
 today.
+
+#### Why the crypto is vendored rather than WebCrypto
+
+The primitives are **X25519 and XSalsa20-Poly1305 from a vendored tweetnacl**
+(`lib/vendor/tweetnacl.js`), not WebCrypto's P-256 and AES-GCM. The reason is
+one measurement: `SubtleCrypto` exists only in a secure context, and a phone
+loading the dev server at `http://<lan-ip>:PORT` is not one. On that exact
+origin `RTCPeerConnection` works, `createDataChannel` works, and
+`crypto.getRandomValues` works — `crypto.subtle` is simply `undefined`. So
+WebCrypto was the single thing standing between two devices on a desk and a
+session, and `test/test-vlan-browser.js` now runs its whole suite against such
+an origin (`VLAN_TEST_HOST=<lan-ip>`) with an assertion that the origin really
+is insecure, so this cannot quietly regress.
+
+Two consequences worth stating plainly. The agreed key is an ordinary
+`Uint8Array` in the page's heap rather than a non-extractable `CryptoKey`, so a
+hostile script on this origin can read it where before it could not — accepted
+deliberately, since the alternative on http is no session at all, and what it
+reaches is one ephemeral session's SDP rather than an identity. And the record
+keys and sealed format both changed, so a page on the older WebCrypto build and
+one on this build compute different keys and never see each other. That is the
+intended failure: `lib/watx-launcher.js`'s `sha256PureHex` could have kept the
+key strings identical, but the seals cannot be made compatible, and two pages
+sharing a room where every introduction fails reads as a NAT problem and sends
+someone hunting for a TURN server.
 
 An inbox record is accepted only when its `from` matches the user who owns the
 record *and* the sender's advertised key matches that user's presence record.

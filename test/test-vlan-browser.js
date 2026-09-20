@@ -63,9 +63,19 @@ async function main() {
     return process.exit(0);
   }
 
+  // 127.0.0.1 is a SECURE CONTEXT, so the default run cannot say anything
+  // about the case this feature was built for: a phone loading the dev server
+  // at http://<lan-ip>, where crypto.subtle does not exist. VLAN_TEST_HOST
+  // binds somewhere else so the same checks run over a plainly insecure
+  // origin -- that run is the gate on lib/vendor/tweetnacl.js, and the
+  // secure-context assertion below refuses to let it pass by accident:
+  //
+  //   VLAN_TEST_HOST=$(ipconfig getifaddr en0) node test/test-vlan-browser.js
+  const host = process.env.VLAN_TEST_HOST || '127.0.0.1';
   const server = createServer({ quiet: true });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
+  await new Promise(resolve => server.listen(0, host, resolve));
+  const base = `http://${host}:${server.address().port}`;
+  if (host !== '127.0.0.1') console.log(`(insecure-origin run against ${base})`);
   const browser = await puppeteer.launch({ executablePath, args: ['--no-sandbox'] });
 
   try {
@@ -93,6 +103,25 @@ async function main() {
     const a = await open('alpha');
     const b = await open('beta');
 
+    // What the page actually got. On 127.0.0.1 this is a secure context with
+    // WebCrypto present and the run proves only that nothing regressed; with
+    // VLAN_TEST_HOST it must be insecure and subtle-less, or the run is not
+    // testing what it claims and says so instead of passing quietly.
+    const ctxOf = ({ page }) => page.evaluate(() => ({
+      secure: isSecureContext,
+      subtle: !!(self.crypto && self.crypto.subtle),
+      nacl: typeof nacl,
+    }));
+    const ctxA = await ctxOf(a);
+    check('the vendored crypto is loaded in the page', ctxA.nacl === 'object',
+      `typeof nacl === ${ctxA.nacl}`);
+    if (host !== '127.0.0.1') {
+      check('the origin really is insecure (no crypto.subtle)',
+        ctxA.secure === false && ctxA.subtle === false,
+        `isSecureContext=${ctxA.secure} crypto.subtle=${ctxA.subtle} -- `
+        + 'this run must be the insecure case or it proves nothing');
+    }
+
     const settle = async (ms) => new Promise(r => setTimeout(r, ms));
     const peerRows = ({ page }) => page.evaluate(
       () => document.querySelectorAll('.vln-peer').length);
@@ -110,10 +139,17 @@ async function main() {
       () => (document.querySelector('.vln-addr') || {}).textContent);
     const addrA = await addressOf(a);
     const addrB = await addressOf(b);
+    // Seats in the 10.0.0.0/24 room, so these are 10.0.0.1 and 10.0.0.2 --
+    // asserted as the shape rather than the exact pair, because which browser
+    // reaches the presence list first is a race and either order is correct.
+    const seat = /^10\.0\.0\.(\d{1,3})$/;
     check('each claimed a segment address',
-      /^10\.77\.\d+\.\d+$/.test(addrA || '') && /^10\.77\.\d+\.\d+$/.test(addrB || ''),
+      seat.test(addrA || '') && seat.test(addrB || ''),
       `alpha=${addrA} beta=${addrB}`);
     check('the two addresses differ', addrA !== addrB, `both got ${addrA}`);
+    check('one of them holds the host seat, 10.0.0.1',
+      addrA === '10.0.0.1' || addrB === '10.0.0.1',
+      `alpha=${addrA} beta=${addrB} -- an empty room must seat its first peer at .1`);
 
     // Only one side clicks. The other must still end up connected — that is
     // the point of deciding roles from user ids rather than from who clicked.
