@@ -16,7 +16,7 @@ wrong about three of them for three different reasons.
 | `strategy-jiggler` | JIGGLER.EXE | plays — three menu fixes plus named FindResource |
 | `board-wingong` | MOREJONG.EXE | draws — longer budget |
 | `strategy-klotski` | KLOTSKI.EXE | plays — the blank capture was a fluke |
-| `cards-sokoban` | SOKOBAN.EXE | **open** — VB3, "execution entered zeros" |
+| `cards-sokoban` | SOKOBAN.EXE | runs, window and menus draw — four fixes; the CD lacks its level file |
 | `arcade-clxwrk` | CLOCKWRX.EXE | **open** — imports from `DISPLAY` |
 
 The five commercial titles, tracked separately: SimCity 2000 and MicroMan run,
@@ -170,7 +170,7 @@ Implemented 2026-09-20 (`8f061f96`). Runs a full 45s with no crash; capture went
 from no PNG at all to 659 KB / 100,397 colours. Regression:
 `test/test-win16-invert-rect.js`.
 
-## Sokoban (open -- crash fixed, form does not draw yet)
+## Sokoban (runs; the CD shipped the wrong SOKOBAN.TXT)
 
 VB3 (`VBRUN300.DLL`). Crashes at batch 72 inside `$decode_block` with marker
 `0xCA002E20` — "execution entered zeros" — at guest `0x002fec83`, which is an
@@ -340,6 +340,45 @@ Now Sokoban runs past VB's startup: `REGISTERCLASS` for its form,
 `LSTRCMPI`s and ~925 identical rounds of `GetSystemMetrics(0,1,0x20..0x23)` +
 `InvalidateRect`. That is the next question: a VB form that is shown and
 invalidated but never lands on the screen.
+
+**2026-09-20, the rest of the way: it runs, and the CD has no levels for it.**
+Three more emulator bugs were between that state and a drawn window:
+
+1. **GlobalSize reported the exact request (8d9186b5).** VB GlobalAllocs a
+   file buffer (0x2c3 bytes, on its first `Open`), asks GlobalSize how big it
+   is, and lays a sub-heap over the whole of it. Its first-fit walk at
+   `0x390333` (`inc ax; xor bx,bx; add si,ax; jb fail; cmp si,dx; je end;
+   mov ax,[si]; inc ax; test al,1; jnz loop`) steps in even strides and stops
+   only on `si == dx`, so an odd end is stepped over and the walk never ends.
+   Windows 3.1 hands global memory out in 32-byte units and reports the rounded
+   size; `$win16_gsize` does the same now.
+2. **USER.237 GetUpdateRgn was not in the Win16 dispatch (8d9186b5).** The
+   form's first WM_PAINT trapped on it at batch ~4,446.
+3. **GetParent returned the owner of an overlapped window (fc2781a0).** A VB
+   form is style `0x02cf0000`: overlapped, owned by VB's hidden 0x0 main window,
+   which VB creates at the centre of the screen (320,240). VB turns a form's
+   GetWindowRect into Left/Top with `ScreenToClient(GetParent(form))`, so every
+   Move shifted the form by -320,-240. It went (25,20) -> (-295,-220) ->
+   (-615,-460), and the capture was teal because the window was off screen.
+   Windows returns the owner only for `WS_POPUP` and NULL here. The tell was
+   `--trace-ctrl`: `hwnd=0x10002 ... at -615,-460`.
+
+With those, the form sits at (25,20), 499x81, with its caption and a working
+Game / Board / Help menu. **Game > New** reads `SOKOBAN.TXT` to EOF twice, then
+leaves the board empty. That is correct: **the level file is missing from the
+CD.** The exe names it (`\SOKOBAN.TXT`, `SOKOBAN.TXT not found`, `Sokoban level
+file not available`), but the `SOKOBAN.TXT` in `CARDS/SOKOBAN` is byte-identical
+(md5 `58df92b2...`) to `STRATEGY/SOKO/SOKO.TXT`. That is the readme of Allan
+Liss's *other* Sokoban, and it says "You are looking at the file SOKO.TXT". The
+compilers of the CD put the wrong file there. The level format is only in the
+VB3 p-code, so there is nothing to put back without inventing data. Real Windows
+would show the same empty board.
+
+```
+node test/run.js --exe=<dir>/SOKOBAN.EXE --vfs-include='*' \
+  --win16-lib=<dir>/VBRUN300.DLL --max-batches=20000 --no-close --quiet-api \
+  --input=8000:click:52:51,9000:click:63:72 --trace-fs --png=sok.png
+```
 
 ## MicroMan (`ARCADE/MICROMAN`)
 
