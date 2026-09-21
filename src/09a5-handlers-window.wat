@@ -3170,6 +3170,56 @@
         (if (local.get $answer) (then (return (local.get $answer))))))
     (call $mouse_activate_default (local.get $lp)))
 
+  ;; DefWindowProc's WM_PAINT is a real BeginPaint/EndPaint pair, and BeginPaint
+  ;; -- not the application's paint code -- is what sends WM_ERASEBKGND. So a
+  ;; window procedure that chains WM_PAINT to the default still owes its window
+  ;; one erase, and applications hang real work off that message: every Plus! 98
+  ;; cartoon screen saver starts its animation from it rather than from a paint
+  ;; handler. CATHY.SCR's procedure passes WM_PAINT straight through, and its
+  ;; WM_ERASEBKGND arm at 0x402683 is the only SetTimer call site in the binary
+  ;; (SetTimer(hwnd, 0, 0x4b, NULL) -- 75 ms). Validating the update region
+  ;; without sending the erase left the saver parked in GetMessage forever on a
+  ;; blank screen, with no timer to ever wake it.
+  (func $defwndproc_paint_erase (param $hwnd i32)
+    (local $hdc i32) (local $result i32) (local $rect i32) (local $partial i32)
+    (if (i32.eqz (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2)))
+      (then (return)))
+    ;; Consume the request before entering the guest, exactly as BeginPaint
+    ;; does, so a nested BeginPaint in the callback cannot redispatch this one.
+    (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
+    (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 0)))
+    (if (local.get $hdc)
+      (then (call $host_paint_begin (local.get $hwnd))))
+    ;; The erase BeginPaint performs is bounded by the update region, not by
+    ;; the whole client, and the callback may be a guest procedure that chains
+    ;; straight back to the class brush. An unclipped window DC would let that
+    ;; fill reach pixels the damage never covered, so install the same clip
+    ;; $begin_paint_core does before entering.
+    (if (local.get $hdc)
+      (then
+        (local.set $rect (call $paint_scratch_take))
+        (local.set $partial (call $update_get_rect (local.get $hwnd) (local.get $rect)))
+        (call $dc_apply_client_clip (local.get $hdc) (local.get $hwnd))
+        (if (local.get $partial)
+          (then
+            (drop (call $gdi_dc_system_clip_rect
+              (local.get $hdc)
+              (i32.load (local.get $rect))
+              (i32.load offset=4 (local.get $rect))
+              (i32.load offset=8 (local.get $rect))
+              (i32.load offset=12 (local.get $rect))
+              (i32.const 1))))))) ;; RGN_AND
+    (local.set $result (call $wnd_send_message (local.get $hwnd) (i32.const 0x14)
+      (local.get $hdc) (i32.const 0)))
+    (if (local.get $hdc)
+      (then
+        (drop (call $host_release_dc (local.get $hdc)))
+        (call $host_paint_end (local.get $hwnd))))
+    ;; Returning zero declines the erase; the window stays marked for one.
+    (if (i32.and (i32.eqz (local.get $result))
+          (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      (then (call $nc_flags_set (local.get $hwnd) (i32.const 2)))))
+
   ;; 78: DefWindowProcA
   (func $handle_DefWindowProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $text_wa i32) (local $text_len i32)
@@ -3302,6 +3352,7 @@
     ;; update region dirty makes PeekMessage return that same WM_PAINT forever.
     (if (i32.eq (local.get $arg1) (i32.const 0x000F))
     (then
+    (call $defwndproc_paint_erase (local.get $arg0))
     (call $update_clear_hwnd (local.get $arg0))
     (call $paint_flag_clear_hwnd (local.get $arg0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
