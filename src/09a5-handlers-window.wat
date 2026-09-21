@@ -2129,10 +2129,18 @@
           (local.get $msg) (i32.shr_u (local.get $packed) (i32.const 16))))
         (if (local.get $hotkey)
           (then (local.set $msg (i32.const 0x0312))))
-        ;; Check message filter range (0,0 = accept all)
-        (if (i32.or (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3)))
-              (i32.and (i32.ge_u (local.get $msg) (local.get $arg2))
-                       (i32.le_u (local.get $msg) (local.get $arg3))))
+        ;; Resolve the delivery HWND before filtering, using the same window
+        ;; and message predicates as the retained shared-queue path.
+        (local.set $tmp (global.get $pending_input_hwnd))
+        (if (i32.eqz (local.get $tmp))
+          (then (local.set $tmp (global.get $main_hwnd))))
+        (local.set $tmp (call $console_input_target (local.get $tmp) (local.get $msg)))
+        ;; WM_HOTKEY targets the registration, including NULL for a thread
+        ;; hotkey, not the window that originally received the key press.
+        (if (local.get $hotkey)
+          (then (local.set $tmp (call $gl32 (i32.add (local.get $hotkey) (i32.const 4))))))
+        (if (call $shared_post_queue_matches (local.get $tmp) (local.get $msg)
+              (local.get $arg1) (local.get $arg2) (local.get $arg3))
           (then
             (if (i32.and (local.get $arg4) (i32.const 1))
               (then (global.set $pending_input_packed (i32.const 0))))
@@ -2142,10 +2150,6 @@
                 (i32.store offset=0 (global.get $reg_base) (i32.const 1))
                 (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
                 (return)))
-            (local.set $tmp (global.get $pending_input_hwnd))
-            (if (i32.eqz (local.get $tmp))
-              (then (local.set $tmp (global.get $main_hwnd))))
-            (local.set $tmp (call $console_input_target (local.get $tmp) (local.get $msg)))
             (call $gs32 (local.get $arg0) (local.get $tmp))
             (call $gs32 (i32.add (local.get $arg0) (i32.const 4)) (local.get $msg))
             (call $gs32 (i32.add (local.get $arg0) (i32.const 8))
@@ -2185,19 +2189,27 @@
             ;; the host for a later event; a single cached slot otherwise lets
             ;; an excluded WM_CHAR permanently hide every following mouse
             ;; message (Alpha Centauri uses exactly those disjoint filters).
-            (local.set $tmp (global.get $pending_input_hwnd))
-            (if (i32.eqz (local.get $tmp))
-              (then (local.set $tmp (global.get $main_hwnd))))
-            (if (call $post_queue_push_input
-              (local.get $tmp)
-              (i32.and (local.get $packed) (i32.const 0xFFFF))
-              (i32.shr_u (local.get $packed) (i32.const 16))
-              (global.get $pending_input_lparam))
+            ;; Retain the translated hotkey as such; putting the raw key in
+            ;; the posted queue bypasses translation on the next read.
+            (if (if (result i32) (local.get $hotkey)
+              (then (call $post_queue_push_input (local.get $tmp) (i32.const 0x0312)
+                (call $gl32 (i32.add (local.get $hotkey) (i32.const 8)))
+                (i32.or
+                  (call $gl32 (i32.add (local.get $hotkey) (i32.const 12)))
+                  (i32.shl (call $gl32 (i32.add (local.get $hotkey) (i32.const 16))) (i32.const 16)))))
+              (else (call $post_queue_push_input
+                (local.get $tmp)
+                (i32.and (local.get $packed) (i32.const 0xFFFF))
+                (i32.shr_u (local.get $packed) (i32.const 16))
+                (global.get $pending_input_lparam))))
               (then (global.set $pending_input_packed (i32.const 0))))
           )
         )
       )
     )
+    ;; A rejected input event must not lend its origin to a local post or to
+    ;; a synthetic message selected below. Shared reads supply their own flag.
+    (global.set $user_queue_input_flags (i32.const 0))
     ;; Check posted message queue (after hardware input — see note above)
     (if (i32.gt_u (global.get $post_queue_count) (i32.const 0))
       (then
@@ -2215,19 +2227,8 @@
                 (i32.mul (local.get $qidx) (i32.const 16))))
             (local.set $qmsg (i32.load offset=4 (local.get $qaddr)))
             (br_if $post_scan_done
-              (i32.and
-                (i32.or
-                  (i32.eqz (local.get $arg1))
-                  (i32.or
-                    (i32.eq (i32.load (local.get $qaddr)) (local.get $arg1))
-                    (i32.and
-                      (i32.eq (local.get $arg1) (i32.const -1))
-                      (i32.eqz (i32.load (local.get $qaddr))))))
-                (i32.or
-                  (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3)))
-                  (i32.and
-                    (i32.ge_u (local.get $qmsg) (local.get $arg2))
-                    (i32.le_u (local.get $qmsg) (local.get $arg3))))))
+              (call $shared_post_queue_matches (i32.load (local.get $qaddr)) (local.get $qmsg)
+                (local.get $arg1) (local.get $arg2) (local.get $arg3)))
             (local.set $qidx (i32.add (local.get $qidx) (i32.const 1)))
             (br $post_scan)))
         (if (i32.lt_u (local.get $qidx) (global.get $post_queue_count))

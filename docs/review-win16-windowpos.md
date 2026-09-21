@@ -1744,3 +1744,47 @@ native comparisons, and cleanup of the now-unused Win32 SetFocus return
 thunk. The internal `$set_focus` sender and modal/dialog focus policies still
 have separate callers; this change does not claim every focus writer is
 centralized.
+
+### Input-window filtering before mouse activation (2026-09-20)
+
+The next integration audit found that PeekMessage's direct/cached host-input
+path tested only the message range, ignoring hWnd. Local and shared posted
+queues tested equality but omitted child descendants. A mouse activation
+hook at that point could therefore process a click excluded by the caller.
+
+The queued paths now share one HWND/range predicate: NULL accepts all,
+-1 accepts thread messages only, and a specific window admits itself and
+WS_CHILD descendants through a bounded parent walk. Top-level popup ownership
+or SetParent links do not count as child ancestry. This follows Microsoft's
+[PeekMessage remarks and hWnd contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-peekmessagea),
+not a newly captured Win98 trace. Hardware targets are resolved before the
+filter, and skipped input keeps its provenance when queued. A skipped event
+also no longer lends its input flag to a subsequently selected local post.
+
+Hotkeys use their registration HWND (possibly NULL), not the physical key's
+target. Filtered-out matches retain WM_HOTKEY/id/chord when moved to the
+shared queue instead of degrading back into an untranslated WM_KEYDOWN.
+
+The added test initially failed on old code with an unrelated-window filter
+returning a mouse click (`/private/tmp/wa-peek-hwnd-negative.log`). Coverage
+includes fresh and cached input, both remove modes, repeated peeks,
+children/grandchildren, popup exclusion, local/shared queues, shared overflow,
+NULL-HWND thread messages, source isolation, and filtered hotkeys. One new
+overflow fixture initially posted to an unregistered HWND; it now creates a
+live unrelated window and checks that all 64 prefix entries survive in order.
+
+Targeted checks pass: `test-peek-message-filter.js`, `test-register-hotkey.js`,
+`test-keyboard-hook.js`, `test-console-input.js` and `test-win16-wait-message.js`
+(`wa-peek-hwnd-*.log` in `/private/tmp`). Normal and compat compilation completed.
+A concurrent USER_SYS_COLORS region addition landed after the build's mirror
+gate, so the final artifacts initially had a different layout from the JS
+mirror. Regenerating the mirror repaired the pair; both artifact custom-section
+hashes now match it (`74b29198cdc0b91f`). That unrelated region and its generated
+mirror are excluded from this queue-filter commit. No browser acceptance or
+new native Win98 run is claimed for this change.
+
+This is a prerequisite queue correction, not completed mouse activation.
+Removal-time WM_MOUSEACTIVATE, Win16 invocation-owned pump completion and
+renderer handoff remain open. GetMessage filtering and synthesized paint/
+timer HWND filtering require separate audits; this change is scoped to
+PeekMessage's input and posted-message paths.

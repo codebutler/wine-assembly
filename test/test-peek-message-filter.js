@@ -15,6 +15,16 @@ const extraWat = String.raw`
     (call $wnd_table_set (i32.const 0x3333) (i32.const 0x12345678)))
   (func (export "test_high_window")
     (call $wnd_table_set (i32.const 0x3334) (i32.const 0x12345678)))
+  (func (export "test_filter_window") (param $h i32) (param $parent i32) (param $style i32)
+    (call $wnd_table_set (local.get $h) (i32.const 0x12345678))
+    (drop (call $wnd_set_style (local.get $h) (local.get $style)))
+    (call $wnd_set_parent (local.get $h) (local.get $parent)))
+  (func (export "test_filter_hotkey")
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_RegisterHotKey (i32.const 0) (i32.const 7) (i32.const 0)
+      (i32.const 0x4B) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp)))
   (func (export "test_read_owner_queue") (param $msg i32) (result i32)
     (local $tid i32) (local $result i32)
     (local.set $tid (global.get $current_thread_id))
@@ -114,6 +124,85 @@ const extraWat = String.raw`
   assert.strictEqual(e.get_post_queue_count(), 0);
 
   e.test_input_window();
+  e.test_filter_window(0x2222, 0, 0);
+  e.test_filter_window(0x3335, 0x3333, 0x40000000);
+  e.test_filter_window(0x3336, 0x3335, 0x40000000);
+  e.test_filter_window(0x3337, 0x3333, 0x80000000); // popup, not a child
+  hardware.push(0x00010201);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, 0), 1);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x2222, 0x201, 0x201, 1), 0,
+    'changing the HWND filter also rejects an already cached input event');
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, 1), 1);
+  for (const filter of [0x2222, -1]) {
+    for (const remove of [0, 1]) {
+      hardware.push(0x00010201);
+      assert.strictEqual(e.test_call_PeekMessageA(0x3000, filter, 0x201, 0x201, remove), 0,
+        'hardware respects unrelated-window and thread-only filters');
+      for (const take of [0, 0, 1]) {
+        assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, take), 1,
+          'excluded hardware remains available through repeated peeks then removal');
+        assert.strictEqual(msg.getUint32(0, true), 0x3333);
+        assert.strictEqual(e.test_input_flags(), 1, 'window filtering preserves input origin');
+      }
+    }
+  }
+  for (const target of [0x3335, 0x3336]) {
+    inputHwnd = target;
+    hardware.push(0x00010201);
+    assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, 1), 1,
+      'parent filter admits hardware for children and grandchildren');
+    assert.strictEqual(msg.getUint32(0, true), target);
+    for (const source of ['local', 'shared']) {
+      if (source === 'local') { put(0, target, 0x201, 1, 0); e.set_post_queue_count(1); }
+      else e.post_message_q(target, 0x201, 1, 0);
+      for (const remove of [0, 1]) {
+        assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, remove), 1,
+          `${source} queue uses the same descendant filter as direct input`);
+        assert.strictEqual(msg.getUint32(0, true), target);
+        assert.strictEqual(e.test_input_flags(), 0, 'posted descendants remain posted messages');
+      }
+    }
+  }
+  inputHwnd = 0x3337;
+  hardware.push(0x00010201);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, 1), 0,
+    'popup parent/owner relationship is not child ancestry');
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3337, 0x201, 0x201, 1), 1);
+  inputHwnd = 0x3333;
+  for (let i = 0; i < 64; i++) e.post_message_q(0x2222, 0x201, i, 0);
+  e.post_message_q(0x3336, 0x201, 64, 0);
+  for (const remove of [0, 1]) {
+    assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, remove), 1,
+      'ancestor filter finds a descendant in shared overflow without consuming the prefix');
+    assert.strictEqual(msg.getUint32(0, true), 0x3336);
+  }
+  for (let i = 0; i < 64; i++) {
+    assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x2222, 0x201, 0x201, 1), 1);
+    assert.strictEqual(msg.getUint32(8, true), i);
+  }
+  e.post_message_q(0, 0x401, 7, 0);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x401, 0x401, 1), 0);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, -1, 0x401, 0x401, 1), 1,
+    'thread-only filter still selects posted NULL-HWND messages');
+  put(0, 0x2222, 0x201, 1, 0);
+  e.set_post_queue_count(1);
+  hardware.push(0x00010201);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x2222, 0x201, 0x201, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 0, 'skipped hardware cannot relabel a local posted click');
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, 1), 1);
+  assert.strictEqual(e.test_input_flags(), 1);
+  e.test_filter_hotkey();
+  hardware.push(0x004B0100);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, -1, 0x312, 0x312, 1), 1,
+    'thread hotkey filtering uses the registration HWND, not the input window');
+  assert.strictEqual(msg.getUint32(0, true), 0);
+  assert.strictEqual(msg.getUint32(8, true), 7);
+  hardware.push(0x004B0100);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x312, 0x312, 1), 0);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, -1, 0x312, 0x312, 1), 1,
+    'excluded hotkey retains its translated payload when moved to the shared queue');
+  assert.strictEqual(msg.getUint32(8, true), 7);
+  assert.strictEqual(msg.getUint32(12, true), 0x004B0000);
   const pollsBeforeHardware = hardwarePolls;
   hardware.push(0x00010201); // WM_LBUTTONDOWN, MK_LBUTTON
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x000F, 0x000F, 1), 0,

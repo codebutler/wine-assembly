@@ -538,17 +538,31 @@
     (i32.const 1)
   )
 
+  ;; A window filter includes child descendants, never owned/reparented
+  ;; top-level popups. NULL admits thread messages too; -1 admits only those.
+  ;; Pure WND reads: shared queue scans call this while holding LOCK_WND.
+  (func $message_hwnd_matches (param $hwnd i32) (param $filter i32) (result i32)
+    (local $depth i32)
+    (if (i32.eqz (local.get $filter)) (then (return (i32.const 1))))
+    (if (i32.eq (local.get $filter) (i32.const -1))
+      (then (return (i32.eqz (local.get $hwnd)))))
+    (block $done (loop $walk
+      (br_if $done (i32.eqz (local.get $hwnd)))
+      (if (i32.eq (local.get $hwnd) (local.get $filter))
+        (then (return (i32.const 1))))
+      (br_if $done (i32.eqz
+        (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000))))
+      (br_if $done (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+      (local.set $hwnd (call $wnd_get_parent (local.get $hwnd)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
+    (i32.const 0))
+
   (func $shared_post_queue_matches
         (param $hwnd i32) (param $msg i32) (param $hwnd_filter i32)
         (param $msg_min i32) (param $msg_max i32) (result i32)
     (i32.and
-      (i32.or
-        (i32.eqz (local.get $hwnd_filter))
-        (i32.or
-          (i32.eq (local.get $hwnd) (local.get $hwnd_filter))
-          (i32.and
-            (i32.eq (local.get $hwnd_filter) (i32.const -1))
-            (i32.eqz (local.get $hwnd)))))
+      (i32.ne (call $message_hwnd_matches (local.get $hwnd) (local.get $hwnd_filter)) (i32.const 0))
       (i32.or
         (i32.and (i32.eqz (local.get $msg_min)) (i32.eqz (local.get $msg_max)))
         (i32.and
