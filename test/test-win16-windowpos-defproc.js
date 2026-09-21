@@ -4,6 +4,12 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  (func (export "test_focus_api") (param $h i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (i32.const 0x90))
+    (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
+    (call $gs16 (i32.const 0x110804) (call $win16_h16 (local.get $h)))
+    (call $win16_SetFocus))
   (func (export "test_click_activate") (param $h i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x11080e))
     (call $win16_cont_push (i32.const 0x000f0090) (i32.const 42))
@@ -806,6 +812,77 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     const expected = mode === 1 ? chosen : mode === 3 || mode === 4 ? old : target;
     assert.strictEqual(e.test_active(), expected, `far reentry mode ${mode}`);
     assert.strictEqual(e.test_focus(), expected);
+  }
+  const runFocus = target => {
+    e.guest_write32(0x110900, 0);
+    writeCode(0x90, [0xeb, 0xfe]);
+    e.test_focus_api(target);
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 50; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090, 'focus returns to Pascal caller');
+    assert.strictEqual(e.get_esp(), 0x110806, 'focus continuation and arguments popped');
+    return e.test_result() & 0xffff;
+  };
+  const focusA = e.test_window(0x5000), focusB = e.test_window(0x5000);
+  const focusChild = e.test_window(0x5000);
+  e.test_as_child(focusChild, focusB);
+  for (const target of [focusA, focusB, focusChild, 0]) {
+    runShow(focusA, 5, 0x90, true);
+    assert.strictEqual(runFocus(target), e.test_narrow(target && target !== focusA ? focusB : focusA));
+    assert.strictEqual(e.test_focus(), target);
+    assert.strictEqual(e.test_active(), target && target !== focusA ? focusB : focusA);
+    const count = e.guest_read32(0x110900);
+    assert.strictEqual(count, target === focusA ? 0 : target ? 6 : 1,
+      'far notifications complete synchronously, including post-activation pair');
+  }
+  runShow(focusA, 5, 0x90, true);
+  e.test_iconify(focusB);
+  runFocus(focusA);
+  assert.strictEqual(runFocus(focusB), 0);
+  assert.strictEqual(e.test_focus(), focusA);
+  assert.strictEqual(e.guest_read32(0x110900), 0);
+  // Native reentry case 4, with both focus and activation suspended through
+  // real far procedures rather than the Win32 synchronous sender.
+  const chainC = e.test_window(0x5000);
+  const selectC = [0x36, 0xc7, 0x06, 0x40, 0x0f, 0, 0,
+    0x68, ...word(e.test_narrow(chainC)), 0x6a, 5, 0x9a, ...word(show), 0x1f, 0];
+  const armedC = [0x36, 0x83, 0x3e, 0x40, 0x0f, 0, 0x74, selectC.length, ...selectC];
+  const activeC = [0x83, 0x7e, 0x0a, 0, 0x74, armedC.length, ...armedC];
+  const focusChain = [...activeC, ...[14, 12, 10, 8, 6].flatMap(offset => [0xff, 0x76, offset]),
+    0x9a, ...word(e.test_thunk()), 0x1f, 0];
+  writeCode(0x7800, recorder([0x83, 0x7e, 0x0c, 6, 0x75, focusChain.length, ...focusChain]));
+  const chainB = e.test_window(0x7800);
+  e.guest_write32(0x110f40, 0);
+  runShow(focusA, 5, 0x90, true);
+  runFocus(focusA);
+  e.guest_write32(0x110f40, 1);
+  runShow(chainB, 5, 0x90, true);
+  assert.strictEqual(e.test_active(), chainB, 'far default reclaims activation');
+  assert.strictEqual(e.test_focus(), chainB);
+  const chainCount = e.guest_read32(0x110900);
+  assert.strictEqual(e.guest_read32(0x110904 + (chainCount - 2) * 8), (e.test_narrow(chainB) << 16) | 8);
+  assert.strictEqual(e.guest_read32(0x110904 + (chainCount - 1) * 8), (e.test_narrow(chainB) << 16) | 7);
+  const setFocus = e.test_user_thunk(22), getFocus = e.test_user_thunk(23);
+  for (const retire of [false, true]) {
+    const off = retire ? 0x7a00 : 0x7900;
+    const old = e.test_window(off), target = e.test_window(0x5000), chosen = e.test_window(0x5000);
+    for (const h of [old, target, chosen]) e.test_as_child(h, focusA);
+    const action = [0x36, 0xc7, 0x06, 0x40, 0x0f, 0, 0,
+      0x9a, ...word(getFocus), 0x1f, 0, 0x36, 0xa3, 0x42, 0x0f,
+      0x68, ...word(e.test_narrow(retire ? target : chosen)),
+      0x9a, ...word(retire ? e.test_destroy_thunk() : setFocus), 0x1f, 0];
+    const onKill = [0x83, 0x7e, 0x0c, 8, 0x75, action.length, ...action];
+    writeCode(off, recorder([0x36, 0x83, 0x3e, 0x40, 0x0f, 0, 0x74, onKill.length, ...onKill]));
+    e.guest_write32(0x110f40, 0);
+    runShow(focusA, 5, 0x90, true);
+    runFocus(old);
+    e.guest_write32(0x110f40, 1);
+    assert.strictEqual(runFocus(target), e.test_narrow(old));
+    assert.strictEqual(e.guest_read32(0x110f40) >>> 16, e.test_narrow(target),
+      'far KILLFOCUS observes published new focus');
+    assert.strictEqual(e.test_focus(), retire ? 0 : chosen, 'nested focus/destruction wins');
+    if (!retire) assert.strictEqual(e.guest_read32(0x110900), 3, 'no stale outer SETFOCUS');
   }
   console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
 })().catch(error => { console.error(error); process.exit(1); });

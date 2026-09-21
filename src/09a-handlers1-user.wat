@@ -1112,65 +1112,73 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
-  ;; 107: SetFocus(hwnd) — 1 arg stdcall, return previous focus hwnd
+  ;; Focus transfer policy is shared by Win32 and the far continuation.
+  (global $focus_transition_serial (mut i32) (i32.const 0))
+  (func $focus_target_allowed (param $hwnd i32) (result i32)
+    (local $h i32) (local $depth i32)
+    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const 1))))
+    (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+      (then (global.set $last_error (i32.const 1400)) (return (i32.const 0))))
+    (if (i32.ne (call $wnd_get_thread (local.get $hwnd)) (global.get $current_thread_id))
+      (then (return (i32.const 0))))
+    (local.set $h (local.get $hwnd))
+    (loop $parents
+      (if (i32.or (call $ctrl_style_disabled (call $wnd_get_style (local.get $h)))
+            (call $wnd_min_get (local.get $h)))
+        (then (global.set $last_error (i32.const 87)) (return (i32.const 0))))
+      (if (i32.eqz (i32.and (call $wnd_get_style (local.get $h)) (i32.const 0x40000000)))
+        (then (return (i32.const 1))))
+      (local.set $h (call $wnd_get_parent (local.get $h)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (if (i32.or (i32.lt_s (call $wnd_table_find (local.get $h)) (i32.const 0))
+            (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+        (then (return (i32.const 0))))
+      (br $parents))
+    (i32.const 0))
+
+  (func $focus_publish (param $hwnd i32) (result i32)
+    (local $old i32)
+    (local.set $old (global.get $focus_hwnd))
+    (global.set $focus_transition_serial (i32.add (global.get $focus_transition_serial) (i32.const 1)))
+    (global.set $focus_hwnd (local.get $hwnd))
+    (local.get $old))
+
+  (func $focus_transfer_current (param $hwnd i32) (param $serial i32) (result i32)
+    (i32.and
+      (i32.eq (global.get $focus_transition_serial) (local.get $serial))
+      (i32.and (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
+        (i32.or (i32.eqz (local.get $hwnd))
+          (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))))))
+
+  (func $focus_set_core (param $hwnd i32) (result i32)
+    (local $old i32) (local $top i32) (local $serial i32)
+    (if (i32.eqz (call $focus_target_allowed (local.get $hwnd))) (then (return (i32.const 0))))
+    (if (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
+      (then (return (local.get $hwnd))))
+    (if (local.get $hwnd)
+      (then
+        (local.set $top (call $wnd_top_level (local.get $hwnd)))
+        (if (i32.ne (global.get $active_hwnd) (local.get $top))
+          (then (drop (call $activate_window_with_host (local.get $top)))))
+        (if (i32.or (i32.ne (global.get $active_hwnd) (local.get $top))
+              (i32.eqz (call $focus_target_allowed (local.get $hwnd))))
+          (then (return (i32.const 0))))))
+    ;; Native Win98 snapshots the return HWND AFTER ancestor activation.
+    ;; Do not short-circuit a same-focus value reached during that activation:
+    ;; the outer transfer still sends the measured self kill/set pair.
+    (local.set $old (call $focus_publish (local.get $hwnd)))
+    (local.set $serial (global.get $focus_transition_serial))
+    (if (local.get $old)
+      (then (drop (call $wnd_send_message (local.get $old) (i32.const 8) (local.get $hwnd) (i32.const 0)))))
+    (if (i32.and (i32.ne (local.get $hwnd) (i32.const 0))
+          (i32.ne (call $focus_transfer_current (local.get $hwnd) (local.get $serial)) (i32.const 0)))
+      (then (drop (call $wnd_send_message (local.get $hwnd) (i32.const 7) (local.get $old) (i32.const 0)))))
+    (local.get $old))
+
+  ;; 107: SetFocus(hwnd) — synchronous USER transaction, not posted messages.
   (func $handle_SetFocus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $wndproc i32) (local $prev i32) (local $ret_addr i32)
-    (local.set $prev (global.get $focus_hwnd))
-    (i32.store offset=0 (global.get $reg_base) (local.get $prev))
-    ;; Focus change: post WM_KILLFOCUS to outgoing window. The incoming
-    ;; WM_SETFOCUS is delivered synchronously below (EIP redirect).
-    (if (i32.and (i32.ne (local.get $prev) (local.get $arg0))
-                 (i32.ne (local.get $prev) (i32.const 0)))
-      (then
-        (drop (call $post_queue_push
-                (local.get $prev) (i32.const 0x0008)
-                (local.get $arg0) (i32.const 0)))))
-    (global.set $focus_hwnd (local.get $arg0))
-    (local.set $wndproc (call $wnd_table_get (local.get $arg0)))
-    ;; Dialog HWNDs keep USER's DefDlgProc marker in the window table, while
-    ;; their real guest DLGPROC lives in dialog state.  The marker is below the
-    ;; WAT-native range, so the generic x86 branch would otherwise jump to
-    ;; 0xFFFE0002 and decode emulator-private data as guest instructions.
-    (if (i32.eq (local.get $wndproc) (global.get $WNDPROC_DIALOG))
-      (then
-        (drop (call $dialog_default_proc
-          (local.get $arg0) (i32.const 0x0007) (local.get $prev) (i32.const 0)))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-        (return)))
-    ;; WAT-native wndproc: dispatch inline
-    (if (i32.ge_u (local.get $wndproc) (i32.const 0xFFFF0000))
-      (then (drop (call $wat_wndproc_dispatch
-              (local.get $arg0) (i32.const 0x0007) (local.get $prev) (i32.const 0)))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-        (return)))
-    ;; x86 wndproc: no entry means try globals
-    (if (i32.eqz (local.get $wndproc))
-      (then
-        (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
-          (then (local.set $wndproc (global.get $wndproc_addr))))))
-    ;; Deliver WM_SETFOCUS synchronously by redirecting EIP to the wndproc.
-    ;; Keep SetFocus's return value and the nonvolatile register set in a
-    ;; continuation frame below its original two-word stdcall frame.
-    (if (local.get $wndproc)
-      (then
-        (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
-        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
-        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $setfocus_ret_thunk))
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg0))     ;; hwnd
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0x0007))    ;; WM_SETFOCUS
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $prev))    ;; wParam = prev focus
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (i32.const 0))        ;; lParam = 0
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)) (local.get $ret_addr))
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $prev))
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.load offset=12 (global.get $reg_base)))
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)) (i32.load offset=24 (global.get $reg_base)))
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)) (i32.load offset=28 (global.get $reg_base)))
-        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)) (i32.load offset=20 (global.get $reg_base)))
-        (global.set $eip (local.get $wndproc))
-        (global.set $steps (i32.const 0))
-        (return)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-  )
+    (i32.store (global.get $reg_base) (call $focus_set_core (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; 110: LoadStringA
   (func $handle_LoadStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

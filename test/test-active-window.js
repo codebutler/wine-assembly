@@ -43,6 +43,19 @@ function makeWndProc(observed, callback = []) {
 }
 
 const extraWat = String.raw`
+  (func (export "test_focus_api") (param $h i32) (param $stack i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (call $handle_SetFocus (local.get $h) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load (global.get $reg_base)))
+  (func (export "test_default_activate") (param $h i32) (param $wp i32) (param $stack i32)
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (call $handle_DefWindowProcA (local.get $h) (i32.const 6) (local.get $wp) (i32.const 0) (i32.const 0) (i32.const 0)))
+  (func (export "test_iconic") (param $h i32) (call $wnd_apply_show_state (local.get $h) (i32.const 2)))
+  (func (export "test_disable") (param $h i32)
+    (local $saved i32)
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_EnableWindow (local.get $h) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved)))
   (func (export "test_click_activate") (param $h i32) (result i32)
     (call $active_window_transition_reason (local.get $h) (i32.const 2)))
   (func (export "test_thunk") (param $id i32) (result i32)
@@ -367,6 +380,94 @@ const extraWat = String.raw`
     assert.strictEqual(records().filter(r => r.hwnd === target && r.msg === 6 && r.wParam === 1).length,
       mode === 1 || mode === 3 || mode === 4 ? 0 : 1, 'superseded/retired activation is not delivered');
   }
+  const focusA = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+  const focusB = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+  const focusChild = e.test_make_window(proc, WS_VISIBLE | WS_CHILD, focusB, 1);
+  const focusThunk = e.test_thunk(apiTable.find(api => api.name === 'SetFocus').id);
+  const getFocusThunk = e.test_thunk(apiTable.find(api => api.name === 'GetFocus').id);
+  for (const target of [focusA, focusB, focusChild, 0]) {
+    e.test_set_active(focusA, stack);
+    resetRecords();
+    const old = e.test_focus_api(target, stack);
+    assert.strictEqual(e.get_esp(), stack + 8, 'SetFocus cleans stdcall synchronously');
+    assert.strictEqual(old, target && target !== focusA ? focusB : focusA,
+      'native old focus is captured after activation');
+    assert.strictEqual(e.test_focus(), target);
+    assert.strictEqual(e.test_get_active(), target && target !== focusA ? focusB : focusA);
+    const events = records();
+    if (target === focusA) assert.deepStrictEqual(events, []);
+    else if (!target) assert.deepStrictEqual(events, [{hwnd: focusA, msg: 8, wParam: 0, lParam: 0}]);
+    else assert.deepStrictEqual(events.slice(-2), [
+      {hwnd: focusB, msg: 8, wParam: target, lParam: 0},
+      {hwnd: target, msg: 7, wParam: focusB, lParam: 0},
+    ], 'outer focus transfer follows synchronous activation');
+  }
+  for (const wp of [0, 1, 2, 0x10000, 0x10001, 0x10002]) {
+    e.test_set_active(focusA, stack);
+    e.test_focus_api(focusA, stack);
+    resetRecords();
+    e.test_default_activate(focusB, wp, stack);
+    assert.strictEqual(e.test_focus(), (wp & 0xffff) ? focusB : focusA);
+    assert.strictEqual(e.get_esp(), stack + 20);
+  }
+  e.test_set_active(focusA, stack);
+  e.test_iconic(focusB);
+  e.test_focus_api(focusA, stack);
+  resetRecords();
+  assert.strictEqual(e.test_focus_api(focusB, stack), 0);
+  e.test_default_activate(focusB, 1, stack);
+  assert.strictEqual(e.test_focus(), focusA);
+  assert.deepStrictEqual(records(), []);
+  const disabled = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+  e.test_disable(disabled);
+  assert.strictEqual(e.test_focus_api(disabled, stack), 0);
+  assert.strictEqual(e.test_focus_api(foreign, stack), 0);
+  assert.strictEqual(e.test_focus(), focusA);
+
+  // Reenter from KILLFOCUS. It must already observe the new focus, and the
+  // nested selection must not receive a later stale outer SETFOCUS.
+  const focusHook = e.guest_alloc(256);
+  const oldFocus = e.test_make_window(focusHook, WS_VISIBLE | WS_CHILD, focusA, 1);
+  const focusTarget = e.test_make_window(proc, WS_VISIBLE | WS_CHILD, focusA, 1);
+  const focusChosen = e.test_make_window(proc, WS_VISIBLE | WS_CHILD, focusA, 1);
+  const focusAction = [0xc7, 0x05, ...u32(armed), ...u32(0),
+    0xb8, ...u32(getFocusThunk), 0xff, 0xd0, 0xa3, ...u32(seenActive),
+    0x68, ...u32(focusChosen), 0xb8, ...u32(focusThunk), 0xff, 0xd0];
+  const focusMsg = [0x83, 0x7c, 0x24, 8, 8, 0x75, focusAction.length, ...focusAction];
+  bytes.set(makeWndProc(observed, [0x83, 0x3d, ...u32(armed), 0,
+    0x74, focusMsg.length, ...focusMsg]), toWasm(focusHook));
+  view.setUint32(toWasm(armed), 0, true);
+  e.test_focus_api(oldFocus, stack);
+  resetRecords();
+  view.setUint32(toWasm(armed), 1, true);
+  assert.strictEqual(e.test_focus_api(focusTarget, stack), oldFocus);
+  assert.strictEqual(view.getUint32(toWasm(seenActive), true), focusTarget);
+  assert.strictEqual(e.test_focus(), focusChosen);
+  assert(!records().some(r => r.hwnd === focusTarget && r.msg === 7));
+  // Native reentry case 4: chaining to DefWindowProc after choosing C
+  // reactivates B, unlike consuming the activation message.
+  const defThunk = e.test_thunk(apiTable.find(api => api.name === 'DefWindowProcA').id);
+  const chainProc = e.guest_alloc(512);
+  const chainB = e.test_make_window(chainProc, WS_VISIBLE, 0, 1);
+  const chainC = e.test_make_window(proc, WS_VISIBLE, 0, 1);
+  const selectC = [0xc7, 0x05, ...u32(armed), ...u32(0),
+    0x68, ...u32(chainC), 0xb8, ...u32(setActiveThunk), 0xff, 0xd0];
+  const armedC = [0x83, 0x3d, ...u32(armed), 0, 0x74, selectC.length, ...selectC];
+  const activeC = [0x83, 0x7c, 0x24, 12, 0, 0x74, armedC.length, ...armedC];
+  const chain = [...activeC, ...Array(4).fill([0xff, 0x74, 0x24, 16]).flat(),
+    0xb8, ...u32(defThunk), 0xff, 0xd0];
+  bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 6, 0x75, chain.length, ...chain]), toWasm(chainProc));
+  view.setUint32(toWasm(armed), 0, true);
+  e.test_set_active(focusA, stack);
+  resetRecords();
+  view.setUint32(toWasm(armed), 1, true);
+  e.test_set_active(chainB, stack);
+  assert.strictEqual(e.test_get_active(), chainB, 'default processing reclaims activation after nested choice');
+  assert.strictEqual(e.test_focus(), chainB);
+  assert.deepStrictEqual(records().slice(-2), [
+    {hwnd: chainB, msg: 8, wParam: chainB, lParam: 0},
+    {hwnd: chainB, msg: 7, wParam: chainB, lParam: 0},
+  ], 'native reentry ends with the outer self-focus pair');
   console.log('PASS Set/GetActiveWindow retain per-thread USER activation state');
 })().catch(error => {
   console.error(error && error.stack || error);

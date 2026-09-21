@@ -1408,7 +1408,7 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
   ;; The cause belongs to this invocation, not a global: a mouse activation
   ;; callback may call SetActiveWindow, whose nested notification is WA_ACTIVE.
   (func $active_window_transition_reason (param $target i32) (param $reason i32) (result i32)
-    (local $previous i32) (local $old_focus i32) (local $serial i32)
+    (local $previous i32) (local $old_focus i32) (local $serial i32) (local $focus_serial i32)
     (local.set $previous (global.get $active_hwnd))
     (if (i32.and
           (i32.ne (local.get $previous) (i32.const 0))
@@ -1470,7 +1470,8 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
               (i32.eqz (local.get $old_focus))
               (i32.ne (call $wnd_top_level (local.get $old_focus)) (local.get $target)))
           (then
-            (global.set $focus_hwnd (local.get $target))
+            (drop (call $focus_publish (local.get $target)))
+            (local.set $focus_serial (global.get $focus_transition_serial))
             (if (i32.and
                   (i32.ne (local.get $old_focus) (i32.const 0))
                   (i32.ge_s (call $wnd_table_find (local.get $old_focus)) (i32.const 0)))
@@ -1481,7 +1482,7 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
             (if (i32.or
                   (i32.ne (global.get $active_transition_serial) (local.get $serial))
                   (i32.or (i32.ne (global.get $active_hwnd) (local.get $target))
-                    (i32.ne (global.get $focus_hwnd) (local.get $target))))
+                    (i32.eqz (call $focus_transfer_current (local.get $target) (local.get $focus_serial)))))
               (then (return (local.get $previous))))
             (drop (call $wnd_send_message
               (local.get $target) (i32.const 0x0007) ;; WM_SETFOCUS
@@ -1496,7 +1497,7 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
                 (i32.eq (call $wnd_top_level (local.get $old_focus))
                         (local.get $previous))))
           (then
-            (global.set $focus_hwnd (i32.const 0))
+            (drop (call $focus_publish (i32.const 0)))
             (if (i32.ge_s (call $wnd_table_find (local.get $old_focus)) (i32.const 0))
               (then
                 (drop (call $wnd_send_message

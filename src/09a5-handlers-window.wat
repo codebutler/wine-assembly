@@ -3046,6 +3046,17 @@
   ;; 78: DefWindowProcA
   (func $handle_DefWindowProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $text_wa i32) (local $text_len i32)
+    ;; Win98 checks the actual iconic state, not HIWORD(wParam). A direct
+    ;; default call can reactivate this window through SetFocus.
+    (if (i32.eq (local.get $arg1) (i32.const 6))
+      (then
+        (if (i32.and (i32.ne (i32.and (local.get $arg2) (i32.const 0xFFFF)) (i32.const 0))
+              (i32.eqz (call $wnd_min_get (local.get $arg0))))
+          (then (drop (call $focus_set_core (local.get $arg0)))))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (return)))
     (if (i32.eq (local.get $arg1) (i32.const 0x0021))
       (then
         (i32.store (global.get $reg_base) (call $mouse_activate_defproc

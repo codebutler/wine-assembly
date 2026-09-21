@@ -7518,7 +7518,7 @@
       (else (call $win16_show_continue))))
 
   ;; Far twin of the active-window notification transaction. The invocation
-  ;; owns {target, previous, phase, old-focus, reason, serial}; no callback scratch is global.
+  ;; owns {target, previous, phase, old-focus, reason, serial, focus-serial}.
   (global $WIN16_CONT_ACTIVATE i32 (i32.const 0xFFB4))
   (func $win16_activate_start (param $target i32)
     (call $win16_activate_start_reason (local.get $target) (i32.const 1)))
@@ -7533,7 +7533,7 @@
     (call $wnd_z_raise_owner_group (local.get $target))
     (if (i32.eq (local.get $previous) (local.get $target))
       (then (call $win16_cont_resume) (return)))
-    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (call $gs32 (local.get $sp) (local.get $target))
     (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $previous))
@@ -7541,6 +7541,7 @@
     (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (i32.const 0))
     (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (local.get $reason))
     (call $gs32 (i32.add (local.get $sp) (i32.const 20)) (global.get $active_transition_serial))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 24)) (i32.const 0))
     (call $win16_activate_continue))
 
   (func $win16_activate_continue
@@ -7587,11 +7588,13 @@
               (local.set $hwnd (global.get $focus_hwnd))
               (br_if $done (i32.eq (call $wnd_top_level (local.get $hwnd)) (local.get $target)))
               (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (local.get $hwnd))
-              (global.set $focus_hwnd (local.get $target))
+              (drop (call $focus_publish (local.get $target)))
+              (call $gs32 (i32.add (local.get $sp) (i32.const 24)) (global.get $focus_transition_serial))
               (local.set $msg (i32.const 8))
               (local.set $wp (local.get $target)))
             (else
-              (br_if $done (i32.ne (global.get $focus_hwnd) (local.get $target)))
+              (br_if $done (i32.eqz (call $focus_transfer_current (local.get $target)
+                (call $gl32 (i32.add (local.get $sp) (i32.const 24))))))
               (local.set $hwnd (local.get $target))
               (local.set $msg (i32.const 7))
               (local.set $wp (call $gl32 (i32.add (local.get $sp) (i32.const 12))))))))
@@ -7620,7 +7623,7 @@
                 (i32.shl (call $wnd_min_get (local.get $hwnd)) (i32.const 16))))
               (else (local.get $wp))) (local.get $lp)))))
       (br $next)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 28)))
     (call $win16_cont_resume))
 
   ;; Invocation-owned {hwnd, client-size, pending-bits} across far callbacks.
@@ -8186,6 +8189,13 @@
         (i32.store (global.get $reg_base) (i32.and (local.get $flags) (i32.const 0xFFFF)))
         (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $flags) (i32.const 16)))
         (call $win16_api_return (i32.const 10))
+        (return)))
+    (if (i32.and (i32.eq (local.get $message) (i32.const 6))
+          (i32.and (i32.ne (local.get $wparam) (i32.const 0))
+            (i32.eqz (call $wnd_min_get (local.get $hwnd)))))
+      (then
+        (call $win16_cont_push (call $win16_take_return (i32.const 10)) (i32.const 0))
+        (call $win16_focus_start (local.get $hwnd) (i32.const 0))
         (return)))
     (if (i32.and (i32.eq (local.get $message) (i32.const 0x0112))
           (call $window_system_show_needs_query (local.get $hwnd) (local.get $wparam)))
@@ -9822,32 +9832,96 @@
     (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
-  ;; USER.22 SetFocus(hWnd) -> the window that had it.
-  ;;
-  ;; Deliberately not the 32-bit handler. That one delivers WM_SETFOCUS by
-  ;; redirecting EIP into the window procedure, and a handler that moves EIP
-  ;; can never return across this bridge -- $win16_call32_end traps on exactly
-  ;; that. Hearts renames its "Pass Left" button to "OK" and calls SetFocus on
-  ;; it the instant you pass three cards, so the game died on the first move of
-  ;; every hand.
-  ;;
-  ;; Posting both notifications is what the task's own pump does with them a
-  ;; moment later anyway, and it keeps the focus bookkeeping identical.
-  (func $win16_SetFocus
-    (local $hwnd i32) (local $prev i32)
-    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
-    (local.set $prev (global.get $focus_hwnd))
-    (if (i32.ne (local.get $prev) (local.get $hwnd))
+  ;; Win16 uses the same focus policy/publication helpers, but far callbacks
+  ;; suspend into an invocation-owned frame instead of the Win32 sender.
+  (global $WIN16_CONT_FOCUS i32 (i32.const 0xFFC0))
+  (func $win16_focus_start (param $hwnd i32) (param $return_old i32)
+    (local $sp i32)
+    (if (i32.eqz (call $focus_target_allowed (local.get $hwnd)))
+      (then (call $win16_cont_resume) (return)))
+    (if (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
       (then
-        (if (local.get $prev)
-          (then (drop (call $post_queue_push (local.get $prev)
-                  (i32.const 0x0008) (local.get $hwnd) (i32.const 0)))))
-        (global.set $focus_hwnd (local.get $hwnd))
-        (if (local.get $hwnd)
-          (then (drop (call $post_queue_push (local.get $hwnd)
-                  (i32.const 0x0007) (local.get $prev) (i32.const 0)))))))
-    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (local.get $prev)))
-    (call $win16_api_return (i32.const 2)))
+        (if (local.get $return_old)
+          (then (call $gs16 (i32.load offset=16 (global.get $reg_base)) (call $win16_h16 (local.get $hwnd)))))
+        (call $win16_cont_resume) (return)))
+    ;; {target, phase, old, serial, return-old, activated-top}
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (local.get $return_old))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 20)) (i32.const 0))
+    (call $win16_focus_continue))
+
+  (func $win16_focus_continue
+    (local $sp i32) (local $target i32) (local $phase i32) (local $top i32)
+    (local $hwnd i32) (local $msg i32) (local $wp i32) (local $proc i32) (local $old i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $target (call $gl32 (local.get $sp)))
+    (block $done (loop $next
+      (local.set $phase (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+      (br_if $done (i32.ge_u (local.get $phase) (i32.const 3)))
+      (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (i32.add (local.get $phase) (i32.const 1)))
+      (if (i32.eqz (local.get $phase))
+        (then
+          (if (local.get $target)
+            (then
+              (local.set $top (call $wnd_top_level (local.get $target)))
+              (if (i32.ne (global.get $active_hwnd) (local.get $top))
+                (then
+                  (call $gs32 (i32.add (local.get $sp) (i32.const 20)) (local.get $top))
+                  (call $win16_cont_push
+                    (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+                      (global.get $WIN16_CONT_FOCUS)) (i32.const 0))
+                  (call $win16_activate_start (local.get $top))
+                  (return)))))
+          (br $next)))
+      (if (i32.eq (local.get $phase) (i32.const 1))
+        (then
+          (br_if $done (i32.eqz (call $focus_target_allowed (local.get $target))))
+          (local.set $top (call $gl32 (i32.add (local.get $sp) (i32.const 20))))
+          (if (local.get $top)
+            (then
+              (br_if $done (i32.ne (global.get $active_hwnd) (local.get $top)))
+              (drop (call $host_activate_window (local.get $top)))))
+          (local.set $old (call $focus_publish (local.get $target)))
+          (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (local.get $old))
+          (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (global.get $focus_transition_serial))
+          (local.set $hwnd (local.get $old))
+          (local.set $msg (i32.const 8))
+          (local.set $wp (local.get $target)))
+        (else
+          (br_if $done (i32.eqz (call $focus_transfer_current (local.get $target)
+            (call $gl32 (i32.add (local.get $sp) (i32.const 12))))))
+          (local.set $hwnd (local.get $target))
+          (local.set $msg (i32.const 7))
+          (local.set $wp (call $gl32 (i32.add (local.get $sp) (i32.const 8))))))
+      (if (i32.and (i32.ne (local.get $hwnd) (i32.const 0))
+            (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+        (then
+          (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+          (if (call $win16_is_far_proc (local.get $proc))
+            (then
+              (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+                (local.get $msg) (call $win16_h16 (local.get $wp)) (i32.const 0)
+                (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_FOCUS))
+              (return)))
+          (drop (call $wnd_send_message (local.get $hwnd) (local.get $msg) (local.get $wp) (i32.const 0)))))
+      (br $next)))
+    (if (call $gl32 (i32.add (local.get $sp) (i32.const 16)))
+      (then (call $gs16 (i32.add (local.get $sp) (i32.const 24))
+        (call $win16_h16 (call $gl32 (i32.add (local.get $sp) (i32.const 8)))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 24)))
+    (call $win16_cont_resume))
+
+  ;; USER.22 SetFocus(hWnd) -> previous focus after ancestor activation.
+  (func $win16_SetFocus
+    (local $hwnd i32)
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (call $win16_cont_push (call $win16_take_return (i32.const 2)) (i32.const 0))
+    (call $win16_focus_start (local.get $hwnd) (i32.const 1)))
 
   ;; The window calls that take one handle and answer with a word, and the two
   ;; that take none. Grouping them keeps sixteen near-identical eight-line
@@ -13920,6 +13994,8 @@
       (then (call $win16_queryopen_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_MOUSEACTIVATE))
       (then (call $win16_mouseactivate_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_FOCUS))
+      (then (call $win16_focus_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_BEGINPAINT))
       (then (call $win16_beginpaint_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took

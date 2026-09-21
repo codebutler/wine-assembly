@@ -1675,3 +1675,72 @@ the preceding native run (`wa-focus-native.serial`). The source-only
 reference harness test passes. Runtime remains unchanged in this reference
 step; focus reentry/destruction, disabled ancestors, cross-thread focus and
 Win16 public focus delivery still need regression coverage and implementation.
+
+### Synchronous focus and activation default implemented (2026-09-20)
+
+Win32 SetFocus now uses a synchronous focus transaction instead of posting
+WM_KILLFOCUS and redirecting only WM_SETFOCUS. The Win16 adapter uses its
+own far continuation for both callbacks and for any intervening top-level
+activation; it no longer pretends that posting both notifications is
+equivalent. Both adapters share target checks, focus publication and a
+transition serial. Activation-driven focus publication uses those same
+helpers, so nested activation cannot be invisible to an outer focus guard.
+
+The target/child ancestry must be live, non-disabled and non-iconic, and
+the target must belong to the current thread. NULL clears focus; a same-focus
+request returns immediately. Otherwise ancestor activation runs first,
+then the old-focus return value is captured, the new focus is published,
+and the kill/set notifications run synchronously. A focus value established
+during activation is not mistaken for an entry-time same-focus request:
+the native self kill/set pair and post-activation return value are retained.
+Disabled/thread validation follows the public
+[SetFocus contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setfocus);
+Win98-specific ordering and minimized behavior follow the preserved native
+trace. AttachThreadInput is not newly implemented by this change.
+
+DefWindowProc now handles a nonzero WM_ACTIVATE reason through this focus
+path, checking actual iconic state instead of trusting the supplied minimized
+bit. Both Win32 and far tests reproduce native reentry case 4: the app first
+selects C, then chains to the default procedure, which reactivates B and
+ends with the observed B→B focus pair. Consuming the message still retains
+the nested selection, as covered by the preceding activation tests.
+
+Regression coverage includes direct defaults, NULL/same/top-level/child and
+minimized focus, disabled/foreign-thread rejection, post-activation return
+values, callback GetFocus observations, nested focus selection and far
+destruction during WM_KILLFOCUS. The first focus tests incorrectly assumed
+reasserting an already-active window would restore focus after SetFocus(NULL);
+fixtures now explicitly restore focus before the next case. Duplicate local
+test variable names were also corrected. Old SetFocus adapters fail the new
+Win32 synchronous-completion and far return-value assertions
+(`/private/tmp/wa-focus-negative32.log`, `wa-focus-negative16.log`).
+
+The initial build caught a disabled-style mask mistaken for a region literal;
+the implementation now reuses `$ctrl_style_disabled`, and the fixture uses
+EnableWindow rather than copying the mask. The next attempt caught a split-line
+ESP epilogue the existing checker could not recognize; standard epilogue
+formatting fixes it without changing cleanup or weakening a gate. Existing
+dialog tab-stop, BUTTON notification and first-keystroke focus tests pass
+(`wa-focus-dialog.log`, `wa-focus-button.log`, `wa-focus-keyboard.log`).
+
+The logical-operand gate additionally required explicit normalization of the
+new predicate at its `i32.and` call site. Final full normal/compat build passes
+(`/private/tmp/wa-focus-build-verified.log`, layout `6ee344b49d5799cb`). Final
+Win32 and far lifetime/default-reentry matrices pass (`wa-focus32-lifetime.log`,
+`wa-focus16-lifetime.log`); completed-artifact WEP3 gameplay is 7/7
+(`wa-focus-wep3.log`), and Notepad taskbar minimize/restore passes in actual
+cooperative/Worker Chrome (`wa-focus-browser.log`). Shared-file resource
+descriptor edits were coordinated and committed separately as `b5183f75`;
+they are not part of this focus change.
+
+WinRAR acceptance also passes (`/private/tmp/wa-focus-winrar.log`): installer
+and installed file-manager rendering, with 28/28 owner-draw drive rows
+containing ink. This is the existing candidate acceptance test, not a new
+claim of exhaustive menu/property-sheet visual equivalence.
+
+Still open: removal-time WM_MOUSEACTIVATE processing, eager renderer focus/
+raise removal, cross-app/attached-queue semantics, broader focus-reentry
+native comparisons, and cleanup of the now-unused Win32 SetFocus return
+thunk. The internal `$set_focus` sender and modal/dialog focus policies still
+have separate callers; this change does not claim every focus writer is
+centralized.
