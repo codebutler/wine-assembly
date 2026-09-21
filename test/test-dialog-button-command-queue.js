@@ -123,8 +123,12 @@ function u32(value) {
   for (const kind of [0, 1, 3, 6, 9, 11]) {
     const button = e.test_create_dialog_button(proc, 1100 + kind, kind) >>> 0;
     const parent = e.wnd_get_parent(button) >>> 0;
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0,
+      'BM_GETSTATE must not expose the internal default-button border as BST_PUSHED');
     for (const [x, y] of [[-1, 5], [5, -1], [100, 5], [5, 24]]) {
       assert.strictEqual(e.dialog_route_mouse(parent, 0x201, 1, (5 << 16) | 5), 1);
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0x0c,
+        'BM_GETSTATE reports BST_PUSHED | BST_FOCUS during a real press');
       assert.strictEqual(e.get_capture_hwnd(), button);
       assert.strictEqual(e.dialog_route_mouse(parent, 0x202, 0,
         (((y & 0xffff) << 16) | (x & 0xffff)) >>> 0), 1);
@@ -132,11 +136,16 @@ function u32(value) {
       assert.strictEqual(e.get_post_queue_count(), 0, 'outside release sends no BN_CLICKED');
       assert.strictEqual(e.send_message(button, 0xf0, 0, 0), 0, 'outside release does not auto-check');
       assert.strictEqual(e.button_get_flags(button) & 1, 0, 'outside release clears native pressed state');
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 8,
+        'cancelled release retains focus but not pushed/check state');
     }
     e.test_button_click(button);
+    assert.strictEqual(e.button_get_flags(button) & 1, 0, 'inside release also retires pressed state');
     assert.strictEqual(e.get_post_queue_count(), 1, 'inside release still posts BN_CLICKED');
     assert.strictEqual(e.send_message(button, 0xf0, 0, 0), [3, 6, 9].includes(kind) ? 1 : 0,
       'inside release preserves automatic check behavior');
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), [3, 6, 9].includes(kind) ? 9 : 8,
+      'BM_GETSTATE combines check and focus after release');
     e.set_post_queue_count(0);
   }
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
@@ -154,6 +163,8 @@ function u32(value) {
       `${cancel} does not erase a replacement capture owner`);
     assert.strictEqual(e.test_dialog_capture(), 0, `${cancel} retires the dialog router's target`);
     assert.strictEqual(e.button_get_flags(custom) & 1, 0, `${cancel} clears native pressed state`);
+    assert.strictEqual(e.send_message(custom, 0xf2, 0, 0), cancel === 'focus-loss' ? 0 : 8,
+      `${cancel} is observable through BM_GETSTATE without losing unrelated focus`);
     e.test_button_release(custom);
     assert.strictEqual(e.get_post_queue_count(), 0, `${cancel} prevents a later stray UP from clicking`);
     if (cancel === 'transfer') e.test_capture_api(0);

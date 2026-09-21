@@ -664,9 +664,12 @@
               (then
                 (call $autoradio_clear_siblings (local.get $hwnd))
                 ;; $autoradio_clear_siblings cleared $hwnd's bit too — set it
-                ;; back on. Use the freshly-cleared flags from the state struct.
+                ;; back on. Reload sibling-updated flags, but do not restore
+                ;; the pressed bit that this UP has just retired locally.
                 (local.set $flags
-                  (i32.or (call $btn_flags (local.get $state_w)) (i32.const 0x02)))))
+                  (i32.or
+                    (i32.and (call $btn_flags (local.get $state_w)) (i32.const -2))
+                    (i32.const 0x02)))))
             (call $btn_set_flags (local.get $state_w) (local.get $flags))
             ;; BS_OWNERDRAW: dispatch WM_DRAWITEM to repaint the unpressed
             ;; face. Other kinds use button_wndproc's WM_PAINT.
@@ -1088,6 +1091,21 @@
             (return (i32.const 0))))
 
         (return (i32.const 0))))
+
+    ;; ---------- BM_GETSTATE (0x00F2) ----------
+    ;; Public BST bits are not ButtonState.flags: pressed moves from bit0
+    ;; to bit2, checked from bit1 to bit0, focus stays bit3. Our default-border
+    ;; bit2 is private and must never masquerade as BST_PUSHED.
+    (if (i32.eq (local.get $msg) (i32.const 0x00F2))
+      (then
+        (if (i32.eqz (local.get $state))
+          (then (return (call $ctrl_get_check_state (local.get $hwnd)))))
+        (local.set $state_w (call $g2w (local.get $state)))
+        (local.set $flags (call $btn_flags (local.get $state_w)))
+        (return (i32.or (i32.and (local.get $flags) (i32.const 8))
+          (i32.or
+            (i32.shl (i32.and (local.get $flags) (i32.const 1)) (i32.const 2))
+            (i32.shr_u (i32.and (local.get $flags) (i32.const 2)) (i32.const 1)))))))
 
     ;; ---------- BM_GETCHECK (0x00F0) ----------
     ;; Prefer ButtonState.flags bit 1 (checked); fall back to legacy CONTROL_TABLE.

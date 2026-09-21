@@ -2490,3 +2490,39 @@ change from other agents' edits. Its normal/compat sizes are 1454258/1455164,
 layout `c5ccefca8909ee4b` (`wa-button-cancel-clean-build.log`). Rodent/Rattler,
 WEP3 7/7 and WordPad browser checks pass (`wa-button-cancel-{vb,wep3,wordpad}.log`).
 All logs are under `/private/tmp/`.
+
+### Public button state and autoradio release drift
+
+BM_GETSTATE now translates ButtonState's stored check, pressed and focus
+flags into the public BST bits instead of returning the default zero. The
+internal default-border bit is deliberately excluded: it occupies the same
+bit position as public BST_PUSHED, but does not mean pressed. The getter
+translates the state pointer once and introduces no second state record.
+The mapping follows [Microsoft's BM_GETSTATE contract](https://learn.microsoft.com/en-us/windows/win32/controls/bm-getstate).
+
+The new real-input assertions caught a separate auto-radio bug: UP cleared
+pressed in a local, then reloaded the still-pressed ButtonState after clearing
+sibling checks. The public result remained 13 (checked, focused, pressed)
+instead of 9 (checked, focused). That reload now excludes the retired press.
+Tests independently assert the native pressed flag is zero after inside
+release and check public results during press, after outside cancellation,
+after accepted release, and after capture/focus cancellation for six styles.
+Old-getter and old-radio-reload negative controls target separate failures.
+
+This adds observation of existing canonical state; it does **not** complete
+three-state checkboxes. BM_SETCHECK/ctrl_set_check_state still reduce nonzero
+values to one checked bit, and BS_AUTO3STATE still uses a binary toggle.
+Indeterminate state storage, its automatic cycle and rendering therefore
+remain open together; BM_GETSTATE cannot report a state that these setters
+do not retain. Move-time highlighting/BM_SETSTATE and broader activation
+work also remain open. Modern themed HOT/dropdown state is not modeled.
+
+Final native matrix passes in main and the clean tree
+(`/private/tmp/wa-button-getstate-main-final.log`, `wa-button-getstate-final.log`).
+The two independent negatives fail (`wa-button-getstate-negative.log`,
+`wa-button-getstate-radio-negative.log`). Clean full gates pass
+(`wa-button-getstate-build.log`); after the radio correction, final concat,
+paren check, normal/compat compile and data-overlap check also pass: sizes
+1454320/1455226, layout `c5ccefca8909ee4b`. Rebuilt Rodent/Rattler, WEP3 7/7
+and WordPad browser checks pass (`wa-button-getstate-{vb,wep3,wordpad}.log`,
+all under `/private/tmp/`). No live cross-app Worker acceptance is claimed.
