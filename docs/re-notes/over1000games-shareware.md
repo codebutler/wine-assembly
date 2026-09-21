@@ -21,8 +21,8 @@ wrong about three of them for three different reasons.
 
 The five commercial titles, tracked separately: SimCity 2000 and MicroMan run,
 Exile II reaches its title screen after a three-stage install (below), Pitfall
-plays its attract demo now that DISPDIB answers, and Bad Toys 3D is the one
-still blocked (WinG as a *file*, then `USER.308 DefDlgProc`).
+plays its attract demo now that DISPDIB answers, and Bad Toys 3D installs
+through both of its stages and runs — so all five are past their blockers.
 
 ## The sweep's verdict is not evidence
 
@@ -467,7 +467,68 @@ Two things to know before the next installer:
 - Stage 3 runs at ~138 batches/s, two orders of magnitude below a typical app.
   The title screen animates, so that is drawing cost, not a hang.
 
-## Bad Toys 3D (`3D/BT3D19`, open)
+## Bad Toys 3D (`3D/BT3D19`, installs and runs)
+
+**2026-09-20: it installs and the game runs.** Everything below this box was
+written when it stopped at the first message box; it is kept because each step
+is still the right description of that step. What changed is four gaps, all in
+`a6282f44`, plus the recipe.
+
+The whole route, from the CD directory:
+
+```bash
+W=<...>/3d-bt3d19
+# stage 1: the bootstrap installer. Ok on the directory dialog.
+node test/run.js --exe=$W/INSTALL.EXE --vfs-include='*' \
+  --win16-lib=$W/WING/WING.DLL --max-batches=120000 --max-seconds=120 \
+  --no-close --quiet-api --capture-launch=/tmp/bt3d-stage1 --input=5000:click:231:291
+# stage 2: what it WinExec()s -- itself, copied to C:\BT3D\TINST.DAT.
+node test/run.js --exe=/tmp/bt3d-stage1/bt3d/tinst.dat --args='/kopie C:\' \
+  --vfs-tree=/tmp/bt3d-stage1 --win16-lib=$W/WING/WING.DLL --cwd='C:\' \
+  --max-batches=400000 --max-seconds=120 --no-close --quiet-api \
+  --save-vfs=/tmp/bt3d-game
+# the game: BT3D.EXE (178,944 bytes) and DATA.PCK (2.4MB) are now real files.
+node test/run.js --exe=/tmp/bt3d-game/bt3d.exe --vfs-include='*' \
+  --win16-lib=$W/WING/WING.DLL --max-batches=200000 --max-seconds=90 --no-close
+```
+
+`--win16-lib` is the answer to the WinG file test below: it both mounts a file
+at `c:\windows\system\<name>` and puts it in the NE loader's search path, so
+the CD's own `WING.DLL` is the real module rather than a stub, and WinG loads
+as an ordinary 16-bit DLL. No WAT-native WinG was needed.
+
+The four gaps, in the order the run hits them:
+
+- **`USER.308 DefDlgProc` was not dispatched.** The paragraph below reads it as
+  needing the far-continuation path; it does not. On this side a dialog's
+  window is ours, and `$win16_DefWindowProc` already routes a message for one
+  into the native dialog path and already ends the dialog on an IDOK or
+  IDCANCEL the dialog procedure declined — that is exactly what a task
+  subclassing a dialog gets back, and calling `DefDlgProc` by ordinal is the
+  same request spelled differently. 308 forwards to it. The setup dialog draws
+  and its Ok button works.
+- **A 16-bit task never saw its command line.** `$win16_InitTask` built the PSP
+  block unconditionally empty. `INSTALL.EXE` copies itself to
+  `C:\BT3D\TINST.DAT` and `WinExec()`s it with `/kopie C:\`, so with an empty
+  PSP the second stage read no switch and put the directory dialog up again.
+  This was never Bad Toys' bug alone: **no** 16-bit task has ever been handed an
+  argument here.
+- **`waveOutGetVolume` read past its own frame.** The waveOut shim hoisted the
+  `HWAVEOUT` out of stack word 3 for every ordinal reaching that point, but 415
+  and 416 take `(uDeviceID, ...)` in a six-byte frame. `$win16_h32` refused the
+  caller's leftover word (`0x5307`) and killed the task on a call that was
+  otherwise implemented and correct.
+- **MMSYSTEM 101-107 and GS.** The joystick set now forwards to the 32-bit
+  handlers, which already answer for a machine with no joystick driver. GS is
+  an ordinary selector in a 16-bit task, resolved through `WIN16_SEG_TABLE`
+  like FS; this game keeps a data selector there.
+
+Where it stops now: ~18,000 batches in, it hands `TranslateAccelerator` an
+accelerator handle it was never given — `0x4510`, against the `0x110`
+`LoadAccelerators` returned, **from the same call site that had been passing
+the right one for thousands of batches**. So the next question is what
+overwrote that variable, not which entry point is missing, and the handle
+widening is left as a trap rather than softened into a zero.
 
 16-bit NE `INSTALL.EXE`, and it never gets as far as unpacking anything:
 
