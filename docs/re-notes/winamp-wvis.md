@@ -87,3 +87,41 @@ name, opens resource 101 itself, manually synchronizes allocator globals,
 and consumes the real button-up. It therefore bypasses the guest's own menu
 setup/check-state path. The replacement must preserve guest delivery and
 submenu usability, not merely draw a lookalike resource menu.
+
+## Separator-state fix, 2026-09-21
+
+The bad transformation was `$dynamic_menu_make_popup_blob`, not the resource
+parser. Detached LoadMenu/GetSubMenu produces a MNUD tree; MF_POPUP items
+correctly store their HMENU in the submenu field and have command id zero.
+The tracked-popup serializer then classified every zero id as a separator
+and unconditionally wrote child offset zero. All the labelled rows after the
+title in this resource are submenus, explaining the exact flag pattern.
+
+Tracked popups now use `$dmb_measure` / `$dmb_write_block`, the existing
+recursive dynamic-menu serializer, with one synthetic bar record. This
+removes the duplicate flat serializer. The shared writer preserves the
+owner-draw marker and never interprets owner-draw data as a text pointer;
+the removed diagnostic `#hhhh` fallback for nontext items is not retained.
+
+Validation:
+
+- `test-menu-popup-text.js`: 12 checks pass on main and the isolated copy.
+  Added submenu labels, ids, checked state, separator, hit-test and owner-draw
+  assertions. Restoring HEAD's previous menu source through the test compiler
+  makes the new separator assertion fail (`1 !== 0`), recorded in
+  `/private/tmp/wa-wvis-popup-negative.log`.
+- Isolated owner-draw, nested-resource-mutation, detached-menu-handle,
+  dynamic-menu-bar and menu-item-rect suites pass.
+- Isolated full build passes: layout `c5ccefca8909ee4b`, wasm 1454564 bytes,
+  compat 1455470 bytes; `/private/tmp/wa-wvis-recursive-popup-build.log`.
+- Rebuilt real-browser test with the helper disabled passes, terminal exit 0:
+  `/private/tmp/wa-wvis-recursive-popup-browser.log`. The same direct probe
+  reports flags `[2,1,0,1,0,0,0,0,0,0,0,1]`, hit 2, hover 2. Rendering Options
+  exposes all 12 expected submenu entries. Screenshot visually inspected;
+  visualizer content, highlighted parent and cascade are visible.
+
+The title-matched renderer helper is still installed in production. Removing
+it, proving command selection/check-state changes and fixing TrackPopupMenu's
+premature return remain open. The shared serializer's existing two-level
+child-depth limit is unchanged; this is not proof of arbitrary-depth menu
+tracking or native Win98 modal-loop fidelity.

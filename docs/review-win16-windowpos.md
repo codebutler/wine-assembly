@@ -3028,3 +3028,12 @@ separators. The hit test correctly rejects that row. No runtime workaround
 was removed and no coordinate-only test fix was accepted. Binary addresses,
 logs, exact flags, limitations and the next diagnostic are recorded in
 [winamp-wvis.md](re-notes/winamp-wvis.md).
+
+Follow-up: fixed the flat dynamic-popup serializer, which treated every
+MF_POPUP's zero command id as a separator and discarded its child offset.
+Tracked popups now share the existing recursive dynamic-menu writer. The
+new compiled regression passes and fails with the old serializer. Five
+adjacent menu suites and the isolated full build pass; rebuilt wVis with
+the helper disabled now passes and visibly opens Rendering Options. The
+production helper remains pending command/check-state and modal-lifetime
+validation; this does not close the broader input/menu review.

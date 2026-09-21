@@ -149,6 +149,31 @@ function check(label, fn) {
     assert.strictEqual(readAt(g2w(buf), n), 'Spectrum &Radar');
   });
 
+  check('tracked dynamic popups preserve submenus rather than id-zero separators', () => {
+    const child = wat.test_call_CreatePopupMenu() >>> 0;
+    const parent = wat.test_call_CreatePopupMenu() >>> 0;
+    wat.test_call_AppendMenuA(child, 0x8, 201, strA('&Clear\tCtrl+C'));
+    wat.test_call_AppendMenuA(child, MF_SEPARATOR, 0, 0);
+    wat.test_call_AppendMenuA(child, 0, 202, strA('Fade'));
+    wat.test_call_AppendMenuA(parent, 0x10, child, strA('Rendering Options'));
+    wat.test_call_AppendMenuA(parent, MF_SEPARATOR, 0, 0);
+    wat.test_call_AppendMenuA(parent, 0x100, 203, 0x12345678);
+    assert.strictEqual(wat.menu_track_popup_open(parent, 0, 40, 40, 0), 1);
+    assert.strictEqual(label(0), 'Rendering Options');
+    assert.strictEqual(wat.menu_child_flags(0, 0, 0) & 1, 0);
+    assert.strictEqual(wat.menu_hittest_dropdown(0, 0, 40, 40, 60, 52), 0);
+    assert.strictEqual(wat.menu_child_sub_count(0, 0, 0), 3);
+    assert.strictEqual(readAt(wat.menu_subchild_label_ptr(0, 0, 0, 0),
+      wat.menu_subchild_label_len(0, 0, 0, 0)), '&Clear');
+    assert.strictEqual(wat.menu_subchild_id(0, 0, 0, 0), 201);
+    assert.strictEqual(wat.menu_subchild_flags(0, 0, 0, 0) & 4, 4);
+    assert.strictEqual(wat.menu_subchild_flags(0, 0, 0, 1) & 1, 1);
+    assert.strictEqual(wat.menu_subchild_id(0, 0, 0, 2), 202);
+    assert.strictEqual(wat.menu_child_flags(0, 0, 1) & 1, 1);
+    assert.strictEqual(wat.menu_child_flags(0, 0, 2) & 8, 8);
+    assert.strictEqual(label(2), '', 'owner-draw data must never become text');
+  });
+
   console.log(`test-menu-popup-text: ${passed} checks ok`);
 })().catch(err => {
   console.error(err);

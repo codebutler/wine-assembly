@@ -840,123 +840,27 @@
     (i32.const -1))
 
   (func $dynamic_menu_make_popup_blob (param $hmenu i32) (result i32)
-    (local $sw i32) (local $count i32) (local $total i32) (local $strings i32)
-    (local $blob_g i32) (local $blob_w i32)
-    (local $i i32) (local $item i32) (local $rec i32) (local $flags i32)
-    (local $out_flags i32) (local $label_off i32) (local $id i32)
-    (local $label i32) (local $chars i32) (local $tab i32)
-    (local $label_chars i32) (local $sc_chars i32)
+    (local $sw i32) (local $struct i32) (local $total i32) (local $blob_g i32)
     (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
     (if (i32.eqz (local.get $sw)) (then (return (i32.const 0))))
-    (local.set $count (i32.load offset=4 (local.get $sw)))
-    (if (i32.eqz (local.get $count)) (then (return (i32.const 0))))
-    ;; Pass 1 sizes the string region. Every item used to get a 5-byte "#hhhh"
-    ;; rendering of its command id, and that is what the popup actually
-    ;; painted -- a menu an app builds at runtime showed "#0065" where its
-    ;; label belonged, and GetMenuString read the same thing back. The string
-    ;; AppendMenu was handed is right there in the item record.
-    (local.set $i (i32.const 0))
-    (block $sized (loop $measure
-      (br_if $sized (i32.ge_u (local.get $i) (local.get $count)))
-      (local.set $item
-        (i32.add (local.get $sw)
-          (i32.add (i32.const 16)
-            (i32.mul (local.get $i) (global.get $DYNAMIC_MENU_ITEM_BYTES)))))
-      (local.set $label (call $dynamic_item_label_w (local.get $item)))
-      ;; A tab-split label only shrinks (the '\t' itself is dropped), so the
-      ;; raw length is a safe reservation for label + shortcut together.
-      (local.set $strings
-        (i32.add (local.get $strings)
-          (if (result i32) (local.get $label)
-            (then (call $strlen (local.get $label)))
-            (else (i32.const 5)))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $measure)))
-    ;; 4 + one 16-byte bar record + 4 child count + N*28 records + the strings.
-    (local.set $total
-      (i32.add (i32.const 24)
-        (i32.add (i32.mul (local.get $count) (i32.const 28))
-                 (local.get $strings))))
+    (if (i32.eqz (i32.load offset=4 (local.get $sw))) (then (return (i32.const 0))))
+    ;; A tracked popup is one synthetic bar record followed by the same
+    ;; recursive child blocks used by SetMenu. MF_POPUP has no command id;
+    ;; flattening it into an id-zero command incorrectly made it a separator.
+    (global.set $dmb_struct (i32.const 20))
+    (global.set $dmb_str (i32.const 0))
+    (call $dmb_measure (local.get $hmenu) (i32.const 1))
+    (local.set $struct (global.get $dmb_struct))
+    (local.set $total (i32.add (local.get $struct) (global.get $dmb_str)))
     (local.set $blob_g (call $heap_alloc (local.get $total)))
     (if (i32.eqz (local.get $blob_g)) (then (return (i32.const 0))))
-    (local.set $blob_w (call $g2w (local.get $blob_g)))
-    (call $zero_memory (local.get $blob_w) (local.get $total))
-    (i32.store         (local.get $blob_w) (i32.const 1))  ;; one synthetic top-level popup
-    (i32.store offset=12 (local.get $blob_w) (i32.const 20)) ;; bar[0].child_offset
-    (i32.store offset=20 (local.get $blob_w) (local.get $count))
-    (local.set $label_off (i32.add (i32.const 24) (i32.mul (local.get $count) (i32.const 28))))
-    (local.set $i (i32.const 0))
-    (block $done (loop $items
-      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
-      (local.set $item
-        (i32.add (local.get $sw)
-          (i32.add (i32.const 16)
-            (i32.mul (local.get $i) (global.get $DYNAMIC_MENU_ITEM_BYTES)))))
-      (local.set $rec
-        (i32.add (local.get $blob_w)
-          (i32.add (i32.const 24) (i32.mul (local.get $i) (i32.const 28)))))
-      (local.set $flags (i32.load (local.get $item)))
-      (local.set $id (i32.load offset=4 (local.get $item)))
-      (local.set $out_flags (i32.const 0))
-      (if (i32.or (i32.and (local.get $flags) (i32.const 0x0800))
-                  (i32.eqz (local.get $id)))
-        (then (local.set $out_flags (i32.or (local.get $out_flags) (i32.const 1)))))
-      (if (i32.and (local.get $flags) (i32.const 0x0003))
-        (then (local.set $out_flags (i32.or (local.get $out_flags) (i32.const 2)))))
-      (if (i32.and (local.get $flags) (i32.const 0x0008))
-        (then (local.set $out_flags (i32.or (local.get $out_flags) (i32.const 4)))))
-      ;; Private blob bit3 remembers MF_OWNERDRAW. Dynamic popups outlive the
-      ;; guest menu long enough to paint asynchronously, so the renderer can no
-      ;; longer ask the destroyed HMENU how this item should be represented.
-      (if (i32.and (local.get $flags) (i32.const 0x0100))
-        (then (local.set $out_flags (i32.or (local.get $out_flags) (i32.const 8)))))
-      (i32.store offset=16 (local.get $rec) (local.get $out_flags))
-      (i32.store offset=20 (local.get $rec) (local.get $id))
-      (i32.store offset=24 (local.get $rec) (i32.const 0))
-      (local.set $label (call $dynamic_item_label_w (local.get $item)))
-      (if (local.get $label)
-        (then
-          (local.set $chars (call $strlen (local.get $label)))
-          ;; Same split the resource loader does: everything after the first
-          ;; '\t' is the right-aligned shortcut column, not part of the label.
-          (local.set $tab (call $dynamic_find_tab (local.get $label) (local.get $chars)))
-          (if (i32.ge_s (local.get $tab) (i32.const 0))
-            (then
-              (local.set $label_chars (local.get $tab))
-              (local.set $sc_chars
-                (i32.sub (i32.sub (local.get $chars) (local.get $tab)) (i32.const 1))))
-            (else
-              (local.set $label_chars (local.get $chars))
-              (local.set $sc_chars (i32.const 0))))
-          (i32.store         (local.get $rec) (local.get $label_off))
-          (i32.store offset=4  (local.get $rec) (local.get $label_chars))
-          (call $memcpy (i32.add (local.get $blob_w) (local.get $label_off))
-                (local.get $label) (local.get $label_chars))
-          (local.set $label_off (i32.add (local.get $label_off) (local.get $label_chars)))
-          (if (local.get $sc_chars)
-            (then
-              (i32.store offset=8  (local.get $rec) (local.get $label_off))
-              (i32.store offset=12 (local.get $rec) (local.get $sc_chars))
-              (call $memcpy (i32.add (local.get $blob_w) (local.get $label_off))
-                    (i32.add (local.get $label) (i32.add (local.get $tab) (i32.const 1)))
-                    (local.get $sc_chars))
-              (local.set $label_off
-                (i32.add (local.get $label_off) (local.get $sc_chars))))))
-        (else
-          ;; Owner-draw values are item data, never text. Keep their label empty
-          ;; so a missing draw specialization cannot leak internal command ids.
-          (i32.store         (local.get $rec) (local.get $label_off))
-          (if (i32.and (local.get $flags) (i32.const 0x0100))
-            (then (i32.store offset=4 (local.get $rec) (i32.const 0)))
-            (else
-              ;; Retain the diagnostic fallback for non-owner-draw bitmap items.
-              (i32.store offset=4 (local.get $rec) (i32.const 5))
-              (call $write_hex_menu_label
-                (i32.add (local.get $blob_w) (local.get $label_off))
-                (local.get $id))
-              (local.set $label_off (i32.add (local.get $label_off) (i32.const 5)))))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $items)))
+    (global.set $dmb_blob_w (call $g2w (local.get $blob_g)))
+    (call $zero_memory (global.get $dmb_blob_w) (local.get $total))
+    (i32.store (global.get $dmb_blob_w) (i32.const 1))
+    (global.set $dmb_struct (i32.const 20))
+    (global.set $dmb_str (local.get $struct))
+    (i32.store offset=12 (global.get $dmb_blob_w)
+      (call $dmb_write_block (local.get $hmenu) (i32.const 1)))
     (local.get $blob_g))
 
   ;; ---- A menu bar built at runtime out of MNUD menus ----
@@ -1064,8 +968,8 @@
       (local.set $id (i32.load offset=4 (local.get $item)))
       (call $dmb_put_text (local.get $rec)
         (call $dynamic_item_label_w (local.get $item)) (i32.const 1))
-      ;; Same bits the host serializer and $dynamic_menu_make_popup_blob write:
-      ;; separator (or a command with no id), grayed, checked.
+      ;; Shared bar/popup flags: separator (or a command with no id),
+      ;; grayed, checked, and the owner-draw marker below.
       (local.set $out (i32.const 0))
       ;; USER also makes a separator of a plain string item whose string is
       ;; NULL: Civ2 spaces its dropdowns with InsertMenu(MF_STRING, id, NULL).
@@ -1080,6 +984,10 @@
         (then (local.set $out (i32.or (local.get $out) (i32.const 2)))))
       (if (i32.and (local.get $flags) (i32.const 0x0008))
         (then (local.set $out (i32.or (local.get $out) (i32.const 4)))))
+      ;; Preserve the tracked popup painter's owner-draw marker. Submenus
+      ;; are identified by their child offset, independently of this bit.
+      (if (i32.and (local.get $flags) (i32.const 0x0100))
+        (then (local.set $out (i32.or (local.get $out) (i32.const 8)))))
       (i32.store offset=16 (local.get $rec) (local.get $out))
       (i32.store offset=20 (local.get $rec) (local.get $id))
       (local.set $sub (call $dmb_child_menu (local.get $item)))
