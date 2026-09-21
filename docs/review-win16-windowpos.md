@@ -2116,3 +2116,34 @@ test now starts its observation at a read-only marker immediately before
 the click, still excluding startup focus; it also accepts the standard
 `WINE_ASSEMBLY_WASM` prebuilt-artifact override. These tests do not replace
 the remaining full nested-dialog/browser activation acceptance matrix.
+
+### Actual nested guest-dialog coverage
+
+The lifecycle regression now goes beyond injected global writes. Real x86
+callbacks call DialogBoxIndirectParamA using an empty DLGTEMPLATE, and the
+nested guest DLGPROC calls EndDialog(99) from WM_INITDIALOG. Three routes
+exercise that complete nested pump: child WM_DESTROY, owner WM_SETFOCUS
+while a DialogBox retires, and owner WM_SETFOCUS while a common dialog
+retires. The nested callback must receive 99, both dialog records must be
+removed, the owner must survive, and the outer call must return its own 42,
+return PC and stack cleanup.
+
+A fourth route calls real MessageBoxA from the common dialog's owner focus
+callback. The test host supplies its OK command when the nested modal pump
+paints; it does not overwrite continuation globals. The nested MessageBox
+returns IDOK, while the outer common call keeps result 42 and its saved
+frame. The owner deliberately uses different EBX/ESI/EDI/EBP values during
+MessageBox and restores its callee-saved registers afterward; the outer API
+must restore its own saved values rather than the nested dialog's values.
+
+Reverting only the common-modal runtime to before `168ecb6d` reproduces the
+actual nested-call failure: IDOK (1) escapes as the outer result instead of
+42 (`wa-real-nested-common-negative.log`). This closes the injected-state-only
+coverage gap for these self-closing guest dialogs and programmatically
+accepted MessageBox. It is still a headless real-guest test, not a browser
+interaction/Worker or Win16 nested-dialog matrix.
+
+Final clean-tree regression including distinct nested nonvolatile registers
+passes (`/private/tmp/wa-real-nested-final.log`). Embedded-WAT address and
+test-timeout gates also pass. This stage changes tests/notes only; the runtime
+fix remains `168ecb6d`, and no additional artifact rebuild is claimed.

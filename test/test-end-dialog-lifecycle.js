@@ -12,6 +12,27 @@ const { bootRenderHarness } = require('./render-helper');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_make_owner") (param $proc i32) (result i32)
+    (local $h i32)
+    (local.set $h (global.get $next_hwnd))
+    (global.set $next_hwnd (i32.add (local.get $h) (i32.const 1)))
+    (call $wnd_table_set (local.get $h) (local.get $proc))
+    (drop (call $wnd_set_style (local.get $h) (i32.const 0x10000000)))
+    (local.get $h))
+  (func (export "test_assign_owner") (param $dlg i32) (param $owner i32)
+    (call $wnd_set_owner (local.get $dlg) (local.get $owner))
+    (global.set $focus_hwnd (i32.const 0)))
+  (func (export "test_finish_common") (param $dlg i32) (param $stack i32)
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (i32.store offset=12 (global.get $reg_base) (i32.const 11))
+    (i32.store offset=24 (global.get $reg_base) (i32.const 22))
+    (i32.store offset=28 (global.get $reg_base) (i32.const 33))
+    (i32.store offset=20 (global.get $reg_base) (i32.const 44))
+    (call $gs32 (local.get $stack) (i32.const 0x405678))
+    (call $modal_begin (local.get $dlg) (i32.const 20))
+    (call $modal_done (i32.const 42))
+    (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA0006))
+    (call $win32_dispatch (i32.const 0)))
   (func (export "test_set_child_proc") (param $h i32) (param $proc i32)
     (call $wnd_table_set (local.get $h) (local.get $proc)))
   (func (export "test_clobber_modal_completion") (param $nested i32)
@@ -102,8 +123,9 @@ function u32(value) {
 
 (async () => {
   let onTick = () => 0;
+  let onInvalidate = () => {};
   const { exports: e, memory } = await bootRenderHarness({ extraWat,
-    extraHostOverrides: { get_ticks: () => onTick() } });
+    extraHostOverrides: { get_ticks: () => onTick(), invalidate: hwnd => onInvalidate(hwnd) } });
   const fixture = fs.readFileSync(path.join(ROOT, 'test', 'binaries', 'calc.exe'));
   new Uint8Array(memory.buffer).set(fixture, e.get_staging());
   assert(e.load_pe(fixture.length), 'fixture PE initializes x86 callback support');
@@ -229,7 +251,112 @@ function u32(value) {
   assert.strictEqual(e.get_eax(), 42, 'retiring DialogBox keeps its own result');
   assert.strictEqual(e.get_eip(), 0x405678, 'retiring DialogBox keeps its own return address');
   assert.strictEqual(e.get_esp(), completionStack + 24, 'modal completion consumes its own frame');
-  console.log('PASS  EndDialog lifecycle and reentrant completion ownership');
+  // Now exercise an actual nested dialog, without host mutation: the outer
+  // child's WM_DESTROY opens DialogBoxIndirectParamA, whose WM_INITDIALOG
+  // ends it with 99. Its result must return to the child before outer teardown
+  // completes with 42.
+  onTick = () => 1000;
+  const dialogThunk = e.test_make_api_thunk(apiTable.find(a => a.name === 'DialogBoxIndirectParamA').id);
+  const nestedEndThunk = e.test_make_api_thunk(apiTable.find(a => a.name === 'EndDialog').id);
+  const template = e.guest_alloc(64) >>> 0;
+  bytes.fill(0, toWasm(template), toWasm(template) + 64);
+  view.setUint32(toWasm(template), 0x80000000, true); // WS_POPUP, empty DLGTEMPLATE
+  view.setUint16(toWasm(template) + 14, 80, true);
+  view.setUint16(toWasm(template) + 16, 40, true);
+  const nestedSeen = e.guest_alloc(8) >>> 0;
+  const nestedProc = e.guest_alloc(128) >>> 0;
+  const closeNested = [
+    0x8b, 0x44, 0x24, 4, 0xa3, ...u32(nestedSeen),
+    0x6a, 99, 0x50, 0xb8, ...u32(nestedEndThunk), 0xff, 0xd0,
+  ];
+  bytes.set(Uint8Array.from([
+    0x81, 0x7c, 0x24, 8, ...u32(0x110), 0x75, closeNested.length,
+    ...closeNested, 0x31, 0xc0, 0xc2, 0x10, 0,
+  ]), toWasm(nestedProc));
+  const openNestedProc = e.guest_alloc(128) >>> 0;
+  const openNestedBody = [
+    0x6a, 0, 0x68, ...u32(nestedProc), 0x6a, 0,
+    0x68, ...u32(template), 0x6a, 0,
+    0xb8, ...u32(dialogThunk), 0xff, 0xd0,
+    0xa3, ...u32(nestedSeen + 4),
+  ];
+  bytes.set(Uint8Array.from([...openNestedBody, 0x31, 0xc0, 0xc2, 0x10, 0]), toWasm(openNestedProc));
+  const outerPacked = BigInt.asUintN(64, e.test_create_modeless_dialog(proc));
+  const outer = Number(outerPacked & 0xffffffffn) >>> 0;
+  e.test_set_child_proc(Number(outerPacked >> 32n) >>> 0, openNestedProc);
+  e.test_finish_modal(outer, completionStack);
+  const nestedHwnd = view.getUint32(toWasm(nestedSeen), true);
+  assert(nestedHwnd, 'nested guest DLGPROC received WM_INITDIALOG');
+  assert.strictEqual(view.getUint32(toWasm(nestedSeen + 4), true), 99,
+    'nested DialogBox returns its own result to the teardown callback');
+  assert.strictEqual(e.test_window_exists(nestedHwnd), 0);
+  assert.strictEqual(e.test_window_exists(outer), 0);
+  assert.strictEqual(e.get_eax(), 42);
+  assert.strictEqual(e.get_eip(), 0x405678);
+  assert.strictEqual(e.get_esp(), completionStack + 24);
+  const ownerProc = e.guest_alloc(128) >>> 0;
+  bytes.set(Uint8Array.from([
+    0x83, 0x7c, 0x24, 8, 7, 0x75, openNestedBody.length,
+    ...openNestedBody, 0x31, 0xc0, 0xc2, 0x10, 0,
+  ]), toWasm(ownerProc));
+  const owner = e.test_make_owner(ownerProc);
+  for (const common of [false, true]) {
+    const packed = BigInt.asUintN(64, e.test_create_modeless_dialog(proc));
+    const dialog = Number(packed & 0xffffffffn) >>> 0;
+    view.setUint32(toWasm(nestedSeen), 0, true);
+    view.setUint32(toWasm(nestedSeen + 4), 0, true);
+    e.test_assign_owner(dialog, owner);
+    if (common) e.test_finish_common(dialog, completionStack);
+    else e.test_finish_modal(dialog, completionStack);
+    const childDialog = view.getUint32(toWasm(nestedSeen), true);
+    assert(childDialog, `common=${common}: owner focus opened an actual nested dialog`);
+    assert.strictEqual(view.getUint32(toWasm(nestedSeen + 4), true), 99);
+    assert.strictEqual(e.test_window_exists(childDialog), 0);
+    assert.strictEqual(e.test_window_exists(dialog), 0);
+    assert.strictEqual(e.test_window_exists(owner), 1);
+    assert.strictEqual(e.get_eax(), 42);
+    assert.strictEqual(e.get_eip(), 0x405678);
+    assert.strictEqual(e.get_esp(), completionStack + (common ? 20 : 24));
+  }
+  // Common dialog inside common dialog: the owner's guest callback calls
+  // MessageBoxA. Once its modal pump paints, the host supplies the real OK
+  // command (no mutation of saved modal globals).
+  const messageThunk = e.test_make_api_thunk(apiTable.find(a => a.name === 'MessageBoxA').id);
+  const text = e.guest_alloc(16) >>> 0;
+  bytes.set(Buffer.from('nested\0'), toWasm(text));
+  const commonOwnerProc = e.guest_alloc(128) >>> 0;
+  const openMessage = [
+    0x53, 0x56, 0x57, 0x55, // preserve the owner's callee-saved registers
+    0xbb, ...u32(111), 0xbe, ...u32(222), 0xbf, ...u32(333), 0xbd, ...u32(444),
+    0x6a, 0, 0x68, ...u32(text), 0x68, ...u32(text), 0x6a, 0,
+    0xb8, ...u32(messageThunk), 0xff, 0xd0, 0xa3, ...u32(nestedSeen + 4),
+    0x5d, 0x5f, 0x5e, 0x5b,
+  ];
+  bytes.set(Uint8Array.from([0x83, 0x7c, 0x24, 8, 7, 0x75, openMessage.length,
+    ...openMessage, 0x31, 0xc0, 0xc2, 0x10, 0]), toWasm(commonOwnerProc));
+  const commonOwner = e.test_make_owner(commonOwnerProc);
+  const commonOuter = Number(BigInt.asUintN(64, e.test_create_modeless_dialog(proc)) & 0xffffffffn);
+  e.test_assign_owner(commonOuter, commonOwner);
+  let accepted = 0;
+  onInvalidate = () => {
+    const dialog = e.modal_dialog_hwnd();
+    if (dialog && dialog !== commonOuter && !accepted) {
+      accepted = dialog;
+      e.send_message(dialog, 0x111, 1, 0);
+    }
+  };
+  view.setUint32(toWasm(nestedSeen + 4), 0, true);
+  e.test_finish_common(commonOuter, completionStack);
+  assert(accepted, 'nested MessageBox reached its own modal pump');
+  assert.strictEqual(view.getUint32(toWasm(nestedSeen + 4), true), 1, 'nested MessageBox returns IDOK');
+  assert.strictEqual(e.test_window_exists(accepted), 0);
+  assert.strictEqual(e.test_window_exists(commonOuter), 0);
+  assert.strictEqual(e.get_eax(), 42);
+  assert.strictEqual(e.get_eip(), 0x405678);
+  assert.strictEqual(e.get_esp(), completionStack + 20);
+  assert.deepStrictEqual([e.get_ebx(), e.get_esi(), e.get_edi(), e.get_ebp()],
+    [11, 22, 33, 44], 'outer common call restores its registers, not the nested MessageBox registers');
+  console.log('PASS  EndDialog lifecycle and actual nested guest/common dialog completion');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);
