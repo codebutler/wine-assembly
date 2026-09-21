@@ -3016,3 +3016,15 @@ This does not remove `_openWorkerContextMenu`, the separate title-matched
 Winamp wVis release workaround. That helper can still consume the release
 and synthesize a menu; it needs a real-app regression before replacement.
 Nor does this establish live cross-app Worker activation/deactivation.
+
+### wVis helper removal remains blocked by menu state (2026-09-21)
+
+The existing real-browser visualization test passes with the helper. In an
+isolated copy, disabling only `_openWorkerContextMenu` delivers the release
+and opens the guest popup, but its Rendering Options submenu fails. Moving
+the test hover to the guest popup's actual anchor does not fix it: direct
+WAT inspection finds the labelled popup and all following rows flagged as
+separators. The hit test correctly rejects that row. No runtime workaround
+was removed and no coordinate-only test fix was accepted. Binary addresses,
+logs, exact flags, limitations and the next diagnostic are recorded in
+[winamp-wvis.md](re-notes/winamp-wvis.md).
