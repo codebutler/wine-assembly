@@ -479,9 +479,10 @@ async function main() {
     assert.strictEqual(selectObject(dc16, bitmap16), 0x30007);
     selectObject(dc16, thin);
     assert.strictEqual(wat.test_gdi_line_try(dc16, 0, 0, 4, 0), 1);
+    // A DDB is stored top row first, so y=0 is the first scanline.
     const storage16 = wat.test_gdi_bitmap_storage(bitmap16) >>> 0;
     assert.deepStrictEqual([0, 1, 2, 3, 4].map(x =>
-      dv.getUint16(storage16 + 36 + x * 2, true)),
+      dv.getUint16(storage16 + x * 2, true)),
     [0x7C00, 0x7C00, 0x7C00, 0x7C00, 0],
     '16-bpp BI_RGB lines use RGB555 and preserve endpoint exclusion');
   });

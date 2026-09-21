@@ -26,6 +26,30 @@ const RegionMap = require('../lib/region-map.generated.js');
   const readBytes = (pointer, size) => Array.from(bytes.subarray(wa(pointer), wa(pointer) + size));
   const writeByte = (pointer, value) => { bytes[wa(pointer)] = value; };
 
+  // A DDB's bits are top row first, both as CreateBitmap takes them and as
+  // Get/SetBitmapBits exchange them. ClockWerx draws each line of its level
+  // text into a 1-bpp CreateBitmap with TextOut and reads it back with
+  // GetBitmapBits as a mask; stored bottom-up, every line came out flipped.
+  check('DDB bits are exchanged top row first', () => {
+    const pixels = allocZero(4);
+    writeByte(pixels + 0, 0xff); writeByte(pixels + 1, 0xff); // row 0 set
+    const bitmap = wat.test_call_CreateBitmap(16, 2, 1, 1, pixels) >>> 0;
+    const dc = wat.test_call_CreateCompatibleDC(0) >>> 0;
+    assert(bitmap && dc);
+    wat.test_call_SelectObject(dc, bitmap);
+    assert.strictEqual(wat.test_call_GetPixel(dc, 0, 0) >>> 0, 0xffffff,
+      'CreateBitmap lpBits row 0 is y=0');
+    assert.strictEqual(wat.test_call_GetPixel(dc, 0, 1) >>> 0, 0,
+      'CreateBitmap lpBits row 1 is y=1');
+    wat.test_call_SetPixel(dc, 3, 1, 0xffffff);
+    const output = allocZero(4);
+    assert.strictEqual(wat.test_call_GetBitmapBits(bitmap, 4, output), 4);
+    assert.deepStrictEqual(readBytes(output, 4), [0xff, 0xff, 0x10, 0x00],
+      'a pixel drawn at y=1 comes back in the second scanline');
+    assert.strictEqual(wat.test_call_DeleteDC(dc), 1);
+    assert.strictEqual(wat.test_call_DeleteObject(bitmap), 1);
+  });
+
   check('CreateBitmapIndirect and bitmap bit access use canonical storage', () => {
     const pixels = allocZero(16);
     const initial = [

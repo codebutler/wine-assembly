@@ -302,6 +302,13 @@
     (i32.store (local.get $plan) (local.get $width))
     (i32.store offset=4 (local.get $plan) (local.get $height))
     (i32.store offset=8 (local.get $plan) (local.get $bpp))
+    ;; A device-dependent bitmap is top row first: that is the order
+    ;; CreateBitmap's lpBits and Get/SetBitmapBits exchange, and both copy the
+    ;; storage verbatim. Stored bottom-up, every DDB a program built or read
+    ;; back was upside down — ClockWerx renders each line of its level text
+    ;; into a 1-bpp CreateBitmap with TextOut, fetches it with GetBitmapBits
+    ;; as a mask, and drew every line flipped.
+    (i32.store offset=12 (local.get $plan) (i32.const 2))
     (i32.store offset=16 (local.get $plan) (local.get $stride))
     (i32.store offset=32 (local.get $plan) (i32.wrap_i64 (local.get $size)))
     (i32.const 1))
