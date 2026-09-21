@@ -301,6 +301,81 @@ async function main() {
   test('FPTAN clears C2 for an in-range argument', tanInRange.c2, 0);
   testFloat('FPTAN pushes 1.0 when in range', tanInRange.st0, 1.0);
 
+  // FXTRACT splits ST(0) into unbiased exponent (replacing it) and significand
+  // (pushed). It used to push (1.0, 0.0) -- right stack effect, wrong numbers,
+  // which only shows up as nonsense out of a CRT log/exp/frexp built on it.
+  const fxtract = value => {
+    setFloat(scratch, value);
+    runCode([
+      0xDD, 0x05, ...le32(scratch), // fld qword [scratch]
+      0xD9, 0xF4,                   // fxtract
+      0xDD, 0x1D, ...le32(scratch), // fstp qword [scratch]      <- significand
+      0xDD, 0x1D, ...le32(scratchA),// fstp qword [scratchA]     <- exponent
+    ]);
+    return {
+      sig: dv.getFloat64(g2w(scratch), true),
+      exp: dv.getFloat64(g2w(scratchA), true),
+    };
+  };
+  const x40 = fxtract(40.0); // 40 = 1.25 * 2^5
+  testFloat('FXTRACT exponent of 40.0', x40.exp, 5);
+  testFloat('FXTRACT significand of 40.0', x40.sig, 1.25);
+  const xNeg = fxtract(-0.75); // -0.75 = -1.5 * 2^-1
+  testFloat('FXTRACT exponent of -0.75', xNeg.exp, -1);
+  testFloat('FXTRACT keeps the sign in the significand', xNeg.sig, -1.5);
+  // test() compares (x >>> 0) and testFloat() demands Number.isFinite, so
+  // neither can assert a non-finite value -- Infinity and DBL_MAX both collapse
+  // to 0 and the assertion passes vacuously. Compare explicitly instead.
+  test('FXTRACT exponent of zero is -inf', fxtract(0).exp === -Infinity, true);
+
+  // FLD m80 must keep infinity and NaN apart. Our own FSTP m80 encodes them
+  // differently (significand 0x8000.. against the QNaN indefinite 0xC000..),
+  // and returning DBL_MAX for both threw that away -- a float32 store of
+  // DBL_MAX then overflows back to +/-inf far from the cause.
+  const m80 = (loBits, seWord) => {
+    dv.setBigUint64(g2w(scratch), loBits, true);
+    dv.setUint16(g2w(scratch + 8), seWord, true);
+    runCode([
+      0xDB, 0x2D, ...le32(scratch),  // fld tbyte [scratch]
+      0xDD, 0x1D, ...le32(scratchA), // fstp qword [scratchA]
+    ]);
+    return dv.getFloat64(g2w(scratchA), true);
+  };
+  test('FLD m80 +infinity', m80(0x8000000000000000n, 0x7FFF) === Infinity, true);
+  test('FLD m80 -infinity', m80(0x8000000000000000n, 0xFFFF) === -Infinity, true);
+  test('FLD m80 QNaN indefinite is a NaN, not DBL_MAX',
+    Number.isNaN(m80(0xC000000000000000n, 0xFFFF)), true);
+
+  // FPREM/FPREM1 report the low three bits of the integer quotient as
+  // C0=Q2, C3=Q1, C1=Q0 and clear C2. A large-argument reduction loop picks
+  // its quadrant from those; we used to leave all three alone, i.e. always
+  // claim quotient 0.
+  const fprem = (a, b) => {
+    setFloat(scratchA, b);
+    setFloat(scratch, a);
+    runCode([
+      0xDD, 0x05, ...le32(scratchA), // fld qword [scratchA]  -> ST(1)
+      0xDD, 0x05, ...le32(scratch),  // fld qword [scratch]   -> ST(0)
+      0xD9, 0xF8,                    // fprem
+      0xDF, 0xE0,                    // fnstsw ax
+      0xDD, 0x1D, ...le32(scratch),  // fstp qword [scratch]
+      0xDD, 0xD8,                    // fstp st(0)
+    ]);
+    const sw = e.get_eax();
+    return {
+      c2: sw & 0x0400,
+      q: ((sw & 0x0100) >> 6) | ((sw & 0x4000) >> 13) | ((sw & 0x0200) >> 9),
+      rem: dv.getFloat64(g2w(scratch), true),
+    };
+  };
+  // 17 = 5*3 + 2, so quotient 5 (Q=101b) and remainder 2.
+  const p17 = fprem(17.0, 3.0);
+  test('FPREM clears C2 on a complete reduction', p17.c2, 0);
+  test('FPREM reports quotient bits Q2:Q1:Q0', p17.q, 5);
+  testFloat('FPREM remainder of 17 mod 3', p17.rem, 2.0);
+  // 30 = 3*10 + 0, quotient 10 -> low three bits 010b = 2.
+  test('FPREM quotient bits keep only the low three', fprem(30.0, 3.0).q, 2);
+
   // 2^63 exactly is out of range: C2 set and ST(0) left untouched.
   const sinOutOfRange = trigAfterFxam(9223372036854775808.0, FSIN);
   test('FSIN sets C2 for an out-of-range argument', sinOutOfRange.c2, 0x0400);

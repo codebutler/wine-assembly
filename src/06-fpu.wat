@@ -215,6 +215,81 @@
     (global.set $fpu_sw
       (i32.or (i32.and (global.get $fpu_sw) (i32.const 0xB8FF)) (local.get $cc))))
 
+  ;; FPREM/FPREM1 report the low three bits of the integer quotient in
+  ;; C0=Q2, C3=Q1, C1=Q0, and clear C2 when the reduction is complete. A
+  ;; large-argument trig reduction loop reads exactly those bits to pick the
+  ;; quadrant; we used to clear C2 and leave all three alone, i.e. always
+  ;; report quotient 0.
+  ;;
+  ;; Our reduction is exact in f64 rather than partial, so C2 is always
+  ;; cleared and the bits are always the defined-meaningful case. The one
+  ;; thing we cannot do is a quotient at or above 2^63: i64.trunc_f64_s would
+  ;; trap and take the emulator with it, and real hardware would have reported
+  ;; a partial reduction there instead. Report zero for the bits in that case
+  ;; rather than risk the trap.
+  (func $fpu_prem_quotient (param $q f64)
+    (local $qi i64) (local $cc i32)
+    ;; 0xB8FF clears C3|C2|C1|C0 (0x4700). C1 is easy to leave in by accident,
+    ;; and a stale one reads back as Q0 -- quotient 10 comes out as 11.
+    (global.set $fpu_sw (i32.and (global.get $fpu_sw) (i32.const 0xB8FF)))
+    (if (call $fpu_is_nan (local.get $q)) (then (return)))
+    (if (f64.ge (f64.abs (local.get $q)) (f64.const 9223372036854775808.0))
+      (then (return)))
+    (local.set $qi (i64.trunc_f64_s (f64.abs (local.get $q))))
+    (if (i64.eqz (i64.and (local.get $qi) (i64.const 1)))
+      (then) (else (local.set $cc (i32.or (local.get $cc) (i32.const 0x0200))))) ;; Q0 -> C1
+    (if (i64.eqz (i64.and (local.get $qi) (i64.const 2)))
+      (then) (else (local.set $cc (i32.or (local.get $cc) (i32.const 0x4000))))) ;; Q1 -> C3
+    (if (i64.eqz (i64.and (local.get $qi) (i64.const 4)))
+      (then) (else (local.set $cc (i32.or (local.get $cc) (i32.const 0x0100))))) ;; Q2 -> C0
+    (global.set $fpu_sw (i32.or (global.get $fpu_sw) (local.get $cc))))
+
+  ;; FXTRACT splits ST(0) into its unbiased exponent (which replaces ST(0)) and
+  ;; its significand, 1.0 <= |sig| < 2.0 with the original sign, which is then
+  ;; pushed. This used to push (1.0, 0.0): the stack effect was right and both
+  ;; numbers were wrong, which stays invisible until a CRT log/exp/frexp built
+  ;; on top of it returns nonsense with no crash to point at.
+  (func $fpu_fxtract
+    (local $v f64) (local $abs f64) (local $bits i64)
+    (local $e i32) (local $adj i32) (local $sig f64) (local $inf f64)
+    (local.set $inf (f64.reinterpret_i64 (i64.const 0x7FF0000000000000)))
+    (local.set $v (call $fpu_get (i32.const 0)))
+    (local.set $abs (f64.abs (local.get $v)))
+    ;; NaN in, that NaN out for both results.
+    (if (call $fpu_is_nan (local.get $v))
+      (then (call $fpu_push (local.get $v)) (return)))
+    ;; Infinity: exponent +inf, significand the infinity itself.
+    (if (f64.gt (local.get $abs) (f64.const 1.7976931348623157e308))
+      (then
+        (call $fpu_set (i32.const 0) (local.get $inf))
+        (call $fpu_push (local.get $v)) (return)))
+    ;; Zero: exponent -inf with ZE raised, significand keeps the signed zero.
+    (if (f64.eq (local.get $abs) (f64.const 0))
+      (then
+        (call $fpu_set_exc (i32.const 0x04))
+        (call $fpu_set (i32.const 0) (f64.neg (local.get $inf)))
+        (call $fpu_push (local.get $v)) (return)))
+    ;; A denormal has no leading 1 to read off, so scale it up by 2^64 first
+    ;; and take those 64 back out of the exponent afterwards.
+    (if (f64.lt (local.get $abs) (f64.const 2.2250738585072014e-308))
+      (then
+        (local.set $adj (i32.const 64))
+        (local.set $v (f64.mul (local.get $v) (f64.const 18446744073709551616.0)))))
+    (local.set $bits (i64.reinterpret_f64 (local.get $v)))
+    (local.set $e (i32.wrap_i64
+      (i64.and (i64.shr_u (local.get $bits) (i64.const 52)) (i64.const 0x7FF))))
+    ;; Significand: keep the mantissa, force the exponent field to the bias,
+    ;; then reapply the sign (built this way so no literal exceeds 2^63).
+    (local.set $sig (f64.reinterpret_i64
+      (i64.or (i64.and (local.get $bits) (i64.const 0x000FFFFFFFFFFFFF))
+              (i64.const 0x3FF0000000000000))))
+    (if (i64.lt_s (local.get $bits) (i64.const 0))
+      (then (local.set $sig (f64.neg (local.get $sig)))))
+    (call $fpu_set (i32.const 0)
+      (f64.convert_i32_s
+        (i32.sub (i32.sub (local.get $e) (i32.const 1023)) (local.get $adj))))
+    (call $fpu_push (local.get $sig)))
+
   ;; FSIN/FCOS/FSINCOS/FPTAN report argument reduction through C2: each clears
   ;; it when |ST(0)| < 2^63 and otherwise SETS it and leaves the stack alone.
   ;; Leaving C2 untouched is not harmless, because C2 is sticky and FXAM runs
@@ -383,9 +458,19 @@
         (if (local.get $sign)
           (then (return (f64.const -0.0)))
           (else (return (f64.const 0.0))))))
+    ;; Maximal exponent. Bit 63 is m80's EXPLICIT integer bit, so the low 63
+    ;; bits decide: all zero is an infinity, anything else a NaN. $fpu_store_m80
+    ;; right below already writes the two apart (0x8000.. against the QNaN
+    ;; indefinite 0xC000..), so collapsing them back to DBL_MAX threw away a
+    ;; distinction we had encoded: _isnan/_finite answer wrong on a reloaded
+    ;; value, and a float32 store of DBL_MAX overflows straight back to +/-inf
+    ;; a long way from the cause -- boids' CRT loads its indefinite constant
+    ;; from 0x41f0f0 and it reached the projection matrix as 0xff800000.
     (if (i32.eq (local.get $exp) (i32.const 0x7FFF))
       (then
-        (local.set $val (f64.const 1.7976931348623157e308))
+        (if (i64.eqz (i64.and (local.get $mant) (i64.const 0x7FFFFFFFFFFFFFFF)))
+          (then (local.set $val (f64.reinterpret_i64 (i64.const 0x7FF0000000000000))))
+          (else (local.set $val (f64.reinterpret_i64 (i64.const 0x7FF8000000000000)))))
         (if (local.get $sign) (then (local.set $val (f64.neg (local.get $val)))))
         (return (local.get $val))))
     (local.set $val
@@ -786,10 +871,7 @@
                 (call $fpu_set (i32.const 1) (call $host_math_atan2 (call $fpu_get (i32.const 1)) (local.get $st0)))
                 (drop (call $fpu_pop)) (return)))
             (if (i32.eq (local.get $rm) (i32.const 4))
-              ;; FXTRACT — placeholder. Real spec splits ST(0) into unbiased
-              ;; exponent (replaces ST(0)) and significand (pushed). We push
-              ;; (1.0, 0.0); stack effect is correct, magnitudes are not.
-              (then (call $fpu_set (i32.const 0) (f64.const 1.0)) (call $fpu_push (f64.const 0.0)) (return)))
+              (then (call $fpu_fxtract) (return))) ;; FXTRACT
             (if (i32.eq (local.get $rm) (i32.const 6))
               (then (global.set $fpu_top (i32.and (i32.sub (global.get $fpu_top) (i32.const 1)) (i32.const 7))) (return)))
             (if (i32.eq (local.get $rm) (i32.const 7))
@@ -802,23 +884,23 @@
                 (call $fpu_set (i32.const 1) (f64.mul (call $fpu_get (i32.const 1)) (call $host_math_log2 (local.get $st0))))
                 (drop (call $fpu_pop)) (return)))
             (if (i32.eq (local.get $rm) (i32.const 5))
-              (then ;; FPREM1: IEEE remainder ST(0) mod ST(1), clear C2
+              (then ;; FPREM1: IEEE remainder ST(0) mod ST(1); C2 clear, Q bits
+                (local.set $v (call $fpu_round (f64.div (local.get $st0) (call $fpu_get (i32.const 1)))))
                 (call $fpu_set (i32.const 0)
                   (f64.sub (local.get $st0)
-                    (f64.mul (call $fpu_round (f64.div (local.get $st0) (call $fpu_get (i32.const 1))))
-                             (call $fpu_get (i32.const 1)))))
-                (global.set $fpu_sw (i32.and (global.get $fpu_sw) (i32.const 0xFBFF)))
+                    (f64.mul (local.get $v) (call $fpu_get (i32.const 1)))))
+                (call $fpu_prem_quotient (local.get $v))
                 (return)))
             (call $fpu_crash_op (local.get $group) (local.get $reg) (local.get $rm)) (return)))
         (if (i32.eq (local.get $reg) (i32.const 7))
           (then
             (if (i32.eq (local.get $rm) (i32.const 0))
-              (then ;; FPREM: ST(0) = ST(0) mod ST(1), clear C2 (complete)
+              (then ;; FPREM: ST(0) = ST(0) mod ST(1); C2 clear (complete), Q bits
+                (local.set $v (f64.trunc (f64.div (local.get $st0) (call $fpu_get (i32.const 1)))))
                 (call $fpu_set (i32.const 0)
                   (f64.sub (local.get $st0)
-                    (f64.mul (f64.trunc (f64.div (local.get $st0) (call $fpu_get (i32.const 1))))
-                             (call $fpu_get (i32.const 1)))))
-                (global.set $fpu_sw (i32.and (global.get $fpu_sw) (i32.const 0xFBFF)))
+                    (f64.mul (local.get $v) (call $fpu_get (i32.const 1)))))
+                (call $fpu_prem_quotient (local.get $v))
                 (return)))
             (if (i32.eq (local.get $rm) (i32.const 2))
               ;; FSQRT — set IE on negative input (WASM's f64.sqrt of a
