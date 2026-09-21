@@ -75,7 +75,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
-const WASM_PATH = path.join(ROOT, 'build', 'wine-assembly.wasm');
+const WASM_PATH = process.env.STACK_BENCH_WASM || path.join(ROOT, 'build', 'wine-assembly.wasm');
 
 // ---------------------------------------------------------------------------
 // x86 encoding helpers. Hand-encoded on purpose: the whole point of a shape is
@@ -2152,7 +2152,82 @@ SHAPES.region_null = {
   },
 };
 
+for (const n of [2, 3, 4]) {
+  const regs = [0, 3, 6, 7].slice(0, n);
+  SHAPES['stack_span' + n] = {
+    describe: `${n} register pushes followed by ${n} reverse-order pops`,
+    real: 'guarded stack-span experiment; synthetic, not app performance',
+    emit(a) {
+      const count = a.iterOverride || 2000000;
+      return {
+        iters: count, bytesTouched: 0,
+        code: loopBack([...regs.map(r => 0x50 + r), ...regs.slice().reverse().map(r => 0x58 + r)]),
+        setup(e) {
+          e.set_ecx(count); e.set_eax(11); e.set_ebx(22); e.set_esi(33); e.set_edi(44);
+        },
+        verify(e) {
+          if (e.get_ecx() !== 0) return 'loop did not complete';
+          if (e.get_eax() !== 11 || e.get_ebx() !== 22 || e.get_esi() !== 33 || e.get_edi() !== 44)
+            return 'register round-trip mismatch';
+          return null;
+        },
+      };
+    },
+  };
+}
+
+// Call-shaped stack benchmark: identical leaf code at one or 512 targets,
+// three callee-saved registers, a real local spill, and a checked accumulator.
+for (const targets of [1, 512]) for (const work of [1, 16]) {
+  const name = `stack_calls${targets}_body${work}`;
+  SHAPES[name] = {
+    describe: `${targets} indirect call targets; save/spill/${work} adds/restore/ret`,
+    real: 'synthetic function-call workload, not a replay of any game',
+    codeStride: 0x20000,
+    emit(a) {
+      const count = a.iterOverride || 1000000;
+      const entry = loopBack([0xff,0x14,0x97, // call [edi+edx*4]
+        0x83,0xc2,73,                      // add edx,73
+        0x81,0xe2,...le32(targets - 1)]); // and edx,mask
+      entry.push(0xc3);
+      const body = [0x53,0x56,0x57,         // push ebx,esi,edi
+        0x83,0xec,16,0x89,0x04,0x24];    // sub esp,16; mov [esp],eax
+      for (let i = 0; i < work; i++) body.push(0x03,0x06); // add eax,[esi]
+      body.push(0x8b,0x1c,0x24,0x83,0xc4,16, // mov ebx,[esp]; add esp,16
+        0x5f,0x5e,0x5b,0xc3);             // pop edi,esi,ebx; ret
+      const stride = 128, first = 256;
+      const code = new Array(first + targets * stride).fill(0xcc);
+      code.splice(0, entry.length, ...entry);
+      for (let i = 0; i < targets; i++) code.splice(first + i * stride, body.length, ...body);
+      return {
+        iters: count, bytesTouched: 0, code,
+        setup(e, mem, g2w) {
+          const dv = new DataView(mem.buffer);
+          for (let i = 0; i < targets; i++) dv.setUint32(g2w(a.buf) + i * 4, a.codeAddr + first + i * stride, true);
+          dv.setUint32(g2w(a.buf + 4096), 7, true);
+          mem.fill(0xa5, g2w(a.stackTop - 64), g2w(a.stackTop));
+          e.set_ecx(count); e.set_eax(0); e.set_edx(0); e.set_ebx(123);
+          e.set_esi(a.buf + 4096); e.set_edi(a.buf);
+        },
+        verify(e, mem, g2w) {
+          if (e.get_ecx() !== 0 || (e.get_eax() >>> 0) !== ((count * work * 7) >>> 0)) return 'accumulator/loop mismatch';
+          if (e.get_ebx() !== 123 || e.get_esi() !== a.buf + 4096 || e.get_edi() !== a.buf) return 'callee-saved register mismatch';
+          if ((e.get_esp() >>> 0) !== a.stackTop + 4) return 'stack unbalanced';
+          const dv = new DataView(mem.buffer);
+          if (dv.getUint32(g2w(a.stackTop - 32), true) !== (((count - 1) * work * 7) >>> 0)) return 'local spill mismatch';
+          return null;
+        },
+        checksum(e, mem, g2w) {
+          return JSON.stringify([e.get_eax(),e.get_ebx(),e.get_ecx(),e.get_edx(),e.get_esi(),e.get_edi(),e.get_esp(),
+            new DataView(mem.buffer).getUint32(g2w(a.stackTop - 32),true)]);
+        },
+      };
+    },
+  };
+}
+
 const TOGGLES = {
+  stack_candidate: 'set_bench_candidate',
   region: 'set_region_fold',
   tree_fold: 'set_tree_fold',
   lut_superops: 'set_loop_lut_emit',
@@ -2343,6 +2418,7 @@ const applyToggle = (e, name, v) => {
 let TOP_N = 6;
 
 function ensureBuilt() {
+  if (process.env.STACK_BENCH_WASM) return;
   let wasmTime = 0;
   try { wasmTime = fs.statSync(WASM_PATH).mtimeMs; } catch (_) {}
   const srcDir = path.join(ROOT, 'src');
@@ -2474,6 +2550,7 @@ function oneRep({ e, mem, g2w }, shape, a, repIndex) {
   mem.set(bytes, g2w(codeAddr));
   built.setup(e, mem, g2w);
   if (process.env.BENCH_TRACE_LOOP && e.set_loop_trace) e.set_loop_trace(1, codeAddr);
+  const stackFast0 = e.get_stack_span_fast_hits?.() || 0n;
   const t0 = process.hrtime.bigint();
   const ok = runToCompletion(e, codeAddr, a.stackTop);
   const t1 = process.hrtime.bigint();
@@ -2491,7 +2568,8 @@ function oneRep({ e, mem, g2w }, shape, a, repIndex) {
   // state after the shape, compared across arms by the caller — that is what
   // makes a hand-built region descriptor evidence rather than a hypothesis.
   const check = built.checksum ? built.checksum(e, mem, g2w) : null;
-  return { ns: Number(t1 - t0), built, check };
+  return { ns: Number(t1 - t0), built, check,
+    stackFastHits: Number((e.get_stack_span_fast_hits?.() || 0n) - stackFast0) };
 }
 
 function countOps(inst, shape, a, repIndex) {
@@ -2680,7 +2758,11 @@ async function main() {
       const order = arms.slice(shift).concat(arms.slice(0, shift));
       for (const v of order) {
         if (v !== null) applyToggle(inst.e, toggle, v);
-        const { ns, built, check } = oneRep(inst, shape, a, repIndex++);
+        const { ns, built, check, stackFastHits } = oneRep(inst, shape, a, repIndex++);
+        if (toggle === 'stack_candidate' && name.startsWith('stack_calls')) {
+          if (stackFastHits !== (v ? built.iters * 2 : 0))
+            throw Error(`${name}: unexpected fast hits ${stackFastHits} in arm ${v}`);
+        }
         armNs.get(v).push(ns);
         a.lastBuilt = built;
         if (check !== null) {
