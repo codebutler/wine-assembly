@@ -1706,6 +1706,24 @@
         (return (i32.const 0))))
     (local.get $packed))
 
+  (func $mouse_message_is_down (param $msg i32) (result i32)
+    (i32.or
+      (i32.or (i32.eq (local.get $msg) (i32.const 0x0201))
+        (i32.or (i32.eq (local.get $msg) (i32.const 0x0204)) (i32.eq (local.get $msg) (i32.const 0x0207))))
+      (i32.or (i32.eq (local.get $msg) (i32.const 0x00A1))
+        (i32.or (i32.eq (local.get $msg) (i32.const 0x00A4)) (i32.eq (local.get $msg) (i32.const 0x00A7))))))
+
+  (func $mouse_activate_query_lparam (param $msg i32) (param $wp i32) (result i32)
+    (i32.or (i32.shl (local.get $msg) (i32.const 16))
+      (i32.and (select (i32.const 1) (local.get $wp)
+        (i32.ge_u (local.get $msg) (i32.const 0x0200))) (i32.const 0xFFFF))))
+
+  (func $mouse_answer_activates (param $answer i32) (result i32)
+    (i32.and (i32.ne (local.get $answer) (i32.const 3)) (i32.ne (local.get $answer) (i32.const 4))))
+
+  (func $mouse_answer_eats (param $answer i32) (result i32)
+    (i32.or (i32.eq (local.get $answer) (i32.const 2)) (i32.eq (local.get $answer) (i32.const 4))))
+
   ;; A removed input-origin button-down asks the target before activation.
   ;; Locals own the complete MSG across synchronous callbacks: the guest may
   ;; recursively pump into the very same LPMSG. Never derive origin from WM_*.
@@ -1713,13 +1731,9 @@
   (func $message_mouse_activate32 (param $ptr i32) (result i32)
     (local $h i32) (local $msg i32) (local $wp i32) (local $lp i32)
     (local $time i32) (local $x i32) (local $y i32)
-    (local $top i32) (local $hit i32) (local $answer i32)
+    (local $top i32) (local $answer i32)
     (local.set $msg (call $gl32 (i32.add (local.get $ptr) (i32.const 4))))
-    (if (i32.eqz (i32.or
-      (i32.or (i32.eq (local.get $msg) (i32.const 0x0201))
-        (i32.or (i32.eq (local.get $msg) (i32.const 0x0204)) (i32.eq (local.get $msg) (i32.const 0x0207))))
-      (i32.or (i32.eq (local.get $msg) (i32.const 0x00A1))
-        (i32.or (i32.eq (local.get $msg) (i32.const 0x00A4)) (i32.eq (local.get $msg) (i32.const 0x00A7))))))
+    (if (i32.eqz (call $mouse_message_is_down (local.get $msg)))
       (then (return (i32.const 0))))
     (local.set $h (call $gl32 (local.get $ptr)))
     (if (i32.lt_s (call $wnd_table_find (local.get $h)) (i32.const 0))
@@ -1735,15 +1749,12 @@
     (local.set $time (call $gl32 (i32.add (local.get $ptr) (i32.const 16))))
     (local.set $x (call $gl32 (i32.add (local.get $ptr) (i32.const 20))))
     (local.set $y (call $gl32 (i32.add (local.get $ptr) (i32.const 24))))
-    (local.set $hit (select (i32.const 1) (local.get $wp)
-      (i32.ge_u (local.get $msg) (i32.const 0x0200))))
     (local.set $answer (call $wnd_send_message (local.get $h) (i32.const 0x0021)
-      (local.get $top) (i32.or (i32.shl (local.get $msg) (i32.const 16))
-        (i32.and (local.get $hit) (i32.const 0xFFFF)))))
+      (local.get $top) (call $mouse_activate_query_lparam (local.get $msg) (local.get $wp))))
     ;; Native Win98 treats zero like MA_ACTIVATE. Only the two explicit
     ;; MA_NOACTIVATE results suppress activation; 2/4 eat this down, not its up.
     (if (i32.and
-          (i32.and (i32.ne (local.get $answer) (i32.const 3)) (i32.ne (local.get $answer) (i32.const 4)))
+          (i32.ne (call $mouse_answer_activates (local.get $answer)) (i32.const 0))
           (i32.and (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0))
             (i32.ge_s (call $wnd_table_find (local.get $top)) (i32.const 0))))
       (then
@@ -1758,7 +1769,7 @@
     (call $gs32 (i32.add (local.get $ptr) (i32.const 20)) (local.get $x))
     (call $gs32 (i32.add (local.get $ptr) (i32.const 24)) (local.get $y))
     (i32.or (i32.lt_s (call $wnd_table_find (local.get $h)) (i32.const 0))
-      (i32.or (i32.eq (local.get $answer) (i32.const 2)) (i32.eq (local.get $answer) (i32.const 4)))))
+      (i32.ne (call $mouse_answer_eats (local.get $answer)) (i32.const 0))))
 
   (func $handle_GetMessageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $sp i32) (local $ret i32) (local $eat i32)
@@ -2165,7 +2176,11 @@
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (return)))
     ;; ---- NC_FLAGS scans (mirrors GetMessageA) ----
-    (if (global.get $nc_flags_count)
+    ;; Activation can invalidate a frame while processing an eaten click.
+    ;; A mouse-only retry must not return that unrelated synthetic NC work.
+    (if (i32.and (i32.ne (global.get $nc_flags_count) (i32.const 0))
+      (i32.ne (call $shared_post_queue_matches (i32.const 0) (i32.const 0x0083)
+        (i32.const 0) (local.get $arg2) (local.get $arg3)) (i32.const 0)))
     (then
     (local.set $tmp (call $nc_flags_scan (i32.const 4)))
     (if (local.get $tmp)
@@ -2182,7 +2197,9 @@
       (i32.add (i32.sub (global.get $image_base) (global.get $GUEST_BASE)) (local.get $nc_rect)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (return)))))
-    (if (global.get $nc_flags_count)
+    (if (i32.and (i32.ne (global.get $nc_flags_count) (i32.const 0))
+      (i32.ne (call $shared_post_queue_matches (i32.const 0) (i32.const 0x0085)
+        (i32.const 0) (local.get $arg2) (local.get $arg3)) (i32.const 0)))
     (then
     (local.set $tmp (call $nc_flags_scan (i32.const 1)))
     (if (local.get $tmp)

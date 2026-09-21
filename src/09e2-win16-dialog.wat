@@ -553,6 +553,17 @@
         (global.set $yield_flag (i32.const 1))
         (return)))
     (call $win16_call32_end)
+    (if (call $win16_mouse_input_start (i32.const 0) (local.get $scratch) (i32.const 2))
+      (then (return)))
+    (call $win16_dlg_deliver_message (local.get $scratch)))
+
+  (func $win16_dlg_deliver_message (param $scratch i32)
+    (local $dlg i32) (local $proc i32) (local $hwnd i32) (local $msg i32)
+    ;; The activation query may have called EndDialog. Retire the modal frame
+    ;; through its normal cleanup rather than dispatching the removed click.
+    (if (global.get $win16_dlg_ended) (then (call $win16_dlg_pump) (return)))
+    (local.set $dlg (call $win16_h32 (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
+    (local.set $proc (call $dialog_proc_get (local.get $dlg)))
     (local.set $hwnd (call $gl32 (local.get $scratch)))
     (local.set $msg  (call $gl32 (i32.add (local.get $scratch) (i32.const 4))))
     (if (i32.eqz (local.get $msg))

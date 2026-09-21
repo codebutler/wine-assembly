@@ -4,6 +4,51 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  (func (export "test_peek_thunk") (result i32)
+    (call $win16_thunk_for (i32.const 2) (i32.const 109) (i32.const 0)))
+  (func (export "test_modal_mouse") (param $h i32) (result i32)
+    (local $dirty i32)
+    (call $post_queue_reset)
+    (call $test_modal_clear_nc)
+    (block $clean (loop $next
+      (local.set $dirty (call $paint_flag_first))
+      (br_if $clean (i32.eqz (local.get $dirty)))
+      (call $paint_flag_clear_hwnd (local.get $dirty))
+      (call $update_clear_hwnd (local.get $dirty))
+      (br $next)))
+    (global.set $win16_dlg_ended (i32.const 0))
+    (global.set $yield_reason (i32.const 0))
+    (drop (call $dialog_proc_set (local.get $h) (call $wnd_table_get (local.get $h))))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (call $win16_h16 (local.get $h)))
+    (call $win16_dlg_pump)
+    (i32.add (i32.const 0x120000) (global.get $WIN16_DLG_PUMP)))
+  (func (export "test_modal_step") (call $win16_dlg_pump))
+  (func (export "test_mouse_pump") (param $peek i32) (param $remove i32) (param $min i32) (param $max i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (i32.const 0x90))
+    (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
+    (if (local.get $peek)
+      (then
+        (call $gs16 (i32.const 0x110804) (local.get $remove))
+        (call $gs16 (i32.const 0x110806) (local.get $max))
+        (call $gs16 (i32.const 0x110808) (local.get $min))
+        (call $gs16 (i32.const 0x11080a) (i32.const 0))
+        (call $gs32 (i32.const 0x11080c) (i32.const 0x00170e00))
+        (call $win16_PeekMessage))
+      (else
+        (call $gs16 (i32.const 0x110804) (local.get $max))
+        (call $gs16 (i32.const 0x110806) (local.get $min))
+        (call $gs16 (i32.const 0x110808) (i32.const 0))
+        (call $gs32 (i32.const 0x11080a) (i32.const 0x00170e00))
+        (call $win16_GetMessage))))
+  (func $test_modal_clear_nc (export "test_mouse_clear_nc")
+    (local $h i32)
+    (block $done (loop $next
+      (local.set $h (call $nc_flags_scan (i32.const 7)))
+      (br_if $done (i32.eqz (local.get $h)))
+      (call $nc_flags_clear (local.get $h) (i32.const 7))
+      (br $next))))
   (func (export "test_focus_api") (param $h i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
     (call $gs16 (i32.const 0x110800) (i32.const 0x90))
@@ -176,8 +221,16 @@ function recorder(extra = []) {
 const word = n => [n & 255, (n >>> 8) & 255];
 const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
 (async () => {
+  const mouseInput = [];
+  let currentMouse = null;
   const rectangles = new Map(), moves = [], orders = [], systemCommands = [];
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none', extraHostOverrides: {
+    check_input: () => {
+      currentMouse = mouseInput.shift() || null;
+      return currentMouse ? ((currentMouse.wp << 16) | currentMouse.msg) : 0;
+    },
+    check_input_hwnd: () => currentMouse ? currentMouse.hwnd : 0,
+    check_input_lparam: () => currentMouse ? currentMouse.lp : 0,
     sys_command: (hwnd, command) => systemCommands.push([hwnd, command]),
     get_window_rect: (hwnd, out) => {
       // Deliberately distinct outer and client geometry, including negatives.
@@ -884,5 +937,102 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     assert.strictEqual(e.test_focus(), retire ? 0 : chosen, 'nested focus/destruction wins');
     if (!retire) assert.strictEqual(e.guest_read32(0x110900), 3, 'no stale outer SETFOCUS');
   }
-  console.log('PASS Win16 WINDOWPOS mutation/default processing, nested far calls, destruction and stack lifetime');
+  e.test_mouse_clear_nc();
+  const pumpMessages = () => Array.from({length: e.guest_read32(0x110900)}, (_, i) => ({
+    msg: e.guest_read32(0x110904 + i * 8) & 0xffff,
+    wp: e.guest_read32(0x110904 + i * 8) >>> 16,
+    lp: e.guest_read32(0x110908 + i * 8) >>> 0,
+  }));
+  const runPump = (peek, remove, min = 0x201, max = 0x201) => {
+    writeCode(0x90, [0xeb, 0xfe]);
+    e.test_mouse_pump(peek, remove, min, max);
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 50; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090, 'mouse pump returns to original far caller');
+    assert.strictEqual(e.get_esp(), peek ? 0x110810 : 0x11080e, 'far pump owns and retires its callback frames');
+    return e.test_result() & 0xffff;
+  };
+  // Do not overwrite earlier decoded focus procedures: each case owns code.
+  let mouseCode = 0x9000;
+  for (const peek of [1, 0]) {
+    for (const answer of [0, 1, 2, 3, 4, 0x10003]) {
+      writeCode(mouseCode, queryProc(answer & 0xffff, answer >>> 16));
+      const target = e.test_window(mouseCode);
+      mouseCode += 0x100;
+      runFocus(focusA);
+      e.guest_write32(0x110900, 0);
+      mouseInput.push({hwnd: target, msg: 0x201, wp: 1, lp: 0x0014000a});
+      if (peek) for (let i = 0; i < 2; i++) {
+        assert.strictEqual(runPump(1, 0), 1);
+        assert.deepStrictEqual(pumpMessages(), [], 'far PM_NOREMOVE never calls the guest');
+      }
+      mouseInput.push({hwnd: target, msg: 0x202, wp: 0, lp: 0x0014000a});
+      const eats = answer === 2 || answer === 4;
+      const activates = answer !== 3 && answer !== 4;
+      assert.strictEqual(runPump(peek, 1), peek && eats ? 0 : 1,
+        `far peek=${peek} answer=${answer} msg=${e.guest_read32(0x110e00).toString(16)} events=${JSON.stringify(pumpMessages())}`);
+      assert.strictEqual(e.test_active(), activates ? target : focusA,
+        `peek=${peek} answer=${answer} msg=${e.guest_read32(0x110e00).toString(16)} callbacks=${JSON.stringify(pumpMessages())}`);
+      const queries = pumpMessages().filter(m => m.msg === 0x21);
+      assert.deepStrictEqual(queries, [{msg: 0x21, wp: e.test_narrow(target), lp: 0x02010001}],
+        'far query carries narrowed top HWND and complete message/hit parameters exactly once');
+      assert.strictEqual(pumpMessages().some(m => m.msg === 6 && m.wp === 2), activates);
+      if (!peek && eats) assert.strictEqual(e.guest_read32(0x110e00) >>> 16, 0x202);
+      else {
+        if (!eats) assert.strictEqual(e.guest_read32(0x110e00) >>> 16, 0x201);
+        assert.strictEqual(runPump(1, 1, 0x202, 0x202), 1, 'far eating down preserves up');
+      }
+      runFocus(focusA);
+      e.guest_write32(0x110900, 0);
+      e.post_message_q(target, 0x201, 1, 0x0014000a);
+      assert.strictEqual(runPump(1, 1), 1);
+      assert.deepStrictEqual(pumpMessages(), [], 'far posted click does not activate');
+    }
+  }
+  const peek16 = e.test_peek_thunk();
+  const nestedPump = [0x68, ...word(0x17), 0x68, ...word(0x0e00), 0x6a, 0,
+    0x68, ...word(0x400), 0x68, ...word(0x400), 0x6a, 1,
+    0x9a, ...word(peek16), 0x1f, 0];
+  writeCode(0xa000, queryProc(3, 0, [0x83, 0x7e, 0x0c, 0x21, 0x75, nestedPump.length, ...nestedPump]));
+  const nestedMouse = e.test_window(0xa000);
+  runFocus(focusA);
+  e.guest_write32(0x110900, 0);
+  e.post_message_q(nestedMouse, 0x400, 0xdead, 0xbeef);
+  mouseInput.push({hwnd: nestedMouse, msg: 0x201, wp: 1, lp: 0x0014000a});
+  assert.strictEqual(runPump(1, 0), 1);
+  const outerMouseMsg = Array.from({length: 18}, (_, i) => e.guest_read32(0x110e00 + i) & 255);
+  assert.strictEqual(runPump(1, 1), 1);
+  const completed = Array.from({length: 18}, (_, i) => e.guest_read32(0x110e00 + i) & 255);
+  assert.deepStrictEqual(completed.filter((_, i) => i < 10 || i > 13), outerMouseMsg.filter((_, i) => i < 10 || i > 13),
+    'nested far PeekMessage into the same destination cannot replace the outer MSG');
+  assert.strictEqual(runPump(1, 1, 0x400, 0x400), 0, 'nested far pump consumed the sentinel');
+
+  // The modal route must query before it dispatches the removed click too.
+  for (const answer of [1, 2, 3, 4]) {
+    const off = 0xa100 + answer * 0x100;
+    writeCode(off, queryProc(answer));
+    const target = e.test_window(off);
+    runFocus(focusA);
+    e.guest_write32(0x110900, 0);
+    mouseInput.push({hwnd: target, msg: 0x201, wp: 1, lp: 0x0014000a},
+      {hwnd: target, msg: 0x202, wp: 0, lp: 0x0014000a});
+    const parked = e.test_modal_mouse(target);
+    // Stop at each modal continuation, before it drains unrelated queued
+    // messages from earlier positioning cases in this long-lived fixture.
+    for (let pass = 0; pass < 4; pass++) {
+      e.set_bp(parked);
+      for (let i = 0; e.get_eip() !== parked && i < 500; i++) e.run(1);
+      e.set_bp(0);
+      if (!mouseInput.length) break;
+      e.test_modal_step();
+    }
+    assert.strictEqual(e.get_eip(), parked, 'modal continuation returns to its own pump');
+    assert.strictEqual(e.get_esp(), 0x110800, 'modal frame remains after mouse callbacks retire');
+    const messages = pumpMessages().map(m => m.msg);
+    assert.strictEqual(messages.filter(m => m === 0x21).length, 1, 'modal click queried once');
+    assert.strictEqual(messages.includes(0x201), answer !== 2 && answer !== 4, 'modal eat controls dispatch');
+    assert(messages.includes(0x202), 'modal loop still dispatches button-up');
+  }
+  console.log('PASS Win16 WINDOWPOS/focus and removal-time task/modal mouse callbacks');
 })().catch(error => { console.error(error); process.exit(1); });

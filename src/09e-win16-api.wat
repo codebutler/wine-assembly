@@ -7738,6 +7738,98 @@
   ;; equivalent is the idle message: WM_NULL, a non-zero return so the loop
   ;; keeps going, and the yield flag left raised so the host still gets its
   ;; turn to deliver input between batches.
+  ;; Removed input survives far callbacks in this invocation's guest-stack
+  ;; frame: {dst, kind(Get=0/Peek=1/modal=2), top, answer, phase, MSG[28]}.
+  ;; The original API/modal frame remains above it, including retry arguments.
+  (global $WIN16_CONT_MOUSE_INPUT i32 (i32.const 0xFFC4))
+  (func $win16_mouse_input_start (param $dst i32) (param $tmp i32) (param $kind i32) (result i32)
+    (local $sp i32) (local $h i32) (local $top i32) (local $proc i32) (local $lp i32)
+    (if (i32.ne (i32.load (global.get $reg_base)) (i32.const 1)) (then (return (i32.const 0))))
+    (if (i32.eqz (global.get $user_queue_input_flags)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $mouse_message_is_down (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))))
+      (then (return (i32.const 0))))
+    (local.set $h (call $gl32 (local.get $tmp)))
+    (local.set $top (call $wnd_top_level (local.get $h)))
+    (if (i32.and (i32.eq (local.get $top) (global.get $active_hwnd))
+          (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 48)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $gs32 (local.get $sp) (local.get $dst))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 4)) (local.get $kind))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 8)) (local.get $top))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (i32.const 1))
+    (memory.copy (call $g2w (i32.add (local.get $sp) (i32.const 20)))
+      (call $g2w (local.get $tmp)) (i32.const 28))
+    (local.set $lp (call $mouse_activate_query_lparam
+      (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
+      (call $gl32 (i32.add (local.get $tmp) (i32.const 8)))))
+    (local.set $proc (call $wnd_table_get (local.get $h)))
+    (if (call $win16_is_far_proc (local.get $proc))
+      (then
+        (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $h))
+          (i32.const 0x21) (call $win16_h16 (local.get $top)) (local.get $lp)
+          (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_MOUSE_INPUT))
+        (return (i32.const 1))))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 12))
+      (call $wnd_send_message (local.get $h) (i32.const 0x21) (local.get $top) (local.get $lp)))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (i32.const 2))
+    (call $win16_mouse_input_continue)
+    (i32.const 1))
+
+  (func $win16_mouse_input_continue
+    (local $sp i32) (local $tmp i32) (local $dst i32) (local $kind i32)
+    (local $h i32) (local $top i32) (local $phase i32) (local $answer i32) (local $eat i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $tmp (i32.add (local.get $sp) (i32.const 20)))
+    (local.set $h (call $gl32 (local.get $tmp)))
+    (local.set $top (call $gl32 (i32.add (local.get $sp) (i32.const 8))))
+    (local.set $phase (call $gl32 (i32.add (local.get $sp) (i32.const 16))))
+    (if (i32.eq (local.get $phase) (i32.const 1))
+      (then
+        ;; WM_MOUSEACTIVATE returns LONG, including high-word-only values.
+        (call $gs32 (i32.add (local.get $sp) (i32.const 12))
+          (i32.or (i32.and (i32.load (global.get $reg_base)) (i32.const 0xFFFF))
+            (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))
+        (local.set $phase (i32.const 2))))
+    (local.set $answer (call $gl32 (i32.add (local.get $sp) (i32.const 12))))
+    (if (i32.and (i32.eq (local.get $phase) (i32.const 2))
+          (i32.ne (call $mouse_answer_activates (local.get $answer)) (i32.const 0)))
+      (then
+        (if (i32.and (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0))
+              (i32.ge_s (call $wnd_table_find (local.get $top)) (i32.const 0)))
+          (then
+            (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (i32.const 3))
+            (call $win16_cont_push
+              (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+                (global.get $WIN16_CONT_MOUSE_INPUT)) (i32.const 0))
+            (call $win16_activate_start_reason (local.get $top) (i32.const 2))
+            (return)))))
+    (if (i32.and (i32.eq (local.get $phase) (i32.const 3))
+          (i32.eq (global.get $active_hwnd) (local.get $top)))
+      (then (drop (call $host_activate_window (local.get $top)))))
+    (local.set $eat (i32.or (i32.ne (call $mouse_answer_eats (local.get $answer)) (i32.const 0))
+      (i32.lt_s (call $wnd_table_find (local.get $h)) (i32.const 0))))
+    (local.set $dst (call $gl32 (local.get $sp)))
+    (local.set $kind (call $gl32 (i32.add (local.get $sp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 48)))
+    (if (local.get $eat)
+      (then
+        (if (i32.eq (local.get $kind) (i32.const 2))
+          (then (call $win16_dlg_pump) (return)))
+        (if (local.get $kind)
+          (then (call $win16_PeekMessage)) (else (call $win16_GetMessage)))
+        (return)))
+    ;; Conversion/delivery reads this snapshot before entering any guest code.
+    (global.set $user_queue_input_flags (i32.const 1))
+    (i32.store (global.get $reg_base) (i32.const 1))
+    (if (i32.eq (local.get $kind) (i32.const 2))
+      (then (call $win16_dlg_deliver_message (local.get $tmp)) (return)))
+    (if (local.get $kind)
+      (then (call $win16_peekmessage_finish (local.get $dst) (local.get $tmp)))
+      (else (call $win16_getmessage_finish (local.get $dst) (local.get $tmp)))))
+
   (func $win16_GetMessage
     (local $dst i32) (local $tmp i32) (local $waited i32) (local $ask i32)
     (local.set $dst (call $win16_far_to_guest
@@ -7769,6 +7861,11 @@
         (call $zero_memory (call $g2w (local.get $tmp)) (i32.const 28))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
     (call $win16_call32_end)
+    (if (call $win16_mouse_input_start (local.get $dst) (local.get $tmp) (i32.const 0))
+      (then (return)))
+    (call $win16_getmessage_finish (local.get $dst) (local.get $tmp)))
+
+  (func $win16_getmessage_finish (param $dst i32) (param $tmp i32)
     ;; Same shape as the modal pump's line below, with a zero dialog to mean
     ;; "the task's own loop". Seeing both is what tells one delivery of a
     ;; message from two.
@@ -10347,6 +10444,13 @@
     (call $handle_PeekMessageA (local.get $tmp) (local.get $hwnd) (local.get $min)
       (local.get $max) (local.get $remove) (i32.const 0))
     (drop (call $win16_call32_end_redirected))
+    (if (i32.and (local.get $remove) (i32.const 1))
+      (then
+        (if (call $win16_mouse_input_start (local.get $dst) (local.get $tmp) (i32.const 1))
+          (then (return)))))
+    (call $win16_peekmessage_finish (local.get $dst) (local.get $tmp)))
+
+  (func $win16_peekmessage_finish (param $dst i32) (param $tmp i32)
     (if (i32.load offset=0 (global.get $reg_base))
       (then
         (call $gs16 (local.get $dst) (call $win16_h16 (call $gl32 (local.get $tmp))))
@@ -14064,6 +14168,8 @@
       (then (call $win16_mouseactivate_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_FOCUS))
       (then (call $win16_focus_continue) (return)))
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_MOUSE_INPUT))
+      (then (call $win16_mouse_input_continue) (return)))
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_BEGINPAINT))
       (then (call $win16_beginpaint_continue) (return)))
     ;; The WH_CALLWNDPROC filter CreateWindow ran has returned. The filter took

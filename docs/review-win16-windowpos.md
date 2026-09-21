@@ -1871,3 +1871,49 @@ adjacent activation/restore paths, not the still-open browser mouse policy.
 Rodent/Rattler gameplay also passes with the completed artifact
 (`wa-mouse-vb.log`), checking that the explicit Win16 bypass preserves those
 existing input paths while the far transaction is still pending.
+
+### Win16 removal-time mouse transaction
+
+The task GetMessage/PeekMessage adapters and Pascal modal pump now share the
+Win32 mouse-answer predicates, but use a far continuation rather than the
+32-bit synchronous sender for guest procedures. A 48-byte invocation-owned
+stack frame retains the canonical MSG, destination, mode, top HWND, full
+DX:AX answer and phase. It survives nested pumping, performs activation with
+WA_CLICKACTIVE, then delivers or retries with the original arguments. Eaten
+button-downs do not discard button-up. No-remove peeks and posted clicks do
+not query. Modal delivery checks EndDialog before dispatching the saved MSG.
+
+The real far-code matrix covers both task adapters, answers 0–4 and a
+high-word answer, exact parameters/stack cleanup, repeated no-remove peeks,
+posted clicks, nested Peek into the same destination, and modal answers 1–4
+with dispatch-versus-eat assertions. High-word cases test ABI consistency,
+not a new claim about native behavior for undocumented return values.
+
+The matrix exposed a separate PeekMessage bug: activation-generated
+WM_NCCALCSIZE/WM_NCPAINT could escape a mouse-only range filter on retry.
+Those synthetic scans now respect the message range without consuming
+excluded NC work. Synthetic HWND filtering and the broader GetMessage
+filter audit remain open.
+
+Fixture corrections matter: fresh code addresses avoid reusing decoded old
+callbacks; the modal cases clear earlier paint/posted work and advance at
+callback boundaries. Earlier failures landed in an old reinvalidating paint
+procedure, not the new mouse continuation. The main-tree far matrix,
+Win32 activation matrix and queue-filter suite pass. A negative control
+disabling the far source hook fails the first activation assertion.
+
+Clean-tree validation at `/private/tmp/wa-far-mouse-verify` uses HEAD
+`d6cd173b` plus only this stage's source/test changes, transferred with rsync.
+Both normal and compatibility builds pass all gates (`wa-mouse-clean-build.log`,
+layout `74b29198cdc0b91f`), and the final far matrix passes there too
+(`wa-mouse-far-clean.log`). The clean tree excluded a concurrently added
+DISPDIB class hook and its unfinished dependencies; their owner subsequently
+landed them separately as `1958ab08`. No build ratchet was weakened.
+Rodent and Rattler gameplay/input checks pass against that clean artifact
+(`wa-mouse-far-vb.log`). These are adjacent real-app regressions, not a
+replacement for a browser no-activation acceptance test.
+
+Remaining: renderer eager raise/focus and cross-app foreground handoff;
+built-in child-control default forwarding to far parents; fuller reentrant
+mouse-query/lifetime and native comparison coverage. This stage does not
+claim end-to-end browser MA_NOACTIVATE correctness.
