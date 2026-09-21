@@ -18,8 +18,8 @@
 // the toast the shell shows it later. That join reaches a game already past
 // its command line, so it goes through lan.join.inGame typing into Quake's
 // console. It is also the three-player room where an unread UDP socket used
-// to stall the wire. A fourth opens a link naming the host's room
-// (?app=quake2_demo&room=USERID) and must land at the owner with no card.
+// to stall the wire. A fourth opens the host's page address, which names its
+// room (?app=quake2_demo&room=USERID), and must land at the owner with no card.
 
 'use strict';
 
@@ -325,7 +325,13 @@ const snapWindow = () => {
       return r ? r.ownerUserId : null;
     });
     check(`the host's room names its owner (${ownerId})`, !!ownerId);
-    const link = ownerId ? `${base}/index.html?app=quake2_demo&room=${ownerId}` : null;
+    // Sharing the page is the invite: its address names the room.
+    const link = await host.page.evaluate(() => location.href);
+    check(`the host's page address is the room's link (${link})`,
+      !!ownerId && /[?&]app=quake2_demo\b/.test(link) && link.includes(`room=${ownerId}`));
+    const guestLink = await guest.page.evaluate(() => location.href);
+    check('and a member\'s page address names the same room',
+      !!ownerId && guestLink.includes(`room=${ownerId}`), guestLink);
     check('and puts no invite button over the game',
       await host.page.evaluate(() => !document.getElementById('wine-lan-invite')));
     const fourth = link ? await open('fourth', JOIN_ARGS, link) : null;
