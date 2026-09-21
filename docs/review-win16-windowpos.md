@@ -2882,3 +2882,20 @@ against the new regression fails the accepted-foreground ownership assertion.
 assertion (line 148, 0 versus 1) with both HEAD and the changed source; it is
 not a pass and no unrelated fixture was modified. No WASM source changed and
 no full build or real-browser acceptance claim is made for this slice.
+
+### Worker menu regression fixture repaired (2026-09-20)
+
+The failure above was traced to the test double, not a runtime focus failure:
+`_hasMenuBar` reads canonical `menu_bar_count`, but the fake Worker exports
+omitted it and supplied only `_menuId` on the host record. Thus the test never
+entered the menu tracker or reached its later Worker-wake assertions.
+The fixture now supplies the canonical count and also tests a menu with the
+host mirror absent (guest installation before renderer record creation).
+No runtime fallback to the stale mirror was introduced.
+
+`test-browser-worker-input-focus.js` now passes through its final menu-command
+wake assertion. Replacing `_wakeMessageWait` with a no-op makes that assertion
+fail, confirming restored coverage. `test-renderer-multi-app-modal.js`,
+`test-keyboard-focus-seed.js` and `test-worker-input-slice-wake.js` also pass;
+the latter executes the compiled guest slice boundary and browser-drive-loop
+fixture. These are harness checks, not live cross-app Worker acceptance.

@@ -117,6 +117,7 @@ const workerOwnedWasm = {
       throw new WebAssembly.RuntimeError('idle Worker ownership token executed');
     },
     set_focus_hwnd(hwnd) { shadowFocus = hwnd | 0; },
+    menu_bar_count(hwnd) { return hwnd === 0x10002 ? 1 : 0; },
     menu_handle_bar_click() { menuClicks++; return 1; },
     menu_open_hwnd() { return menuOpenHwnd; },
     menu_handle_mouse_open() {
@@ -147,6 +148,16 @@ assert.deepStrictEqual(focusRequests, [{ wasm: workerOwnedWasm, hwnd: 0x10002 }]
   'Worker-backed mouse focus should request the same transition in live slot 0');
 assert.strictEqual(menuClicks, 1,
   'Worker-backed Win16 menu click should reach the menu tracker after focus routing');
+
+// A guest can install its menu before the renderer gets the window record.
+// The canonical WAT menu still exists when the optional host mirror is absent.
+menuRenderer.handleMouseUp(40, 30, 0);
+delete menuRenderer.windows[0x10002]._menuId;
+menuRenderer.handleMouseDown(40, 30, 0);
+assert.strictEqual(menuClicks, 2,
+  'Worker menu installed before its renderer record still reaches the tracker');
+assert.strictEqual(liveFocusCalls, 0,
+  'canonical menu discovery must not enter the idle guest focus callback');
 
 // Menu activation runs synchronously in the renderer's idle ownership token.
 // The WAT helper puts WM_COMMAND into shared memory, but a Worker parked in
