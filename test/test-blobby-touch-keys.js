@@ -1,33 +1,42 @@
 #!/usr/bin/env node
-// Blobby Volley's touch key remap: player two jumps with Enter.
+// Blobby Volley's touch key remap: player two jumps with Space.
 //
 //   node test/test-blobby-touch-keys.js [--keep]
 //
 // WHAT AND WHY, in short:
 //
-//   a touch button must carry BOTH players' jump keys, because either side of
-//   a network match may be the client and the client is driven by player
-//   two's set. Player two's stock jump is UP -- which is also how this game's
-//   menus move -- so no single button could be both "jump" and "confirm".
-//   lib/browser-shell.js therefore rewrites one dword of settings.dat, and
-//   only while the on-screen pad is up:
+//   the pad sends only the keys of the player THIS machine owns -- player one
+//   until the room hands out a seat, player two when this machine is the
+//   joiner (lib/browser-shell.js `touchControlsForSeat`). A pad that sent both
+//   sets walked both blobs at once in a solo match, which is how this started.
+//
+//   That makes the jump key's other property the one that matters: it has to
+//   be inert for the blob it does NOT own, and inert in the menus. Player
+//   two's stock jump is UP, which is how this game's menus move, so
+//   lib/browser-shell.js rewrites one dword of settings.dat -- and only while
+//   the on-screen pad is up:
 //
 //         settings.dat   0x00 0x04 0x08   p1  A     D      W    (untouched)
-//                        0x0c 0x10 0x14   p2  LEFT  RIGHT  UP -> ENTER
+//                        0x0c 0x10 0x14   p2  LEFT  RIGHT  UP -> SPACE
 //
-//   Two halves are checked here, because either one passing alone proves
+//   ENTER would not do: every layout carries it as the menu confirm, so it
+//   must belong to no player. SPACE belongs to nobody else.
+//
+//   Three things are checked here, because any one passing alone proves
 //   nothing:
 //
 //     1. the patch is applied when the pad is up and NOT when it is down,
 //        against a stand-in VFS -- desktop players keep the stock file;
-//     2. Enter really does jump player two IN THE GAME. That is the half a
+//     2. the seat picks the layout: host keys before and at .1, player two's
+//        keys at any other seat, and the two layouts share no movement key;
+//     3. Space really does jump player two IN THE GAME. That is the half a
 //        unit test cannot answer: the key is legal (the game indexes its
 //        key-state table with the raw VK and no whitelist) but "legal" is not
 //        "wired to the blob". Two headless runs of a real match, identical
 //        except that one holds Enter, and the green blob has to be higher in
 //        the one that does:
 //
-//              no key                    Enter held
+//              no key                    Space held
 //          ┌──────────────┐          ┌──────────────┐
 //          │              │          │          ()  │  <- green blob up
 //          │          ()  │          │              │
@@ -51,7 +60,7 @@ const RUN = path.join(__dirname, 'run.js');
 const PKG = path.join(ROOT, 'packages', 'freeware', 'blobby-volley');
 const OUT = path.join(ROOT, 'scratch', 'blobby-touch-keys');
 
-const VK_RETURN = 0x0d;
+const VK_SPACE = 0x20;
 const P2_JUMP_OFFSET = 0x14;
 const SETTINGS_SIZE = 117;
 
@@ -85,7 +94,7 @@ function readJump(vfs) {
 }
 
 function unitChecks() {
-  const app = { touchPatches: [{ path: 'c:\\settings.dat', offset: P2_JUMP_OFFSET, uint32: VK_RETURN, size: SETTINGS_SIZE }] };
+  const app = { touchPatches: [{ path: 'c:\\settings.dat', offset: P2_JUMP_OFFSET, uint32: VK_SPACE, size: SETTINGS_SIZE }] };
   global.window = { TouchControls: { shouldInstall: () => false } };
   const shell = require('../lib/browser-shell');
 
@@ -97,7 +106,7 @@ function unitChecks() {
   global.window.TouchControls.shouldInstall = () => true;
   vfs = fakeVfs(settingsBytes(0x26));
   shell.applyTouchPatches(app, vfs, null);
-  check('a touch session moves player two\'s jump to Enter', readJump(vfs) === VK_RETURN,
+  check('a touch session moves player two\'s jump to Space', readJump(vfs) === VK_SPACE,
     `jump is 0x${readJump(vfs).toString(16)}`);
 
   // The player's own saved file is what gets patched, so everything else in
@@ -121,7 +130,55 @@ function unitChecks() {
   delete global.window;
 }
 
-// ---- half two: Enter jumps the blob in a real match ------------------------
+// ---- half two: the seat picks the layout -----------------------------------
+
+// Against the real registry entry, not a stand-in: the thing that can go wrong
+// is the two layouts sharing a movement key, and only the shipped ones can say.
+function seatChecks() {
+  const shell = require('../lib/browser-shell');
+  const { APPS } = require('../lib/apps');
+  const app = APPS.blobby_volley;
+  const forSeat = shell.touchControlsForSeat;
+
+  check('before any room, the pad drives player one',
+    forSeat(app, null) === app.touchControls);
+  check('the host seat drives player one',
+    forSeat(app, '10.0.0.1') === app.touchControls);
+  check('any other seat drives player two',
+    forSeat(app, '10.0.0.2') === app.lanClientTouchControls);
+  // An app with no LAN layout must come back with its own, not undefined: this
+  // helper sits on the path every launch takes.
+  check('an app without a client layout is unchanged',
+    forSeat({ touchControls: 'X' }, '10.0.0.2') === 'X');
+
+  const moves = layout => {
+    const vks = layout.dpad.vks;
+    return [].concat(vks.left, vks.right);
+  };
+  const host = moves(app.touchControls);
+  const client = moves(app.lanClientTouchControls);
+  check('the two layouts share no movement key',
+    host.every(vk => client.indexOf(vk) < 0),
+    `host=${JSON.stringify(host)} client=${JSON.stringify(client)} — a shared ` +
+    'key is the original bug: one thumb walking both blobs.');
+
+  // Whatever confirms menus has to be a key no player owns, or it jumps
+  // somebody every time it is pressed.
+  const playerKeys = [].concat(host, client,
+    [0x57, VK_SPACE]);                       // p1 jump W, p2 jump SPACE
+  const menuKeys = [0x26, 0x28, 0x0d];       // UP, DOWN, ENTER
+  check('no menu key belongs to a player',
+    menuKeys.every(vk => playerKeys.indexOf(vk) < 0),
+    `players=${JSON.stringify(playerKeys)}`);
+  for (const [name, layout] of [['host', app.touchControls], ['client', app.lanClientTouchControls]]) {
+    const button = layout.buttons[0];
+    check(`the ${name} button jumps its own player and confirms menus`,
+      button.vk.indexOf(0x0d) >= 0 && button.vk.length === 2,
+      JSON.stringify(button));
+  }
+}
+
+// ---- half three: Space jumps the blob in a real match ----------------------
 
 // Green pixels in the strip of court the resting blob occupies. The palm
 // fronds are green too and they end well above this band, so leaving it is
@@ -161,7 +218,7 @@ function play(exe) {
     '560:mousedown:401:223',
     '600:mouseup:401:223',
     '703:png:' + rest,
-    '704:keydown:0x0d',
+    '704:keydown:0x20',
     // Two frames across the arc: at 200ms of guest clock per batch, a jump is
     // a handful of batches and one sample can land on the way back down.
     '706:png:' + air[0],
@@ -192,13 +249,18 @@ function gameChecks() {
   const settings = path.join(app, 'settings.dat');
   execFileSync('node', [
     path.join(ROOT, 'tools', 'blobby-settings.js'), settings,
-    `--keys2=LEFT,RIGHT,0x${VK_RETURN.toString(16)}`, `--out=${settings}`,
+    `--keys2=LEFT,RIGHT,0x${VK_SPACE.toString(16)}`, `--out=${settings}`,
   ], { cwd: ROOT, encoding: 'utf8' });
   const patched = fs.readFileSync(settings);
   check('the patched file still parses as settings.dat',
-    patched.length === SETTINGS_SIZE && patched.readUInt32LE(P2_JUMP_OFFSET) === VK_RETURN);
+    patched.length === SETTINGS_SIZE && patched.readUInt32LE(P2_JUMP_OFFSET) === VK_SPACE);
 
-  const shots = play(path.join(app, 'volley.exe'));
+  // --from-shots measures the frames a previous run left in scratch/, for a
+  // box too loaded to reach batch 708 inside the runner cap: run the command
+  // play() builds by hand with no deadline, then judge it here.
+  const shots = process.argv.includes('--from-shots')
+    ? { rest: path.join(OUT, 'rest.png'), air: [path.join(OUT, 'air-1.png'), path.join(OUT, 'air-2.png')] }
+    : play(path.join(app, 'volley.exe'));
   const rest = blobMass(shots.rest);
   const air = shots.air.map(blobMass);
 
@@ -210,10 +272,10 @@ function gameChecks() {
   // one sample can land after it has come back down.
   const best = air.reduce((a, b) => (a.mass <= b.mass ? a : b));
   const left = rest.mass ? best.mass / rest.mass : 1;
-  check(`Enter jumps player two (${(left * 100).toFixed(0)}% of the blob still in the band)`,
+  check(`Space jumps player two (${(left * 100).toFixed(0)}% of the blob still in the band)`,
     left < 0.6,
     `rest=${JSON.stringify(rest)} air=${JSON.stringify(air)} — if the blob never ` +
-    'leaves the band, Enter is a legal key the game never wired to it, and the ' +
+    'leaves the band, Space is a legal key the game never wired to it, and the ' +
     'one-button touch layout in lib/apps.js is wrong.');
 }
 
@@ -223,6 +285,7 @@ if (!fs.existsSync(path.join(PKG, 'volley.exe'))) {
 }
 
 unitChecks();
+seatChecks();
 gameChecks();
 console.log(failures ? `test-blobby-touch-keys: ${failures} FAILED`
   : 'test-blobby-touch-keys: all checks passed');

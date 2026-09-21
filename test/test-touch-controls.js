@@ -849,45 +849,46 @@ TouchControls.destroy();
   // player two only in a LOCAL match -- a network client is driven by player
   // two's configured keys (measured in test-blobby-vlan.js) -- and a
   // mouseJoystick emits no key events at all, so it can never drive a network
-  // game. The shipped settings.dat gives both players A/D/W so this one pad is
-  // correct on either side; see docs/re-notes/blobby-volley.md.
+  // game. The pad sends only the local player's keys: `touchControls` for
+  // player one (solo, and the host seat), `lanClientTouchControls` for player
+  // two, swapped at joinVlan; see docs/re-notes/blobby-volley.md.
   assert.strictEqual(APPS.blobby_volley.mobileTouch, 'direct',
     'the canvas stays an absolute mouse, because Blobby navigates its MENUS with one');
-  assert(!APPS.blobby_volley.touchControls.mouseJoystick,
-    'a mouse joystick cannot drive a network match');
-  assert.strictEqual(APPS.blobby_volley.touchControls.boardLayout, true);
-  assert.deepStrictEqual(APPS.blobby_volley.touchControls.dpad.vks,
-    { left: [0x41, 0x25], right: [0x44, 0x27], up: [0x57, 0x26], down: [0x28] },
-    'Blobby pad sends BOTH players\' key sets; each machine keeps the one it owns');
-  assert.deepStrictEqual(APPS.blobby_volley.touchControls.buttons,
-    [{ vk: [0x57, 0x26], label: 'Jump', pos: 'br' }, { vk: 0x0d, label: 'OK', pos: 'br' }],
-    'jump covers both key sets; OK is Enter, without which a phone cannot leave the menu');
-  // The pad is only correct because of what the shipped settings.dat says, so
-  // check the two against each other rather than hardcoding A/D/W twice. This
-  // file is easy to replace by accident: `--save-vfs` captures whatever the
-  // guest last wrote, and persistFiles lets a player's own copy shadow it.
+  for (const layout of [APPS.blobby_volley.touchControls, APPS.blobby_volley.lanClientTouchControls]) {
+    assert(!layout.mouseJoystick, 'a mouse joystick cannot drive a network match');
+    assert.strictEqual(layout.boardLayout, true);
+  }
+  // The pads are only correct because of what settings.dat says once the
+  // touch patch has run, so check the two against each other rather than
+  // hardcoding the keys twice. The shipped file is easy to replace by
+  // accident: `--save-vfs` captures whatever the guest last wrote, and
+  // persistFiles lets a player's own copy shadow it.
   {
     const { parse, CONTROL } = require('../tools/blobby-settings');
-    const dat = parse(require('fs').readFileSync(
+    const raw = Buffer.from(require('fs').readFileSync(
       'packages/freeware/blobby-volley/settings.dat'));
-    const pad = APPS.blobby_volley.touchControls.dpad.vks;
+    for (const p of APPS.blobby_volley.touchPatches) raw.writeUInt32LE(p.uint32, p.offset);
+    const dat = parse(raw);
+    const layouts = [APPS.blobby_volley.touchControls, APPS.blobby_volley.lanClientTouchControls];
     for (const [i, keys] of [dat.keys1, dat.keys2].entries()) {
-      // Each player's left/right/jump must appear in the matching pad
-      // direction. The pad sends both players' sets at once, so what matters
-      // is coverage, not equality: a key the file names and the pad omits is
-      // a control that does nothing on the machine owning that player.
-      for (const [dir, vk] of [['left', keys[0]], ['right', keys[1]], ['up', keys[2]]]) {
-        assert(pad[dir].includes(vk),
-          `player ${i + 1}'s ${dir} key 0x${vk.toString(16)} is missing from the `
-          + `pad's ${dir}, so the pad drives nothing on the side owning that player`);
-      }
+      // Each player's pad moves exactly that player -- equality, not
+      // coverage: a key belonging to the other player is the "one thumb
+      // walks both blobs" bug in a solo match.
+      const pad = layouts[i].dpad.vks;
+      assert.deepStrictEqual([pad.left, pad.right], [[keys[0]], [keys[1]]],
+        `player ${i + 1}'s pad must send player ${i + 1}'s left/right and nothing else`);
+      assert(layouts[i].buttons[0].vk.includes(keys[2]),
+        `player ${i + 1}'s Jump button must send player ${i + 1}'s jump key`);
       assert.strictEqual(dat.control[i], CONTROL.keyboard,
         `player ${i + 1} must be on the keyboard: the mouse never reaches a `
         + 'network client, and COMPUTER leaves the AI driving its blob');
     }
-    assert(APPS.blobby_volley.touchControls.buttons[0].vk.includes(dat.keys1[2])
-      && APPS.blobby_volley.touchControls.buttons[0].vk.includes(dat.keys2[2]),
-      'the Jump button must cover both players\' jump keys');
+    // The menu keys ride along in both layouts, so none may be a player key.
+    const playerKeys = [...dat.keys1, ...dat.keys2];
+    for (const vk of [0x26, 0x28, 0x0d]) {
+      assert(!playerKeys.includes(vk),
+        `menu key 0x${vk.toString(16)} is also a player key, so it moves a blob`);
+    }
   }
   assert.deepStrictEqual(APPS.quake2_demo.touchControls.dpad.vks,
     { up: 0x26, down: 0x28, left: 0x41, right: 0x44 },

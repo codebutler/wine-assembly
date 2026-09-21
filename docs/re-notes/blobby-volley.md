@@ -126,30 +126,43 @@ change that **player two is on the keyboard, not the mouse**
 (`tools/blobby-settings.js --control=keyboard,keyboard`), because the mouse
 never reaches a network client.
 
-The phone pad then sends **both players' key sets at once**: `A`+`←`,
-`D`+`→`. Each machine applies only the set of the player it owns and
-ignores the other, so one layout is correct everywhere without touching the
-stock keys — and a local hot-seat game still gives two people different keys.
+**The phone pad sends only the key set of the player this machine owns.**
+It used to send both (`A`+`←`, `D`+`→`) on the theory that each machine
+applies only its own player's set. That is true on the wire and wrong in a
+solo match, where both blobs are keyboard players reading one keyboard: one
+thumb walked both blobs. Reported 2026-09-20 as "I control 2 players".
 
-**On a touch device only, player two's jump moves from `↑` to `Enter`**
+So there are two layouts in `lib/apps.js`: `touchControls` (player one:
+`A`/`D`, jump `W`) and `lanClientTouchControls` (player two: `←`/`→`, jump
+`Space`). `touchControlsForSeat` in `lib/browser-shell.js` picks between them:
+before any room, and at the host seat `10.0.0.1`, this machine is player one;
+at any other seat it is player two. The on-demand lobby hands out the seat
+while the game is already running, so the shell rewrites that running app's
+record and calls `TouchControls.sync` again. The guest's state is not touched.
+
+**On a touch device only, player two's jump moves from `↑` to `Space`**
 (`touchPatches` in `lib/apps.js`, applied by `applyTouchPatches` in
 `lib/browser-shell.js` after the persistence restore, so it patches the
 player's own saved copy and leaves everything else in it alone).
 
-The reason is that a touch button has to carry *both* players' jump keys —
-either side of a network match may be the client, and the client is driven by
-player two's set — while player two's stock jump `↑` is also how the menus
-move. One button could therefore never be both "jump" and "confirm", and the
-layout needed two, the `Jump` one walking the menu selection every time it was
-pressed there. With player two on `Enter`, both jump keys (`W` and `Enter`)
-are inert in the menus, so a single **`Jump`** button does both jobs on
-both sides and the pad's verticals become pure menu navigation.
+Both layouts carry the menu keys, `↑`/`↓` on the pad and `Enter` on the
+`Jump` button, so no menu key may belong to any player: if one did, pressing
+it would move a blob. Stock player two jumps with `↑`, so the patch moves that
+jump to `Space`. Once it has, `↑`, `↓` and `Enter` belong to nobody, and
+each layout's single `Jump` button (`W`+`Enter` or `Space`+`Enter`) jumps only
+its own blob while still confirming menus.
+
+The first version of this patch moved the jump to `Enter`. That fit the older
+pad, which sent both key sets anyway. It is wrong for the per-seat pad,
+because `Enter` then jumps the green blob in every solo match.
 
 Only player two moves, and only when `TouchControls.shouldInstall()` is true:
 a desktop player keeps the stock arrow jump, and two people at one keyboard
-keep two distinct key sets. `test/test-blobby-touch-keys.js` checks both the
-gating and — the half that matters — that `Enter` actually lifts the blob in a
-running match, since a key can be legal without being wired to anything.
+keep two distinct key sets. `test/test-blobby-touch-keys.js` checks the
+gating, the seat choice (including that the two layouts share no movement key
+and that no menu key is a player key), and, the part that needs a real match,
+that `Space` actually lifts the blob. A key can be legal without being wired
+to anything.
 
 That last claim is the one worth measuring rather than assuming, and
 `test/test-blobby-vlan.js` now does, with the host holding a key belonging to
@@ -165,7 +178,7 @@ position on its own, and the first version of this check held `RIGHT`,
 measured −125px of that homing drift and "failed" a machine that was ignoring
 the key perfectly.
 
-The pad also carries `DOWN`, and there is an **Enter** button, for the
+The pad also carries `DOWN`, and the `Jump` button carries `Enter`, for the
 menu rather than the match: a phone tap does not activate a menu item at all,
 the menu is arrow+Enter driven, and its selection does **not** wrap past
 `ENDE`. Without that button a phone cannot leave the main menu. A
