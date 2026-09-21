@@ -1119,14 +1119,22 @@
         (i32.store (i32.add (global.get $OWNER_TABLE) (i32.mul (local.get $idx) (i32.const 4)))
                    (local.get $owner)))))
 
-  ;; Win32 GetParent returns a child parent for WS_CHILD, otherwise the owner
-  ;; for owned popups/dialogs.
+  ;; GetParent returns the parent of a WS_CHILD window and the owner of a
+  ;; WS_POPUP one. A top-level window that is neither -- an owned *overlapped*
+  ;; window -- has no parent to report, owner or not, and gets NULL. Visual
+  ;; Basic 3 creates every form that way, owned by its hidden 0x0 main window
+  ;; at the centre of the screen, and turns a form's GetWindowRect into its
+  ;; Left/Top with ScreenToClient(GetParent(form)). Handed the owner, each
+  ;; Move shifted the form by the owner's position (-320,-240 on a 640x480
+  ;; screen) until Sokoban's form sat entirely off the screen.
   (func $wnd_get_parent_api (param $hwnd i32) (result i32)
     (local $style i32)
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
     (if (i32.and (local.get $style) (i32.const 0x40000000))
       (then (return (call $wnd_get_parent (local.get $hwnd)))))
-    (call $wnd_get_owner (local.get $hwnd)))
+    (if (i32.and (local.get $style) (i32.const 0x80000000))
+      (then (return (call $wnd_get_owner (local.get $hwnd)))))
+    (i32.const 0))
 
   ;; Identify the two pre-msftedit RichEdit class contracts used by Win9x
   ;; applications. RICHEDIT is the Riched32/RichEdit 1.0 class; RichEdit20A
