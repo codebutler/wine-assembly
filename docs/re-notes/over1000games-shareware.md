@@ -17,7 +17,7 @@ wrong about three of them for three different reasons.
 | `board-wingong` | MOREJONG.EXE | draws — longer budget |
 | `strategy-klotski` | KLOTSKI.EXE | plays — the blank capture was a fluke |
 | `cards-sokoban` | SOKOBAN.EXE | runs, window and menus draw — four fixes; the CD lacks its level file |
-| `arcade-clxwrk` | CLOCKWRX.EXE | **open** — imports from `DISPLAY` |
+| `arcade-clxwrk` | CLOCKWRX.EXE | plays — installed layout, a USE32 blitter via DPMI, mm timers, caret, top-down DDBs |
 
 The five commercial titles, tracked separately: SimCity 2000 and MicroMan run,
 Exile II reaches its title screen after a three-stage install (below), Pitfall
@@ -681,7 +681,7 @@ Two things to settle before that matters, in this order:
    `USER.308` with the mounted-stub trick first and dump the installed exe's
    imports; do not size the WinG work from the API list before then.
 
-## ClockWerx (open)
+## ClockWerx (plays; 174e790f, fbb6d7bb)
 
 16-bit, and the loader says it first:
 
@@ -734,3 +734,71 @@ that point or the list lookup came back empty. Note the strings in this image
 are *not* a packed Mac `STR#` — they are Pascal strings in fixed slots — so
 whatever index 10 resolves to has to be read out of the resource at runtime
 rather than counted in the file.
+
+**Later 2026-09-20: it plays.** Six separate things stood between the exit
+above and a moving board, and none of them was the string itself.
+
+1. **Run it from an installed layout, not the CD directory.** WinG's LibMain
+   checks that WING.DLL was loaded from the system directory and refuses to
+   start otherwise. Once fe4d1e76 made a static import's LibEntry actually run,
+   that check fired as a LibEntry returning 0 (`0xCA16D1F0`). The emulator was
+   right: with the whole CD directory mounted as the game directory, the loader
+   finds `C:\WING.DLL` next to the exe, just as Windows would. The fix is the
+   install shape: copy the game's own files into a directory of their own
+   (`CLOCKWRX.EXE *.BMP *.BIN CWDMUSIC.DLL CWXLEVEL.DLL MAC2WIN.DLL
+   SD2SOUND.DLL SONG*.MID`, after the SZDD expansion) and supply WinG with
+   `--win16-lib`, as Bad Toys 3D does.
+2. **`LoadResource` returns a selector** (fbb6d7bb). MAC2WIN's `GetIndString`
+   calls `GlobalLock` on the `hResData` handle, which is legal in Win16. The
+   resource used to be loaded lazily inside `LockResource`, so `GlobalLock` got
+   a handle it could not resolve, the copy came back empty, and the game quit.
+   `$win16_res_load(desc)` now loads at `LoadResource` time and returns the
+   segment's selector. `LockResource` and `GlobalLock` both give `sel:0000`,
+   and `FreeResource` finds the descriptor by its selector. The trace went from
+   87 calls to 129.
+3. **MMSYSTEM timers**: `timeGetDevCaps` (604), `timeSetEvent` (602) and
+   `timeKillEvent` (603). The game sets six of them. A due 16-bit TimeProc is
+   entered from the task's own `PeekMessage`/`GetMessage` with a FAR PASCAL
+   frame that returns into that pump call. GDI.445 `CreateDIBPatternBrush` and
+   GDI.78 `GetCurrentPosition` came next. After these the title screen draws
+   at 640x480.
+4. **A USE32 code segment** (fbb6d7bb). NE segment 1 is a 0x35d-byte 32-bit
+   blitter. On first use the game fetches its descriptor with DPMI `int 31h`
+   000Bh, sets D (`or byte [desc+6],40h`), and writes it back with 000Ch. From
+   then on the segment runs as 32-bit code: 32-bit operands and addresses by
+   default, rel32 branches, and `66 CA` for its 16-bit far return. Without
+   this, int 31h failed, the probe after it looped, and a click on the title
+   screen did nothing. The segment flag is `WIN16_SEG_BIG`, `$cs_big` is the
+   decode-time switch, and `$use32_gap` (`0xCA163200`) names the first
+   program that makes a 32-bit far transfer out of such a segment.
+5. **The USER caret family** (163-169 and 183) and USER.21
+   `GetDoubleClickTime`. The Options screen's name field creates a caret, and
+   the second click asks for the double-click time.
+6. **DDBs are stored top row first** (174e790f). The level names are rendered
+   through a monochrome DDB built from raw bits, and they came out upside down
+   until `$gdi_bitmap_plan_create_bitmap` marked the plan top-down.
+
+After Play the screen stays black for about 2000 batches with no API calls.
+That is level loading in the game's own code (CS=0x27), not a hang.
+
+**Reaching gameplay headless** (`$D` is the expanded CD directory, `$I` the
+installed copy from step 1):
+
+```
+node test/run.js --exe=$I/CLOCKWRX.EXE --vfs-include='*' \
+  --win16-lib=$D/WING.DLL --win16-lib=$D/WINGDIB.DRV \
+  --max-batches=8800 --stuck-after=100000 --no-close --quiet-api \
+  --input=3500:click:320:300,3720:click:318:403,6100:keydown:88,6110:keyup:88 \
+  --png=clx.png
+```
+
+The click at 3500 leaves the title for Options. Play at (318,403) starts the
+Stage 1 tutorial, and X at 6100 dismisses "Welcome to Stage 1 DEMO". By batches
+8200-8800 the clock hands on the board are animating. Another X at 9000 resets
+the board. `--stuck-after` has to be raised, because the title screen idles in
+a blocking wait long enough to trip the detector.
+
+Still open, and cosmetic: some narrow glyphs are missing from the Options
+screen's level list ("Wa s", "D zz ness", and "Goa  Dot" without its `l`).
+Only the narrowest letters (i, l) drop, which points at glyph width in
+whatever text path draws that list. That path has not been traced yet.
