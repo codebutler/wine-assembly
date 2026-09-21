@@ -72,6 +72,45 @@ assert.deepStrictEqual([0x0084, 0x0201, 0x0202].map(() => renderer.takeInput(own
 assert.strictEqual(renderer._keyboardInputWasm, appA,
   'pointer dequeue must not itself publish an activation decision');
 
+// Accepted foreground, not the provisional click owner or highest surface,
+// selects the keyboard app. Restoring the routing context must not execute
+// guest focus callbacks (the browser instance may only be a Worker shadow).
+{
+  const r = new Win98Renderer(canvas);
+  const forbidden = () => { throw new Error('routing must not execute guest focus code'); };
+  const accepted = { exports: { set_focus: forbidden, set_focus_hwnd: forbidden } };
+  const provisional = { exports: {} };
+  const acceptedMemory = { owner: 'accepted' };
+  const otherMemory = { owner: 'other' };
+  const foreground = { hwnd: 400, visible: true, isChild: false, zOrder: 1,
+    wasm: accepted, wasmMemory: acceptedMemory };
+  const above = { hwnd: 500, visible: true, isChild: false, zOrder: 100,
+    wasm: provisional, wasmMemory: otherMemory };
+  r.windows[400] = foreground;
+  r.windows[500] = above;
+  r._foregroundWindow = foreground;
+  r._setKeyboardInputOwner(above);
+  r._restoreKeyboardInputOwner();
+  assert.strictEqual(r._keyboardInputWasm, accepted, 'accepted foreground overrides click owner');
+  assert.strictEqual(r.wasm, accepted, 'key dispatch uses accepted app exports');
+  assert.strictEqual(r.wasmMemory, acceptedMemory, 'key dispatch uses matching app memory');
+  assert.strictEqual(r._keyboardInputMemory, acceptedMemory);
+  assert.strictEqual(above.zOrder, 100, 'keyboard restoration does not reorder windows');
+
+  // Absent/hidden/child/replaced foreground records cannot steal routing.
+  const hidden = { ...foreground, visible: false };
+  const child = { ...foreground, isChild: true };
+  for (const [stale, registered] of [[null, foreground], [{ ...foreground }, foreground],
+      [hidden, hidden], [child, child]]) {
+    r._foregroundWindow = stale;
+    r.windows[400] = registered;
+    r._setKeyboardInputOwner(above);
+    r._restoreKeyboardInputOwner();
+    assert.strictEqual(r.wasm, provisional, 'invalid foreground preserves live fallback owner');
+    assert.strictEqual(r.wasmMemory, otherMemory);
+  }
+}
+
 renderer.inputQueue.length = 0;
 renderer.windows[100].zOrder = renderer._nextZ++;
 renderer.handleMouseDown(310, 180, 0);

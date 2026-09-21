@@ -2853,3 +2853,32 @@ unchanged layout `c5ccefca8909ee4b`.
 The activation/removal-time mouse-activation suite and rebuilt WordPad
 browser check also pass (`wa-button-refocus-active.log`,
 `wa-button-refocus-wordpad.log`), with both processes exiting successfully.
+
+### Accepted foreground owns keyboard restoration (2026-09-20)
+
+The browser's `_restoreKeyboardInputOwner` now prefers the valid record
+published by USER's `activate_window` import over the provisional click owner.
+Previously a mouse candidate could replace `_keyboardInputWasm` before its
+queued `WM_MOUSEACTIVATE` was answered, and keyboard restoration retained
+that candidate merely because one of its windows was still visible. A higher
+surface is not proof of activation. Restoration switches exports and memory
+together without calling guest focus code or changing z-order.
+
+Record identity, visibility and top-level status are checked; a recycled HWND,
+hidden window or child cannot acquire this authority. When there is no valid
+accepted foreground, the existing bootstrap/fallback policy is unchanged.
+This is a bounded routing fix, **not** completion of activation ownership:
+`handleMouseDown` still eagerly raises candidates and changes guest focus,
+and direct native/non-client routes still need their own acceptance audit.
+Cross-app live Worker activation/deactivation remains unverified here.
+
+Main-tree checks passed: `test-renderer-multi-app-modal.js` (including matching
+memory, stale records and no focus callback), `test-host-window-related.js`,
+`test-renderer-mouse-drag-mask.js`, `test-renderer-dialog-modal-input.js`,
+`test-renderer-dialog-button-queue.js`, `test-keyboard-focus-seed.js`, and
+`test-keyboard-message-lparam.js`. Loading the HEAD renderer-input source
+against the new regression fails the accepted-foreground ownership assertion.
+`test-browser-worker-input-focus.js` fails at its existing Win16 menu-tracker
+assertion (line 148, 0 versus 1) with both HEAD and the changed source; it is
+not a pass and no unrelated fixture was modified. No WASM source changed and
+no full build or real-browser acceptance claim is made for this slice.
