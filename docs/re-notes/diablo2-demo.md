@@ -832,3 +832,80 @@ machine it now times out before it reaches Act I — the assertion is fine, the
 budget is not. It is the D3D route that is being timed since the
 `startupRegistry` seeding landed; the DirectDraw route the 220s was calibrated
 against is no longer what that test exercises.
+
+### 2026-09-20: the route's cost is a frame-limiter spin, not rendering
+
+The 569s above is mostly waste, and `--trace-api-counts` says so in one line.
+Over the first 100s of the `Render=1` route, of 56M Win32 calls:
+
+| calls | API |
+| ---: | --- |
+| 18,720,923 | `PeekMessageA` |
+| 18,720,903 | `QueryPerformanceFrequency` |
+| 18,720,902 | `QueryPerformanceCounter` |
+| 18,303 | `IDirect3DDevice3_DrawPrimitive` |
+
+**99.7% of the route's API calls are three calls in one frame-limiter loop**, at
+about 4.3 blocks an iteration. The headless guest clock only advances between
+batches, so that loop cannot exit inside a batch: whatever budget is left after
+the frame's real work is spent spinning, and nothing else. Surplus
+`--batch-size` therefore buys spin, not progress. Measured user CPU for the
+identical route (user CPU, because this box sits at load 10-40 and wall time
+measures the machine):
+
+| `--batch-size` | user CPU to the Act I load |
+| ---: | ---: |
+| 200,000 | 91s |
+| **50,000** | **49s** |
+| 20,000 | 51s |
+
+50,000 is the knee; below it per-batch host overhead takes the saving back.
+
+**`--tick-ms-per-batch` is not the other half of this.** Giving the guest more
+time per batch does cut the number of waiting batches, but at 1000ms/batch the
+Act I load dies in Diablo II's own "This application has encountered a critical
+error" box, which is the documented consequence of stepping over Storm's 255ms
+MPQ completion waits (see *Isolated-Worker bounded MPQ waits*). Keep the
+default 200.
+
+### 2026-09-20: the gameplay test is event-driven and split
+
+`test/test-diablo2-demo-gameplay.js` no longer fires input at fixed batch
+numbers. Every stage waits for the pixels that stage produces, so the route
+survives a `--batch-size` change; the old schedule was calibrated against
+`--batch-size=1000000` and, at any other budget, clicked screens that were not
+up yet (at 50,000 it sat on SELECT HERO CLASS for 400 batches and captured that).
+The screen signatures it waits on, at the CLI's 640x480 canvas:
+
+| stage | signature |
+| --- | --- |
+| main menu | >1000 bright desaturated pixels in *both* `(200,145)-(440,185)` (SINGLE PLAYER) and `(200,425)-(440,465)` (EXIT DIABLO II) |
+| SELECT HERO CLASS | >40000 pixels changed from the menu and the centred EXIT plate gone |
+| CHARACTER NAME | >400 pixels over a **dim** plate floor in `(495,425)-(615,460)`; that OK plate peaks at 131, not 255, because the screen is lit by one campfire, and a 90 floor scores it 0 |
+| Act I load | the centred portal `(185,105)-(455,365)` lit, with `(0,0)-(180,480)` black — D2's own critical-error box also leaves a mostly black frame but paints that left margin |
+
+Working input coordinates are **canvas 640x480**, not the guest's 800x600:
+SINGLE PLAYER `(320,164)`, Barbarian `mousemove` + `dblclick` `(315,210)`, name
+field `(320,422)`, OK `(553,442)`. The old schedule's `(400,275)` missed the
+Barbarian entirely and `(405,527)` was off the bottom of the canvas.
+
+The default run stops at the Act I loading portal: **49s of CPU, about 55s wall
+on a quiet box**, 220s at load 26. Its 420s guest guard and the matching 480s
+row in `tools/test-timeouts.json` are sized for this machine at load 50, not for
+the expected duration. `DIABLO2_FULL_ROUTE=1` continues into the Rogue
+Encampment; that took 2163 batches and 270s of wall clock at load 11-17, and is
+opt-in precisely because that figure is not bounded on a shared box — the same
+opt-in run repeated at load 73-90 passed at batch 3299 after **152s of user CPU
+and 11 minutes of wall clock**.
+
+One threshold moved with it. The full route's terrain assertion was `> 50000`
+green pixels, calibrated on the 87,447 of the 2026-09-20 capture. That pinned
+one camera position: three captures of the same encampment — grass, wagon,
+campfire, NPC, Barbarian, both orbs, HUD — score **87,447, 43,950 and 34,552**,
+because the count is framing-dependent and the Act I load is one of the
+nondeterministic paths. The failure the assertion exists to catch is the
+silent-success `DrawIndexedPrimitiveVB` stub, whose black floor scores
+743-2,186 — the same range as the menu and loading screens. It is now
+`> 20000`: 10x over that failure, 1.7x under the tightest frame that is
+genuinely gameplay. The life orb, mana orb and colour assertions are unchanged
+(measured 2,974 / 2,902 / 961 against 2,500 / 2,000 / 100).
