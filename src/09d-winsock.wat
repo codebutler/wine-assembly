@@ -850,6 +850,15 @@
         (call $vsock_set_error (i32.const 10043))          ;; WSAEPROTONOSUPPORT
         (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
+    ;; A socket is the first moment a Winsock game needs the room, the way
+    ;; DPOPEN is for a DirectPlay one, so a host that asks the person which
+    ;; room gets to ask here. Quake II is the case: WSAStartup runs at boot for
+    ;; every launch, but socket() only once a player picks multiplayer, so this
+    ;; keeps the lobby out of every solo game. Checked after the argument
+    ;; tests, so a refused IPX probe asks nothing. Every host without a lobby
+    ;; answers 1 at once.
+    (if (i32.eqz (call $host_net_link_open))
+      (then (call $vsock_block (i32.const 16)) (return)))
     (local.set $idx (call $vsock_alloc))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then

@@ -10572,6 +10572,12 @@ if (VERBOSE) {
 
   if (workerThreadHost) workerThreadHost.stop();
   if (closeD3DRender) await closeD3DRender();
+  // A --vlan-wire run is a forked child, and an open IPC channel keeps node
+  // alive after everything else has finished: the run printed its Stats, hit
+  // --max-seconds, and then sat resident forever with its 512 MiB guest until
+  // the parent killed it. Every two-process test used to kill its seats for
+  // exactly this reason. The run is over, so hang up the wire.
+  if (VLAN_WIRE && process.connected) process.disconnect();
 }
 
 main().catch(async e => {

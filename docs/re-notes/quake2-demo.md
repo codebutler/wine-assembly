@@ -525,3 +525,51 @@ still supplies every binding not explicitly modernized. Browser persistence is
 enabled for this config: an existing saved config is restored after the bundled
 default is mounted, and later in-game customization is saved, so the defaults
 do not overwrite user choices on subsequent launches.
+
+## Multiplayer over the virtual LAN
+
+Quake II's network layer is plain UDP. The only WSOCK32 imports are by
+ordinal: `socket`, `bind`, `setsockopt` (`SO_BROADCAST`), `ioctlsocket`
+(`FIONBIO`), `sendto`, `recvfrom`, `closesocket`, `htons`/`ntohs`,
+`inet_ntoa`, `gethostbyname`, `WSAStartup`, `WSAGetLastError`. The server
+listens on 27910 and the client on 27901. `src/09d-winsock.wat` already
+serves all of it, so **no Quake-specific emulator work was needed**: the
+first two-process attempt (2026-09-20) put a client into a deathmatch.
+
+```bash
+node tools/vlan-pair.js --log-dir=/tmp/q2lan \
+  -- --app=quake2_demo --args='+set vid_ref soft +set deathmatch 1 +set maxclients 4 +map demo1' \
+     --trace-net --quiet-api --quiet-blocks --batch-size=20000 --max-batches=100000000 --max-seconds=200 --no-close --png=/tmp/q2lan/host.png \
+  -- --app=quake2_demo --args='+set vid_ref soft +connect 10.0.0.1' \
+     --trace-net --quiet-api --quiet-blocks --batch-size=20000 --max-batches=100000000 --max-seconds=200 --no-close --png=/tmp/q2lan/client.png
+```
+
+Read the client's send sizes in order (`grep '\[net\] ->' seat-2.log`):
+
+| size | what it is |
+|---|---|
+| 17 | `getchallenge` |
+| 92 | `connect` + protocol, qport, challenge, userinfo |
+| 26-32, with 10-byte keepalives | signon stages (`new`, configstrings, baselines, `begin`) |
+| 25 | one usercmd per frame: the client is in the game |
+
+In that run the client sent ~120 `getchallenge`/`connect` pairs before one
+was answered. **That is not a reconnect loop.** It is Quake's own 3-second
+resend while the server loads `demo1`, and the client stops for good once it
+gets in. After that there were 1,343 usercmds against 1,428 server packets,
+and the two captures show two different players on `demo1`.
+`test/test-quake2-vlan-gameplay.js` is this run as a gate.
+
+Server discovery works as well. Started 120s after the server, a client
+opened with `+menu_joinserver` broadcasts `info` to
+`255.255.255.255:27910`, and the server answers `10.0.0.2:27901`
+directly. So in a browser room **either seat may host**: the joiner's list
+is filled by broadcast, not by assuming the server is at `.1`.
+
+**Solo play never makes a socket.** A `+map demo1` run calls `WSAStartup` and
+nothing else from WSOCK32. Quake opens its UDP sockets only from `NET_Config`,
+i.e. once a player starts or joins a network game. So `$handle_socket` asks
+`host_net_link_open` first, the same question DirectPlay's `DPOPEN` asks, and
+the registry entry sets `lan.onDemand`. The browser lobby then appears at
+*Start/Join Network Server* and never in a single-player game. Hosts without
+a lobby (the CLI, every non-`onDemand` app) answer 1 immediately.
