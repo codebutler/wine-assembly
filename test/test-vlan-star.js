@@ -300,6 +300,20 @@ async function main() {
     await b.close(); await a.close();
   });
 
+  await check('"Start my own room" opens a second room beside a serving one', async () => {
+    const d = new Directory();
+    const a = await open(d, 'u1', 'ana');
+    const b = await open(d, 'u2', 'ben', { ownRoom: true });
+    assert.strictEqual(b.role, 'owner', 'ben asked for his own room');
+    assert.strictEqual(b.address, '10.0.0.1');
+    assert.strictEqual(a.wire.memberCount, 0, 'nobody joined ana');
+    const c = await open(d, 'u3', 'cy', { preferOwner: 'u2' });
+    assert.strictEqual(c.role, 'member');
+    assert.strictEqual(c.owner.userId, 'u2', 'a pick from the list reaches that room, not the older one');
+    assert.strictEqual(b.wire.memberCount, 1);
+    await c.close(); await b.close(); await a.close();
+  });
+
   await check('an owner that never answers (a closed tab) is passed over for a room of our own', async () => {
     const d = new Directory();
     d.records.set('u0', { userId: 'u0', name: 'ghost', role: 'owner', address: '10.0.0.1', updatedAt: 1 });

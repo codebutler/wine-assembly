@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-// Quake II's star room, between two browsers: one hosts, the other is offered
-// the match on the Join card and lands in it.
+// Quake II's star room, between two browsers: one hosts, the next is shown the
+// server list and joins from it.
 //
 //   node test/test-web-quake2-room.js [--timeout=540] [--headful]
 //
@@ -14,7 +14,7 @@
 // +connect to the owner's seat over WebRTC. Each browser context is its own
 // cookie, so its own signaling user, as two people are.
 //
-// A third browser says "Not now", starts at the game's menu, and joins from
+// A third browser says "Continue offline", starts at the game's menu, and joins from
 // the toast the shell shows it later. That join reaches a game already past
 // its command line, so it goes through lan.join.inGame typing into Quake's
 // console. It is also the three-player room where an unread UDP socket used
@@ -117,7 +117,7 @@ const snapWindow = () => {
     args: ['--no-sandbox', '--no-first-run', '--no-default-browser-check'],
   });
 
-  const open = async (label, args, link) => {
+  const open = async (label, args, link, setup) => {
     const ctx = browser.createBrowserContext
       ? await browser.createBrowserContext()
       : await browser.createIncognitoBrowserContext();
@@ -156,6 +156,7 @@ const snapWindow = () => {
     }
     await page.goto(`${base}/index.html`, { waitUntil: 'load', timeout: 60000 });
     await page.waitForFunction('typeof launchApp === "function"', { timeout: 60000 });
+    if (setup) await page.evaluate(setup);
     await page.evaluate(a => {
       window.wineApps.APPS.quake2_demo.args = a;
       document.getElementById('app-select').value = 'quake2_demo';
@@ -195,20 +196,42 @@ const snapWindow = () => {
     }
 
     // ---- the joiner: offered the match before its game starts -------------
-    const guest = await open('guest', JOIN_ARGS);
-    const card = await H.until(guest.page, 'guest: no Join card',
+    // A second server that starts while the list is open, so the list has to
+    // grow by itself. It is a presence record only -- nobody answers it --
+    // which is also why the test then joins the real one by name.
+    const guest = await open('guest', JOIN_ARGS, null, () => {
+      const real = VlanRoom.hostedRooms;
+      let calls = 0;
+      VlanRoom.hostedRooms = async opts => {
+        const rooms = await real(opts);
+        if (++calls < 2) return rooms;
+        return rooms.concat([{ userId: 'ghost-server', name: 'ghost', role: 'owner',
+          address: '10.0.0.1', hosting: { label: 'ghost q2dm1 0/8' }, updatedAt: 1 }]);
+      };
+    });
+    const card = await H.until(guest.page, 'guest: no server list',
       () => {
-        const c = document.getElementById('wine-lan-card');
-        return c ? c.textContent : null;
+        const rows = document.querySelectorAll('#wine-lan-card .wine-lan-room');
+        return rows.length ? Array.from(rows, r => r.textContent) : null;
       }, null, 60000);
-    check(`the second browser was offered the match before launching (${card ? JSON.stringify(card) : 'no card'})`,
-      !!card && /is hosting Quake II/.test(card) && /demo1/.test(card));
-    check('and its game was not started behind the card',
+    check(`the second browser was shown the server list before launching (${card ? JSON.stringify(card) : 'no list'})`,
+      !!card && card.length === 1 && /demo1/.test(card[0]));
+    check('with a way to continue offline', await guest.page.evaluate(() =>
+      Array.from(document.querySelectorAll('#wine-lan-card button'))
+        .some(x => x.textContent === 'Continue offline')));
+    check('and its game was not started behind the list',
       await guest.page.evaluate(() => runningApps.length === 0));
+    const grown = await H.until(guest.page, 'guest: the list never refreshed',
+      () => {
+        const rows = document.querySelectorAll('#wine-lan-card .wine-lan-room');
+        return rows.length === 2 ? Array.from(rows, r => r.textContent) : null;
+      }, null, 15000);
+    check(`a server that starts while the list is open appears in it (${grown ? JSON.stringify(grown) : 'no'})`,
+      !!grown && grown.some(t => /ghost q2dm1/.test(t)) && grown.some(t => /demo1/.test(t)));
     await guest.page.evaluate(() => {
-      const b = Array.from(document.querySelectorAll('#wine-lan-card button'))
-        .find(x => /^Join /.test(x.textContent));
-      b.click();
+      const row = Array.from(document.querySelectorAll('#wine-lan-card .wine-lan-room'))
+        .find(r => /demo1/.test(r.textContent) && !/ghost/.test(r.textContent));
+      row.querySelector('button').click();
     });
 
     const joined = await H.until(guest.page, 'guest: never wired',
@@ -239,23 +262,23 @@ const snapWindow = () => {
 
     // ---- a third player, already playing when they take the offer --------
     //
-    // "Not now" on the card, so the game starts at its own menu with no room.
+    // "Continue offline" on the list, so the game starts at its own menu with no room.
     // The shell keeps looking, offers the same host again as a toast, and a
     // Join there has to reach a game that is past its command line: the
     // recipe types `connect 10.0.0.1 into its console. Three players is also
     // the room the unread-UDP stall used to freeze.
     const third = await open('third', JOIN_ARGS);
-    const offered = await H.until(third.page, 'third: no Join card',
+    const offered = await H.until(third.page, 'third: no server list',
       () => !!document.getElementById('wine-lan-card'), null, 60000);
     if (offered) {
       await third.page.evaluate(() => {
         Array.from(document.querySelectorAll('#wine-lan-card button'))
-          .find(x => x.textContent === 'Not now').click();
+          .find(x => x.textContent === 'Continue offline').click();
       });
     }
     const running = await H.until(third.page, 'third: game never started',
       () => runningApps.length > 0 && !runningApps[0].wine.vlanWire, null, 60000);
-    check('"Not now" starts the game with no room', !!running);
+    check('"Continue offline" starts the game with no room', !!running);
     const toast = await H.until(third.page, 'third: no toast',
       () => { const c = document.getElementById('wine-lan-card'); return c ? c.textContent : null; },
       null, 90000);

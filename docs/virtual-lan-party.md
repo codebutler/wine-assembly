@@ -1433,3 +1433,15 @@ hosting, the game launches with `lan.join.launchArgs`. If the owner is in a
 room but not serving yet, the room is joined silently at the game's first
 `socket()`. If the owner is gone, the launch proceeds as usual. `room` is read
 only for the app the link names.
+
+**The server list (2026-09-21).** Opening a `room: 'auto'` game while
+anybody's room is serving shows every such room: one row per owner (their
+name and the probe's status line, e.g. `noname demo1 1/4`), each with its own
+Join, plus **Continue offline**. The list re-reads presence every 3 s while it
+is open, so servers that start or stop while somebody is looking come and go.
+The same list comes back when the game first goes online, this time with
+**Play offline** and **Start my own room**. The latter is `openRoom({ownRoom})`:
+a second room beside the listed ones, with no joining and no step-down. The
+step-down only settles two claims made on an *empty* channel at the same
+moment. With nobody serving, nothing is shown and going online joins or opens
+a room silently, as before.
