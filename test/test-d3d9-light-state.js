@@ -14,7 +14,11 @@ const {bootRenderHarness}=require('./render-helper');
       (store.field DxObject misc1 (call $dx_from_this (local.get $d)) (call $d3d9_program_alloc))
       (call $d3d9_default_output (local.get $d) (i32.const 0)) (local.get $d))
     (func (export "state") (param $d i32) (result i32) (call $d3d9_program_state (local.get $d)))
-    (func (export "free_head") (result i32) (global.get $free_list))
+    ;; $heap_bins_flush first, as the shipped "get_free_list" export does:
+    ;; $heap_free_impl bins every block <= $HEAP_BIN_MAX (256) and returns
+    ;; before reaching $free_list, and a light node is small, so a raw
+    ;; (global.get $free_list) never sees it freed.
+    (func (export "free_head") (result i32) (call $heap_bins_flush) (global.get $free_list))
     ${[...methods.map(n=>['IDirect3DDevice9',n]),...['Capture','Apply','Release'].map(n=>['IDirect3DStateBlock9',n]),
       ['IDirect3DDevice9','Release']].map(([type,n])=>`
       (func (export "${type}_${n}") (param $a i32) (param $b i32) (param $c i32) (result i32)

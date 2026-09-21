@@ -40,7 +40,12 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
   (func (export "program") (param $d i32) (result i32) (call $d3d9_program_state (local.get $d)))
   (func (export "scissor") (param $d i32) (param $p i32) (param $get i32) (result i32)
     (call $d3d9_scissor (local.get $d) (local.get $p) (local.get $get)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "free_head") (result i32) (global.get $free_list))
+  ;; $heap_bins_flush first, exactly as the shipped "get_free_list" export
+  ;; does. $heap_free_impl sends every block <= $HEAP_BIN_MAX (256) to a
+  ;; per-size bin and returns before it ever reaches $free_list, so a raw
+  ;; (global.get $free_list) cannot see a freed small block at all -- and a
+  ;; light node is small.
+  (func (export "free_head") (result i32) (call $heap_bins_flush) (global.get $free_list))
   (func (export "light") (param $d i32) (result i32)
     (call $d3d9_light (local.get $d) (i32.const 123456) (i32.const 1) (i32.const 2)) (i32.load offset=0 (global.get $reg_base)))
   (func (export "material") (param $d i32) (param $p i32) (result i32)
