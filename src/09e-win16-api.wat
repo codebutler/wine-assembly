@@ -3548,10 +3548,25 @@
     (if (i32.eqz (local.get $bytes)) (then (return (i32.const 1))))
     (i32.div_u (i32.add (local.get $bytes) (i32.const 0xFFFF)) (i32.const 0x10000)))
 
+  ;; The size a global block really has: Windows 3.1 hands out global memory
+  ;; in 32-byte units, and GlobalSize reports the rounded size, not the one
+  ;; asked for. Callers depend on that -- they GlobalAlloc a block and then ask
+  ;; GlobalSize how much they actually got, to use all of it. Visual Basic
+  ;; builds a sub-heap inside each file buffer that way, and walks it in even
+  ;; steps until it lands exactly on the end GlobalSize gave it; handed the
+  ;; odd 0x2c3 it had asked for, the walk stepped over the end and never
+  ;; stopped (Sokoban, on its first `Open`). Zero stays zero: GlobalAlloc(0)
+  ;; is a handle with no memory behind it, whose size is 0.
+  (func $win16_gsize (param $bytes i32) (result i32)
+    (if (i32.gt_u (local.get $bytes) (i32.const 0xFFFFFFE0))
+      (then (return (local.get $bytes))))
+    (i32.and (i32.add (local.get $bytes) (i32.const 31)) (i32.const -32)))
+
   ;; Allocate `bytes` and answer with the head selector, or 0 if the arena
   ;; cannot cover it.
   (func $win16_global_alloc (param $bytes i32) (result i32)
     (local $need i32) (local $i i32) (local $head i32) (local $n i32)
+    (local.set $bytes (call $win16_gsize (local.get $bytes)))
     (local.set $need (call $win16_gseg_count (local.get $bytes)))
     (if (i32.and (i32.le_u (local.get $bytes) (i32.const 0x1000))
                  (i32.ge_u (global.get $win16_next_seg)
@@ -3683,7 +3698,7 @@
     (local $h i32) (local $bytes i32) (local $index i32) (local $new i32)
     (local $old i32) (local $i i32)
     (local.set $h (call $win16_arg16 (i32.const 3)))
-    (local.set $bytes (call $win16_arg32 (i32.const 1)))
+    (local.set $bytes (call $win16_gsize (call $win16_arg32 (i32.const 1))))
     (local.set $index (call $win16_sel_to_index (local.get $h)))
     (local.set $old (call $win16_gseg_field (local.get $index) (i32.const 12)))
     ;; A pooled block owns only its own run, so it resizes in place up to that
@@ -6220,6 +6235,8 @@
       (then (call $win16_ChangeMenu) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 190))
       (then (call $win16_GetUpdateRect) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 237))
+      (then (call $win16_GetUpdateRgn) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 24))
       (then (call $win16_prop (i32.const 2)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 25))
@@ -8456,6 +8473,23 @@
     (i32.store offset=0 (global.get $reg_base)
       (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 8)))
+
+  ;; USER.237 GetUpdateRgn(hWnd, hRgn, fErase). The region handle is the
+  ;; 16-bit one CreateRectRgn gave out, so it maps back through $win16_h32.
+  ;; $handle_GetUpdateRgn already answers a 16-bit program with the
+  ;; zero/non-zero result VB-era code tests for -- VBRUN300 does `or ax,ax;
+  ;; jz` on it before combining the region into its own -- so the answer is
+  ;; passed through as it comes back.
+  (func $win16_GetUpdateRgn
+    (local $hwnd i32) (local $rgn i32) (local $erase i32)
+    (local.set $erase (call $win16_arg16 (i32.const 0)))
+    (local.set $rgn (call $win16_h32 (call $win16_arg16 (i32.const 1))))
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 2))))
+    (call $win16_call32_begin (i32.const 3))
+    (call $handle_GetUpdateRgn (local.get $hwnd) (local.get $rgn) (local.get $erase)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (call $win16_api_return (i32.const 6)))
 
   ;; USER.32 GetWindowRect / USER.33 GetClientRect(hWnd, lpRect).
   (func $win16_get_rect (param $is_window i32)
