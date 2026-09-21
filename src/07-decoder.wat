@@ -2886,13 +2886,18 @@
   ;; Pack the EA registers for the segmented compute handler: base | index<<4 |
   ;; seg<<8, with 0xF standing for "no register". Bit 11 distinguishes a
   ;; 32-bit address-size override in a 16-bit code segment: the selector base
-  ;; still applies, but the offset must not wrap at 16 bits.
+  ;; still applies, but the offset must not wrap at 16 bits. Bits 12-13 carry
+  ;; the SIB scale, which only that override can produce: `fs: mov edx,
+  ;; [edi+ecx*4]` in 386 code running from a 16-bit segment is a table lookup,
+  ;; and without the scale it reads a misaligned mix of two neighbouring entries.
   (func $ea16_info (result i32)
     (i32.or
       (i32.or
         (i32.or
-          (if (result i32) (i32.ne (global.get $mr_base) (i32.const -1))
-            (then (global.get $mr_base)) (else (i32.const 0xF)))
+          (i32.or
+            (i32.shl (global.get $mr_scale) (i32.const 12))
+            (if (result i32) (i32.ne (global.get $mr_base) (i32.const -1))
+              (then (global.get $mr_base)) (else (i32.const 0xF))))
           (i32.shl
             (if (result i32) (i32.ne (global.get $mr_index) (i32.const -1))
               (then (global.get $mr_index)) (else (i32.const 0xF)))

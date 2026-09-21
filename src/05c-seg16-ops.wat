@@ -128,24 +128,31 @@
 
   ;; ---- Effective addresses ----
   ;;
-  ;; info = base | index<<4 | seg<<8 | addr32<<11, with 0xF meaning "no
-  ;; register". A normal 16-bit-address sum wraps inside the segment before
-  ;; the base is added, which is what makes `[bp-2]` with a small BP address
-  ;; the top of the segment rather than the segment below it. An address-size
-  ;; override keeps the full 32-bit offset while still applying the selector.
+  ;; info = base | index<<4 | seg<<8 | addr32<<11 | scale<<12, with 0xF
+  ;; meaning "no register". A normal 16-bit-address sum wraps inside the
+  ;; segment before the base is added, which is what makes `[bp-2]` with a
+  ;; small BP address the top of the segment rather than the segment below it.
+  ;; An address-size override keeps the full 32-bit offset while still applying
+  ;; the selector, and is the only form with a SIB byte and so a scale.
   (func $ea16_compute (param $info i32) (param $disp i32) (result i32)
+    (local.set $disp (i32.add (local.get $disp) (call $ea16_regs (local.get $info))))
+    (i32.add
+      (call $seg16_base (i32.and (i32.shr_u (local.get $info) (i32.const 8)) (i32.const 7)))
+      (if (result i32) (i32.and (local.get $info) (i32.const 0x800))
+        (then (local.get $disp))
+        (else (i32.and (local.get $disp) (i32.const 0xFFFF))))))
+
+  ;; base + index<<scale, the register half of an info word.
+  (func $ea16_regs (param $info i32) (result i32)
     (local $off i32)
     (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $off (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $info) (i32.const 0xF)) (i32.const 2)))))))
     (if (i32.ne (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $off (i32.add (local.get $off)
-        (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))))))
-    (local.set $off (i32.add (local.get $off) (local.get $disp)))
-    (i32.add
-      (call $seg16_base (i32.and (i32.shr_u (local.get $info) (i32.const 8)) (i32.const 7)))
-      (if (result i32) (i32.and (local.get $info) (i32.const 0x800))
-        (then (local.get $off))
-        (else (i32.and (local.get $off) (i32.const 0xFFFF))))))
+        (i32.shl
+          (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))
+          (i32.and (i32.shr_u (local.get $info) (i32.const 12)) (i32.const 3)))))))
+    (local.get $off))
 
   ;; 363: compute a 16-bit segmented EA into ea_temp, then fall through to the
   ;; handler that consumes it — the same contract as $th_compute_ea_sib.
@@ -160,11 +167,7 @@
   (func $th_lea16 (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $info i32) (local $off i32)
     (local.set $info (call $read_thread_word))
-    (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
-      (then (local.set $off (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $info) (i32.const 0xF)) (i32.const 2)))))))
-    (if (i32.ne (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 0xF))
-      (then (local.set $off (i32.add (local.get $off)
-        (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))))))
+    (local.set $off (call $ea16_regs (local.get $info)))
     (call $set_reg16 (local.get $op)
       (i32.and (i32.add (local.get $off) (call $read_thread_word)) (i32.const 0xFFFF)))
     (dispatch-next))
