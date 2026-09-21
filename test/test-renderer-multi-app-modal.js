@@ -78,4 +78,49 @@ renderer.handleMouseDown(310, 180, 0);
 renderer.handleMouseUp(310, 180, 0);
 assert.deepStrictEqual(renderer.inputQueue, [], 'app A modal dialog should still block its own owner window');
 
-console.log('PASS  multi-app modal input blocking stays within the owning emulator instance');
+// A toolbar combo uses the native container router. Its pending release
+// must retain both that container and the emulator which received the down,
+// even when a different application's run slice replaces renderer.wasm.
+for (const screenRouter of [true, false]) {
+  const r = new Win98Renderer(canvas);
+  const calls = [];
+  let classifications = 0;
+  const foreign = { exports: {
+    modal_dialog_hwnd: () => 0,
+    dialog_route_mouse_screen: (...args) => { calls.push(['foreign', ...args]); return 1; },
+    dialog_route_mouse: (...args) => { calls.push(['foreign', ...args]); return 1; },
+  }};
+  const owner = { exports: {
+    modal_dialog_hwnd: () => 0,
+    wnd_get_style_export: () => 0,
+    wnd_get_parent: hwnd => hwnd === 301 ? 300 : 0,
+    wnd_client_screen_x: () => 10,
+    wnd_client_screen_y: () => 20,
+    get_focus_hwnd: () => 301,
+    set_focus() {},
+    ctrl_get_class: () => { classifications++; return 5; },
+    [screenRouter ? 'dialog_route_mouse_screen' : 'dialog_route_mouse']:
+      (...args) => { calls.push(['owner', ...args]); return 1; },
+  }};
+  r.wasm = owner;
+  r.windows[300] = { hwnd: 300, visible: true, isChild: false,
+    x: 10, y: 20, w: 200, h: 160, hasCaption: false, style: 0,
+    zOrder: 1, wasm: owner };
+  r._hitTestDeepChild = () => ({ hwnd: 301, sx: 30, sy: 40 });
+  r.handleMouseDown(45, 55, 0);
+  assert.strictEqual(r._dialogBtnDrag.wasm, owner, 'pending release retains emulator identity');
+  assert.strictEqual(r._dialogBtnDrag.parent, 300, 'release retains the down routing container');
+  r.wasm = foreign;
+  r.handleMouseUp(47, 58, 0);
+  assert.deepStrictEqual(calls, screenRouter ? [
+    ['owner', 300, 0x201, 1, 45, 55],
+    ['owner', 300, 0x202, 0, 47, 58],
+  ] : [
+    ['owner', 300, 0x201, 1, (35 << 16) | 35],
+    ['owner', 300, 0x202, 0, (38 << 16) | 37],
+  ], 'down/up use one owner and container, with screen or container-client coordinates');
+  assert.strictEqual(classifications, 1, 'classify the clicked control once in its owner');
+  assert.strictEqual(r._dialogBtnDrag, null, 'release retires the pending native press');
+}
+
+console.log('PASS  multi-app modal input and native press ownership stay within the owning emulator instance');

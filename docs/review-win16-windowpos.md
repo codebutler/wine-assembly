@@ -2378,3 +2378,39 @@ unchanged active-caption and scene-depth checks. Logs are `/private/tmp/`
 `wa-accepted-foreground-{build,far,win32,negative,far-negative}.log` and
 `wa-accepted-foreground-{vb,wep3}-final.log`. These are clean headless checks,
 not a live browser/Worker acceptance claim.
+
+### Native press ownership before deferred activation
+
+The toolbar-combo/deep-dialog branch kept a pending mouse-up without its
+owning WASM instance and stored the child HWND instead of the container used
+for mouse-down. A scheduler slice switching `renderer.wasm` could therefore
+release through another application's router; even without that switch,
+the release used a different container. This dependency must be removed
+before pointer routing can stop eagerly selecting the keyboard owner.
+
+The route now uses `ownerWasm` for classification/dispatch, classifies once,
+and retains the actual routing parent, owner and parent-client origin for
+mouse-up. The legacy coordinate router gets parent-relative coordinates,
+not the deep child's coordinates. The multi-app regression drives down/up
+through both screen and legacy routers with a foreign run slice between
+them and asserts the exact owner, container and coordinates. The old-source
+negative fails because the pending press has no owner
+(`/private/tmp/wa-native-owner-negative.log`). This does not yet move native
+controls onto the removal-time WM_MOUSEACTIVATE decision.
+
+Four focused renderer suites pass in main and the clean validation tree.
+Two adjacent clean-tree tests (`test-renderer-dialog-modal-input.js` and
+`test-renderer-dialog-button-queue.js`) fail identically with the unchanged
+renderer: their assertions require queuing WAT-button input, whereas the
+current implementation routes it synchronously. Their foreign worktree
+edits are not part of this change. Baseline evidence is in
+`/private/tmp/wa-native-owner-{modal,button}-baseline.log`.
+
+The clean-tree WordPad browser regression passes after using rsync to put
+its EXE/DLL/help assets inside the static server's root (the first attempt
+correctly rejected the external worktree symlink with HTTP 403). Evidence:
+`/private/tmp/wa-native-owner-wordpad.log` and the clean tree's
+`test/output/wordpad-web/hello-world.png`. This covers real RichEdit typing,
+Date/Time insertion, inline DIB, toolbar and menu rendering; the synthetic
+multi-instance matrix, not this single-app browser smoke, proves the routed
+press-owner handoff. No WAT/Worker ABI or build-artifact change in this stage.
