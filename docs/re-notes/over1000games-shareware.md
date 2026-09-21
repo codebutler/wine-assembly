@@ -310,6 +310,50 @@ Two things to know before the next installer:
 - Stage 3 runs at ~138 batches/s, two orders of magnitude below a typical app.
   The title screen animates, so that is drawing cost, not a hang.
 
+## Bad Toys 3D (`3D/BT3D19`, open)
+
+16-bit NE `INSTALL.EXE`, and it never gets as far as unpacking anything:
+
+```
+[MessageBox] "BAD TOYS 3D Setup": "WinG is not installed,
+```
+
+The check is a file test, not a load. `--trace-fs` shows
+`GetSystemDirectory` then `OpenFile` on `C:\WINDOWS\SYSTEM\wing.dll`, and the
+message box follows the miss immediately — no `LoadLibrary`, no
+`GetProcAddress`. The CD carries the WinG redistributable in `BT3D19/WING/`
+(the Microsoft ACME `MSSETUP.EXE` kit: `WING.DL_`, `WING32.DL_`,
+`WINGDIB.DR_`, `DVA.38_`, `WING.MST`), so on real hardware you run that first.
+
+Mounting any file at that path with
+`--vfs-mount=<host file>=c:\windows\system\wing.dll` gets past it — the
+installer then builds its main window and a 7-control dialog and stops at the
+**next** gap, `USER.308 DefDlgProc`, which we do not have in 16-bit form.
+
+That one is not a small wrapper. `$handle_DefDlgProcA` reaches dialog default
+processing through `$dialog_default_proc`, which calls `$wnd_send_message` —
+the 32-bit synchronous sender — and can also tail-dispatch a stored proc by
+writing `$eip` over a 32-bit frame. Neither is right for a Pascal caller, so a
+truthful `USER.308` wants the Win16 far-continuation path rather than a
+forward. As of 2026-09-20 that area is claimed on the message board by another
+agent (Win16 windowpos/defproc, far continuation), so this is blocked on
+coordination and not on knowledge.
+
+Two things to settle before that matters, in this order:
+
+1. **WinG itself.** Eight entry points — `WinGCreateDC`,
+   `WinGRecommendDIBFormat`, `WinGCreateBitmap`, `WinGGetDIBPointer`,
+   `WinGGet/SetDIBColorTable`, `WinGBitBlt`, `WinGStretchBlt` — all of which
+   sit on DIB machinery `10a-gdi-bitmap.wat` and `10g-gdi-raster.wat` already
+   have. The shape to copy is `09d1-mpr.wat`/`09d2-tapi.wat`: a WAT-native
+   module answered for by name, plus whatever makes a file test at
+   `c:\windows\system\wing.dll` succeed, since that test is what the installer
+   actually performs.
+2. **Which entry points `BT3D.EXE` needs.** Unknown, because the exe is inside
+   `DATA.TCF`/`BT3D.TCF` and only the installer unpacks them. Get past
+   `USER.308` with the mounted-stub trick first and dump the installed exe's
+   imports; do not size the WinG work from the API list before then.
+
 ## ClockWerx (open)
 
 16-bit, and the loader says it first:
