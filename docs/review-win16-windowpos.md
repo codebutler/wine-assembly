@@ -2297,3 +2297,44 @@ in this fixture/audit stage.
 Negative controls confirm the repaired test rejects both dropping
 WM_NCHITTEST (`wa-input-order-negative.log`) and ignoring the queue's ownership
 predicate (`wa-input-owner-negative.log`); both are in `/private/tmp`.
+
+### Foreground-aware removal-time query gate
+
+Both ABI pumps now use `mouse_target_is_active`: skipping WM_MOUSEACTIVATE
+requires the target to match both local `active_hwnd` and the existing
+`foreground_window` host import. A different foreground HWND, or NULL,
+requires a query even if the target remains locally active. The distinction
+matches the documented separation of [GetActiveWindow's calling-queue state](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getactivewindow)
+from desktop foreground ownership; no new native Win98 cross-app trace is
+claimed here. Foreground is read only on the local-active fast-path candidate,
+not for every message or every interpreter operation.
+
+The real Win32 and far-code matrices now cover all four standard answers
+with the same locally active target and either a foreign foreground HWND or
+NULL. PM_NOREMOVE makes no guest query. Removal delivers/eats according to the
+answer, only answers 1/2 call host activation, and rejecting desktop activation
+does not erase the instance's local active HWND. The ordinary same-local-and-
+foreground case retains its no-query fast path. Both matrices pass in the
+clean tree (`wa-foreground-clean32.log`, `wa-foreground-clean16.log`);
+independent negatives restoring the local-only predicate fail by omitting
+the query (`wa-foreground-negative32.log`, `wa-foreground-negative16.log`).
+
+This is the guest decision prerequisite, not completed browser arbitration:
+the host still derives foreground from renderer z-order, eager mouse-down
+raising can change that before removal, other native input routes still
+bypass the pump, and WM_ACTIVATEAPP/old-app deactivation and live Worker
+acceptance remain open. No host/Worker import signatures changed.
+
+The first clean build also found the prior disabled-frame fixture had added
+a second WS_DISABLED literal that equals a region base and tripped the raw
+address ratchet. Both fixture uses now share one named WS_DISABLED constant;
+the test passes and no gate or baseline was relaxed.
+
+Clean verification uses `47bf2871` plus the claimed files via rsync in
+`/private/tmp/wa-foreground-mouse-verify`. Full build gates, normal/compat
+compilation and data-overlap checks pass (`wa-foreground-build-final.log`),
+layout `c5ccefca8909ee4b`, sizes 1453972/1454878 bytes. The final far matrix
+also explicitly checks that matching desktop/local state skips the query
+(`wa-foreground-final16.log`). All four renderer/input JS suites pass in the
+clean tree. Rodent/Rattler gameplay passes (`wa-foreground-vb.log`).
+WEP3 gameplay also passes all seven cases (`wa-foreground-wep3.log`).

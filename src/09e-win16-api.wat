@@ -7780,7 +7780,7 @@
       (then (return (i32.const 0))))
     (local.set $h (call $gl32 (local.get $tmp)))
     (local.set $top (call $wnd_top_level (local.get $h)))
-    (if (i32.and (i32.eq (local.get $top) (global.get $active_hwnd))
+    (if (i32.and (call $mouse_target_is_active (local.get $top))
           (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0)))
       (then (return (i32.const 0))))
     (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 48)))

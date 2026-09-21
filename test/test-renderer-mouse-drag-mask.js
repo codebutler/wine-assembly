@@ -242,7 +242,8 @@ assert.deepStrictEqual(focusChanges, [],
 // rather than inside a dialog. Its initial Split/Double/Stay/Hit controls have
 // WS_DISABLED; the direct deep-child route must reject both halves of a click.
 const disabledRenderer = new Win98Renderer(canvas);
-let disabledStyle = 0x08000000;
+const WS_DISABLED = 0x08000000;
+let disabledStyle = WS_DISABLED;
 let disabledFocus = 142;
 const disabledFocusChanges = [];
 const disabledWasm = {
@@ -283,7 +284,7 @@ for (const worker of [false, true]) {
   let disabled = true;
   const focusCalls = [];
   const targetWasm = { exports: {
-    wnd_get_style_export: () => disabled ? 0x08000000 : 0,
+    wnd_get_style_export: () => disabled ? WS_DISABLED : 0,
     get_focus_hwnd: () => 0,
     set_focus: hwnd => focusCalls.push(hwnd),
     set_focus_hwnd: hwnd => focusCalls.push(hwnd),

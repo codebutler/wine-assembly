@@ -1728,6 +1728,14 @@
   ;; Locals own the complete MSG across synchronous callbacks: the guest may
   ;; recursively pump into the very same LPMSG. Never derive origin from WM_*.
   ;; Result 1 means discard this event and continue scanning, not "no message".
+  ;; Active-window state belongs to one guest instance; the foreground frame
+  ;; belongs to the desktop. A background instance may still have a locally
+  ;; active HWND, so only their agreement permits skipping the mouse query.
+  (func $mouse_target_is_active (param $top i32) (result i32)
+    (if (i32.ne (local.get $top) (global.get $active_hwnd))
+      (then (return (i32.const 0))))
+    (i32.eq (local.get $top) (call $host_foreground_window)))
+
   (func $message_mouse_activate32 (param $ptr i32) (result i32)
     (local $h i32) (local $msg i32) (local $wp i32) (local $lp i32)
     (local $time i32) (local $x i32) (local $y i32)
@@ -1739,7 +1747,7 @@
     (if (i32.lt_s (call $wnd_table_find (local.get $h)) (i32.const 0))
       (then (return (i32.const 1))))
     (local.set $top (call $wnd_top_level (local.get $h)))
-    (if (i32.eq (local.get $top) (global.get $active_hwnd)) (then (return (i32.const 0))))
+    (if (call $mouse_target_is_active (local.get $top)) (then (return (i32.const 0))))
     ;; Far procedures require a suspended Pascal transaction, never the
     ;; synchronous Win32 sender's posted fallback.
     (if (call $win16_is_far_proc (call $wnd_table_get (local.get $h)))

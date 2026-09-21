@@ -255,8 +255,12 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
 (async () => {
   const mouseInput = [];
   let currentMouse = null;
+  let desktopForeground = null;
+  const desktopActivations = [];
   const rectangles = new Map(), moves = [], orders = [], systemCommands = [];
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none', extraHostOverrides: {
+    foreground_window: () => desktopForeground === null ? e.test_active() : desktopForeground,
+    activate_window: hwnd => { desktopActivations.push(hwnd); return 1; },
     check_input: () => {
       currentMouse = mouseInput.shift() || null;
       return currentMouse ? ((currentMouse.wp << 16) | currentMouse.msg) : 0;
@@ -1021,6 +1025,29 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
       assert.strictEqual(runPump(1, 1), 1);
       assert.deepStrictEqual(pumpMessages(), [], 'far posted click does not activate');
     }
+  }
+  for (const desktop of [0x76543210, 0]) for (const answer of [1, 2, 3, 4]) {
+    const off = (desktop ? 0xd000 : 0xe000) + answer * 0x100;
+    writeCode(off, queryProc(answer));
+    const target = e.test_window(off);
+    runFocus(target);
+    desktopForeground = desktop;
+    desktopActivations.length = 0;
+    e.guest_write32(0x110900, 0);
+    mouseInput.push({hwnd: target, msg: 0x201, wp: 1, lp: 0x0014000a});
+    assert.strictEqual(runPump(1, 0), 1);
+    assert.deepStrictEqual(pumpMessages(), [], 'background far PM_NOREMOVE does not query');
+    assert.strictEqual(runPump(1, 1), answer === 2 || answer === 4 ? 0 : 1);
+    assert.deepStrictEqual(pumpMessages(), [{msg: 0x21, wp: e.test_narrow(target), lp: 0x02010001}],
+      'locally active far background frame receives query');
+    assert.deepStrictEqual(desktopActivations, answer <= 2 ? [target] : [],
+      'far query consent alone publishes desktop activation');
+    assert.strictEqual(e.test_active(), target);
+    desktopForeground = null;
+    e.guest_write32(0x110900, 0);
+    mouseInput.push({hwnd: target, msg: 0x201, wp: 1, lp: 0x0014000a});
+    assert.strictEqual(runPump(1, 1), 1);
+    assert.deepStrictEqual(pumpMessages(), [], 'aligned far foreground/local active state skips the query');
   }
   const peek16 = e.test_peek_thunk();
   // A native child (and a native intermediate parent) must query the far

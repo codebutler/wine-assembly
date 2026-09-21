@@ -195,6 +195,7 @@ const extraWat = String.raw`
 
   const hostCalls = [];
   const externalForeground = 0x76543210;
+  let foreground = externalForeground;
   const harness = await bootRenderHarness({
     extraWat,
     fonts: 'none',
@@ -209,7 +210,7 @@ const extraWat = String.raw`
         hostCalls.push(['activate', hwnd >>> 0]);
         return hwnd ? 1 : 0;
       },
-      foreground_window() { return externalForeground; },
+      foreground_window() { return foreground === null ? e.test_get_active() : foreground; },
       set_window_zorder(hwnd, after) {
         hostCalls.push(['zorder', hwnd >>> 0, after | 0]);
       },
@@ -561,6 +562,7 @@ const extraWat = String.raw`
     {hwnd: chainB, msg: 7, wParam: chainB, lParam: 0},
   ], 'native reentry ends with the outer self-focus pair');
   const mouseMsg = e.guest_alloc(28) >>> 0;
+  foreground = null; // Ordinary single-app cases keep desktop/local activation aligned.
   // Earlier restore/focus cases deliberately left NC work pending. Keep the
   // input transaction matrix independent of that synthetic message source.
   e.test_mouse_clear_nc();
@@ -678,6 +680,25 @@ const extraWat = String.raw`
   mouseInput.push({hwnd: mouseChild, msg: 0x201, wp: 1, lp: 0x0014000a});
   assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), 1);
   assert.deepStrictEqual(records(), [], 'an already-active top level needs no activation query');
+  for (const desktop of [externalForeground, 0]) for (const answer of [1, 2, 3, 4]) {
+    const query = e.guest_alloc(256) >>> 0;
+    bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 0x21, 0x75, 8,
+      0xb8, ...u32(answer), 0xc2, 0x10, 0]), toWasm(query));
+    const target = e.test_make_window(query, WS_VISIBLE, 0, 1);
+    e.test_set_active(target, stack);
+    foreground = desktop;
+    resetRecords(); hostCalls.length = 0;
+    mouseInput.push({hwnd: target, msg: 0x201, wp: 1, lp: 0x0014000a});
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 0, 0x201, 0x201), 1);
+    assert.deepStrictEqual(records(), [], 'background PM_NOREMOVE still does not query');
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), answer === 2 || answer === 4 ? 0 : 1);
+    assert.deepStrictEqual(records(), [{hwnd: target, msg: 0x21, wParam: target, lParam: 0x02010001}],
+      'locally active background frame receives the query');
+    assert.deepStrictEqual(hostCalls.filter(call => call[0] === 'activate'),
+      answer <= 2 ? [['activate', target]] : [], 'only consent publishes desktop activation');
+    assert.strictEqual(e.test_get_active(), target, 'desktop rejection does not erase local active state');
+  }
+  foreground = null;
   console.log('PASS Set/GetActiveWindow and removal-time mouse activation');
 })().catch(error => {
   console.error(error && error.stack || error);
