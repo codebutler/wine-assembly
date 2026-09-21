@@ -2899,3 +2899,46 @@ fail, confirming restored coverage. `test-renderer-multi-app-modal.js`,
 `test-keyboard-focus-seed.js` and `test-worker-input-slice-wake.js` also pass;
 the latter executes the compiled guest slice boundary and browser-drive-loop
 fixture. These are harness checks, not live cross-app Worker acceptance.
+
+### Queued client clicks no longer preempt USER activation (2026-09-20)
+
+`handleMouseDown` previously raised every candidate, selected its keyboard
+instance and transferred guest focus before enqueuing its button-down.
+Consequently a correct later `MA_NOACTIVATE` answer could not undo the
+already-delivered focus callbacks or restore the previous surface ordering.
+Ordinary queued client input now only selects and queues its target. The
+compiled USER removal-time transaction and `activate_window` publication
+decide activation. Queued child input likewise no longer calls `_setInputFocus`.
+
+The existing synchronous native/non-client preparation is isolated in an
+explicit, once-per-candidate helper, used only by those routes. Scrollbar
+hit classification happens before preparation and is passed into dispatch,
+so focus preparation still precedes scrollbar handling without hit-testing
+twice. Direct dialog/combo routes can still prepare before discovering no
+child accepts the click; these and non-client acceptance remain unfinished,
+not evidence that every mouse path now obeys `WM_MOUSEACTIVATE`.
+
+`test-active-window.js` now connects real renderer queueing to the compiled
+USER pump and production desktop activation import for all four `MA_*`
+answers. Window geometry and app ownership tokens are synthetic; this does
+not launch a second live guest process.
+It checks no pre-queue focus callback/z-order/keyboard change, consent-only
+publication, veto preservation, and surviving button-up after an eaten down.
+This passes on main and the isolated test copy. Loading the old renderer
+fails the new pre-activation z-order assertion; the smaller multi-app test
+independently fails the old speculative keyboard-owner assignment.
+
+Updated two older renderer fixtures that explicitly required eager focus or
+app-context replacement. Their mouse, disabled-window, capture and drag
+checks remain; enabled Worker-owned queued input now asserts no speculative
+focus publication. Focused main checks pass for multi-app routing, caption
+drag, mouse drag mask, native dialog button queue/modal input, Worker input,
+keyboard focus seeding, cursor routing, letterbox input, resize and menu
+discovery without a mirror. The isolated WordPad browser regression also
+passes with terminal exit 0 (including RichEdit text, inline DIB, toolbar
+and menus), using the existing consistent WASM artifact; no WAT changed.
+
+Next authority gaps: `host.js` still guesses `_workerFocusHwnd` from a
+dequeued mouse-down, rather than the live guest's acceptance/focus decision;
+direct native/non-client routing remains separate; live cross-app Worker
+activation/deactivation has not been verified by this harness matrix.

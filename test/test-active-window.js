@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const apiTable = require('../src/api_table.json');
 const { bootRenderHarness } = require('./render-helper');
+const { createWindowHost } = require('../lib/host-window');
 
 const ROOT = path.join(__dirname, '..');
 const CAPACITY = 64;
@@ -189,6 +190,8 @@ const extraWat = String.raw`
 (async () => {
   const mouseInput = [];
   let currentMouse = null;
+  let inputRenderer = null;
+  let desktopHost = null;
   assert.strictEqual(apiTable.find(api => api.name === 'SetActiveWindow').nargs, 1);
   assert.strictEqual(apiTable.find(api => api.name === 'GetActiveWindow').nargs, 0);
   assert.strictEqual(apiTable.find(api => api.name === 'GetForegroundWindow').nargs, 0);
@@ -201,16 +204,23 @@ const extraWat = String.raw`
     fonts: 'none',
     extraHostOverrides: {
       check_input() {
-        currentMouse = mouseInput.shift() || null;
+        const event = inputRenderer && inputRenderer.takeInput();
+        currentMouse = inputRenderer
+          ? (event && { hwnd: event.hwnd, msg: event.msg, wp: event.wParam, lp: event.lParam })
+          : (mouseInput.shift() || null);
         return currentMouse ? ((currentMouse.wp << 16) | currentMouse.msg) : 0;
       },
       check_input_hwnd() { return currentMouse ? currentMouse.hwnd : 0; },
       check_input_lparam() { return currentMouse ? currentMouse.lp : 0; },
       activate_window(hwnd) {
         hostCalls.push(['activate', hwnd >>> 0]);
+        if (desktopHost) return desktopHost.activate_window(hwnd);
         return hwnd ? 1 : 0;
       },
-      foreground_window() { return foreground === null ? e.test_get_active() : foreground; },
+      foreground_window() {
+        if (desktopHost) return desktopHost.foreground_window();
+        return foreground === null ? e.test_get_active() : foreground;
+      },
       set_window_zorder(hwnd, after) {
         hostCalls.push(['zorder', hwnd >>> 0, after | 0]);
       },
@@ -699,6 +709,62 @@ const extraWat = String.raw`
     assert.strictEqual(e.test_get_active(), target, 'desktop rejection does not erase local active state');
   }
   foreground = null;
+  // Feed real renderer clicks through the compiled USER pump, then publish
+  // accepted activation through the production desktop host. Geometry and
+  // app tokens are synthetic; guest focus/callbacks and MA_* decisions are real.
+  const r = harness.renderer;
+  r.scheduleRepaint = () => {};
+  r.repaint = () => {};
+  const previousApp = { exports: {} };
+  const clickApp = { exports: {
+    get_focus_hwnd: e.get_focus_hwnd,
+    set_focus: e.set_focus,
+    wnd_get_style_export: e.wnd_get_style_export,
+  }};
+  inputRenderer = r;
+  desktopHost = createWindowHost({ renderer: r }, {}).imports;
+  for (const answer of [1, 2, 3, 4]) {
+    const query = e.guest_alloc(256) >>> 0;
+    bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 0x21, 0x75, 8,
+      0xb8, ...u32(answer), 0xc2, 0x10, 0]), toWasm(query));
+    const target = e.test_make_window(query, WS_VISIBLE, 0, 1);
+    const old = { hwnd: focusA, visible: true, isChild: false,
+      x: 350, y: 10, w: 200, h: 150, style: 0, zOrder: 10, wasm: previousApp };
+    const clicked = { hwnd: target, visible: true, isChild: false,
+      x: 10, y: 10, w: 200, h: 150, style: 0, zOrder: 1, wasm: clickApp };
+    r.windows = { [focusA]: old, [target]: clicked };
+    r._nextZ = 11;
+    r._foregroundWindow = old;
+    r._setKeyboardInputOwner(old);
+    r.inputQueue.length = 0;
+    e.test_set_active(focusA, stack);
+    e.test_focus_api(focusA, stack);
+    e.test_mouse_clear_nc();
+    resetRecords(); hostCalls.length = 0;
+    r.handleMouseDown(40, 60, 0);
+    r.handleMouseUp(40, 60, 0);
+    assert.deepStrictEqual(r.inputQueue.map(event => event.msg), [0x84, 0x201, 0x202],
+      `answer ${answer}: renderer queues hit-test/down/up`);
+    assert.strictEqual(clicked.zOrder, 1, 'renderer cannot preempt USER z-order decision');
+    assert.strictEqual(r._keyboardInputWasm, previousApp, 'renderer retains accepted keyboard app');
+    assert.strictEqual(e.get_focus_hwnd(), focusA, 'renderer cannot preempt guest focus decision');
+    assert.deepStrictEqual(records(), [], 'queueing invokes no guest focus callbacks');
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x84, 0x84), 1,
+      'hit-test message precedes the activation-bearing down');
+    assert.strictEqual(r._foregroundWindow, old, 'removing hit-test does not activate');
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201),
+      answer === 2 || answer === 4 ? 0 : 1, `answer ${answer}: USER decides whether the queued down survives`);
+    const activates = answer <= 2;
+    assert.strictEqual(r._foregroundWindow, activates ? clicked : old,
+      'desktop publication follows the guest MA_* answer');
+    assert.strictEqual(r._keyboardInputWasm, activates ? clickApp : previousApp);
+    assert.strictEqual(clicked.zOrder > old.zOrder, activates,
+      'only accepted activation raises the clicked surface');
+    if (!activates) assert.strictEqual(e.get_focus_hwnd(), focusA, 'activation veto retains guest focus');
+    assert.strictEqual(records().filter(event => event.msg === 0x21).length, 1);
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x202, 0x202), 1,
+      'even an eaten down retains its queued release');
+  }
   console.log('PASS Set/GetActiveWindow and removal-time mouse activation');
 })().catch(error => {
   console.error(error && error.stack || error);

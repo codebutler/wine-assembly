@@ -337,7 +337,7 @@ function makeRenderer(wasm) {
   };
 
   r.handleMouseDown(50, 70, 0);
-  assert.strictEqual(r.wasm, secondWasm, 'native child interaction should activate its owning app context');
+  assert.strictEqual(r.wasm, firstWasm, 'queued child press must await USER activation before replacing app context');
   r.wasm = firstWasm; // A repaint may leave another app as the drawing context.
   r.handleMouseMove(80, 100);
 

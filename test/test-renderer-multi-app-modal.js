@@ -50,9 +50,16 @@ renderer.windows[200] = {
   x: 10, y: 10, w: 250, h: 200, zOrder: 3, style: 0, wasm: appB,
 };
 renderer._nextZ = 4;
+renderer._setKeyboardInputOwner(renderer.windows[100]);
+const oldZ = renderer.windows[200].zOrder;
+let prematureFocus = 0;
+appB.exports.set_focus = () => { prematureFocus++; };
 
 renderer.handleMouseDown(40, 60, 0);
 renderer.handleMouseUp(40, 60, 0);
+assert.strictEqual(renderer._keyboardInputWasm, appA, 'queued client click does not decide keyboard ownership');
+assert.strictEqual(renderer.windows[200].zOrder, oldZ, 'queued client click does not raise its candidate');
+assert.strictEqual(prematureFocus, 0, 'queued client click does not send premature guest focus callbacks');
 assert.deepStrictEqual(renderer.inputQueue.map(event => [event.hwnd, event.msg]), [
   [200, 0x0084],
   [200, 0x0201],

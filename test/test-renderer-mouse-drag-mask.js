@@ -229,10 +229,11 @@ focusRenderer.windows[130] = {
   wasm: focusWasm,
 };
 focusRenderer.handleMouseDown(40, 60, 1);
-assert.deepStrictEqual(focusChanges, [130],
-  'top-level click should transfer child focus to the parent, never clear it to NULL');
-assert.strictEqual(focusHwnd, 130,
-  'top-level click should retain the completed USER focus transaction');
+assert.deepStrictEqual(focusChanges, [],
+  'queued top-level click must await USER before sending focus callbacks');
+assert.strictEqual(focusHwnd, 131,
+  'queued top-level click retains the existing child focus');
+focusWasm.exports.set_focus(130); // Model a subsequent guest-accepted transfer.
 focusChanges.length = 0;
 focusRenderer.handleMouseDown(40, 60, 1);
 assert.deepStrictEqual(focusChanges, [],
@@ -316,8 +317,11 @@ for (const worker of [false, true]) {
   renderer.handleMouseDown(40, 60, 0);
   assert(renderer.inputQueue.some(event => event.hwnd === 151 && event.msg === 0x201),
     'reenabling the same frame restores click delivery');
-  assert.deepStrictEqual(publishedFocus, worker ? [151] : [],
-    'reenabled Worker frame uses the real focus-publisher route');
+  assert.deepStrictEqual(publishedFocus, [],
+    'reenabled queued frame awaits USER instead of publishing speculative Worker focus');
+  assert.deepStrictEqual(focusCalls, [], 'reenabling permits delivery, not premature focus');
+  assert.strictEqual(target.zOrder, 1);
+  assert.strictEqual(renderer._keyboardInputWasm, oldWasm);
 }
 const captionWasm = {
   exports: {
