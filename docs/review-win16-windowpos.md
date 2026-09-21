@@ -1917,3 +1917,45 @@ Remaining: renderer eager raise/focus and cross-app foreground handoff;
 built-in child-control default forwarding to far parents; fuller reentrant
 mouse-query/lifetime and native comparison coverage. This stage does not
 claim end-to-end browser MA_NOACTIVATE correctness.
+
+### Renderer handoff audit after 875749f4
+
+The next change cannot be just deleting `_raiseWindowGroup` from mouse-down.
+Current source has these independent bypasses:
+
+| Boundary | Current behavior | Required integration |
+| --- | --- | --- |
+| `renderer-input.js::handleMouseDown` candidate loop | Raises the window group, changes keyboard owner and transfers focus before enqueueing input | Defer activation effects until USER accepts the removal-time query |
+| `_setInputFocus` cooperative branch | Calls `set_focus`, then forces `set_focus_hwnd(requested)` if the result differs | Preserve the authoritative focus transaction and callback-selected winner |
+| `_setInputFocus` Worker branch | Updates a shadow global and publishes a focus request separately from mouse removal | Keep the query and focus decision on the live guest instance; do not execute guest procedures on the shadow |
+| Native dialog/combo/button routes | Some downs call `control_wndproc_dispatch` or `dialog_route_mouse_screen` directly; native scrollbar downs have another early return | Cover these routes with the same activation decision before dispatch, including eaten clicks |
+| `host-window.js::activate_window` | Already raises the group and selects keyboard ownership after WAT calls it | Use this as the accepted-activation publication seam, with cross-app arbitration still to specify/test |
+
+The focus mismatch has a concrete cause, not just duplicated naming.
+`09c0-window-table.wat::$set_focus` sends KILLFOCUS/SETFOCUS but does not
+publish focus or use the transition serial. The renderer export still calls
+it. In contrast, the public SetFocus API uses `$focus_set_core`, which
+validates, publishes and guards reentry. Seven internal call sites also use
+the old helper (dialog/navigation/control paths); replacing the export alone
+would leave those divergent semantics. Some callers run inside far/native
+dialog routing, so blindly redirecting all of them to the synchronous
+32-bit sender is not safe.
+
+A direct JavaScript probe of the actual `_setInputFocus` implementation
+confirmed the overwrite: requested HWND 2; the mocked `set_focus` callback
+selected HWND 3; the renderer then invoked `set_focus_hwnd(2)`, leaving 2.
+This proves the host helper overwrites a callback-selected result, not that
+every real app reaches that scenario. The keyboard seed fixture currently
+mocks `set_focus` as notification-only, so its passing result would not prove
+that a unified focus transaction preserves guest reentry.
+
+Next implementation order: consolidate focus publication/notification with
+ABI-appropriate completion; cover native child default mouse activation and
+far-parent forwarding; then remove eager renderer effects and validate the
+accepted-activation host publication in cooperative and Worker modes. Keep
+input target ownership separate from keyboard ownership: `takeInput(owns)`
+already supports selecting events for another instance without switching
+the keyboard to it first. Acceptance must include answers 1–4, no-remove
+peeks, child/native targets, guest focus redirection, two overlapping apps,
+and an eaten down with its later up. Existing task-pump tests do not cover
+these browser boundaries.
