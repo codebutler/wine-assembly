@@ -4658,6 +4658,115 @@
   ;; file it cannot find, and which every caller already tests for.
   (global $WIN16_DLL_INIT_CONT i32 (i32.const 0xFF98))
 
+  ;; ---- LibEntry of the modules a task imports ----
+  ;;
+  ;; Windows runs the LibEntry of every NE DLL a task imports before the task's
+  ;; own entry point, a DLL's own imports first. The host loads those modules
+  ;; after $win16_start_task has already set the task up, so it queues each one
+  ;; here in initialisation order and then starts the chain. The chain saves
+  ;; the task's start registers on its stack, runs each LibEntry the way
+  ;; LoadLibrary does (DS = the library's DGROUP, DI = its instance, CX = its
+  ;; heap size, ES:SI = NULL) with this thunk slot as the far return, and puts
+  ;; the saved registers back once the last one returns.
+  ;;
+  ;; Without it a library's LibMain simply never ran. WinG's is where it binds
+  ;; its DIB engine: skipped, WinGCreateDC made a plain screen-compatible DC and
+  ;; WinGCreateBitmap a device-dependent bitmap with no bits, so Bad Toys 3D
+  ;; drew its whole 3D view through a NULL far pointer.
+  ;;
+  ;; The queue is ten 6-bit module ids packed into an i64; ids stop at 37.
+  (global $WIN16_STATIC_INIT_CONT i32 (i32.const 0xFFC8))
+  (global $win16_init_queue (mut i64) (i64.const 0))
+  (global $win16_init_count (mut i32) (i32.const 0))
+
+  (func $win16_queue_dll_init (export "win16_queue_dll_init") (param $id i32)
+    (if (i32.or (i32.ge_u (global.get $win16_init_count) (i32.const 10))
+                (i32.gt_u (local.get $id) (i32.const 0x3F)))
+      (then
+        (call $host_log_i32 (i32.const 0xCA16D1F1))  ;; init queue full / bad id
+        (call $host_log_i32 (local.get $id))
+        (unreachable)))
+    (global.set $win16_init_queue
+      (i64.or (global.get $win16_init_queue)
+        (i64.shl (i64.extend_i32_u (local.get $id))
+                 (i64.extend_i32_u (i32.mul (global.get $win16_init_count) (i32.const 6))))))
+    (global.set $win16_init_count (i32.add (global.get $win16_init_count) (i32.const 1))))
+
+  (func $win16_pop16 (result i32)
+    (local $v i32)
+    (local.set $v (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base)
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (local.get $v))
+
+  ;; The task's start registers, in the order they come back off the stack.
+  (func $win16_begin_dll_inits (export "win16_begin_dll_inits")
+    (local $r i32)
+    (if (i32.eqz (global.get $win16_init_count)) (then (return)))
+    (call $win16_push16 (i32.sub (global.get $eip) (global.get $seg_base_cs)))
+    (call $win16_push16 (global.get $sreg_cs))
+    (call $win16_push16 (global.get $sreg_ds))
+    (call $win16_push16 (global.get $sreg_es))
+    (local.set $r (i32.const 0))
+    (loop $save   ;; EAX ECX EDX EBX, skip ESP, EBP ESI EDI
+      (if (i32.ne (local.get $r) (i32.const 4))
+        (then (call $win16_push16
+          (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))))))
+      (local.set $r (i32.add (local.get $r) (i32.const 1)))
+      (br_if $save (i32.lt_u (local.get $r) (i32.const 8))))
+    (call $win16_static_init_next))
+
+  (func $win16_static_init_next
+    (local $id i32) (local $init i32) (local $handle i32) (local $r i32)
+    (block $done
+      (loop $scan
+        (br_if $done (i32.eqz (global.get $win16_init_count)))
+        (local.set $id (i32.wrap_i64 (i64.and (global.get $win16_init_queue) (i64.const 0x3F))))
+        (global.set $win16_init_queue (i64.shr_u (global.get $win16_init_queue) (i64.const 6)))
+        (global.set $win16_init_count (i32.sub (global.get $win16_init_count) (i32.const 1)))
+        (local.set $init (call $win16_dll_init_entry (local.get $id)))
+        (br_if $scan (i32.eqz (local.get $init)))
+        (local.set $handle
+          (call $win16_h16 (i32.or (i32.const 0x00D10000) (local.get $id))))
+        (call $win16_push16 (local.get $id))
+        (call $win16_push16 (global.get $WIN16_THUNK_SEL))
+        (call $win16_push16 (global.get $WIN16_STATIC_INIT_CONT))
+        (call $win16_set_sreg (i32.const 3) (call $win16_dll_data_sel (local.get $id)))
+        (call $win16_set_sreg (i32.const 0) (i32.const 0))
+        (i32.store offset=24 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=28 (global.get $reg_base) (local.get $handle))
+        (i32.store offset=4 (global.get $reg_base) (call $win16_dll_heap_size (local.get $id)))
+        (call $win16_set_sreg (i32.const 1) (i32.shr_u (local.get $init) (i32.const 16)))
+        (global.set $eip (i32.add (global.get $seg_base_cs)
+                                  (i32.and (local.get $init) (i32.const 0xFFFF))))
+        (global.set $steps (i32.const 0))
+        (return)))
+    ;; Every library is up: the task starts where $win16_start_task left it.
+    (local.set $r (i32.const 8))
+    (loop $restore   ;; EDI ESI EBP, skip ESP, EBX EDX ECX EAX
+      (local.set $r (i32.sub (local.get $r) (i32.const 1)))
+      (if (i32.ne (local.get $r) (i32.const 4))
+        (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))
+                (call $win16_pop16))))
+      (br_if $restore (local.get $r)))
+    (call $win16_set_sreg (i32.const 0) (call $win16_pop16))
+    (call $win16_set_sreg (i32.const 3) (call $win16_pop16))
+    (call $win16_set_sreg (i32.const 1) (call $win16_pop16))
+    (global.set $eip (i32.add (global.get $seg_base_cs) (call $win16_pop16)))
+    (global.set $steps (i32.const 0)))
+
+  ;; A LibEntry has returned. Zero is the library refusing to start, which
+  ;; Windows answers by refusing the task, so the task stops here too.
+  (func $win16_static_init_resume
+    (local $id i32)
+    (local.set $id (call $win16_pop16))
+    (if (i32.eqz (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+      (then
+        (call $host_log_i32 (i32.const 0xCA16D1F0))  ;; LibEntry returned 0
+        (call $host_log_i32 (local.get $id))
+        (unreachable)))
+    (call $win16_static_init_next))
+
   ;; Resume a LoadLibrary whose freshly loaded NE DLL has returned from its
   ;; LibEntry. The continuation record is handle, module id, caller DS, caller
   ;; SI and DI, and the original far return. LibEntry is register-called and RETFs no arguments,
@@ -11476,13 +11585,23 @@
     ;; embossed disabled bitmap, not as the literal two-color SRCCOPY that a
     ;; normal application DC receives. Keep the compatibility behavior scoped
     ;; to the live WM_DRAWITEM destination selected by $btn_send_drawitem.
+    ;; Only resource 999 is monochrome: once WEPUTIL's LibMain has run it sees
+    ;; a colour screen and selects its 4-bpp logo 666 instead, which is an
+    ;; ordinary SRCCOPY. The emboss helper refuses anything but 1 bpp, so ask
+    ;; before painting the face and frame around artwork it will not draw.
     (if (i32.and
           (i32.and
-            (i32.eq (local.get $dst) (global.get $btn_about_logo_hdc))
-            (i32.eq (local.get $rop) (i32.const 0x00CC0020)))
+            (i32.and
+              (i32.eq (local.get $dst) (global.get $btn_about_logo_hdc))
+              (i32.eq (local.get $rop) (i32.const 0x00CC0020)))
+            (i32.and
+              (i32.eq (local.get $w) (i32.const 260))
+              (i32.eq (local.get $h) (i32.const 65))))
           (i32.and
-            (i32.eq (local.get $w) (i32.const 260))
-            (i32.eq (local.get $h) (i32.const 65))))
+            (i32.ne (call $gdi_surface_descriptor (local.get $src)
+                      (global.get $GDI_BLIT_SRC_DESC)) (i32.const 0))
+            (i32.eq (i32.load offset=16 (global.get $GDI_BLIT_SRC_DESC))
+                    (i32.const 1))))
       (then
         (drop (call $host_gdi_fill_rect
           (local.get $dst) (local.get $x) (local.get $y)
@@ -14423,6 +14542,9 @@
     ;; A freshly loaded NE DLL has completed its standard LibEntry startup.
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_DLL_INIT_CONT))
       (then (call $win16_dll_init_resume) (return)))
+    ;; The LibEntry of a module the task imports has returned; on to the next.
+    (if (i32.eq (local.get $thunk_off) (global.get $WIN16_STATIC_INIT_CONT))
+      (then (call $win16_static_init_resume) (return)))
     ;; An NDDEAPI entry point the task took the address of and called.
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_NDDE_GETWINDOW))
       (then (call $win16_NDdeGetWindow) (return)))

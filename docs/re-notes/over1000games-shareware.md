@@ -607,12 +607,37 @@ The four gaps, in the order the run hits them:
   an ordinary selector in a 16-bit task, resolved through `WIN16_SEG_TABLE`
   like FS; this game keeps a data selector there.
 
-Where it stops now: ~18,000 batches in, it hands `TranslateAccelerator` an
-accelerator handle it was never given — `0x4510`, against the `0x110`
-`LoadAccelerators` returned, **from the same call site that had been passing
-the right one for thousands of batches**. So the next question is what
-overwrote that variable, not which entry point is missing, and the handle
-widening is left as a trap rather than softened into a zero.
+**2026-09-20, later: it plays its attract-mode DEMO** (the 3-D view, HUD and
+weapon all draw; 40,000 batches, no trap). Two more gaps, neither of them
+Bad Toys-specific:
+
+- **The SIB scale was dropped in 16-bit segments** (`00f9f44d`). The game is
+  Borland Pascal with 386 code, and its raycaster reads a 900-entry tangent
+  table (`FS=02cf:0000`, tan((i+0.5)·0.1°) in 16.16, which is exact) with
+  `fs: mov edx,[edi+ecx*4]`. `$ea16_info` never packed the scale, so that was
+  `[edi+ecx]`, a misaligned blend of two entries. A ray given those slopes
+  walked out of the fully walled 64x64 map and `or word [si+0x4616],0x4400`
+  marked words past it, and one of them was the accelerator handle, which is
+  how `0x110` became the `0x4510` handed to `TranslateAccelerator` at ~18,300
+  batches. So the "what overwrote it" question above had a decoder answer.
+- **A statically imported NE DLL never ran its LibEntry**; only
+  `LoadLibrary` did. WinG's LibMain (entry `16:0x336`) is what binds
+  `GDI.489 CreateDIBSection` through `GetProcAddress`. Without it
+  `[WING DS:0x2412]` stays 0, so `WinGCreateDC` becomes `CreateCompatibleDC(0)`
+  and `WinGCreateBitmap` becomes `CreateCompatibleBitmap`, a DDB with no bits
+  pointer, and the column drawers in seg 30 (`les di,[0x1712]`) write
+  through NULL. `lib/dll-loader.js` now queues every static import
+  dependencies-first, and `win16_begin_dll_inits` runs each LibEntry
+  (`DI`=hInstance, `DS`=its DGROUP, `CX`=heap size, `ES:SI`=0) before the
+  task entry, on the task's stack, restoring the task's registers afterwards.
+  A LibEntry that returns 0 traps with marker `0xCA16D1F0` and the module id:
+  Windows would refuse to start the task.
+
+  That also changed WEPUTIL, the Entertainment Pack's shared DLL: its LibMain
+  now sees `NUMCOLORS=256` and picks its 4-bpp colour About logo (`666`)
+  instead of the monochrome `999`. The About-panel emboss in
+  `$win16_BitBlt` is gated on a 1-bpp source now; before that gate it
+  painted the face and frame and embossed nothing.
 
 16-bit NE `INSTALL.EXE`, and it never gets as far as unpacking anything:
 
