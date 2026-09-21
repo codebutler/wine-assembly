@@ -12,9 +12,16 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+const { createCanvas } = require('../lib/canvas-compat');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_legacy_check") (param $hwnd i32) (param $value i32) (result i32)
+    (call $ctrl_set_check_state (local.get $hwnd) (local.get $value))
+    (call $ctrl_get_check_state (local.get $hwnd)))
+  (func (export "test_check_pixel") (param $hwnd i32) (param $x i32) (param $y i32) (result i32)
+    (call $host_gdi_get_pixel (i32.add (local.get $hwnd) (i32.const 0x40000))
+      (local.get $x) (local.get $y)))
   (func (export "test_capture_api") (param $next i32) (result i32)
     (local $sp i32)
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
@@ -87,7 +94,7 @@ function u32(value) {
 }
 
 (async () => {
-  const { exports: e, memory } = await bootRenderHarness({ extraWat });
+  const { exports: e, memory, renderer, instance } = await bootRenderHarness({ extraWat });
   const fixture = fs.readFileSync(path.join(ROOT, 'test', 'binaries', 'calc.exe'));
   new Uint8Array(memory.buffer).set(fixture, e.get_staging());
   assert(e.load_pe(fixture.length), 'fixture PE initializes x86 callback support');
@@ -149,6 +156,54 @@ function u32(value) {
     e.set_post_queue_count(0);
   }
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
+  e.send_message(custom, 0xf1, 1, 0);
+  assert.strictEqual(e.send_message(custom, 0xf0, 0, 0), 0, 'BM_SETCHECK has no effect on push buttons');
+  for (const kind of [5, 6]) {
+    const strip = createCanvas(39, 13);
+    const stripCtx = strip.getContext('2d');
+    const stripPixels = stripCtx.createImageData(39, 13);
+    const tri = e.test_create_dialog_button(proc, 1300 + kind, kind) >>> 0;
+    const parent = e.wnd_get_parent(tri) >>> 0;
+    renderer.windows[parent] = { hwnd: parent, x: 0, y: 0, w: 100, h: 24,
+      visible: true, isChild: false, hasCaption: false, style: 0, zOrder: 1,
+      wasm: instance, wasmMemory: memory };
+    for (const check of [0, 1, 2]) {
+      e.send_message(tri, 0xf1, check, 0);
+      assert.strictEqual(e.send_message(tri, 0xf0, 0, 0), check, 'BM_GETCHECK retains all three states');
+      assert.strictEqual(e.send_message(tri, 0xf2, 0, 0) & 3, check, 'BM_GETSTATE agrees with BM_GETCHECK');
+      assert.strictEqual(e.test_check_pixel(parent, 3, 9) >>> 0,
+        [0xffffff, 0, 0x808080][check], 'checkbox tick paints clear, black or grayed state');
+      for (let y = 0; y < 13; y++) for (let x = 0; x < 13; x++) {
+        const color = e.test_check_pixel(parent, x, y + 5) >>> 0;
+        const at = (y * 39 + check * 13 + x) * 4;
+        stripPixels.data.set([color & 255, (color >>> 8) & 255, (color >>> 16) & 255, 255], at);
+      }
+    }
+    stripCtx.putImageData(stripPixels, 0, 0);
+    fs.mkdirSync(path.join(ROOT, 'test/output'), { recursive: true });
+    fs.writeFileSync(path.join(ROOT, `test/output/button-three-state-${kind}.png`), strip.toBuffer('image/png'));
+    assert.strictEqual(e.get_post_queue_count(), 0, 'programmatic checking does not notify');
+    assert.strictEqual(e.test_legacy_check(tri, 2), 2, 'legacy check setter retains indeterminate');
+    assert.strictEqual(e.send_message(tri, 0xf0, 0, 0), 2, 'native getter reads legacy setter state');
+    if (kind === 6) {
+      e.test_legacy_check(tri, 0);
+      for (const expected of [1, 2, 0, 1, 2, 0]) {
+        e.test_button_click(tri);
+        assert.strictEqual(e.send_message(tri, 0xf0, 0, 0), expected, 'AUTO3STATE cycles through three states');
+        assert.strictEqual(e.send_message(tri, 0xf2, 0, 0), 8 | expected);
+        e.set_post_queue_count(0);
+      }
+    } else {
+      e.test_button_click(tri);
+      assert.strictEqual(e.send_message(tri, 0xf0, 0, 0), 2, 'manual 3STATE does not auto-cycle');
+      e.set_post_queue_count(0);
+    }
+    e.test_legacy_check(tri, 2);
+    e.dialog_route_mouse(parent, 0x201, 1, (5 << 16) | 5);
+    e.dialog_route_mouse(parent, 0x202, 0, (5 << 16) | 0xffff);
+    assert.strictEqual(e.send_message(tri, 0xf2, 0, 0), 10, 'outside cancellation preserves indeterminate and focus');
+    assert.strictEqual(e.get_post_queue_count(), 0);
+  }
   const customParent = e.wnd_get_parent(custom) >>> 0;
   const replacement = e.test_create_dialog_button(proc, 1200) >>> 0;
   for (const cancel of ['transfer', 'release', 'cancel-mode', 'focus-loss']) {

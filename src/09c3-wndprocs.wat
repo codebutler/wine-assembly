@@ -250,11 +250,16 @@
   ;; way the BUTTON painter does". One pixel apart is a visible mismatch when a
   ;; dialog puts a check box and a checked list-view row on the same line.
   (func $paint_check_box (param $hdc i32) (param $x i32) (param $y i32) (param $checked i32)
+    (call $paint_check_box_state (local.get $hdc) (local.get $x) (local.get $y)
+      (i32.ne (local.get $checked) (i32.const 0))))
+
+  (func $paint_check_box_state (param $hdc i32) (param $x i32) (param $y i32) (param $checked i32)
     (local $i i32)
     (drop (call $host_gdi_fill_rect (local.get $hdc)
       (local.get $x) (local.get $y)
       (i32.add (local.get $x) (i32.const 13)) (i32.add (local.get $y) (i32.const 13))
-      (i32.const 0x30010)))
+      (select (i32.const 0x30011) (i32.const 0x30010)
+        (i32.eq (local.get $checked) (i32.const 2)))))
     ;; EDGE_SUNKEN (0x0A), BF_RECT (0x0F).
     (drop (call $host_gdi_draw_edge (local.get $hdc)
       (local.get $x) (local.get $y)
@@ -276,7 +281,8 @@
               (select (i32.add (local.get $i) (i32.const 6))
                       (i32.sub (i32.const 12) (local.get $i))
                       (i32.lt_s (local.get $i) (i32.const 3))))
-            (i32.const 0x30014)))
+            (select (i32.const 0x30012) (i32.const 0x30014)
+              (i32.eq (local.get $checked) (i32.const 2)))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $tick))))))
 

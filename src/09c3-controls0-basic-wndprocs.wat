@@ -656,10 +656,12 @@
             ;; Push buttons (0,1), plain BS_RADIOBUTTON(4), and groupbox (7)
             ;; likewise do not auto-toggle.
             (local.set $w (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x0F)))
-            (if (i32.or
-                  (i32.eq (local.get $w) (i32.const 3))
-                  (i32.eq (local.get $w) (i32.const 6)))
+            (if (i32.eq (local.get $w) (i32.const 3))
               (then (local.set $flags (i32.xor (local.get $flags) (i32.const 0x02)))))
+            (if (i32.eq (local.get $w) (i32.const 6))
+              (then (local.set $flags (call $btn_flags_with_check (local.get $flags)
+                (i32.rem_u (i32.add (call $btn_check_from_flags (local.get $flags))
+                  (i32.const 1)) (i32.const 3))))))
             (if (i32.eq (local.get $w) (i32.const 9))
               (then
                 (call $autoradio_clear_siblings (local.get $hwnd))
@@ -922,9 +924,9 @@
                     (i32.const 0x30011)))
             ;; One 13x13 check box, shared with the list-view state images.
             (local.set $box_y (i32.div_u (i32.sub (local.get $h) (i32.const 13)) (i32.const 2)))
-            (call $paint_check_box (local.get $hdc)
+            (call $paint_check_box_state (local.get $hdc)
               (i32.const 0) (local.get $box_y)
-              (i32.and (local.get $flags) (i32.const 0x02)))  ;; flags bit 1 = checked
+              (call $btn_check_from_flags (local.get $flags)))
             (if (local.get $text_w)
               (then
                 ;; DT_VCENTER(0x04)|DT_SINGLELINE(0x20) = 0x24
@@ -1094,8 +1096,8 @@
 
     ;; ---------- BM_GETSTATE (0x00F2) ----------
     ;; Public BST bits are not ButtonState.flags: pressed moves from bit0
-    ;; to bit2, checked from bit1 to bit0, focus stays bit3. Our default-border
-    ;; bit2 is private and must never masquerade as BST_PUSHED.
+    ;; to bit2, checked from bit1 to bit0, indeterminate from bit8 to bit1,
+    ;; focus stays bit3. Private default-border bit2 is not BST_PUSHED.
     (if (i32.eq (local.get $msg) (i32.const 0x00F2))
       (then
         (if (i32.eqz (local.get $state))
@@ -1105,17 +1107,12 @@
         (return (i32.or (i32.and (local.get $flags) (i32.const 8))
           (i32.or
             (i32.shl (i32.and (local.get $flags) (i32.const 1)) (i32.const 2))
-            (i32.shr_u (i32.and (local.get $flags) (i32.const 2)) (i32.const 1)))))))
+            (call $btn_check_from_flags (local.get $flags)))))))
 
     ;; ---------- BM_GETCHECK (0x00F0) ----------
-    ;; Prefer ButtonState.flags bit 1 (checked); fall back to legacy CONTROL_TABLE.
+    ;; Share the canonical native/legacy check-state reader.
     (if (i32.eq (local.get $msg) (i32.const 0x00F0))
       (then
-        (if (local.get $state)
-          (then (return (i32.and (i32.shr_u
-                                   (call $btn_flags (call $g2w (local.get $state)))
-                                   (i32.const 1))
-                                 (i32.const 1)))))
         (return (call $ctrl_get_check_state (local.get $hwnd)))))
 
     ;; ---------- BM_SETCHECK (0x00F1) ----------
@@ -1125,6 +1122,8 @@
     ;; the click path, so without this two radios end up "checked".
     (if (i32.eq (local.get $msg) (i32.const 0x00F1))
       (then
+        (local.set $h (call $btn_normalize_check (local.get $hwnd) (local.get $wParam)))
+        (if (i32.lt_s (local.get $h) (i32.const 0)) (then (return (i32.const 0))))
         (if (i32.and
               (i32.ne (local.get $wParam) (i32.const 0))
               (i32.eq (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x0F))
@@ -1133,10 +1132,8 @@
         (if (local.get $state)
           (then
             (local.set $state_w (call $g2w (local.get $state)))
-            (local.set $flags (call $btn_flags (local.get $state_w)))
-            (local.set $flags (i32.and (local.get $flags) (i32.const 0xFFFFFFFD))) ;; clear checked
-            (if (local.get $wParam)
-              (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x02)))))
+            (local.set $flags (call $btn_flags_with_check
+              (call $btn_flags (local.get $state_w)) (local.get $h)))
             (call $btn_set_flags (local.get $state_w) (local.get $flags))
             (call $invalidate_hwnd (local.get $hwnd))
             (drop (call $wnd_send_message

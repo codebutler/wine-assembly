@@ -76,9 +76,10 @@
   ;; Button (ctrl_class 1). 68 bytes — $button_wndproc WM_CREATE heap_alloc 68.
   ;; flags@8 bit0=pressed bit1=checked bit2=default (the CURRENT paint default,
   ;; which flips on focus — $btn_clear_sibling_default / $btn_restore_real_default)
-  ;; bit3=focused; read/written only through $btn_flags / $btn_set_flags, and by
-  ;; $ctrl_get_check_state / $ctrl_set_check_state which shift bit1 out as the
-  ;; legacy BM_GETCHECK answer.
+  ;; bit3=focused, bit8=indeterminate (mutually exclusive with checked bit1);
+  ;; read/written only through $btn_flags / $btn_set_flags, and by
+  ;; $ctrl_get_check_state / $ctrl_set_check_state which share the native
+  ;; unchecked/checked/indeterminate encoding with BM_GETCHECK.
   ;; drawitem@12 is a 48-byte DRAWITEMSTRUCT scratch embedded in the record, not
   ;; a field: $btn_drawitem_guest hands its GUEST address to the app's owner-draw
   ;; handler, so its 12 words are the app's to write. It is named, and named as
@@ -1335,15 +1336,39 @@
     (i32.store offset=4 (local.get $addr) (local.get $ctrl_id))
     (local.get $old))
 
+  ;; One encoding for native check state; preserve pressed/default/focus bits.
+  (func $btn_normalize_check (param $hwnd i32) (param $check i32) (result i32)
+    (local $kind i32)
+    (local.set $kind (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 15)))
+    (if (i32.eqz (i32.or
+          (i32.and (i32.ge_u (local.get $kind) (i32.const 2))
+                   (i32.le_u (local.get $kind) (i32.const 6)))
+          (i32.eq (local.get $kind) (i32.const 9))))
+      (then (return (i32.const -1)))) ;; Not a checkbox/radio: ignore setters.
+    (if (i32.and (i32.eq (local.get $check) (i32.const 2))
+          (i32.or (i32.eq (local.get $kind) (i32.const 5))
+                  (i32.eq (local.get $kind) (i32.const 6))))
+      (then (return (i32.const 2))))
+    (i32.ne (local.get $check) (i32.const 0)))
+
+  (func $btn_check_from_flags (param $flags i32) (result i32)
+    (select (i32.const 2)
+      (i32.and (i32.shr_u (local.get $flags) (i32.const 1)) (i32.const 1))
+      (i32.and (local.get $flags) (i32.const 0x100))))
+
+  (func $btn_flags_with_check (param $flags i32) (param $check i32) (result i32)
+    (i32.or (i32.and (local.get $flags) (i32.const -259))
+      (select (i32.const 0x100)
+        (select (i32.const 2) (i32.const 0) (i32.eq (local.get $check) (i32.const 1)))
+        (i32.eq (local.get $check) (i32.const 2)))))
+
   ;; Get check state for a control hwnd (legacy CONTROL_TABLE path)
   (func $ctrl_get_check_state (param $hwnd i32) (result i32)
     (local $idx i32) (local $state i32)
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (local.get $state)
       (then
-        (return (i32.and
-          (i32.shr_u (call $btn_flags (call $g2w (local.get $state))) (i32.const 1))
-          (i32.const 1)))))
+        (return (call $btn_check_from_flags (call $btn_flags (call $g2w (local.get $state)))))))
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
@@ -1353,13 +1378,14 @@
   ;; Set check state for a control hwnd (legacy CONTROL_TABLE path)
   (func $ctrl_set_check_state (param $hwnd i32) (param $state i32)
     (local $idx i32) (local $btn_state i32) (local $btn_state_w i32) (local $flags i32)
+    (local.set $state (call $btn_normalize_check (local.get $hwnd) (local.get $state)))
+    (if (i32.lt_s (local.get $state) (i32.const 0)) (then (return)))
     (local.set $btn_state (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (local.get $btn_state)
       (then
         (local.set $btn_state_w (call $g2w (local.get $btn_state)))
-        (local.set $flags (i32.and (call $btn_flags (local.get $btn_state_w)) (i32.const 0xFFFFFFFD)))
-        (if (local.get $state)
-          (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x02)))))
+        (local.set $flags (call $btn_flags_with_check
+          (call $btn_flags (local.get $btn_state_w)) (local.get $state)))
         (call $btn_set_flags (local.get $btn_state_w) (local.get $flags))))
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.ne (local.get $idx) (i32.const -1))

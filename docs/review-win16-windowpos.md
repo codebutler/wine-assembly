@@ -2526,3 +2526,39 @@ paren check, normal/compat compile and data-overlap check also pass: sizes
 1454320/1455226, layout `c5ccefca8909ee4b`. Rebuilt Rodent/Rattler, WEP3 7/7
 and WordPad browser checks pass (`wa-button-getstate-{vb,wep3,wordpad}.log`,
 all under `/private/tmp/`). No live cross-app Worker acceptance is claimed.
+
+### Three-state checkbox storage, cycling and painting
+
+The preceding indeterminate-state gap is now addressed without growing
+ButtonState: private bit8 represents indeterminate, mutually exclusive with
+checked bit1. Shared encoding helpers preserve pressed/default/focus flags;
+BM_SETCHECK and the legacy check setter retain 0/1/2, and BM_GETCHECK and
+BM_GETSTATE read the same state. Setters ignore push-button styles.
+BS_AUTO3STATE cycles 0 -> 1 -> 2 -> 0; BS_3STATE remains application-managed.
+This follows Microsoft's [button styles](https://learn.microsoft.com/en-us/windows/win32/controls/button-styles)
+and [BM_SETCHECK](https://learn.microsoft.com/en-us/windows/win32/controls/bm-setcheck)
+contracts. Unsupported numeric check values retain the prior nonzero-to-checked
+normalization; their exact native behavior has not been established here.
+
+The shared checkbox painter accepts an explicit three-state value, drawing
+the indeterminate tick gray. Its existing boolean wrapper remains for
+ListView callers so a nonzero boolean cannot accidentally become state2.
+Tests sample the actual GDI pixels and write three-state strips to
+`test/output/button-three-state-{5,6}.png`. These are emulator regression
+artifacts, not a pixel-exact native Win98 oracle.
+
+The native command-queue fixture covers both setters/getters, two complete
+automatic cycles, manual non-cycling, no programmatic notification, and
+outside-release cancellation preserving indeterminate and focus. Main and
+clean-tree runs pass; the old binary decoder negative fails with 0 instead
+of 2. The radio-group regression also passes. Clean full build gates pass:
+normal/compat sizes 1454485/1455391, layout `c5ccefca8909ee4b`.
+Logs: `/private/tmp/wa-three-state-{main,final,negative,radio,build}.log`.
+The final PNG-producing fixture passes (`wa-three-state-pixels.log`); the
+rendered strip was inspected. Rebuilt VB games pass 2/2 and WEP3 passes 7/7
+(`wa-three-state-vb.log`, `wa-three-state-wep3.log`). WordPad's browser
+assertions also pass (`wa-three-state-wordpad.log`).
+
+Remaining: BM_SETSTATE and move-time pressed highlighting, tracking versus
+visual pressed-state separation, eager activation/direct native input
+authority, and live cross-app Worker acceptance.
