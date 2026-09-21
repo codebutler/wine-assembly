@@ -623,8 +623,21 @@
 
   (func $modal_finish_local (param $result i32)
     (local $owner i32) (local $hwnd i32) (local $class i32)
+    (local $ret i32) (local $esp i32) (local $adjust i32) (local $pending i32)
+    (local $ebx i32) (local $esi i32) (local $edi i32) (local $ebp i32)
     (local.set $hwnd (global.get $modal_dlg_hwnd))
     (if (i32.eqz (local.get $hwnd)) (then (return)))
+    ;; A callback during teardown may complete another common dialog. Keep
+    ;; this parked API's continuation invocation-owned until it is published
+    ;; back for the owning pump, rather than borrowing the nested globals.
+    (local.set $ret (global.get $modal_ret_addr))
+    (local.set $esp (global.get $modal_saved_esp))
+    (local.set $adjust (global.get $modal_esp_adjust))
+    (local.set $pending (global.get $modal_restore_pending))
+    (local.set $ebx (global.get $modal_saved_ebx))
+    (local.set $esi (global.get $modal_saved_esi))
+    (local.set $edi (global.get $modal_saved_edi))
+    (local.set $ebp (global.get $modal_saved_ebp))
     (local.set $class (call $ctrl_table_get_class (local.get $hwnd)))
     ;; The shell picker sends the selected HTREEITEM through shared modal
     ;; state. Convert it to a caller-owned PIDL only in this owning instance;
@@ -660,7 +673,18 @@
     (i32.atomic.store (global.get $SHARED_MODAL_DONE) (i32.const 0))
     ;; The dialog held the focus; give it back to the owner, or the app never
     ;; hears WM_SETFOCUS again. See $focus_restore_after_modal.
-    (call $focus_restore_after_modal (local.get $owner)))
+    (call $focus_restore_after_modal (local.get $owner))
+    ;; A completed nested dialog may have published a different shared result.
+    (i32.atomic.store (global.get $SHARED_MODAL_RESULT) (local.get $result))
+    (global.set $modal_result (local.get $result))
+    (global.set $modal_ret_addr (local.get $ret))
+    (global.set $modal_saved_esp (local.get $esp))
+    (global.set $modal_esp_adjust (local.get $adjust))
+    (global.set $modal_restore_pending (local.get $pending))
+    (global.set $modal_saved_ebx (local.get $ebx))
+    (global.set $modal_saved_esi (local.get $esi))
+    (global.set $modal_saved_edi (local.get $edi))
+    (global.set $modal_saved_ebp (local.get $ebp)))
 
   (func $modal_done (param $result i32)
     (local $shared_hwnd i32)

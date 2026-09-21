@@ -2072,3 +2072,47 @@ gates (`wa-modal-result-final-build.log`, layout `c5ccefca8909ee4b`). These
 logs are under `/private/tmp`; verification reused the clean MDI tree above,
 adding only the dispatch/lifecycle changes via rsync. Unrelated main-tree
 test work was excluded, not modified.
+
+### Common-modal continuation and synchronous Win32 owner focus
+
+`modal_finish_local` now owns the parked API's result, return PC, saved ESP,
+cleanup size, four nonvolatile registers and restore-pending marker across
+teardown/owner callbacks. It snapshots these in WAT locals and republishes
+the original continuation afterward for CACA0006. It also republishes the
+outer shared result after owner notification. This prevents a completed
+nested dialog from lending its continuation to the retiring API.
+
+Owner focus restoration now uses the shared internal focus transaction
+instead of publishing a raw HWND and posting guest WM_SETFOCUS. Win32 owner
+callbacks therefore run before restoration returns and can redirect focus;
+an existing live focus is still left alone. Internal far-procedure delivery
+retains the sender's posted path, so this is not a claim of synchronous
+Win16 internal restoration or complete modal activation behavior.
+
+The two-instance common-dialog test covers direct owner completion and
+renderer-shadow completion, injects nested continuation writes during
+teardown, and executes the actual CACA0006 return to assert result, EIP,
+ESP, EBX/ESI/EDI/EBP and the pending marker. This is a saved-frame regression,
+not a full nested-dialog browser test. The real x86 focus suite separately
+checks that an owner observes itself focused inside synchronous WM_SETFOCUS
+and can redirect to another child before restoration returns.
+
+Validation under `/private/tmp`: common-frame and lifecycle clean-tree tests
+pass, as does the real x86 focus matrix. Reverting the common completion
+source yields nested result 256 instead of 42 (`wa-common-frame-negative.log`);
+reverting owner restoration fails the synchronous-callback assertion
+(`wa-modal-focus-negative.log`). Full clean build gates pass
+(`wa-common-focus-build.log`); final normal/compat recompilation after shared
+result republication also passes, with no data overlaps and layout
+`c5ccefca8909ee4b` (1453624/1454530 bytes).
+
+EmPipe stage transition passes 13/13 checks on the final artifact
+(`wa-common-focus-empipe-final.log`), and Rodent/Rattler gameplay passes
+(`wa-common-focus-vb.log`). The first EmPipe run passed its stage/bonus/timer
+checks but failed an obsolete trace boundary: `dlg-click` is logged after
+synchronous button dispatch, so the owner's GetFocus now precedes that line.
+Raw trace (`wa-common-focus-empipe-raw.log`) confirmed this ordering. The
+test now starts its observation at a read-only marker immediately before
+the click, still excluding startup focus; it also accepts the standard
+`WINE_ASSEMBLY_WASM` prebuilt-artifact override. These tests do not replace
+the remaining full nested-dialog/browser activation acceptance matrix.

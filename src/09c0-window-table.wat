@@ -1794,9 +1794,9 @@
   ;;
   ;; The focus hwnd is set before the message goes out because that is the
   ;; order the app observes: its WM_SETFOCUS handler calls GetFocus() and
-  ;; compares. This legacy restore path still posts guest WM_SETFOCUS rather
-  ;; than using SetFocus's synchronous transaction; its teardown/reentry
-  ;; behavior remains a separate migration.
+  ;; compares. Share the internal transaction so Win32 callbacks complete
+  ;; before the modal API returns and callback-selected focus is preserved.
+  ;; Internal far-procedure notifications still use the sender's posted path.
   (func $focus_restore_after_modal (param $owner i32)
     (if (i32.eqz (local.get $owner))
       (then (local.set $owner (global.get $main_hwnd))))
@@ -1808,14 +1808,7 @@
     (if (i32.and (i32.ne (global.get $focus_hwnd) (i32.const 0))
                  (i32.ne (call $wnd_table_get (global.get $focus_hwnd)) (i32.const 0)))
       (then (return)))
-    (global.set $focus_hwnd (local.get $owner))
-    (if (i32.ge_u (call $wnd_table_get (local.get $owner)) (i32.const 0xFFFF0000))
-      (then
-        (drop (call $wnd_send_message
-                (local.get $owner) (i32.const 0x0007) (i32.const 0) (i32.const 0))))
-      (else
-        (drop (call $post_queue_push
-                (local.get $owner) (i32.const 0x0007) (i32.const 0) (i32.const 0)))))
+    (call $set_focus (local.get $owner))
   )
 
   ;; ---- SCROLL_TABLE / SCROLL_AUX_TABLE accessors ----

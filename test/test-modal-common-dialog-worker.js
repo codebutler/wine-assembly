@@ -10,6 +10,20 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_seed_completion") (param $seed i32)
+    (global.set $modal_result (local.get $seed))
+    (global.set $modal_ret_addr (i32.add (i32.const 0x401000) (local.get $seed)))
+    (global.set $modal_saved_esp (i32.add (i32.const 0x120000) (local.get $seed)))
+    (global.set $modal_esp_adjust (i32.add (i32.const 20) (local.get $seed)))
+    (global.set $modal_restore_pending (i32.eqz (local.get $seed)))
+    (global.set $modal_saved_ebx (i32.add (i32.const 11) (local.get $seed)))
+    (global.set $modal_saved_esi (i32.add (i32.const 22) (local.get $seed)))
+    (global.set $modal_saved_edi (i32.add (i32.const 33) (local.get $seed)))
+    (global.set $modal_saved_ebp (i32.add (i32.const 44) (local.get $seed))))
+  (func (export "test_restore_pending") (result i32) (global.get $modal_restore_pending))
+  (func (export "test_complete_api")
+    (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA0006))
+    (call $win32_dispatch (i32.const 0)))
   (func (export "test_modal_begin") (param $hwnd i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x00120000))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
@@ -29,7 +43,9 @@ const extraWat = String.raw`
   const memory = new WebAssembly.Memory({
     initial: 8192, maximum: 8192, shared: true,
   });
-  const worker = await bootRenderHarness({ extraWat, memory });
+  let onDestroy = () => {};
+  const worker = await bootRenderHarness({ extraWat, memory,
+    extraHostOverrides: { destroy_window: hwnd => onDestroy(hwnd) } });
   const shadow = await bootRenderHarness({ extraWat, memory });
   const guest = worker.exports;
   const ui = shadow.exports;
@@ -62,7 +78,31 @@ const extraWat = String.raw`
   assert.strictEqual(guest.test_modal_result(), 0,
     'renderer-side cancellation preserves the cancel result');
 
-  console.log('PASS  common modal completion crosses renderer/guest Worker instances');
+  // A reentrant teardown can finish another dialog on the same instance.
+  // Inject its continuation writes, then exercise the actual CACA0006 return.
+  for (const fromShadow of [false, true]) {
+    guest.test_modal_begin(hwnd);
+    guest.test_seed_completion(0);
+    let reentries = 0;
+    onDestroy = target => {
+      assert.strictEqual(target >>> 0, hwnd);
+      reentries++;
+      guest.test_seed_completion(256);
+    };
+    (fromShadow ? ui : guest).test_modal_done(42);
+    if (fromShadow) assert.strictEqual(guest.test_modal_pump(), 0);
+    assert.strictEqual(reentries, 1);
+    assert.strictEqual(guest.test_modal_result(), 42, 'outer completion owns the result');
+    assert.strictEqual(guest.test_restore_pending(), 1, 'outer restore marker survives reentry');
+    guest.test_complete_api();
+    assert.strictEqual(guest.get_eax(), 42);
+    assert.strictEqual(guest.get_eip(), 0x401000);
+    assert.strictEqual(guest.get_esp(), 0x120000 + 20);
+    assert.deepStrictEqual([guest.get_ebx(), guest.get_esi(), guest.get_edi(), guest.get_ebp()],
+      [11, 22, 33, 44], 'outer nonvolatile registers survive nested completion');
+    assert.strictEqual(guest.test_restore_pending(), 0);
+  }
+  console.log('PASS  common modal Worker completion and reentrant API frame ownership');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

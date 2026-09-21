@@ -31,6 +31,7 @@ const inputSpec = [
   '262:poke:0x410b7c:0',
   '264:poke:0x4117fc:0',
   '330:dlg-dump:stageclear',
+  '349:read-dword:0x410bd8:before-dismiss',
   '350:dlg-click:1',
   '430:dlg-dump:afterok',
   '440:read-dword:0x410bd8:stage-after',
@@ -51,6 +52,9 @@ const args = [
   '--count=0x404b2a,0x40464d,0x405397',
   '--stuck-after=1000',
 ];
+if (process.env.WINE_ASSEMBLY_WASM) {
+  args.splice(1, 0, '--no-build', `--wasm=${process.env.WINE_ASSEMBLY_WASM}`);
+}
 
 console.log('$ node', args.map(a => a.replace(ROOT, '.')).join(' '));
 
@@ -84,7 +88,10 @@ const afterOkSize = fs.existsSync(afterOkPng) ? fs.statSync(afterOkPng).size : 0
 // own window. Tearing a modal down without handing focus back therefore left
 // the game frozen on the stage it had just cleared -- the board advanced and
 // then nothing moved again.
-const afterDismiss = out.split(/\[input\] dlg-click: id=1/)[1] || '';
+// dlg-click is logged AFTER synchronous button/owner callbacks finish.
+// Start at the read-only marker immediately before the click so both sent
+// and queued restoration notifications are included, but startup focus is not.
+const afterDismiss = out.split(/\[input\] read-dword:before-dismiss/)[1] || '';
 const checks = [
   { name: 'bounded run exited cleanly', pass: exitCode === 0 },
   { name: 'gameplay was started before forcing completion', pass: /SetTimer\(0x00010001, 0x00000002/.test(out) },

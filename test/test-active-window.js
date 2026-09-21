@@ -43,6 +43,8 @@ function makeWndProc(observed, callback = []) {
 }
 
 const extraWat = String.raw`
+  (func (export "test_restore_modal_focus") (param $owner i32)
+    (call $focus_restore_after_modal (local.get $owner)))
   (func (export "test_mdi_focus") (param $client i32) (param $target i32) (param $mode i32)
     (local $state i32)
     (local.set $state (call $heap_alloc (i32.const 16)))
@@ -515,6 +517,23 @@ const extraWat = String.raw`
     assert(!records().some(r => r.hwnd === mdiTarget && r.msg === 7),
       `MDI route ${mode} must not notify the superseded target`);
   }
+  const restoreProc = e.guest_alloc(512);
+  const restoreTarget = e.test_make_window(restoreProc, WS_VISIBLE | WS_CHILD, focusA, 1);
+  const restoreMsg = [0x83, 0x7c, 0x24, 8, 7, 0x75, focusAction.length, ...focusAction];
+  bytes.set(makeWndProc(observed, [0x83, 0x3d, ...u32(armed), 0,
+    0x74, restoreMsg.length, ...restoreMsg]), toWasm(restoreProc));
+  e.set_focus(0);
+  resetRecords();
+  view.setUint32(toWasm(armed), 1, true);
+  e.test_restore_modal_focus(restoreTarget);
+  assert.strictEqual(view.getUint32(toWasm(seenActive), true), restoreTarget,
+    'owner restoration publishes focus before its synchronous callback');
+  assert.strictEqual(e.test_focus(), focusChosen, 'owner callback can redirect focus before restoration returns');
+  assert(records().some(r => r.hwnd === restoreTarget && r.msg === 7));
+  resetRecords();
+  e.test_restore_modal_focus(restoreTarget);
+  assert.strictEqual(e.test_focus(), focusChosen, 'restoration preserves an existing live focus');
+  assert.deepStrictEqual(records(), []);
   // Native reentry case 4: chaining to DefWindowProc after choosing C
   // reactivates B, unlike consuming the activation message.
   const defThunk = e.test_thunk(apiTable.find(api => api.name === 'DefWindowProcA').id);
