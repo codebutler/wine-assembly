@@ -94,6 +94,30 @@ Read off the branches in the per-frame input path, not guessed:
 - `4` exists and is compared against a coordinate; still unidentified. It is the
   likely remote-player marker (see the network section).
 
+### Any VK is a legal player key
+
+`0x004421dc`, the WM_KEYDOWN handler, writes the key-state table straight from
+the message with no whitelist and no range check:
+
+```
+004421fc  movzx ebx, word [ecx]                  ; the VK, whatever it is
+004421ff  mov byte [edx+ebx+0x97ce35], 1
+00442210  mov [eax+0x97d21e], dx                 ; and the "last key" word
+```
+
+and the per-frame input path reads it back indexed by the *configured* key
+(`0x0044beee`, `mov dl, [ebx+edx+0x97ce35]`, with `[eax+0x2c/0x30/0x34]` the
+player's left/right/jump). So a player key may be **any** virtual key, not
+only the ones the options screen offers.
+
+Nothing in a match claims `Enter` for itself, either: every in-match read of
+the last-key word is an any-key test (`0x00448c16`, `cmp word [...], 0` / `ja`,
+cleared again at `0x00448cc1`), not a comparison against a specific VK. The
+one place a specific key is compared is the lobby's ESC (`0x0044b63e`,
+`cmp word [esi+0x97d21e], 0x1b`).
+
+That is what makes the touch remap below safe.
+
 ### What we ship, and why
 
 `packages/freeware/blobby-volley/settings.dat` keeps the game's **stock** key
@@ -103,9 +127,29 @@ change that **player two is on the keyboard, not the mouse**
 never reaches a network client.
 
 The phone pad then sends **both players' key sets at once**: `A`+`←`,
-`D`+`→`, `W`+`↑`. Each machine applies only the set of the player it owns and
+`D`+`→`. Each machine applies only the set of the player it owns and
 ignores the other, so one layout is correct everywhere without touching the
 stock keys — and a local hot-seat game still gives two people different keys.
+
+**On a touch device only, player two's jump moves from `↑` to `Enter`**
+(`touchPatches` in `lib/apps.js`, applied by `applyTouchPatches` in
+`lib/browser-shell.js` after the persistence restore, so it patches the
+player's own saved copy and leaves everything else in it alone).
+
+The reason is that a touch button has to carry *both* players' jump keys —
+either side of a network match may be the client, and the client is driven by
+player two's set — while player two's stock jump `↑` is also how the menus
+move. One button could therefore never be both "jump" and "confirm", and the
+layout needed two, the `Jump` one walking the menu selection every time it was
+pressed there. With player two on `Enter`, both jump keys (`W` and `Enter`)
+are inert in the menus, so a single **`Jump / OK`** button does both jobs on
+both sides and the pad's verticals become pure menu navigation.
+
+Only player two moves, and only when `TouchControls.shouldInstall()` is true:
+a desktop player keeps the stock arrow jump, and two people at one keyboard
+keep two distinct key sets. `test/test-blobby-touch-keys.js` checks both the
+gating and — the half that matters — that `Enter` actually lifts the blob in a
+running match, since a key can be legal without being wired to anything.
 
 That last claim is the one worth measuring rather than assuming, and
 `test/test-blobby-vlan.js` now does, with the host holding a key belonging to
@@ -121,7 +165,7 @@ position on its own, and the first version of this check held `RIGHT`,
 measured −125px of that homing drift and "failed" a machine that was ignoring
 the key perfectly.
 
-The pad also carries `DOWN`, and there is an **`OK` (Enter)** button, for the
+The pad also carries `DOWN`, and there is an **Enter** button, for the
 menu rather than the match: a phone tap does not activate a menu item at all,
 the menu is arrow+Enter driven, and its selection does **not** wrap past
 `ENDE`. Without that button a phone cannot leave the main menu. A

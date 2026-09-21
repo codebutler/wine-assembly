@@ -41,8 +41,26 @@ class FakeChannel {
     this.sent.push(Uint8Array.from(bytes));
   }
   close() { this.closed = true; this.readyState = 'closed'; }
+  // Test helper: pretend the far side hung up without a goodbye.
+  hangUp() { this.readyState = 'closed'; if (this.onclose) this.onclose(); }
   // Test helper: pretend the far side sent something.
   arrive(bytes) { if (this.onmessage) this.onmessage({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }); }
+}
+
+// A stand-in for RTCPeerConnection: only the part RtcWire watches. ICE state
+// is the only thing that reports a peer which vanished without closing its
+// channel -- a shut laptop, a tab killed, Wi-Fi gone -- so it has to be
+// drivable from a test.
+class FakePeerConnection {
+  constructor() {
+    this.connectionState = 'connected';
+    this._listeners = [];
+  }
+  addEventListener(type, fn) { if (type === 'connectionstatechange') this._listeners.push(fn); }
+  set(state) {
+    this.connectionState = state;
+    for (const fn of this._listeners) fn();
+  }
 }
 
 function frame(n) {
@@ -592,6 +610,80 @@ async function main() {
       assert.strictEqual(ch.closed, true);
       assert.strictEqual(wire.send(frame(1)), false);
     });
+
+    // ---- the other player leaving ---------------------------------------
+    //
+    // The match ending is invisible from inside the guest: the frames just
+    // stop. These checks are the seam the UI banner hangs on.
+    const grace = RtcWire.disconnectGraceMs;
+    RtcWire.disconnectGraceMs = 20;
+    const settle = () => new Promise(r => setTimeout(r, 60));
+    try {
+      await check('a channel that closes reports the peer gone, once', () => {
+        const ch = new FakeChannel();
+        const wire = new RtcWire(ch);
+        const seen = [];
+        wire.onClosed = why => seen.push(why);
+        ch.hangUp();
+        ch.hangUp();
+        if (ch.onerror) ch.onerror();
+        assert.strictEqual(seen.length, 1, `fired ${seen.length} times: ${seen}`);
+        assert.strictEqual(wire.closed, true);
+      });
+
+      await check('quitting ourselves is not a disconnection', () => {
+        const ch = new FakeChannel();
+        const wire = new RtcWire(ch);
+        let fired = 0;
+        wire.onClosed = () => { fired++; };
+        wire.close();
+        if (ch.onclose) ch.onclose();
+        assert.strictEqual(fired, 0);
+      });
+
+      await check('a failed connection reports the peer gone', () => {
+        const ch = new FakeChannel();
+        const pc = new FakePeerConnection();
+        const wire = new RtcWire(ch, pc);
+        let why = null;
+        wire.onClosed = reason => { why = reason; };
+        pc.set('failed');
+        assert.strictEqual(why, 'failed');
+      });
+
+      await check('an ICE blip that recovers says nothing', async () => {
+        const ch = new FakeChannel();
+        const pc = new FakePeerConnection();
+        const wire = new RtcWire(ch, pc);
+        let fired = 0;
+        wire.onClosed = () => { fired++; };
+        pc.set('disconnected');
+        pc.set('connected');
+        await settle();
+        assert.strictEqual(fired, 0);
+      });
+
+      await check('an ICE drop that does not recover reports the peer gone', async () => {
+        const ch = new FakeChannel();
+        const pc = new FakePeerConnection();
+        const wire = new RtcWire(ch, pc);
+        let why = null;
+        wire.onClosed = reason => { why = reason; };
+        pc.set('disconnected');
+        await settle();
+        assert.strictEqual(why, 'disconnected');
+      });
+
+      await check('a throwing listener does not take the wire down with it', () => {
+        const ch = new FakeChannel();
+        const wire = new RtcWire(ch);
+        wire.onClosed = () => { throw new Error('listener is broken'); };
+        ch.hangUp();
+        assert.strictEqual(wire.closed, true);
+      });
+    } finally {
+      RtcWire.disconnectGraceMs = grace;
+    }
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

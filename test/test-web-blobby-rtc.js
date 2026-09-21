@@ -248,7 +248,7 @@ const blobsAt = (band) => {
         window.__launching = launchApp();
       });
       const cdp = await page.createCDPSession();
-      return { label, page, problems, cdp };
+      return { label, page, problems, cdp, ctx };
     };
 
     const host = await open('host');
@@ -511,7 +511,25 @@ const blobsAt = (band) => {
       gp ? (gp.lit * 100).toFixed(0) : 0}% lit)`,
       !!hp && !!gp && hp.lit > 0.5 && gp.lit > 0.5);
 
-    const problems = [...host.problems, ...guest.problems];
+    // ---- and then the other player is gone --------------------------------
+    //
+    // Nobody says goodbye: a browser gets closed, a phone goes to sleep. From
+    // inside the guest that is invisible -- Blobby keeps serving to a blob
+    // that no longer answers -- so the page has to say it. The guest's context
+    // is closed here rather than its wire, because closing the wire is the
+    // clean case the game itself could notice.
+    const guestProblems = [...guest.problems];
+    await guest.ctx.close();
+    const banner = await host.page.waitForFunction(() => {
+      const el = document.getElementById('wine-lan-notice');
+      if (!el || el.style.display === 'none') return null;
+      return el.querySelector('.wine-lan-notice-text').textContent;
+    }, { timeout: 30000, polling: 500 }).then(h => h.jsonValue(), () => null);
+    check('the host is told the other player disconnected',
+      !!banner && /disconnect/i.test(banner), String(banner));
+    await snap(host, 'host-peer-gone');
+
+    const problems = [...host.problems, ...guestProblems];
     check('neither page reported an error', problems.length === 0, problems.join(' | '));
     console.log(`Screenshots: ${OUT}`);
   } finally {
