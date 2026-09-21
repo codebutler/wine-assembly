@@ -77,7 +77,12 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
    const lightHead=e.guest_read32(e.program(d)+21996)>>>0;assert(lightHead);
    const rect=e.guest_alloc(16);[1,2,6,7].forEach((v,i)=>e.guest_write32(rect+i*4,v));
    assert.strictEqual(e.scissor(d,rect,0),0);
-   for(const overrides of [{6:0},{6:2},{6:4},{11:1},{12:60},{13:2},{3:2},{4:2},{5:1},{8:0},{8:0,0:640,1:480,12:75}]){
+   // Word 11 is Flags. D3DPRESENTFLAG_LOCKABLE_BACKBUFFER (1) is admissible --
+   // e2b6135f admitted it on purpose, because it is what D3D9 GetDC on the back
+   // buffer requires, and Pawn 3 draws its whole board that way. Any OTHER flag
+   // bit is still refused, so {11:2} keeps that half of the coverage; the
+   // successful Reset below carries Flags=1 to pin the admission itself.
+   for(const overrides of [{6:0},{6:2},{6:4},{11:2},{12:60},{13:2},{3:2},{4:2},{5:1},{8:0},{8:0,0:640,1:480,12:75}]){
     params(overrides);const target=e.target(d),before=moves.length;
     assert.strictEqual(await invoke(e.reset,d,pp),0x8876086c,JSON.stringify(overrides));
     assert.strictEqual(e.target(d),target);assert.strictEqual(moves.length,before,'invalid mode does not resize host');
@@ -87,13 +92,24 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     assert.strictEqual(e.scissor(d,rect,1),0);
     assert.deepStrictEqual(Array.from(new Uint32Array(memory.buffer,wa(rect),4)),[1,2,6,7]);
    }
-   params({0:0,1:0,2:0,6:3});assert.strictEqual(await invoke(e.reset,d,pp),0);
+   params({0:0,1:0,2:0,6:3,11:1});assert.strictEqual(await invoke(e.reset,d,pp),0,
+    'Reset admits D3DPRESENTFLAG_LOCKABLE_BACKBUFFER');
    assert.strictEqual(e.guest_read32(e.program(d)+21996),0,'successful Reset clears light list');
    assert.strictEqual(e.scissor(d,rect,1),0);
    assert.deepStrictEqual(Array.from(new Uint32Array(memory.buffer,wa(rect),4)),[0,0,12,10],
      'successful Reset restores resized full-target scissor');
    e.guest_free(rect);
    assert(new Uint8Array(memory.buffer,wa(e.program(d))+21928,68).every(v=>v===0),'successful Reset restores zero material');
+   // KNOWN FAILING, and it is NOT the Flags staleness fixed above -- it fails
+   // identically with and without that change; it was simply masked, because
+   // the Flags assertion aborted this test long before reaching here.
+   // What is established: $d3d9_lights_free does heap_free every node, and the
+   // "clears light list" assertion above passes, so there is no dangling
+   // pointer. What this asserts instead is that one specific address is still
+   // visible as a free-list entry, which a coalescing free or an immediate
+   // reuse by Reset's own state/shared allocations would legitimately break.
+   // Deciding it needs someone to say whether Reset leaks or the allocator
+   // merged the block -- do not "fix" it by deleting the assertion.
    let free=e.free_head()>>>0,lightFreed=false;
    for(let i=0;free&&i<1000;i++,free=e.guest_read32(free+4)>>>0)if(free===lightHead-4)lightFreed=true;
    assert(lightFreed,'successful Reset retires old light allocation');
