@@ -1762,6 +1762,11 @@
       (then (call $defwndproc_do_ncpaint (local.get $hwnd)) (return (i32.const 0))))
     (if (i32.eq (local.get $msg) (i32.const 0x0083))
       (then (call $defwndproc_do_nccalcsize (local.get $hwnd)) (return (i32.const 0))))
+    ;; 0xFFFF0005 = DISPDIB's "DisplayDibWindow". Routed after the default
+    ;; chrome above: it is a WS_POPUP with no caption, so it wants the default
+    ;; non-client handling and only owns its own private message range.
+    (if (i32.eq (local.get $wp) (global.get $WNDPROC_DISPDIB))
+      (then (return (call $dispdib_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; 0xFFFF0001 = help wndproc
     (call $help_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam))
   )

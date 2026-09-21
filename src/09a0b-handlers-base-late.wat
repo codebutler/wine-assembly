@@ -752,6 +752,18 @@
   ;; WinExec uses, so the two cannot disagree about what launching means.
   (func $handle_LoadModule (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $esp i32) (local $attr i32) (local $show i32) (local $show_ptr i32)
+    ;; DISPDIB is a built-in surface of ours (09d5-dispdib.wat), not a file on
+    ;; the disk: a caller LoadModule()s it and then talks to the window class
+    ;; it registers. Answer what Windows answers for a module that loaded, an
+    ;; instance handle above 32, before the file test below can refuse it.
+    ;; A program that instead *stats* the DLL still sees nothing there, which
+    ;; is a real gap and is recorded in the re-notes rather than papered over.
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (if (call $dispdib_is_module_path (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x2000))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $esp) (i32.const 12)))
+        (return)))
     ;; GetFileAttributesA is a one-argument handler and pops its own frame, so
     ;; its stack adjustment is not ours; take the answer and put ESP back.
     (local.set $esp (i32.load offset=16 (global.get $reg_base)))

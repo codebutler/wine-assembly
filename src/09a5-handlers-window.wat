@@ -350,6 +350,11 @@
               (i32.eq (i32.or (i32.load offset=8 (local.get $class_wa)) (i32.const 0x20202020))
                       (i32.const 0x6f646e69)))))) ;; "indo"
       (then (local.set $tmp (i32.const 0))))
+    ;; DISPDIB's "DisplayDibWindow" is registered by a module we answer for
+    ;; ourselves, so no class record exists to look up and the name has to be
+    ;; claimed here. See 09d5-dispdib.wat for what the window then does.
+    (if (call $dispdib_is_class_name (local.get $arg1))
+      (then (local.set $tmp (global.get $WNDPROC_DISPDIB))))
     (if (local.get $tmp)
       (then (call $wnd_table_set (local.get $hwnd) (local.get $tmp)))
       (else

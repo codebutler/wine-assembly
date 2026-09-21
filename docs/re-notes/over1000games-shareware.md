@@ -21,7 +21,8 @@ wrong about three of them for three different reasons.
 
 The five commercial titles, tracked separately: SimCity 2000 and MicroMan run,
 Exile II reaches its title screen after a three-stage install (below), Pitfall
-is blocked on DISPDIB and Bad Toys 3D is untouched.
+plays its attract demo now that DISPDIB answers, and Bad Toys 3D is the one
+still blocked (WinG as a *file*, then `USER.308 DefDlgProc`).
 
 ## The sweep's verdict is not evidence
 
@@ -291,15 +292,49 @@ window. The flag at `0x0046c3dc` ("DISPDIB is available", set at `0x00441181`)
 is *not* the answer: its three readers are all in the dialog code at
 `0x0044072c`, choosing a control layout.
 
-So the next step is a runtime one, and it is small: make `LoadModule` of that
-path succeed and register a WAT-native `DisplayDibWindow` class whose wndproc
-implements the three messages above and calls `$crash_unimplemented` on
-anything else. The crash then *names* the fourth message, which is the one
-piece of the protocol reading the binary cannot supply. Do not try to design
-the whole surface before that run.
+### The surface, and what the runtime then said
+
+Built 2026-09-20 as `src/09d5-dispdib.wat`: `$handle_LoadModule` answers a
+module handle for any path whose basename is `dispdib.dll`, `CreateWindowExA`
+claims the class name `DisplayDibWindow` onto a new WAT-native wndproc marker
+(`0xFFFF0005`), and that wndproc implements the three sends above over a small
+`$DISPDIB_STATE` record. Every *other* private message traps by name, which was
+the point: the fourth send, if there is one, would say so rather than be
+guessed at.
+
+**There is no fourth send.** Pitfall runs the whole handshake — LoadModule,
+`CreateWindowExA(… "DisplayDibWindow" … 640x480 WS_POPUP)`, one `WM_COPYDATA`
+with `dwData=0x400` — and never touches that HWND again, over 200,000
+batches. Nothing trapped. It then **plays in its own window**: the title
+screen with its File/Help menu, and `File > New Game` (`post-cmd:40036`) runs
+the 2600-style attract demo, drawn with ordinary GDI into the 320x224 client
+area and a status strip underneath.
+
+So DISPDIB here is a *capability probe with a mode attached*, not the path the
+pixels take. The 0x403/0x404 pair is the full-screen switch, which a headless
+run never asks for; the flag at `0x0046c3dc` choosing a control layout is
+consistent with that reading. Reaching gameplay needed the surface to exist
+and answer, not to display anything.
+
+```
+node test/run.js --exe=/Volumes/1000GAMES/ARCADE/PITFALL/PITFALL.EXE \
+  --vfs-include='*' --quiet-api --max-batches=200000 --max-seconds=50 \
+  --no-close --input=3000:dlg-cmd:1,20000:post-cmd:40036 --png=pitfall.png
+```
+
+(`3000:dlg-cmd:1` is the OK on the 256-colour notice; without it the run parks
+on the modal at batch 14.)
+
+Two things this does not fix. A program that *stats* `DISPDIB.DLL` rather than
+loading it still finds nothing there — the same gap Bad Toys 3D hits with
+`wing.dll`, and the reason that one needs a file and not a module answer. And
+a full-screen 320x200 presentation is still unimplemented: the wndproc records
+the mode and the running flag, and the first program to actually start the
+display will trap on whatever it sends next.
 
 There is no fallback path to find, either: Pitfall exits when the module is
-missing rather than degrading to GDI.
+missing rather than degrading to GDI. Regression:
+`test/test-dispdib-window.js`.
 
 ## Exile II: Crystal Souls (`ADV/EXILE`)
 

@@ -208,6 +208,13 @@
   ;; table is an override and not a copy that could drift from it.
   (region.declare $USER_SYS_COLORS (size 0x00000100) (align 0x00000100)
     (owner "10-helpers.wat:$win98_sys_color_slot"))
+  ;; DISPDIB's emulated display state (mode, palette-present, running) and the
+  ;; three literals its surface is recognized by. The driver is a window
+  ;; class, not an export table, so both live here rather than in a DLL image.
+  (region.declare $DISPDIB_STATE (size 0x00000040) (align 0x00000040)
+    (owner "09d5-dispdib.wat:$dispdib_wndproc"))
+  (region.declare $DISPDIB_STRINGS (size 0x00000060) (align 0x00000040)
+    (owner "09d5-dispdib.wat:$dispdib_is_class_name"))
   ;; The reserved page just below GUEST_BASE. Four undeclared string blocks
   ;; interleaved with the declared tables that already lived here; each is
   ;; bounded by the next declared region, so the extents are not guesses.
