@@ -1295,6 +1295,19 @@ async function main() {
   };
 
   const logs = [];
+  // Drain by walking forward, never with shift(). shift() moves the whole
+  // backing store down one slot, so draining N buffered lines costs O(N^2) --
+  // and N is not small: every Win32 call buffers an [API] line unless
+  // --quiet-api, and Runenlegen alone emits 12.9M of them (8.6M SelectObject +
+  // 4.3M BitBlt) composing its sprite sheets. Worse, the drain runs BETWEEN
+  // batches, so a run stuck in it never reaches the --max-seconds check: two
+  // orphaned simcity2000_demo runs outlived both `timeout 180` and
+  // --max-seconds=90 by 18.8 hours, burning 17.6 CPU-hours between them, with
+  // 99.4% of samples in Builtin_ArrayShift and not one wasm frame.
+  const flushLogs = () => {
+    for (let i = 0; i < logs.length; i++) console.log(logs[i]);
+    logs.length = 0;
+  };
   let stopped = false;
   // Batches actually executed. Not the same as MAX_BATCHES once --max-seconds
   // or an early exit ends the loop, and it is the throughput number a
@@ -5210,7 +5223,7 @@ async function main() {
     if (TRACE_SEH) dumpSEH();
     const cs = showCStrings();
     if (cs) console.log(cs);
-    while (logs.length) console.log(logs.shift());
+    flushLogs();
     const readline = require('readline');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise(resolve =>
@@ -6147,7 +6160,7 @@ async function main() {
         const at = parseInt(ev.arg, 16) >>> 0;
         const len = parseInt(ev.arg2 || '256', 10) || 256;
         logs.push(`[input] dump-mem at batch ${batch}`);
-        while (logs.length) console.log(logs.shift());
+        flushLogs();
         hexdump(at, len);
       } else if (ev.action === 'tick-ms') {
         batchClock.setTickMsPerBatch(ev.ms);
@@ -8575,7 +8588,7 @@ async function main() {
     }
     if (control) settleLiveInput();
     if (stopped) {
-      while (logs.length) console.log(logs.shift());
+      flushLogs();
       break;
     }
 
@@ -8687,7 +8700,7 @@ async function main() {
     try {
       if (!mainExecutionSuspended()) instance.exports.run(BATCH_SIZE);
     } catch (e) {
-      while (logs.length) console.log(logs.shift());
+      flushLogs();
       console.log(`\n*** CRASH at batch ${batch}: ${e.message}`);
       console.log('  Full stack:', e.stack.split('\n').slice(0, 15).join('\n    '));
       console.log('  EIP before batch: ' + describeAddr(eipBefore));
@@ -9270,7 +9283,7 @@ async function main() {
 
     // API breakpoint check
     if (apiBreakHit) {
-      while (logs.length) console.log(logs.shift());
+      flushLogs();
       console.log(`\n*** API BREAKPOINT: ${apiBreakHit} (batch ${batch})`);
       apiBreakHit = null;
       stepping = true;
@@ -9278,7 +9291,7 @@ async function main() {
     }
 
     // Flush logs
-    while (logs.length) console.log(logs.shift());
+    flushLogs();
 
     const eip = instance.exports.get_eip();
 if (VERBOSE) {
