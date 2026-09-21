@@ -526,3 +526,41 @@ with `EIP=0`, `EAX=0x4C01` and 16-bit selectors still in the registers. This is
 a driver surface we do not have, not a missing USER/GDI entry point. Its CD
 directory is already fully expanded apart from `AAA._`, `DVA.38_` and
 `WINGPAL.WN_`, so the SZDD trick above does not apply.
+
+**2026-09-20: `DISPLAY` is a red herring, and so is the 256-colour check.**
+
+The import is not ClockWerx's at all — `CLOCKWRX.EXE` names KERNEL, GDI, USER,
+WIN87EM, WING, MAC2WIN, COMMDLG and MMSYSTEM, and it is **WING.DLL** that
+imports `DISPLAY.#1` (the driver's own `BitBlt`, for its fast path).
+`lib/dll-loader.js` now lists `DISPLAY` among the emulated modules, so the name
+resolves to a thunk and the Win16 dispatcher's fail-fast tail would report
+`DISPLAY.1` if it were ever entered. **It never is**: with and without that
+change the `--trace-win16` log is the same 152 lines apart from the
+"no DLL found" line itself, and the task exits at the same batch either way.
+The change is worth keeping — an unresolved fixup is a landmine and this turns
+it into a named crash — but it is not what stands between ClockWerx and a
+window.
+
+What the task actually does, in order: `MAC2WININIT`, `GetDC` +
+`GetDeviceCaps(BITSPIXEL)` + `GetDeviceCaps(PLANES)` +
+`GetSystemPaletteEntries(256)`, WinG ordinal 1002, MAC2WIN's `PixelSize`,
+`LoadCursor`/`LoadIcon`/`RegisterClass`, `InitSoundMusicSystem` with
+`midiOutGetNumDevs`/`midiOutGetDevCaps`, a second `RegisterClass`, a
+`SoundMusicSys` window, `waveOutOpen`, several song buffers — and then
+`GetIndString(STR# 128, index 10)` through `FindResource`/`LoadResource`,
+after which it tears everything down in order (`FinisSoundMusicSystem`,
+`waveOutClose`, `DestroyWindow`, `timeEndPeriod`, `Mac2WinUninit`) and exits
+with code 1 via `INT 21h AX=0x4C01`. **No `MessageBox` is ever called**, so the
+string it fetched is never shown.
+
+The colour-depth check is ruled out by measurement, not by reading: with
+`GetDeviceCaps(BITSPIXEL)` temporarily answering 8 instead of 32, the run is
+identical — same exit, same batch. (The image does carry both of the strings
+that check would print, at file offsets `0x2be06` and `0x2c5d0`.)
+
+So the next step is the string: at the return from `GetIndString` the
+destination buffer is still zeros, which says either the copy happens after
+that point or the list lookup came back empty. Note the strings in this image
+are *not* a packed Mac `STR#` — they are Pascal strings in fixed slots — so
+whatever index 10 resolves to has to be read out of the resource at runtime
+rather than counted in the file.
