@@ -19,6 +19,10 @@ wrong about three of them for three different reasons.
 | `cards-sokoban` | SOKOBAN.EXE | **open** — VB3, "execution entered zeros" |
 | `arcade-clxwrk` | CLOCKWRX.EXE | **open** — imports from `DISPLAY` |
 
+The five commercial titles, tracked separately: SimCity 2000 and MicroMan run,
+Exile II reaches its title screen after a three-stage install (below), Pitfall
+is blocked on DISPDIB and Bad Toys 3D is untouched.
+
 ## The sweep's verdict is not evidence
 
 Three of the seven were photographed too early or under load, not broken:
@@ -247,6 +251,64 @@ full screen). The one copy of the real DLL in this tree,
 **KWAJ**-compressed, not SZDD, so `tools/szdd.js` cannot expand it — and it is
 a 16-bit DLL besides, which a 32-bit caller cannot load without thunks we do
 not have. Implementing the surface is the route, not finding the file.
+
+## Exile II: Crystal Souls (`ADV/EXILE`)
+
+Reaches its title screen as of 2026-09-20. Getting there is a **three-stage**
+run, because nothing on the CD is the game: `INSTALL.EXE` is a bootstrapper,
+the installer it starts is a second program, and only that one writes the game.
+
+```bash
+# 1. the bootstrapper: unpacks IRDATA.DAT + IRSETUP.EXE into C:\WINDOWS and
+#    WinExec's the second, which --capture-launch snapshots instead of losing
+node test/run.js --exe=/Volumes/1000GAMES/ADV/EXILE/INSTALL.EXE \
+  --vfs-include='*' --quiet-api --no-close --max-batches=30000 \
+  --capture-launch=/tmp/exile-stage2
+
+# 2. the real installer. --exe-guest-path is load-bearing: IRSETUP finds its
+#    configuration next to its own module, and without it the module reads as
+#    C:\IRSETUP.EXE and the config lookup goes to C:\IRDATA.DAT, which is not
+#    where stage 1 put it -- "Could not load the configuration file."
+node test/run.js --exe=/tmp/exile-stage2/windows/irsetup.exe \
+  --exe-guest-path='C:\WINDOWS\IRSETUP.EXE' --args='C:' \
+  --vfs-tree=/tmp/exile-stage2 --cwd='C:\' --overlay-dir=/tmp/exile-overlay \
+  --quiet-api --no-close --max-batches=120000 --input='3000:click:281:349'
+
+# 3. the game, out of the overlay the installer wrote
+node tools/overlay-export.js /tmp/exile-overlay --out=/tmp/exile2 --prefix='c:\exile2'
+node test/run.js --exe=/tmp/exile2/exile2.exe --vfs-tree=/tmp/exile2 \
+  --quiet-api --no-close --max-batches=200000 --input='6000:click:480:427'
+```
+
+Stage 2 installs 37 files (6.8 MB) into `C:\EXILE2`. Stage 3 draws the welcome
+text, and one click on "On with the game..." reaches the title screen with the
+animated map panel and the five-item menu.
+
+Four emulator gaps were in the way, and the first is the interesting one:
+
+- **`GDI.76` was wired to `SetBitmapBits` and is `GetBkMode`.** The real GDI
+  export table (`src/win16-ordinals.generated.json`, which the `--trace-win16`
+  decoder already prints from) says 74 `GETBITMAPBITS`, 76 `GETBKMODE`, 106
+  `SETBITMAPBITS`. IRSetup's painter reads the background mode back while
+  drawing its text, so the bitmap path ran instead and fed a stack word to
+  `$win16_h32`, which correctly refused a handle it never handed out. **The
+  generated ordinal map is ground truth for this kind of bug** — a wrong
+  ordinal looks exactly like an unimplemented one until the two are compared.
+- `USER.181 SetSysColors` did not exist in either bitness. It does now, backed
+  by `USER_SYS_COLORS`, a 32-slot override table `GetSysColor` reads ahead of
+  the stock palette (`test/test-set-sys-colors.js`). The 16-bit form is not the
+  32-bit one: its index array is 16-bit and its value array 32-bit, so the
+  Win16 entry walks the pair itself rather than forwarding.
+- `GDI.373 SetSystemPaletteUse` and `GDI.60 CreatePatternBrush` needed only
+  their Win16 wrappers; both Win32 handlers were already there.
+
+Two things to know before the next installer:
+
+- `--capture-launch=DIR` plus `--vfs-tree=DIR` is the two-stage bootstrapper
+  route, and `--overlay-dir=DIR` plus `tools/overlay-export.js` is how the
+  *installed* tree comes back out as ordinary files.
+- Stage 3 runs at ~138 batches/s, two orders of magnitude below a typical app.
+  The title screen animates, so that is drawing cost, not a hang.
 
 ## ClockWerx (open)
 

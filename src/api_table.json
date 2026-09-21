@@ -30830,5 +30830,27 @@
       }
     ],
     "ret": "UINT"
+  },
+  {
+    "id": 3686,
+    "name": "SetSysColors",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1968644996,
+    "args": [
+      {
+        "name": "cElements",
+        "type": "int"
+      },
+      {
+        "name": "lpaElements",
+        "type": "LPVOID"
+      },
+      {
+        "name": "lpaRgbValues",
+        "type": "LPVOID"
+      }
+    ],
+    "ret": "BOOL"
   }
 ]

@@ -6492,7 +6492,34 @@
       (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
       (br 0))))
 
+  ;; One slot of the SetSysColors override table: [0] whether a guest has ever
+  ;; written this index, [4] the COLORREF it wrote. An index outside the table
+  ;; returns 0, and every caller treats that as "no override" -- Windows takes
+  ;; the same view of a COLOR_ constant it does not know.
+  (func $win98_sys_color_slot (param $idx i32) (result i32)
+    (if (i32.ge_u (local.get $idx)
+                  (i32.div_u (global.get $USER_SYS_COLORS_SIZE) (i32.const 8)))
+      (then (return (i32.const 0))))
+    (i32.add (global.get $USER_SYS_COLORS) (i32.mul (local.get $idx) (i32.const 8))))
+
+  ;; SetSysColors(nChanges, lpIndices, lpValues) writes here. Windows keeps the
+  ;; change for the whole session and broadcasts WM_SYSCOLORCHANGE; what makes
+  ;; a program ask for it is usually its own full-screen look, so the value has
+  ;; to come back out of GetSysColor rather than be dropped on the floor.
+  (func $win98_set_sys_color (param $idx i32) (param $color i32)
+    (local $slot i32)
+    (local.set $slot (call $win98_sys_color_slot (local.get $idx)))
+    (if (i32.eqz (local.get $slot)) (then (return)))
+    (i32.store offset=4 (local.get $slot) (local.get $color))
+    (i32.store offset=0 (local.get $slot) (i32.const 1)))
+
   (func $win98_sys_color (param $idx i32) (result i32)
+    (local $slot i32)
+    (local.set $slot (call $win98_sys_color_slot (local.get $idx)))
+    (if (local.get $slot)
+      (then
+        (if (i32.load offset=0 (local.get $slot))
+          (then (return (i32.load offset=4 (local.get $slot)))))))
     ;; COLORREF values for the stock Windows 98 classic palette.
     (if (i32.eq (local.get $idx) (i32.const 0)) (then (return (i32.const 0x00C0C0C0)))) ;; SCROLLBAR
     (if (i32.eq (local.get $idx) (i32.const 1)) (then (return (i32.const 0x00808000)))) ;; BACKGROUND

@@ -1947,6 +1947,10 @@
   ;; top-level/modal windows and GetWindow(GW_OWNER).
   (global $OWNER_TABLE i32 (region.addr $OWNER_TABLE 0))
   (global $OWNER_TABLE_SIZE i32 (region.size $OWNER_TABLE))
+  ;; USER_SYS_COLORS: 32 slots of {set, COLORREF}, written by SetSysColors and
+  ;; read by GetSysColor ahead of the stock palette.
+  (global $USER_SYS_COLORS i32 (region.addr $USER_SYS_COLORS 0))
+  (global $USER_SYS_COLORS_SIZE i32 (region.size $USER_SYS_COLORS))
   ;; WNDCLASS.hIcon per window, the same shape as the class cursor above and
   ;; for the same reason: SetClassWord(GCW_HICON) changes what a window shows
   ;; for itself, and the class record it came from may be re-registered or its

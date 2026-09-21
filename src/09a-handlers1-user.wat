@@ -1854,6 +1854,32 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
+  ;; SetSysColors(cElements, lpaElements, lpaRgbValues) — take the caller's
+  ;; palette for the rest of the session. Both arrays are cElements long: the
+  ;; first holds COLOR_ indices, the second the COLORREF for each. The write is
+  ;; what matters, because the program that does this is about to paint its own
+  ;; chrome and then read the values straight back out of GetSysColor.
+  ;;
+  ;; Windows also broadcasts WM_SYSCOLORCHANGE to every top-level window. We do
+  ;; not, so a window already on screen keeps the pixels it drew with the old
+  ;; palette until something else invalidates it; nothing repaints on its own.
+  (func $handle_SetSysColors (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32)
+    (if (i32.and (i32.ne (local.get $arg1) (i32.const 0))
+                 (i32.ne (local.get $arg2) (i32.const 0)))
+      (then
+        (block $done
+          (loop $each
+            (br_if $done (i32.ge_s (local.get $i) (local.get $arg0)))
+            (call $win98_set_sys_color
+              (call $gl32 (i32.add (local.get $arg1) (i32.shl (local.get $i) (i32.const 2))))
+              (call $gl32 (i32.add (local.get $arg2) (i32.shl (local.get $i) (i32.const 2)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $each)))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+  )
+
   ;; 136: DialogBoxParamA(hInstance, lpTemplate, hWndParent, lpDialogFunc, dwInitParam)
   ;; DialogBoxParamA(hInstance, lpTemplateName, hWndParent, lpDialogFunc, dwInitParam)
   ;; Creates modal dialog, sends WM_INITDIALOG, enters message loop, returns EndDialog result

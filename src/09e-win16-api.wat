@@ -6279,6 +6279,8 @@
       (then (call $win16_SetMenu) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 180))
       (then (call $win16_GetSysColor) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 181))
+      (then (call $win16_SetSysColors) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 6))
       (then (call $win16_PostQuitMessage) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 67))
@@ -9059,6 +9061,37 @@
     (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
+  ;; USER.181 SetSysColors(nChanges, lpSysColor, lpColorValues). The 16-bit
+  ;; shape is not the 32-bit one: lpSysColor is an array of *ints*, two bytes
+  ;; each, while lpColorValues is an array of COLORREFs, four bytes each. So
+  ;; this walks the pair itself rather than forwarding to $handle_SetSysColors,
+  ;; which would read the index array at the wrong stride.
+  ;;
+  ;; Exile II repaints its whole window in its own palette and calls this on
+  ;; the way in.
+  (func $win16_SetSysColors
+    (local $count i32) (local $indices i32) (local $values i32) (local $i i32)
+    (local.set $values (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+    (local.set $indices (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
+    (local.set $count (call $win16_arg16 (i32.const 4)))
+    (if (i32.and (i32.ne (local.get $indices) (i32.const 0))
+                 (i32.ne (local.get $values) (i32.const 0)))
+      (then
+        (block $done
+          (loop $each
+            (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+            (call $win98_set_sys_color
+              (call $gl16 (i32.add (local.get $indices)
+                                   (i32.shl (local.get $i) (i32.const 1))))
+              (call $gl32 (i32.add (local.get $values)
+                                   (i32.shl (local.get $i) (i32.const 2)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $each)))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (call $win16_api_return (i32.const 10)))
+
   ;; USER.118 RegisterWindowMessage(lpString).
   (func $win16_RegisterWindowMessage
     (local $s i32)
@@ -10946,6 +10979,22 @@
     (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
+  ;; GDI.373 SetSystemPaletteUse(hDC, wUsage) — whether the twenty static
+  ;; system colours stay reserved (SYSPAL_STATIC) or the whole hardware palette
+  ;; is handed to the foreground program (SYSPAL_NOSTATIC). A full-screen game
+  ;; asks for NOSTATIC on the way in and puts STATIC back on the way out; the
+  ;; previous value is the return, which is what makes the pairing work.
+  (func $win16_SetSystemPaletteUse
+    (local $hdc i32) (local $usage i32)
+    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 1))))
+    (local.set $usage (call $win16_arg16 (i32.const 0)))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_SetSystemPaletteUse (local.get $hdc) (local.get $usage)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 4)))
+
   ;; GDI.7 SetStretchBltMode(hDC, nStretchMode) — word in, word out.
   (func $win16_SetStretchBltMode
     (local $hdc i32) (local $mode i32)
@@ -11310,7 +11359,21 @@
               (call $icon_intern (global.get $ICON_FROM_BITMAP) (local.get $bmp))))))
     (call $win16_api_return (i32.const 18)))
 
-  ;; GDI.74 GetBitmapBits(hbm, cbBuffer, lpvBits) and GDI.76 SetBitmapBits —
+  ;; GDI.76 GetBkMode(hdc) — OPAQUE or TRANSPARENT, as the DC currently has it.
+  ;; A painter that is about to draw text over its own background reads this to
+  ;; put back what it found; IRSetup's window painter does exactly that.
+  (func $win16_GetBkMode
+    (local $hdc i32)
+    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (call $win16_call32_begin (i32.const 1))
+    (call $handle_GetBkMode (local.get $hdc)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 2)))
+
+  ;; GDI.74 GetBitmapBits(hbm, cbBuffer, lpvBits) and GDI.106 SetBitmapBits —
   ;; the bitmap's own pixels, copied to or from the caller's memory. A Visual
   ;; Basic control reads its bitmap back this way while composing the board.
   (func $win16_bitmap_bits (param $is_set i32)
@@ -12088,6 +12151,19 @@
       (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
+  ;; GDI.60 CreatePatternBrush(hBitmap) — a brush that tiles the bitmap's own
+  ;; pixels. Exile II fills its window with one rather than a solid colour.
+  (func $win16_CreatePatternBrush
+    (local $bmp i32)
+    (local.set $bmp (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (call $win16_call32_begin (i32.const 1))
+    (call $handle_CreatePatternBrush (local.get $bmp)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (i32.store offset=0 (global.get $reg_base)
+      (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
+    (call $win16_api_return (i32.const 2)))
+
   ;; GDI.442 CreateDIBitmap(hDC, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage).
   (func $win16_CreateDIBitmap
     (local $hdc i32) (local $bmih i32) (local $init i32) (local $bits i32)
@@ -12538,6 +12614,10 @@
       (then (call $win16_SetPolyFillMode) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 7))
       (then (call $win16_SetStretchBltMode) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 373))
+      (then (call $win16_SetSystemPaletteUse) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 60))
+      (then (call $win16_CreatePatternBrush) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 81))
       (then (call $win16_GetMapMode) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 128))
@@ -12678,8 +12758,10 @@
       (then (call $win16_StretchDIBits) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 74))
       (then (call $win16_bitmap_bits (i32.const 0)) (return (i32.const 1))))
-    (if (i32.eq (local.get $ordinal) (i32.const 76))
+    (if (i32.eq (local.get $ordinal) (i32.const 106))
       (then (call $win16_bitmap_bits (i32.const 1)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 76))
+      (then (call $win16_GetBkMode) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 39))
       (then (call $win16_save_restore_dc (i32.const 1)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 48))

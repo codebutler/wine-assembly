@@ -202,6 +202,12 @@
     (owner "09a3-handlers-audio.wat:$mci_slot_addr"))
   (region.declare $OWNER_TABLE (size 0x00000400) (align 0x00000100)
     (owner "09c0-window-table.wat:$wnd_owner_reset_slot"))
+  ;; The system colours a program changed with SetSysColors, as 32 pairs of
+  ;; {was it set, COLORREF}. Only the pairs a guest actually wrote live here;
+  ;; every other index still answers from the stock Win98 palette, so the
+  ;; table is an override and not a copy that could drift from it.
+  (region.declare $USER_SYS_COLORS (size 0x00000100) (align 0x00000100)
+    (owner "10-helpers.wat:$win98_sys_color_slot"))
   ;; The reserved page just below GUEST_BASE. Four undeclared string blocks
   ;; interleaved with the declared tables that already lived here; each is
   ;; bounded by the next declared region, so the extents are not guesses.
