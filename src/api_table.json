@@ -30812,5 +30812,23 @@
     "test_call": true,
     "convention": "stdcall",
     "hash": 1402905313
+  },
+  {
+    "id": 3685,
+    "name": "LoadModule",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2508407889,
+    "args": [
+      {
+        "name": "lpModuleName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpParameterBlock",
+        "type": "LPVOID"
+      }
+    ],
+    "ret": "UINT"
   }
 ]

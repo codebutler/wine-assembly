@@ -738,6 +738,49 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
+  ;; LoadModule(lpModuleName, lpParameterBlock) -> an instance handle above 31,
+  ;; or a DOS error code below it. WinExec's older twin, kept in KERNEL32 for
+  ;; ports of 16-bit code, and still imported by them: Pitfall (1997) builds
+  ;; `\DISPDIB.DLL` in a stack buffer and asks for it here, having already said
+  ;; it wants 256-colour mode. DISPDIB is the Video for Windows full-screen DIB
+  ;; driver, which this machine does not have — and 2, ERROR_FILE_NOT_FOUND, is
+  ;; what Windows answers for a module that is not there. That is a real
+  ;; answer, not a stub: the caller is asking whether a facility exists, and no
+  ;; is the truth here, which is why it then falls back to ordinary GDI.
+  ;;
+  ;; A module that does exist is launched through the same shell boundary
+  ;; WinExec uses, so the two cannot disagree about what launching means.
+  (func $handle_LoadModule (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $esp i32) (local $attr i32) (local $show i32) (local $show_ptr i32)
+    ;; GetFileAttributesA is a one-argument handler and pops its own frame, so
+    ;; its stack adjustment is not ours; take the answer and put ESP back.
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetFileAttributesA (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (local.set $attr (i32.load offset=0 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp))
+    (if (i32.eq (local.get $attr) (i32.const -1))
+      (then
+        (global.set $last_error (i32.const 2))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 2))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (local.get $esp) (i32.const 12)))
+        (return)))
+    ;; LOADPARMS32 { WORD segEnv; LPSTR lpCmdLine; WORD *lpCmdShow; DWORD }.
+    ;; lpCmdShow points at two words, the second of which is the show command;
+    ;; without a block the module gets an ordinary window.
+    (local.set $show (i32.const 1))
+    (if (local.get $arg1)
+      (then
+        (local.set $show_ptr (call $gl32 (i32.add (local.get $arg1) (i32.const 8))))
+        (if (local.get $show_ptr)
+          (then (local.set $show
+            (call $gl16 (i32.add (local.get $show_ptr) (i32.const 2))))))))
+    ;; Same arity as WinExec, so its own stdcall adjustment is the right one.
+    (call $handle_WinExec (local.get $arg0) (local.get $show) (i32.const 0)
+      (i32.const 0) (i32.const 0) (local.get $name_ptr))
+  )
+
   ;; 500: CreateProcessW — STUB: unimplemented
   (func $handle_CreateProcessW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $app i32) (local $cmd i32) (local $dir i32) (local $dir_w i32)

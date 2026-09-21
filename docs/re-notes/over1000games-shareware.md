@@ -218,6 +218,36 @@ Ruled out: the target is not a missing relocation (the whole region from
 `0x2fec60` on is zeros at batch 71, i.e. past the segment's real content), and
 it is not a far-call selector problem.
 
+## MicroMan (`ARCADE/MICROMAN`)
+
+16-bit NE, and it needs nothing: `--max-batches=40000` off the CD directory
+draws the full game — menu bar, tiled level, sprite and the status strip.
+
+## Pitfall (`ARCADE/PITFALL`, open)
+
+32-bit PE. It greets you with "Pitfall must be played in 256 color mode for
+optimum performance." (`MB_ICONERROR`, OK only), and then asks for
+**DISPDIB.DLL** — the Video for Windows full-screen DIB driver — through
+`LoadModule`, a KERNEL32 API we did not implement, so the run ended in
+`FATAL: implement this API`.
+
+`LoadModule` is implemented as of 2026-09-20 and answers what Windows answers
+for a module that is not on the machine: 2, `ERROR_FILE_NOT_FOUND`. Pitfall
+turns that into its own diagnostic —
+
+```
+[MessageBox] "Pitfall": "Bad or missing dispdib.dll - error 2"
+```
+
+— and exits. So it has no GDI fallback: reaching gameplay needs a DISPDIB
+surface, the same shape as the MPR/TAPI/spooler fragments (a small WAT-native
+module behind `DisplayDib`/`DisplayDibWindow`, presenting a 320x200 8bpp DIB
+full screen). The one copy of the real DLL in this tree,
+`test/binaries/candidates/civilization-2-win16/cd/VFW_INST/DISPDIB.DL_`, is
+**KWAJ**-compressed, not SZDD, so `tools/szdd.js` cannot expand it — and it is
+a 16-bit DLL besides, which a 32-bit caller cannot load without thunks we do
+not have. Implementing the surface is the route, not finding the file.
+
 ## ClockWerx (open)
 
 16-bit, and the loader says it first:
