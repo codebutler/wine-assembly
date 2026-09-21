@@ -735,6 +735,28 @@
     (load.field.memarg WndRecord parent (call $wnd_record_addr (local.get $idx)))
   )
 
+  ;; IsChild ancestry, shared by the public ABIs, enumeration and message
+  ;; filters. Ownership is not ancestry; only WS_CHILD links are traversed.
+  ;; No callbacks/locks: this is also used under the shared queue lock.
+  (func $wnd_is_child (param $parent i32) (param $child i32) (result i32)
+    (local $depth i32)
+    (if (i32.or (i32.eqz (local.get $parent)) (i32.eqz (local.get $child)))
+      (then (return (i32.const 0))))
+    (if (i32.eq (local.get $parent) (local.get $child)) (then (return (i32.const 0))))
+    (if (i32.eq (call $wnd_table_find (local.get $parent)) (i32.const -1))
+      (then (return (i32.const 0))))
+    (block $done (loop $walk
+      (br_if $done (i32.eqz
+        (i32.and (call $wnd_get_style (local.get $child)) (i32.const 0x40000000))))
+      (br_if $done (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+      (local.set $child (call $wnd_get_parent (local.get $child)))
+      (br_if $done (i32.eqz (local.get $child)))
+      (if (i32.eq (local.get $child) (local.get $parent))
+        (then (return (i32.const 1))))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
+    (i32.const 0))
+
   ;; Return the host-assigned Win32 process ID. Standalone embedders that do
   ;; not assign one retain the historical PID 1000 fallback.
   (func $current_process_id (result i32)

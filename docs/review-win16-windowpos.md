@@ -1788,3 +1788,30 @@ Removal-time WM_MOUSEACTIVATE, Win16 invocation-owned pump completion and
 renderer handoff remain open. GetMessage filtering and synthesized paint/
 timer HWND filtering require separate audits; this change is scoped to
 PeekMessage's input and posted-message paths.
+
+### Shared child ancestry; remove dialog-only IsChild (2026-09-20)
+
+The follow-up found Win32 IsChild ignored hWnd entirely: it returned true
+whenever hWndParent matched the current dialog global. Win16 instead had an
+unbounded parent walk, while enumeration and queue filtering each maintained
+another walk. The public ABIs now call `$wnd_is_child`, also used by the
+enumeration predicate and PeekMessage's window filter. The shared helper
+rejects NULL, self and invalid parents, follows only WS_CHILD links, and
+bounds traversal by the window-table capacity. Popup ownership/reparenting
+does not turn a top-level window into a child.
+
+The behavior follows the official
+[IsChild contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-ischild).
+The new matrix exercises direct children/grandchildren, unrelated/reversed/
+self/NULL/invalid handles, popup exclusion, enumeration parity, malformed
+cycles, and both public calling conventions. The old Win32 implementation
+fails a grandchild query whose parent is not the current dialog
+(`/private/tmp/wa-ischild-negative.log`); the repaired matrix passes. This
+does not complete the pending input-removal activation transaction.
+
+Validation: the extended filter/IsChild/cycle matrix and existing active-window
+regression pass (`wa-ischild-positive.log`, `wa-ischild-active.log`); full build
+passes (`wa-ischild-build.log`) and both artifacts match the generated layout
+`74b29198cdc0b91f`. Real Win16 Rodent and Rattler gameplay tests pass using
+that completed artifact (`wa-ischild-vb.log`). Foreign SetSysColors and GDI
+ordinal changes in the shared adapter files are excluded from this commit.

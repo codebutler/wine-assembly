@@ -6,6 +6,28 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_enum_child") (param $parent i32) (param $child i32) (result i32)
+    (call $enum_child_is_descendant (local.get $child) (local.get $parent)))
+  (func (export "test_corrupt_parent") (param $h i32) (param $parent i32)
+    (store.field.memarg WndRecord parent
+      (call $wnd_record_addr (call $wnd_table_find (local.get $h))) (local.get $parent)))
+  (func (export "test_is_child") (param $parent i32) (param $child i32) (param $far i32) (result i64)
+    ;; The dialog global must not decide ancestry for either ABI.
+    (global.set $dlg_hwnd (i32.const 0x3333))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (if (local.get $far)
+      (then
+        (call $win16_seg_set (i32.const 1) (i32.const 0x100000) (i32.const 65536) (i32.const 0) (i32.const 1))
+        (call $gs16 (i32.const 0x110800) (i32.const 0x90))
+        (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
+        (call $gs16 (i32.const 0x110804) (call $win16_h16 (local.get $child)))
+        (call $gs16 (i32.const 0x110806) (call $win16_h16 (local.get $parent)))
+        (call $win16_IsChild))
+      (else (call $handle_IsChild (local.get $parent) (local.get $child)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+    (global.set $dlg_hwnd (i32.const 0))
+    (i64.or (i64.extend_i32_u (i32.load (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
   (func (export "test_input_flags") (result i32) (global.get $user_queue_input_flags))
   (func (export "test_post_input") (param $h i32) (result i32)
     (call $post_queue_push_input (local.get $h) (i32.const 0x0201) (i32.const 1) (i32.const 0)))
@@ -128,6 +150,28 @@ const extraWat = String.raw`
   e.test_filter_window(0x3335, 0x3333, 0x40000000);
   e.test_filter_window(0x3336, 0x3335, 0x40000000);
   e.test_filter_window(0x3337, 0x3333, 0x80000000); // popup, not a child
+  for (const far of [0, 1]) {
+    for (const [parent, child, expected] of [
+      [0x3333, 0x3335, 1], [0x3333, 0x3336, 1], [0x3335, 0x3336, 1],
+      [0x3333, 0x3333, 0], [0x3333, 0x2222, 0], [0x3333, 0x3337, 0],
+      [0x3336, 0x3333, 0], [0, 0x3335, 0], [0x3333, 0, 0], [0, 0, 0],
+      [0x7777, 0x3335, 0], [0x3333, 0x7777, 0],
+    ]) {
+      const result = e.test_is_child(parent, child, far);
+      assert.strictEqual(Number(result & 0xffffffffn), expected,
+        `${far ? 'Win16' : 'Win32'} IsChild(${parent.toString(16)}, ${child.toString(16)})`);
+      assert.strictEqual(Number(result >> 32n), 0x110800 + (far ? 8 : 12),
+        'IsChild preserves ABI-specific stack cleanup');
+      assert.strictEqual(e.test_enum_child(parent, child), expected,
+        'EnumChildWindows uses the same child/owner distinction');
+    }
+  }
+  e.test_corrupt_parent(0x3335, 0x3336);
+  for (const far of [0, 1]) {
+    assert.strictEqual(Number(e.test_is_child(0x3333, 0x3336, far) & 0xffffffffn), 0,
+      'a corrupt parent cycle terminates without claiming an unrelated ancestor');
+  }
+  e.test_corrupt_parent(0x3335, 0x3333);
   hardware.push(0x00010201);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x3333, 0x201, 0x201, 0), 1);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0x2222, 0x201, 0x201, 1), 0,

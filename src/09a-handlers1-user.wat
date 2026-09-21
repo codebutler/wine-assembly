@@ -1838,10 +1838,7 @@
 
   ;; 133: IsChild
   (func $handle_IsChild (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.and
-    (i32.ne (global.get $dlg_hwnd) (i32.const 0))
-    (i32.eq (local.get $arg0) (global.get $dlg_hwnd)))
-    (then (i32.const 1)) (else (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (call $wnd_is_child (local.get $arg0) (local.get $arg1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 

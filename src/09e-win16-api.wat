@@ -5342,28 +5342,14 @@
     (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 2)))
 
-  ;; USER.48 IsChild(hWndParent, hWnd). Walk the real WND parent chain rather
-  ;; than reusing the narrow Win32 dialog-only helper: Visual Basic asks this
-  ;; during WM_SETFOCUS even for an ordinary top-level form. The window itself
-  ;; is not its own child, so start at its parent, matching USER's semantics.
+  ;; USER.48 IsChild(hWndParent, hWnd). Handle conversion and Pascal cleanup
+  ;; are the only differences from the Win32 shared ancestry query.
   (func $win16_IsChild
     (local $parent i32) (local $child i32)
     (local.set $child (call $win16_h32 (call $win16_arg16 (i32.const 0))))
     (local.set $parent (call $win16_h32 (call $win16_arg16 (i32.const 1))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (if (i32.and
-          (i32.ne (local.get $parent) (i32.const 0))
-          (i32.ne (local.get $child) (i32.const 0)))
-      (then
-        (local.set $child (call $wnd_get_parent (local.get $child)))
-        (block $done (loop $ancestors
-          (br_if $done (i32.eqz (local.get $child)))
-          (if (i32.eq (local.get $child) (local.get $parent))
-            (then
-              (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-              (br $done)))
-          (local.set $child (call $wnd_get_parent (local.get $child)))
-          (br $ancestors)))))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $wnd_is_child (local.get $parent) (local.get $child)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.50 FindWindow(lpClassName, lpWindowName). Either argument may be a

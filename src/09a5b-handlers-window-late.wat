@@ -2974,17 +2974,7 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; the walk suspends on the CACA002B continuation and resumes at the next
   ;; slot — the same shape as the D3D device enumerators.
   (func $enum_child_is_descendant (param $hwnd i32) (param $ancestor i32) (result i32)
-    (local $p i32) (local $guard i32)
-    (local.set $p (call $wnd_get_parent (local.get $hwnd)))
-    (block $done (loop $walk
-      (br_if $done (i32.eqz (local.get $p)))
-      (if (i32.eq (local.get $p) (local.get $ancestor)) (then (return (i32.const 1))))
-      ;; A malformed parent chain must not spin forever.
-      (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
-      (br_if $done (i32.ge_u (local.get $guard) (global.get $MAX_WINDOWS)))
-      (local.set $p (call $wnd_get_parent (local.get $p)))
-      (br $walk)))
-    (i32.const 0))
+    (call $wnd_is_child (local.get $ancestor) (local.get $hwnd)))
 
   ;; Finish the walk: drop the saved API return address and resume the caller.
   ;; EnumChildWindows reports TRUE whenever it ran, including a callback-
