@@ -73,9 +73,23 @@ function report(request, response) {
     let parsed;
     try { parsed = JSON.parse(body); } catch (_) { parsed = { raw: body }; }
     const stamp = new Date().toISOString().slice(11, 19);
-    if (Array.isArray(parsed)) for (const item of parsed) print(stamp, item);
-    else print(stamp, parsed);
-    if (LOG) fs.appendFileSync(LOG, body + '\n');
+    // The log is written FIRST and printing is caught, because this process is
+    // the only record of a session on a device we cannot attach a debugger to.
+    // A report that is missing a field -- an older page, a stub posted while
+    // the emulator was still loading, a hand-rolled curl probe -- used to
+    // throw inside print() and take the server down with the whole session's
+    // log. Losing the reading is worse than printing it ugly.
+    if (LOG) {
+      try { fs.appendFileSync(LOG, body + '\n'); } catch (_) {}
+    }
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    for (const item of items) {
+      try {
+        print(stamp, item);
+      } catch (error) {
+        console.log(`${stamp}  UNPRINTABLE (${error && error.message}) ${JSON.stringify(item)}`);
+      }
+    }
   });
 }
 
@@ -87,7 +101,7 @@ function print(stamp, item) {
     return;
   }
   if (item && item.kind === 'lab') {
-    console.log(`${stamp}  LAB ${item.page.padEnd(9)} ${item.line}`);
+    console.log(`${stamp}  LAB ${String(item.page).padEnd(9)} ${item.line}`);
     return;
   }
   if (item && item.kind === 'log') {
@@ -101,9 +115,13 @@ function print(stamp, item) {
   if (item && item.verdict) {
     const kb = `kb ${item.kbInset}/${item.kbShift}`;
     const zoom = item.vv ? `z${item.vv.scale}` : 'z?';
-    const head = `${stamp}  ${item.verdict.padEnd(14)} run ${item.running} win ${item.windows} ` +
+    // Every field here is optional on purpose: a record posted before the
+    // page finished setting itself up carries only some of them, and that
+    // half-record is often the most interesting one in the log.
+    const scroll = Array.isArray(item.scroll) ? item.scroll.join(',') : '?';
+    const head = `${stamp}  ${String(item.verdict).padEnd(14)} run ${item.running} win ${item.windows} ` +
       `mem ${item.mem || '?'}  ` +
-      `icon@${item.iconTop} hit ${item.hit}  ${zoom} scroll ${item.scroll.join(',')} ` +
+      `icon@${item.iconTop} hit ${item.hit}  ${zoom} scroll ${scroll} ` +
       `${kb} wrap "${item.wrapTransform}"  [${item.classes}]`;
     console.log(head);
     if (item.audio) console.log(`${' '.repeat(stamp.length)}  AUDIO ${item.audio}`);
