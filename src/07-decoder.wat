@@ -2839,9 +2839,9 @@
   (func $modrm16_apply_seg
     (if (global.get $d_seg)
       (then
-        (if (i32.gt_u (global.get $d_seg) (i32.const 5))
+        (if (i32.gt_u (global.get $d_seg) (i32.const 6))
           (then
-            (call $host_log_i32 (i32.const 0xCA165E67)) ;; GS in a 16-bit task
+            (call $host_log_i32 (i32.const 0xCA165E67)) ;; not a segment prefix
             (call $host_log_i32 (global.get $d_seg))
             (unreachable)))
         (global.set $mr_seg (i32.sub (global.get $d_seg) (i32.const 1)))

@@ -3108,6 +3108,14 @@
   (global $tsc_last (mut i64) (i64.const 0))
   ;; FS segment base — points to fake TIB (allocated from heap during PE load)
   (global $fs_base (mut i32) (i32.const 0))
+  ;; GS in a 16-bit task. A Win32 program never touches GS and nothing sets
+  ;; these on that path, but a 16-bit one has six selectors to spend and uses
+  ;; the last two like any other: Bad Toys 3D keeps a data selector in GS and
+  ;; addresses through it, which used to trap. The base is the arena address
+  ;; the selector resolves to; the selector itself is kept so reading GS back
+  ;; answers what was written rather than DS.
+  (global $gs_base (mut i32) (i32.const 0))
+  (global $sreg_gs (mut i32) (i32.const 0))
   ;; Win32-visible current thread id. Main thread is 1; worker tid N is N+1.
   (global $current_thread_id (mut i32) (i32.const 1))
   ;; Current segment prefix during decoding (set before decode_modrm)

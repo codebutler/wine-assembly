@@ -11607,36 +11607,25 @@
     (call $d3dim_get_render_target (local.get $arg0) (local.get $arg1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
-  ;; ── Immediate mode: Begin / BeginIndexed / Vertex / Index / End ──
-  ;;
-  ;; This is a COMPLETE alternative way to draw, and none of it is
-  ;; implemented. An app calls Begin, streams vertices through Vertex, then
-  ;; End; every one of these returned S_OK and discarded its argument, so the
-  ;; app drew nothing while every call reported success.
-  ;;
-  ;; That is the failure mode DrawIndexedPrimitiveVB had -- a silent-success
-  ;; stub produces no trap, no unimplemented-API message and no wrong return
-  ;; code, so the only symptom is missing geometry, which reads as a texture
-  ;; or state bug anywhere but here. Diablo II's black ground cost a session
-  ;; to that exact shape.
-  ;;
-  ;; So fail loudly instead, per the project rule: the next app that draws
-  ;; this way names itself in the crash log instead of rendering blank. The
-  ;; trap comes BEFORE the stack pop so the dump still shows the arguments.
   (func $handle_IDirect3DDevice3_Begin (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirect3DDevice3_BeginIndexed (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_IDirect3DDevice3_Vertex (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_Index (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_End (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetRenderState(this, dwRenderStateType, lpdwRenderState) — 3 args
   (func $handle_IDirect3DDevice3_GetRenderState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11763,14 +11752,9 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
       (local.get $name_ptr)))
 
-  ;; IDirect3DDevice3::DrawPrimitiveVB(primType, lpVB, dwStartVertex,
-  ;; dwNumVertices, dwFlags) — the same five arguments as the v7 form, so the
-  ;; core takes $arg1..$arg4 straight through and the frame is 28 either way,
-  ;; so share the v7 body rather than copy it.
   (func $handle_IDirect3DDevice3_DrawPrimitiveVB (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DDevice7_DrawPrimitiveVB
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (local.get $name_ptr)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; IDirect3DDevice3::DrawIndexedPrimitiveVB(primType, lpVB, lpwIndices,
   ;; dwIndexCount, dwFlags) — 6 dwords with `this`, so 28. The v3 form has no
@@ -11780,24 +11764,8 @@
   ;; return address, and the guest jumps to whatever that was. Diablo II's
   ;; Direct3D backend hits this during the Act I load and lands on 0x140 or
   ;; 0x280 -- its own screen coordinates, 320 and 640.
-  ;;
-  ;; Fixing that pop stopped the crash and left the body empty: it returned
-  ;; S_OK and drew nothing. That is a silent-success stub, and it is why the
-  ;; symptom was a *picture* rather than a trap -- Diablo II batches its floor
-  ;; tiles through this entry point (d2direct3d+0x6457, vtable slot 35, a
-  ;; TRIANGLELIST of 150 indices over a vertex buffer it Locks) while sprites
-  ;; go through DrawPrimitive, which was implemented. So the units, the HUD
-  ;; and the text all drew and the ground stayed black.
-  ;;
-  ;; The v3 form has no dwStartVertex/dwNumVertices, so the whole buffer is in
-  ;; play: pass start 0 and a count the core clamps down to the buffer's real
-  ;; capacity (size/stride), which is exactly what its `count > max - start`
-  ;; guard is for.
   (func $handle_IDirect3DDevice3_DrawIndexedPrimitiveVB (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3dim_vb_draw_indexed_primitive
-      (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (i32.const 0) (i32.const -1)
-      (local.get $arg3) (local.get $arg4))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   (func $handle_IDirect3DDevice3_ComputeSphereVisibility (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

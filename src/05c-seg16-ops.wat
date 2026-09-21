@@ -15,8 +15,10 @@
   ;; can rebuild the linear address as `cs_base | ip`.
   ;;
   ;; Segment ids follow the x86 ModRM sreg encoding throughout: 0=ES, 1=CS,
-  ;; 2=SS, 3=DS, 4=FS. WinG uses LFS and FS-relative accesses in Win16 code;
-  ;; GS still has no modeled use and traps.
+  ;; 2=SS, 3=DS, 4=FS, 5=GS. WinG uses LFS and FS-relative accesses in Win16
+  ;; code, and Bad Toys 3D uses GS the same way — in a 16-bit task both are
+  ;; ordinary data selectors resolved through WIN16_SEG_TABLE, not the Win32
+  ;; TIB register FS is on the other path.
 
   (func $seg16_base (param $id i32) (result i32)
     (if (i32.eq (local.get $id) (i32.const 0)) (then (return (global.get $seg_base_es))))
@@ -24,7 +26,8 @@
     (if (i32.eq (local.get $id) (i32.const 2)) (then (return (global.get $seg_base_ss))))
     (if (i32.eq (local.get $id) (i32.const 3)) (then (return (global.get $seg_base_ds))))
     (if (i32.eq (local.get $id) (i32.const 4)) (then (return (global.get $fs_base))))
-    (call $host_log_i32 (i32.const 0xCA165E67))  ;; GS in a 16-bit task
+    (if (i32.eq (local.get $id) (i32.const 5)) (then (return (global.get $gs_base))))
+    (call $host_log_i32 (i32.const 0xCA165E67))  ;; a segment id that is not one
     (call $host_log_i32 (local.get $id))
     (unreachable))
 
@@ -32,6 +35,7 @@
     (if (i32.eq (local.get $id) (i32.const 0)) (then (return (global.get $sreg_es))))
     (if (i32.eq (local.get $id) (i32.const 1)) (then (return (global.get $sreg_cs))))
     (if (i32.eq (local.get $id) (i32.const 2)) (then (return (global.get $sreg_ss))))
+    (if (i32.eq (local.get $id) (i32.const 5)) (then (return (global.get $sreg_gs))))
     (global.get $sreg_ds))
 
   ;; Load a segment register. The base comes from WIN16_SEG_TABLE, so a
@@ -116,6 +120,8 @@
       (then (global.set $sreg_ds (local.get $sel)) (global.set $seg_base_ds (local.get $base)) (return)))
     (if (i32.eq (local.get $id) (i32.const 4))
       (then (global.set $fs_base (local.get $base)) (return)))
+    (if (i32.eq (local.get $id) (i32.const 5))
+      (then (global.set $sreg_gs (local.get $sel)) (global.set $gs_base (local.get $base)) (return)))
     (call $host_log_i32 (i32.const 0xCA165E67))
     (call $host_log_i32 (local.get $id))
     (unreachable))

@@ -374,7 +374,7 @@
   ;; a real selector, not a cookie, and startup code stores this one and later
   ;; hands it back to RegisterClass and CreateWindow.
   (func $win16_InitTask
-    (local $psp i32) (local $base i32)
+    (local $psp i32) (local $base i32) (local $len i32) (local $i i32)
     (if (i32.eqz (global.get $win16_psp_sel))
       (then
         (local.set $psp (call $win16_alloc_segment))
@@ -392,9 +392,28 @@
         ;;
         ;; The carriage return still follows the terminator, so anything reading
         ;; this the DOS way finds the byte it expects one place further on.
-        (call $gs8 (i32.add (local.get $base) (i32.const 0x80)) (i32.const 0))
-        (call $gs8 (i32.add (local.get $base) (i32.const 0x81)) (i32.const 0))
-        (call $gs8 (i32.add (local.get $base) (i32.const 0x82)) (i32.const 0x0D))))
+        ;;
+        ;; The text is whatever the host was told to pass ("set_extra_cmdline",
+        ;; the same buffer GetCommandLineA appends after the exe name), so a
+        ;; 16-bit task finally sees its arguments. It used to see none at all,
+        ;; and an installer that re-runs itself with a switch then took its
+        ;; no-arguments path forever: Bad Toys 3D's INSTALL.EXE copies itself to
+        ;; C:\BT3D\TINST.DAT and WinExec()s it with "/kopie C:\" to do the
+        ;; actual copying, so with an empty PSP the second stage just put the
+        ;; directory dialog up again. The PSP field is a length byte, so it
+        ;; holds 126 characters and the rest is dropped rather than wrapped.
+        (local.set $len (global.get $extra_cmdline_len))
+        (if (i32.gt_u (local.get $len) (i32.const 126))
+          (then (local.set $len (i32.const 126))))
+        (call $gs8 (i32.add (local.get $base) (i32.const 0x80)) (local.get $len))
+        (block $copied (loop $copy
+          (br_if $copied (i32.ge_u (local.get $i) (local.get $len)))
+          (call $gs8 (i32.add (i32.add (local.get $base) (i32.const 0x81)) (local.get $i))
+            (i32.load8_u (i32.add (global.get $EXTRA_CMDLINE_BUFFER) (local.get $i))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $copy)))
+        (call $gs8 (i32.add (i32.add (local.get $base) (i32.const 0x81)) (local.get $len)) (i32.const 0))
+        (call $gs8 (i32.add (i32.add (local.get $base) (i32.const 0x82)) (local.get $len)) (i32.const 0x0D))))
 
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=4 (global.get $reg_base) (global.get $win16_stack_size))
@@ -6338,6 +6357,17 @@
     (if (i32.eq (local.get $ordinal) (i32.const 403))
       (then (call $win16_UnregisterClass) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 107))
+      (then (call $win16_DefWindowProc) (return (i32.const 1))))
+    ;; USER.308 DefDlgProc(hDlg, message, wParam, lParam) -> LONG. Same Pascal
+    ;; frame as DefWindowProc, and on this side the same procedure: a dialog's
+    ;; window is ours, so $win16_DefWindowProc already routes a message for one
+    ;; into the native dialog path and already ends the dialog on an IDOK or
+    ;; IDCANCEL the dialog procedure declined ($win16_defdlg_command). That is
+    ;; exactly what a task subclassing a dialog gets back, and calling
+    ;; DefDlgProc by ordinal is the same request spelled differently -- Bad
+    ;; Toys 3D's MSSETUP-style installer calls it from its own dialog window
+    ;; procedure for every message it does not want.
+    (if (i32.eq (local.get $ordinal) (i32.const 308))
       (then (call $win16_DefWindowProc) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 108))
       (then (call $win16_GetMessage) (return (i32.const 1))))
@@ -13170,7 +13200,17 @@
         (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 2))
         (return (i32.const 1))))
-    (local.set $hwo (call $win16_h32 (call $win16_arg16 (i32.const 3))))
+    ;; Word 3 is the HWAVEOUT only for the three-argument calls below. 415 and
+    ;; 416 take (uDeviceID, ...) in a six-byte frame, so word 3 is past the end
+    ;; of it and holds whatever the caller last left on its stack -- and
+    ;; $win16_h32 is right to refuse an index it never handed out, so reading it
+    ;; unconditionally killed the task on a waveOutGetVolume that was otherwise
+    ;; implemented and correct. Bad Toys 3D asks for the volume at startup.
+    (if (i32.or (i32.or (i32.eq (local.get $ordinal) (i32.const 406))
+                        (i32.eq (local.get $ordinal) (i32.const 407)))
+                (i32.or (i32.eq (local.get $ordinal) (i32.const 408))
+                        (i32.eq (local.get $ordinal) (i32.const 412))))
+      (then (local.set $hwo (call $win16_h32 (call $win16_arg16 (i32.const 3))))))
     ;; 406 waveOutPrepareHeader / 407 waveOutUnprepareHeader
     (if (i32.or (i32.eq (local.get $ordinal) (i32.const 406))
                 (i32.eq (local.get $ordinal) (i32.const 407)))
@@ -13883,6 +13923,88 @@
         (call $win16_call32_end)
         (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
         (call $win16_api_return (i32.const 6))
+        (return (i32.const 1))))
+    ;; ---- MMSYSTEM joystick (101-107) ----
+    ;;
+    ;; This machine has no joystick driver, which is a real configuration and
+    ;; the one the 32-bit handlers in 09a3-handlers-audio.wat already answer
+    ;; for: joyGetNumDevs counts none and every per-device call reports
+    ;; MMSYSERR_NODRIVER, so a game keeps its keyboard and mouse. The same
+    ;; answers belong here rather than a second opinion, so the calls that have
+    ;; a 32-bit twin are forwarded to it. Bad Toys 3D asks for the joystick
+    ;; capabilities at startup and dies on the way in without this.
+    (if (i32.eq (local.get $ordinal) (i32.const 101))
+      (then
+        (call $win16_call32_begin (i32.const 0))
+        (call $handle_joyGetNumDevs (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 0))
+        (return (i32.const 1))))
+    ;; 102 joyGetDevCaps(wId, lpCaps, wSize). The Win16 JOYCAPS is 54 bytes and
+    ;; the Win32 one is longer, but nothing is written into it on the no-driver
+    ;; path, so the pointer crosses unchanged.
+    (if (i32.eq (local.get $ordinal) (i32.const 102))
+      (then
+        (local.set $p1 (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
+        (if (i32.eqz (call $win16_arg16 (i32.const 2))) (then (local.set $p1 (i32.const 0))))
+        (local.set $dev (call $win16_arg16 (i32.const 3)))
+        (local.set $p2 (call $win16_arg16 (i32.const 0)))
+        (call $win16_call32_begin (i32.const 3))
+        (call $handle_joyGetDevCapsA (local.get $dev) (local.get $p1)
+          (local.get $p2) (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 8))
+        (return (i32.const 1))))
+    ;; 103 joyGetPos(wId, lpInfo) / 104 joyGetThreshold(wId, lpThreshold). No
+    ;; 32-bit twin is wired up for these, so they answer the same way directly:
+    ;; a malformed request is MMSYSERR_INVALPARAM, a well-formed one finds no
+    ;; driver. Neither writes through the pointer.
+    (if (i32.or (i32.eq (local.get $ordinal) (i32.const 103))
+                (i32.eq (local.get $ordinal) (i32.const 104)))
+      (then
+        (i32.store offset=0 (global.get $reg_base)
+          (select (i32.const 11) (i32.const 6)
+            (i32.or (i32.eqz (call $win16_arg16 (i32.const 1)))
+                    (i32.gt_u (call $win16_arg16 (i32.const 2)) (i32.const 15)))))
+        (call $win16_api_return (i32.const 6))
+        (return (i32.const 1))))
+    ;; 105 joyReleaseCapture(wId)
+    (if (i32.eq (local.get $ordinal) (i32.const 105))
+      (then
+        (local.set $dev (call $win16_arg16 (i32.const 0)))
+        (call $win16_call32_begin (i32.const 1))
+        (call $handle_joyReleaseCapture (local.get $dev) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 2))
+        (return (i32.const 1))))
+    ;; 106 joySetCapture(hwnd, wId, uPeriod, bChanged)
+    (if (i32.eq (local.get $ordinal) (i32.const 106))
+      (then
+        (local.set $msg (call $win16_h32 (call $win16_arg16 (i32.const 3))))
+        (local.set $dev (call $win16_arg16 (i32.const 2)))
+        (local.set $p1 (call $win16_arg16 (i32.const 1)))
+        (local.set $p2 (call $win16_arg16 (i32.const 0)))
+        (call $win16_call32_begin (i32.const 4))
+        (call $handle_joySetCapture (local.get $msg)
+          (local.get $dev) (local.get $p1)
+          (local.get $p2) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 8))
+        (return (i32.const 1))))
+    ;; 107 joySetThreshold(wId, uThreshold)
+    (if (i32.eq (local.get $ordinal) (i32.const 107))
+      (then
+        (i32.store offset=0 (global.get $reg_base)
+          (select (i32.const 11) (i32.const 6)
+            (i32.gt_u (call $win16_arg16 (i32.const 1)) (i32.const 15))))
+        (call $win16_api_return (i32.const 4))
         (return (i32.const 1))))
     (i32.const 0))
 
