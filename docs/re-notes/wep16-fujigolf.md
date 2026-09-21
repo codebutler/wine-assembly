@@ -117,3 +117,23 @@ the related Klotski EnableWindow repaint-loop correction are recorded in
 earlier shipping-red status above; it does not close the remaining ShowWindow
 hide/minimize selection, application-activation scheduling or return-value
 gaps.
+
+## 2026-09-20: explicit host foreground exposes missing show publication
+
+Replacing the host's highest-z-order inference with an accepted foreground
+record made the unchanged clubhouse caption check fail (blue width zero),
+while the course transition still worked. `wa-foreground-fuji-trace.log`
+shows the clubhouse ShowWindow(3) and full-height child layout, but no
+`activate_window` call; `foreground_window` remained zero. This is separate
+from the earlier missing guest `active_hwnd` state.
+
+The far ShowWindow continuation now explicitly publishes the surviving
+accepted target after activation/focus callbacks, before size/erase work.
+Its pending bit is invocation-owned; child/no-activate modes do not publish,
+and nested activation or destruction cannot restore the superseded target.
+The test's dimensions, colour predicate and gameplay recipe are unchanged.
+
+The completed clean build passes all seven WEP3 games, including Fuji's
+original maximized-caption, scene-depth and first-tee checks:
+`/private/tmp/wa-accepted-foreground-wep3-final.log`. Normal/compat artifacts
+are 1454060/1454966 bytes, layout `c5ccefca8909ee4b`.

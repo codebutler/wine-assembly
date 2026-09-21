@@ -38,6 +38,9 @@ const renderer = {
   _lastDeepChild: { topHwnd: 200, childHwnd: 210 },
   _computeClientRect() { clientRectComputes++; },
   _clampToolbarWidth() { return false; },
+  showWindow(hwnd, cmd) {
+    this.windows[hwnd].visible = ![0, 2, 6, 7].includes(cmd);
+  },
   scheduleRepaint() {
     this.repaintScheduled = true;
   },
@@ -89,11 +92,11 @@ assert.strictEqual(host.get_window_info(420, 2), 0, 'get_window_info enabled');
 assert.strictEqual(host.get_window_info(100, 3), 4321, 'get_window_info process owner');
 assert.strictEqual(host.get_window_info(100, 4), 1, 'get_window_info finds an existing window');
 assert.strictEqual(host.get_window_info(999, 4), 0, 'get_window_info rejects an unknown window');
-assert.strictEqual(host.foreground_window(), 420,
-  'foreground_window returns the highest visible renderer top-level');
+assert.strictEqual(host.foreground_window(), 0,
+  'visible windows alone do not constitute accepted foreground activation');
 renderer.windows[420].visible = false;
-assert.strictEqual(host.foreground_window(), 400,
-  'foreground_window skips hidden top-level windows');
+assert.strictEqual(host.foreground_window(), 0,
+  'hiding a z-order leader does not select another foreground window');
 renderer.windows[420].visible = true;
 const topLevels = Object.values(renderer.windows).filter(win => !win.isChild);
 const priorVisibility = topLevels.map(win => win.visible);
@@ -152,6 +155,26 @@ assert.strictEqual(renderer.keyboardOwner, renderer.windows[100],
   'activate_window assigns keyboard input to the activated top-level');
 assert.strictEqual(host.foreground_window(), 100,
   'activating a window makes it the renderer-wide foreground window');
+renderer.windows[420].zOrder = 1000;
+assert.strictEqual(host.foreground_window(), 100,
+  'raising a disabled/topmost surface does not overwrite accepted foreground');
+renderer.windows[420].zOrder = 60;
+
+// All app host contexts share the renderer-wide accepted identity.
+const otherHost = createHostImports({getMemory: () => memory, renderer, exports: {}}).host;
+assert.strictEqual(otherHost.foreground_window(), 100);
+assert.strictEqual(otherHost.activate_window(200), 1);
+assert.strictEqual(host.foreground_window(), 200, 'activation in another host context is visible here');
+renderer.windows[200].visible = false;
+assert.strictEqual(host.foreground_window(), 0, 'hidden accepted window is retired, not replaced by z-order');
+renderer.windows[200].visible = true;
+assert.strictEqual(host.foreground_window(), 0, 'visibility alone does not reactivate a retired record');
+host.activate_window(200);
+const previous200 = renderer.windows[200];
+renderer.windows[200] = { ...previous200 };
+assert.strictEqual(host.foreground_window(), 0, 'reused HWND cannot inherit the old foreground identity');
+renderer.windows[200] = previous200;
+host.activate_window(100);
 
 const topZBeforeChildActivation = renderer.windows[100].zOrder;
 host.set_window_zorder(110, 0);
@@ -164,6 +187,17 @@ assert.strictEqual(renderer.keyboardOwner, renderer.windows[100],
   'activating a child assigns keyboard input to its top-level ancestor');
 assert.strictEqual(host.activate_window(0x7ffffffe), 0,
   'activate_window rejects an unknown HWND');
+for (const hide of [0, 2, 6, 7]) {
+  host.activate_window(200);
+  host.show_window(200, hide);
+  host.show_window(200, 4); // SW_SHOWNOACTIVATE, with no foreground query while hidden
+  assert.strictEqual(host.foreground_window(), 0, 'hide/minimize then no-activate show cannot revive foreground');
+}
+host.activate_window(200);
+host.move_window(200, 0, 0, 0, 0, 0x83); // NOMOVE | NOSIZE | HIDEWINDOW
+host.move_window(200, 0, 0, 0, 0, 0x53); // NOMOVE | NOSIZE | NOACTIVATE | SHOWWINDOW
+assert.strictEqual(host.foreground_window(), 0, 'window-position visibility changes cannot revive foreground');
+host.activate_window(100);
 
 const activatedZ = renderer.windows[100].zOrder;
 host.move_window(300, 0, 0, 0, 0, 0x43); // SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
@@ -176,6 +210,8 @@ assert(renderer.windows[300].zOrder > activatedZ,
 
 const inputQueueIdentity = renderer.inputQueue;
 host.destroy_window(100);
+assert.strictEqual(renderer._foregroundWindow, null, 'destroy releases the retained foreground record immediately');
+assert.strictEqual(host.foreground_window(), 0, 'destroying the accepted window retires its foreground identity');
 assert.strictEqual(renderer.inputQueue, inputQueueIdentity,
   'DestroyWindow compacts the browser input queue in place');
 assert.deepStrictEqual(renderer.inputQueue.map(event => [event.hwnd, event.msg]), [

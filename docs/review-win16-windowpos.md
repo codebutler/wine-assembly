@@ -2338,3 +2338,43 @@ also explicitly checks that matching desktop/local state skips the query
 (`wa-foreground-final16.log`). All four renderer/input JS suites pass in the
 clean tree. Rodent/Rattler gameplay passes (`wa-foreground-vb.log`).
 WEP3 gameplay also passes all seven cases (`wa-foreground-wep3.log`).
+
+### Explicit accepted foreground (host and Win16 show handoff)
+
+The host now records the window accepted by `activate_window`, independently
+of renderer z-order. Both import contexts sharing a renderer see the same
+record. The record's object identity prevents a recycled HWND from becoming
+foreground; hide/minimize, hidden positioning and destruction clear it.
+Raising another surface alone no longer changes GetForegroundWindow. This
+implements the ownership distinction, not the remaining selection of a
+replacement after hide/minimize. NULL is an allowed transition result in
+[Microsoft's GetForegroundWindow contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow).
+
+The unchanged Fuji Golf gate caught a prerequisite omission: far ShowWindow
+updated guest activation without publishing host activation. Its clubhouse
+was correctly sized but painted an inactive caption (blue width zero).
+ShowWindow now keeps a pending publication bit in its invocation-owned show
+frame and consumes it after the far activation transaction, before size and
+erase callbacks. It publishes only a surviving, visible, nonminimized target
+that still matches the accepted local active window. A nested activation
+therefore wins; child and no-activate shows do not publish. This follows the
+[documented show-mode activation distinction](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow),
+not a new claim of native Win98 cross-application ordering fidelity.
+
+Remaining: renderer mouse-down/ShowWindow can still change z-order and
+keyboard ownership eagerly; direct native-control input routes bypass the
+removed-message query; cross-app WM_ACTIVATEAPP, old-app deactivation,
+hide/minimize replacement selection and live Worker acceptance need work.
+In particular SW_SHOWMINIMIZED has a documented activation contract that the
+current renderer's hidden-minimized representation does not fully model.
+
+Verification in the existing clean `47bf2871` tree plus committed `5611d821`
+and this stage's owned files: full build gates and both compiled artifacts
+pass (1454060/1454966 bytes, layout `c5ccefca8909ee4b`). Host relations and
+three renderer/input suites pass; Win32 and real far callback matrices pass.
+Old-host and old-far negative controls fail at the new assertions. The rebuilt
+Rodent/Rattler and all seven WEP3 gameplay cases pass, including Fuji's
+unchanged active-caption and scene-depth checks. Logs are `/private/tmp/`
+`wa-accepted-foreground-{build,far,win32,negative,far-negative}.log` and
+`wa-accepted-foreground-{vb,wep3}-final.log`. These are clean headless checks,
+not a live browser/Worker acceptance claim.

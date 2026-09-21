@@ -693,7 +693,9 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   writeCode(0x5000, recorder([]));
   e.test_reset_activation();
   const activeA = e.test_window(0x5000), activeB = e.test_window(0x5000);
+  desktopActivations.length = 0;
   assert.deepStrictEqual(runShow(activeA, 5, 0x90, true), [6, 7]);
+  assert.deepStrictEqual(desktopActivations, [activeA], 'accepted show publishes foreground');
   assert.strictEqual(e.test_active(), activeA);
   assert.strictEqual(e.test_focus(), activeA);
   assert(e.test_rank(activeA) > e.test_rank(activeB), 'activation raises A above B');
@@ -704,10 +706,13 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.strictEqual(e.test_focus(), activeB);
   assert(e.test_rank(activeB) > e.test_rank(activeA), 'activation raises B above A');
   const aboveActive = e.test_window(0x5000);
+  desktopActivations.length = 0;
   assert(e.test_rank(aboveActive) > e.test_rank(activeB));
   assert.deepStrictEqual(runShow(activeB, 5, 0x90, true), [],
     'reasserting activation does not resend activation/focus notifications');
   assert(e.test_rank(activeB) > e.test_rank(aboveActive), 'same active window is raised again');
+  assert.deepStrictEqual(desktopActivations, [activeB], 'same-local-active show reasserts foreground');
+  desktopActivations.length = 0;
   for (const mode of [4, 7, 8]) {
     runShow(activeA, mode, 0x90, true);
     assert.strictEqual(e.test_active(), activeB, `show mode ${mode} must not activate`);
@@ -717,6 +722,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   e.test_as_child(childShow, activeA);
   runShow(childShow, 5, 0x90, true);
   assert.strictEqual(e.test_active(), activeB, 'showing a child does not activate it');
+  assert.deepStrictEqual(desktopActivations, [], 'nonactivating modes and children do not publish foreground');
 
   const nestedActive = e.test_window(0x5000);
   const activateNested = [0x68, ...word(e.test_narrow(nestedActive)), 0x6a, 5,
@@ -725,7 +731,9 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   writeCode(0x5100, recorder([0x83, 0x7e, 0x0c, 6, 0x75, activateOnly.length,
     ...activateOnly]));
   const superseded = e.test_window(0x5100);
+  desktopActivations.length = 0;
   runShow(superseded, 5, 0x90, true);
+  assert.deepStrictEqual(desktopActivations, [nestedActive], 'superseded outer show cannot steal foreground');
   assert.strictEqual(e.test_active(), nestedActive, 'nested activation wins');
   assert.strictEqual(e.test_focus(), nestedActive, 'outer activation cannot steal focus back');
   const getActive = e.test_user_thunk(60);
@@ -737,6 +745,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   assert.strictEqual(e.guest_read32(0x110f00) & 0xffff, e.test_narrow(maximizeActive),
     'GetActiveWindow inside SIZE_MAXIMIZED sees the activated window');
   const minimizedActive = e.test_window(0x5000);
+  desktopActivations.length = 0;
   assert.deepStrictEqual(runShow(minimizedActive, 2, 0x90, true), [6, 6]);
   assert.strictEqual(e.guest_read32(0x110910), (0x10000 | e.test_narrow(maximizeActive)) >>> 0,
     'Win16 minimized flag is HIWORD(lParam), not wParam');
@@ -745,6 +754,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     ...destroyOnActivate]));
   const destroyedActive = e.test_window(0x5300);
   runShow(destroyedActive, 5, 0x90, true);
+  assert.deepStrictEqual(desktopActivations, [], 'minimized/destroyed show cannot publish foreground');
   assert.strictEqual(e.test_alive(destroyedActive), 0);
   assert.strictEqual(e.test_active(), 0, 'activation must not retain a retired HWND');
   const queryProc = (ax, dx = 0, body = []) => [

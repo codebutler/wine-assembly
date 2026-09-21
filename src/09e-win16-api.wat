@@ -7529,6 +7529,10 @@
             (i32.or (i32.eq (local.get $show) (i32.const 5))
                     (i32.eq (local.get $show) (i32.const 9)))))
       (then
+        ;; Publish desktop activation only after the far transaction returns.
+        ;; Keep this request on the show frame, not a shared global.
+        (call $gs32 (i32.add (local.get $sp) (i32.const 8))
+          (i32.or (call $gl32 (i32.add (local.get $sp) (i32.const 8))) (i32.const 8)))
         (call $win16_cont_push
           (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
                   (global.get $WIN16_CONT_SHOW)) (i32.const 0))
@@ -7665,6 +7669,18 @@
     (local $proc i32) (local $msg i32) (local $wp i32) (local $lp i32)
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (local.set $hwnd (call $gl32 (local.get $sp)))
+    (if (i32.and (call $gl32 (i32.add (local.get $sp) (i32.const 8))) (i32.const 8))
+      (then
+        (call $gs32 (i32.add (local.get $sp) (i32.const 8))
+          (i32.and (call $gl32 (i32.add (local.get $sp) (i32.const 8))) (i32.const -9)))
+        ;; A callback may have selected another window, hidden or destroyed
+        ;; this one. Do not overwrite the accepted choice on return.
+        (if (i32.and
+              (i32.and (i32.eq (global.get $active_hwnd) (local.get $hwnd))
+                (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+              (i32.and (call $wnd_is_effectively_visible (local.get $hwnd))
+                (i32.eqz (call $wnd_min_get (local.get $hwnd)))))
+          (then (drop (call $host_activate_window (local.get $hwnd)))))))
     (if (i32.and (call $gl32 (i32.add (local.get $sp) (i32.const 8))) (i32.const 4))
       (then
         (call $win16_show_erase_result
