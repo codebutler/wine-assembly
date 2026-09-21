@@ -2818,3 +2818,38 @@ executing tests. The declaration was present on immediate reinspection;
 no foreign source was edited to work around it.
 The main-tree repeat passes (`wa-button-focus-fix-main-repeat.log`), and the
 WordPad browser process exits successfully after its passing assertions.
+
+### Reentrant focus: preserve HWND, retain Win98's focus-bit quirk
+
+The native probe now calls SetFocus from inside BN_CLICKED, choosing either
+the same button or a sibling. For all twelve style values, GetFocus after
+the outer SetFocus returns still names the callback-selected window.
+Self-refocus has an important Win98 quirk: the nested call sets the button's
+focus-state bit, but the outer WM_KILLFOCUS clears that bit afterward even
+though GetFocus still names the button. A blanket guard skipping all state
+cleanup would therefore be incompatible with the observed native behavior.
+
+The emulator bug was the control's direct `focus_hwnd = 0` write after
+notification. Removed that write: the shared USER focus transaction owns
+focus identity, while the BUTTON still performs its native state cleanup.
+The test uses actual SetFocus API calls and synchronous x86 callback thunks,
+with siblings under the same parent as the native probe, checking both focus
+identity and each button's reported state for 24 cases.
+
+The native refocus sections (baseline matrices omitted) are preserved in
+[reference-button-refocus-win98.txt](reference-button-refocus-win98.txt).
+Full output/metadata: `/private/tmp/wa-button-refocus-native.serial` and
+`.json`. Updated probe executable SHA-256:
+`7aa03faafb5faa21fe8488f2b860795cd883e68072850b680f331937982a6141`.
+The pinned Win98/v86 runtime provenance is unchanged. Recapture and reentry
+during the earlier highlight/capture callbacks remain outside this matrix.
+
+Two native runs produce byte-identical 37597-byte serial output. Main and
+clean public-API callback matrices pass (`/private/tmp/wa-button-refocus-main.log`,
+`wa-button-refocus-final.log`). Old source fails by clearing the selected
+HWND to zero (`wa-button-refocus-negative.log`). Clean full build gates pass
+(`wa-button-refocus-build.log`), normal/compat sizes 1454927/1455833,
+unchanged layout `c5ccefca8909ee4b`.
+The activation/removal-time mouse-activation suite and rebuilt WordPad
+browser check also pass (`wa-button-refocus-active.log`,
+`wa-button-refocus-wordpad.log`), with both processes exiting successfully.

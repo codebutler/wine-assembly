@@ -16,6 +16,17 @@ const { createCanvas } = require('../lib/canvas-compat');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_focus_api") (param $hwnd i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetFocus (local.get $hwnd) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp)))
+  (func (export "test_create_sibling_button") (param $hwnd i32) (param $id i32) (result i32)
+    (call $ctrl_create_child
+      (call $wnd_get_parent (local.get $hwnd)) (i32.const 1) (local.get $id)
+      (i32.const 120) (i32.const 0) (i32.const 100) (i32.const 24)
+      (i32.const 0x50010000) (i32.const 0)))
   (func (export "test_thunk") (param $id i32) (result i32)
     (local $p i32)
     (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
@@ -271,6 +282,37 @@ function u32(value) {
   assert.strictEqual(e.get_post_queue_count(), 0, 'ordinary parent notification is synchronous');
 
   const apiTable = require('../src/api_table.json');
+  const focusThunk = e.test_thunk(apiTable.find(api => api.name === 'SetFocus').id);
+  for (const kind of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
+    for (const self of [true, false]) {
+      const button = e.test_create_dialog_button(proc, 1850, kind) >>> 0;
+      const alternate = e.test_create_sibling_button(button, 1851) >>> 0;
+      const chosen = self ? button : alternate;
+      const armed = e.guest_alloc(4) >>> 0;
+      const refocusProc = e.guest_alloc(96) >>> 0;
+      const action = [
+        0xc7, 0x05, ...u32(armed), ...u32(0),
+        0x68, ...u32(chosen), 0xb8, ...u32(focusThunk), 0xff, 0xd0,
+      ];
+      const gate = [0x83, 0x3d, ...u32(armed), 0, 0x74, action.length, ...action];
+      bytes.set(Uint8Array.from([
+        0x81, 0x7c, 0x24, 0x08, ...u32(0x111), 0x75, gate.length, ...gate,
+        0x31, 0xc0, 0xc2, 0x10, 0x00,
+      ]), toWasm(refocusProc));
+      view.setUint32(toWasm(armed), 0, true);
+      e.test_make_unowned_guest_parent(button, refocusProc);
+      e.test_focus_api(button);
+      e.send_message(button, 0xf3, 1, 0);
+      view.setUint32(toWasm(armed), 1, true);
+      e.test_focus_api(e.wnd_get_parent(button));
+      assert.strictEqual(view.getUint32(toWasm(armed), true), 0, 'nested SetFocus callback ran');
+      assert.strictEqual(e.get_focus_hwnd(), chosen, `native callback-selected focus survives kind=${kind} self=${self}`);
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), [3, 6, 9].includes(kind) ? 1 : 0,
+        'Win98 outer handler still clears its focus-state bit after self-refocus');
+      assert.strictEqual(e.send_message(alternate, 0xf2, 0, 0), self ? 0 : 8);
+      assert.strictEqual(e.get_post_queue_count(), 0);
+    }
+  }
   const destroyThunk = e.test_thunk(apiTable.find(api => api.name === 'DestroyWindow').id);
   for (const stage of ['paint', 'command']) {
     const victim = e.test_create_dialog_button(proc, 1900, stage === 'paint' ? 11 : 3) >>> 0;

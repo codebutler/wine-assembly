@@ -5,6 +5,8 @@ static HANDLE serial;
 static int clicks;
 static int tracing, trace_kind;
 static WNDPROC original_button;
+static HWND nested_focus_target;
+static int nested_focus_armed;
 static void row(const char *label, int a, int b, int c, int d) {
   char buf[160]; DWORD written;
   wsprintfA(buf, "%s %d %d %d %d\r\n", label, a, b, c, d);
@@ -15,6 +17,13 @@ static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     clicks++;
     if (tracing) row("CLICK kind/state/capture/count", trace_kind,
       SendMessageA((HWND)l, BM_GETSTATE, 0, 0), GetCapture() == (HWND)l, clicks);
+    if (nested_focus_armed) {
+      nested_focus_armed = 0;
+      SetFocus(nested_focus_target);
+      row("NESTED_FOCUS kind/target-focused/button-state/target-state", trace_kind,
+        GetFocus() == nested_focus_target, SendMessageA((HWND)l, BM_GETSTATE, 0, 0),
+        SendMessageA(nested_focus_target, BM_GETSTATE, 0, 0));
+    }
   }
   return DefWindowProcA(h, m, w, l);
 }
@@ -28,7 +37,7 @@ static LRESULT CALLBACK button_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return result;
 }
 void WINAPI WinMainCRTStartup(void) {
-  WNDCLASSA wc = {0}; HWND parent, button; int kind, before, after, mode;
+  WNDCLASSA wc = {0}; HWND parent, button, alternate; int kind, before, after, mode;
   serial = CreateFileA("COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
   wc.lpfnWndProc = proc; wc.hInstance = GetModuleHandleA(NULL);
   wc.lpszClassName = "ButtonReference";
@@ -89,6 +98,26 @@ void WINAPI WinMainCRTStartup(void) {
       tracing = 0;
       ReleaseCapture();
     }
+    alternate = CreateWindowA("BUTTON", "Other", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      120, 10, 100, 24, parent, (HMENU)101, wc.hInstance, NULL);
+    for (mode = 0; mode < 2; mode++) {
+      SetFocus(button);
+      SendMessageA(button, BM_SETCHECK, 0, 0);
+      SendMessageA(button, BM_SETSTATE, TRUE, 0);
+      clicks = 0;
+      nested_focus_target = mode ? alternate : button;
+      nested_focus_armed = 1;
+      tracing = 1;
+      row("REFOCUS_CASE kind/mode", kind, mode, 0, 0);
+      SetFocus(parent);
+      row("REFOCUS_RESULT kind/focus-button/focus-alternate/button-state", kind,
+        GetFocus() == button, GetFocus() == alternate, SendMessageA(button, BM_GETSTATE, 0, 0));
+      row("REFOCUS_OTHER kind/alternate-state/clicks/armed", kind,
+        SendMessageA(alternate, BM_GETSTATE, 0, 0), clicks, nested_focus_armed);
+      tracing = 0;
+      nested_focus_armed = 0;
+    }
+    DestroyWindow(alternate);
     SetWindowLongA(button, GWL_WNDPROC, (LONG)original_button);
     DestroyWindow(button);
   }

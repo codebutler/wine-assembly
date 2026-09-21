@@ -613,8 +613,9 @@
         ;; Capture notification may destroy/subclass the button; do not use
         ;; the state pointer retained before that callback.
         (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
-        (if (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
-          (then (global.set $focus_hwnd (i32.const 0))))
+        ;; USER's focus transaction owns the HWND. A BN_CLICKED callback can
+        ;; refocus this button; preserve that winner even though native Win98
+        ;; still clears the outer button's focus paint bit below.
         (if (local.get $state)
           (then
             (local.set $state_w (call $g2w (local.get $state)))
