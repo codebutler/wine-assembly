@@ -170,7 +170,7 @@ Implemented 2026-09-20 (`8f061f96`). Runs a full 45s with no crash; capture went
 from no PNG at all to 659 KB / 100,397 colours. Regression:
 `test/test-win16-invert-rect.js`.
 
-## Sokoban (open)
+## Sokoban (open -- crash fixed, form does not draw yet)
 
 VB3 (`VBRUN300.DLL`). Crashes at batch 72 inside `$decode_block` with marker
 `0xCA002E20` — "execution entered zeros" — at guest `0x002fec83`, which is an
@@ -295,6 +295,51 @@ segment still reaches an `IRET` — or a handler written to be entered by an
 INT — the word counts on the two sides do not match, and one word is exactly
 the discrepancy measured above. Confirm or eliminate that before hunting a
 missing `pop` in the guest's own code.
+
+**2026-09-20, resolved: it was our `pop sp`, fixed in f04f2721.** The `$th_int`
+suspect is eliminated on two counts. `$th_int`'s non-21h branch pushes nothing
+and returns nothing, so it is balanced whatever the vector. And there is no
+FP-emulator INT to speak of: SOKOBAN.EXE contains no `int 21h` or
+`int 34h`-`3Eh` at all, and VBRUN300.DLL has 17 `int 21h` and exactly one
+`cd 3d` -- in seg 33 at `0x000c`, not in the FP interpreter's seg 25, inside
+`9b db 5e fc cd 3d 8b 46 fc`, straight after an `fwait; fistp`. `INT 3Dh` is the
+MS emulator's FWAIT, so that one may well be a real instruction; if it runs,
+`$th_int` treats it as a balanced no-op, which is what an FWAIT is here. An
+emulator-vector build would show thousands, not one. (Count with
+`find_bytes.js` and read the `Total:` line: `grep -c 0x` also counts the
+`imageBase=0x0` header and reports 1 for a file with none.)
+
+The jump table the dispatcher reads is **ten entries long** --
+`0x5223 0x5223 0x5214 0x5223 0x522b 0x523f 0x5257 0x5236 0x5223 0x5223` at
+`cs:0x515a`, with code resuming at `0x516e` -- so `0x78` was never an index
+that happened to be too large; it was never an index at all. Tracing SP back
+through the VM with `--trace-eip-range=0x002f3ff0-0x002f5210
+--trace-eip-detail --trace-eip-stream` showed where the extra word went:
+
+```
+5214:  pop di; sub sp,8; push di; push ax
+521a:  mov ax, sp          ; ax = 0x70bc, handed back through `jmp cx`
+4f12:  add ax, 0x0c        ; 0x70c8 -- the VM stack to restore
+4f18:  push ax             ; saved at [0x70ba]
+ ...   (far call through the 0x4b76 thunk)
+4f32:  pop ax; pop bx; pop cx
+4f35:  pop sp              ; SP came back 0x70ca
+4f36:  jmp ax
+```
+
+`$th_pop_r16` wrote the register and then added 2 to ESP unconditionally, so
+for `pop sp` the increment landed on top of the value it had just loaded.
+The 32-bit `$th_pop_r` already had the right order and a comment saying why.
+`$th_push_r16` had the matching 8086-style bug (it stored SP after the
+decrement), fixed in the same commit. With SP back at `0x70c8` the
+dispatcher no longer runs off the table, and the run goes on past batch 72.
+
+Now Sokoban runs past VB's startup: `REGISTERCLASS` for its form,
+`CREATEWINDOW`, `SHOWWINDOW`, then the full `Thunder*` control set -- but after
+30,000 batches the capture is still plain desktop teal, with ~7,600
+`LSTRCMPI`s and ~925 identical rounds of `GetSystemMetrics(0,1,0x20..0x23)` +
+`InvalidateRect`. That is the next question: a VB form that is shown and
+invalidated but never lands on the screen.
 
 ## MicroMan (`ARCADE/MICROMAN`)
 
