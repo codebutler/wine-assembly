@@ -2232,3 +2232,31 @@ no runtime changes after its clean pass; the final far fixture includes the
 explicit SendMessage matrix and its exact full-result/stack checks.
 Rodent/Rattler gameplay and WEP3 7/7 pass on the final artifact
 (`/private/tmp/wa-native-mouse-vb.log`, `wa-native-mouse-wep3.log`).
+
+### Disabled browser frames reject input before ownership effects
+
+The browser candidate loop previously raised a disabled top-level frame,
+selected its instance as keyboard owner, and attempted focus transfer before
+its later client-route WS_DISABLED check rejected the click. That check now
+runs before those effects. It does not make disabled children transparent in
+a new way or change capture routing; the existing child/parent routing stays
+intact. General enabled-window WM_MOUSEACTIVATE handoff is still open.
+
+The renderer drag/input test now clicks an inactive disabled frame belonging
+to another instance with left and right buttons, under both cooperative and
+Worker ownership configuration. It checks unchanged z-order/keyboard owner,
+no focus calls or Worker focus publication, no down input, and restored click
+delivery after reenabling the same HWND. The old renderer fails by raising
+the frame from z-order 1 to 10 (`wa-disabled-frame-negative.log`). The fixture
+also corrects its obsolete notification-only set_focus mock: shared USER has
+owned publication since `25c1a98c`; separate focus-seed tests still verify
+that a callback-selected result is not overwritten.
+
+Both updated mouse-drag and keyboard-focus suites pass in main and the clean
+temporary verification tree using rsync of just the relevant JS files. No
+WASM changed in this stage. Adjacent multi-app-modal and dialog-caption-drag
+tests currently fail because their expected queues omit the already-existing
+WM_NCHITTEST event. Both failures reproduce with HEAD's unchanged renderer
+(`wa-disabled-frame-multi-baseline.log`, `wa-disabled-frame-caption-baseline.log`);
+they are not counted as passing validation or fixed here. They need updating
+before the broader browser activation acceptance matrix can be trusted.

@@ -217,7 +217,7 @@ const focusWasm = {
     get_focus_hwnd() { return focusHwnd; },
     set_focus(hwnd) {
       focusChanges.push(hwnd);
-      focusHwnd = 0; // Native parent wndproc does not update the WAT focus global.
+      focusHwnd = hwnd; // The shared USER focus transaction owns publication.
     },
     set_focus_hwnd(hwnd) { focusHwnd = hwnd; },
   },
@@ -232,7 +232,7 @@ focusRenderer.handleMouseDown(40, 60, 1);
 assert.deepStrictEqual(focusChanges, [130],
   'top-level click should transfer child focus to the parent, never clear it to NULL');
 assert.strictEqual(focusHwnd, 130,
-  'top-level click should synchronize focus when the native parent wndproc does not');
+  'top-level click should retain the completed USER focus transaction');
 focusChanges.length = 0;
 focusRenderer.handleMouseDown(40, 60, 1);
 assert.deepStrictEqual(focusChanges, [],
@@ -275,6 +275,49 @@ assert.deepStrictEqual(disabledRenderer.inputQueue.filter(e => e.hwnd === 141).m
   'the same button must receive an ordered hit-test and click after EnableWindow');
 
 const captionRenderer = new Win98Renderer(canvas);
+// Disabled top-level rejection precedes z-order, keyboard ownership and
+// focus changes, for both cooperative and guest-Worker instances.
+for (const worker of [false, true]) {
+  const renderer = new Win98Renderer(canvas);
+  const oldWasm = { exports: {} };
+  let disabled = true;
+  const focusCalls = [];
+  const targetWasm = { exports: {
+    wnd_get_style_export: () => disabled ? 0x08000000 : 0,
+    get_focus_hwnd: () => 0,
+    set_focus: hwnd => focusCalls.push(hwnd),
+    set_focus_hwnd: hwnd => focusCalls.push(hwnd),
+  }};
+  renderer.wasm = oldWasm;
+  renderer._keyboardInputWasm = oldWasm;
+  renderer._nextZ = 10;
+  renderer._guestWorkerWasms = new Set(worker ? [targetWasm] : []);
+  const publishedFocus = [];
+  renderer._guestWorkerFocusPublishers = new Set([(wasm, hwnd) => publishedFocus.push(hwnd)]);
+  renderer.windows[150] = { hwnd: 150, visible: true, isChild: false,
+    x: 300, y: 10, w: 200, h: 160, style: 0, hasCaption: false,
+    zOrder: 2, wasm: oldWasm };
+  const target = renderer.windows[151] = { hwnd: 151, visible: true, isChild: false,
+    x: 10, y: 10, w: 200, h: 160, style: 0, hasCaption: false,
+    zOrder: 1, wasm: targetWasm };
+  for (const button of [0, 2]) {
+    renderer.handleMouseDown(40, 60, button);
+    assert.strictEqual(target.zOrder, 1, 'disabled frame is not raised');
+    assert.strictEqual(renderer._keyboardInputWasm, oldWasm, 'disabled frame cannot take keyboard ownership');
+    assert.deepStrictEqual(focusCalls, [], 'disabled frame cannot request focus');
+    assert.deepStrictEqual(renderer.inputQueue, [], 'disabled frame receives no button input');
+    renderer.handleMouseUp(40, 60, button);
+    assert.strictEqual(renderer._keyboardInputWasm, oldWasm);
+    assert.deepStrictEqual(publishedFocus, [], 'disabled Worker frame publishes no focus request');
+    renderer.inputQueue.length = 0;
+  }
+  disabled = false;
+  renderer.handleMouseDown(40, 60, 0);
+  assert(renderer.inputQueue.some(event => event.hwnd === 151 && event.msg === 0x201),
+    'reenabling the same frame restores click delivery');
+  assert.deepStrictEqual(publishedFocus, worker ? [151] : [],
+    'reenabled Worker frame uses the real focus-publisher route');
+}
 const captionWasm = {
   exports: {
     hittest_sync() { return 2; }, // HTCAPTION
