@@ -1426,9 +1426,11 @@ which is what the Join card shows: at launch ("Join alex / Not now"), at the
 first `socket()` ("Join / Play offline"), and as a toast over a running game.
 Apps without `lan.room: 'auto'` (Blobby, Liquid War) keep the lobby.
 
-**Invite links.** While a page is in a star room, an Invite button under the
-status chip shares (on a phone) or copies `?app=ID&room=OWNER_USERID`. The
-link is the person's answer already, so it shows no card. If the owner is
+**Invite links.** `?app=ID&room=OWNER_USERID` names the room to join. Nothing
+on screen hands these out any more — an Invite button under the chip sat on
+top of the game's own UI, and the server list made it redundant — but a link
+built by hand still works. It is the person's answer already, so it shows no
+card. If the owner is
 hosting, the game launches with `lan.join.launchArgs`. If the owner is in a
 room but not serving yet, the room is joined silently at the game's first
 `socket()`. If the owner is gone, the launch proceeds as usual. `room` is read

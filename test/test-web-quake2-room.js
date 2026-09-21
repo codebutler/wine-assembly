@@ -18,7 +18,7 @@
 // the toast the shell shows it later. That join reaches a game already past
 // its command line, so it goes through lan.join.inGame typing into Quake's
 // console. It is also the three-player room where an unread UDP socket used
-// to stall the wire. A fourth opens the host's invite link
+// to stall the wire. A fourth opens a link naming the host's room
 // (?app=quake2_demo&room=USERID) and must land at the owner with no card.
 
 'use strict';
@@ -315,16 +315,19 @@ const snapWindow = () => {
     const tp = await snap(third, 'third-match');
     check(`the third player is in the level (${pct(tp)})`, !!tp && tp.lit > 0.3 && tp.colours > 40);
 
-    // ---- a fourth, from the host's invite link ----------------------------
+    // ---- a fourth, from a link naming the host's room ---------------------
     //
     // The link names the owner, so it is the person's answer already: the
-    // game launches straight at the owner with no card at all.
-    const link = await host.page.evaluate(() => {
-      const b = document.getElementById('wine-lan-invite');
-      return b ? b.dataset.link : null;
+    // game launches straight at the owner with no list at all. Nothing on
+    // screen hands these out; the test builds one from the host's room.
+    const ownerId = await host.page.evaluate(() => {
+      const r = runningApps[0] && runningApps[0].wine._lanRoom;
+      return r ? r.ownerUserId : null;
     });
-    check(`the host has an invite link (${link})`,
-      !!link && /[?&]app=quake2_demo\b/.test(link) && /[?&]room=[^&]+/.test(link));
+    check(`the host's room names its owner (${ownerId})`, !!ownerId);
+    const link = ownerId ? `${base}/index.html?app=quake2_demo&room=${ownerId}` : null;
+    check('and puts no invite button over the game',
+      await host.page.evaluate(() => !document.getElementById('wine-lan-invite')));
     const fourth = link ? await open('fourth', JOIN_ARGS, link) : null;
     const fourthSeat = fourth && await H.until(fourth.page, 'fourth: never wired',
       () => { const w = runningApps[0] && runningApps[0].wine.vlanWire; return w ? w.address : null; },
