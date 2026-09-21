@@ -566,6 +566,15 @@ opened with `+menu_joinserver` broadcasts `info` to
 directly. So in a browser room **either seat may host**: the joiner's list
 is filled by broadcast, not by assuming the server is at `.1`.
 
+**Other players drawn as a yellowish diamond** (first real browser match,
+2026-09-20) is `ref_gl`'s `R_DrawNullModel`, the stand-in for an entity whose
+model did not load. The demo ships its player models loose in
+`baseq2/players/{male,female}/` (59 files, `tris.md2`, `weapon.md2`, skins and
+`_i` icons), *outside* `pak0.pak`, and the registry mounted only the pak. Gibs
+(`models/objects/gibs/`, in the pak) looked fine, which is the tell. The
+manifest now mounts all 59. With them, `+menu_playerconfig` renders the grunt
+preview, and it could not before.
+
 **Solo play never makes a socket.** A `+map demo1` run calls `WSAStartup` and
 nothing else from WSOCK32. Quake opens its UDP sockets only from `NET_Config`,
 i.e. once a player starts or joins a network game. So `$handle_socket` asks
