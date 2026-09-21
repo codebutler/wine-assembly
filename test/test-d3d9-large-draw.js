@@ -9,13 +9,24 @@ const {Device}=require('../lib/d3d9-software-backend');
     (func (export "reverse_pointer") (param i32) (result i32) (call $w2g (local.get 0)))`});
   let creates=0,programs=0,textureBinds=0,failAt=0,indices=0;
   const live=new Set(),stepped=new Set();
+  // A context comes from one of four constructors -- plain, typed, deferred and
+  // deferred+clipped -- chosen by clip planes, deferred setup and typed
+  // constants, and every one of them is released through the single
+  // d3d_software_free below. Watching only the plain one made this whole test
+  // vacuous once large draws moved to deferred setup: it builds all 35 of its
+  // contexts with d3d_software_create_deferred, so creates and indices stayed 0,
+  // the failAt injection never fired, and the free of a context that was never
+  // recorded tripped live.delete.
+  const track=name=>(desc,...rest)=>{creates++;if(creates===failAt)return 0;
+    indices+=new Uint32Array(memory.buffer,desc,32)[12];
+    const p=e[name](desc,...rest)>>>0;if(p){assert(!live.has(p));live.add(p);}return p;};
   const ex={...e,d3d_shader_vm_compile(ir){programs++;return e.d3d_shader_vm_compile(ir);},
-    d3d_software_create(desc){creates++;if(creates===failAt)return 0;
-      indices+=new Uint32Array(memory.buffer,desc,32)[12];
-      const p=e.d3d_software_create(desc);if(p){assert(!live.has(p));live.add(p);}return p;},
-    d3d_software_free(p){assert(live.delete(p));e.d3d_software_free(p);},
+    d3d_software_free(p){assert(live.delete(p>>>0));e.d3d_software_free(p);},
     d3d_software_step(p,n){assert(live.has(p));stepped.add(p);return e.d3d_software_step(p,n);},
     d3d_software_bind_texture_mips(...args){textureBinds++;return e.d3d_software_bind_texture_mips(...args);}};
+  for(const name of ['d3d_software_create','d3d_software_create_typed',
+    'd3d_software_create_deferred','d3d_software_create_deferred_clipped'])
+    if(typeof e[name]==='function')ex[name]=track(name);
   const options={width:8,height:8,getExports:()=>ex,getMemory:()=>memory.buffer};
   if(process.argv.includes('--no-coalesce'))ex.d3d_render_coalesce_heap=()=>0;
   function source(){
@@ -89,18 +100,38 @@ const {Device}=require('../lib/d3d9-software-backend');
   }
   d.destroy();
   const scheduled=[],async=new Device({...options,quadBudget:65536,schedule:fn=>scheduled.push(fn)}),asyncBase=async.bytes;
-  const s=source(),task=async.drawAsync(s),allContexts=live.size;
-  assert(allContexts>1);s.vertices.fill(0);s.textures[0].pixels.fill(0);
+  // This used to assert live.size>1 here, i.e. that every context existed
+  // before drawAsync returned. Deferred setup builds them lazily, one per
+  // batch, so that count is 0 by design now. What it was really protecting --
+  // that the snapshot is taken before return, so the caller may scribble on its
+  // own arrays immediately afterwards -- still holds, and is what the
+  // completing draw below proves by checking pixels after exactly that. The
+  // batch split is asserted there too, on contexts actually created.
+  const s=source(),task=async.drawAsync(s);
+  s.vertices.fill(0);s.textures[0].pixels.fill(0);
   assert.throws(()=>async.readPixels(),/in flight/);stepped.clear();
   assert.throws(()=>async.sampleCount(),/in flight/);
-  scheduled.shift()();assert.strictEqual(stepped.size,1,'one batch boundary remains resumable');
+  // Deferred setup spends its first scheduled turns building the batch's
+  // context, so the first callback need not step anything. Run turns until one
+  // batch has actually stepped -- that partially-executed state is what the
+  // cancel below has to retire -- rather than assuming the old eager schedule
+  // where turn one always stepped.
+  // A deferred draw runs a whole setup phase first -- one context built and
+  // prepare_step'd per batch, 35 of them here -- and only then rasters, so the
+  // first d3d_software_step is many turns in. The bound is a safety net, not an
+  // expected count.
+  let turns=0;
+  while(stepped.size===0&&scheduled.length&&turns++<5000)scheduled.shift()();
+  assert.strictEqual(stepped.size,1,'one batch boundary remains resumable');
   async.cancel();await assert.rejects(task,/cancel/);
   assert.strictEqual(async.sampleCount(),0n,'cancelled split draw publishes no partial count');
   while(scheduled.length)scheduled.shift()();assert.strictEqual(stepped.size,1,'cancel retires untouched future batches');
   assert.strictEqual(live.size,0);assert.strictEqual(async.bytes,asyncBase);
+  const splitFrom=creates;
   const immutable=source(),complete=async.drawAsync(immutable);
   immutable.vertices.fill(0);immutable.textures[0].pixels.fill(0);
   while(scheduled.length)scheduled.shift()();await complete;
+  assert(creates-splitFrom>1,'a large async draw still splits into several batched contexts');
   assert.strictEqual(async.sampleCount(),samplesPerDraw,'async completion publishes all batches exactly once');
   assert.strictEqual(new Uint32Array(async.readPixels().buffer)[9],0xff00ff00);
   assert.strictEqual(async.bytes,asyncBase);async.destroy();
