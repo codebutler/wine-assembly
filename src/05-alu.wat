@@ -2968,15 +2968,23 @@
       (then (call $set_reg16 (i32.const 2) (i32.const 0xFFFF))) ;; DX = 0xFFFF
       (else (call $set_reg16 (i32.const 2) (i32.const 0))))     ;; DX = 0
     (dispatch-next))
-  ;; PUSH 16-bit register
+  ;; PUSH 16-bit register. Read the register first, so `push sp` stores SP as
+  ;; it was before the decrement -- the 80286-and-later definition, and what
+  ;; $th_push_r already does for the 32-bit form.
   (func $th_push_r16 (param $op i32)
-     (local $nx_fn i32) (local $nx_op i32) (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
-    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $op) (i32.const 2)))) (i32.const 0xFFFF)))
+     (local $nx_fn i32) (local $nx_op i32) (local $v i32)
+    (local.set $v (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $op) (i32.const 2)))) (i32.const 0xFFFF)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (local.get $v))
     (dispatch-next))
-  ;; POP 16-bit register
+  ;; POP 16-bit register. Read top-of-stack, advance esp, *then* assign -- so
+  ;; `pop sp` ends up holding the popped value and not popped_value + 2. This
+  ;; is the same ordering $th_pop_r uses for the 32-bit form.
   (func $th_pop_r16 (param $op i32)
-     (local $nx_fn i32) (local $nx_op i32) (call $set_reg16 (local.get $op) (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+     (local $nx_fn i32) (local $nx_op i32) (local $v i32)
+    (local.set $v (call $gl16 (i32.load offset=16 (global.get $reg_base))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $set_reg16 (local.get $op) (local.get $v))
     (dispatch-next))
   ;; MOVSW: move word [ESI] → [EDI]
   (func $th_movsw (param $op i32)

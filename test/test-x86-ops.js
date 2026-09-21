@@ -981,6 +981,55 @@ async function main() {
   test('adc ax,[edi] sets CF when b+CF exceeds the word', e.get_ecx() & 0xFF, 1);
 
   // ================================================================
+  // PUSH SP / POP SP — the stack pointer as its own operand
+  // ================================================================
+  // Found by Sokoban (VB3): VBRUN300's floating-point interpreter parks its
+  // VM stack pointer in a local and restores it with `pop sp`, and our 16-bit
+  // POP wrote the register and *then* added 2 unconditionally, so SP came back
+  // two bytes high. Two words later a jump-table dispatcher popped the wrong
+  // slot as its index and jumped off the end of a ten-entry table. The 32-bit
+  // $th_pop_r had the ordering right and a comment saying why; its 16-bit twin
+  // did not. `66` selects the 16-bit forms here.
+  const spTop = imageBase + 0xD00000;
+
+  // Each case pops from a slot below spTop so runCode's sentinel return
+  // address at spTop survives for the trailing `ret`.
+  runCode([
+    0x66, 0x5C,                       // pop sp
+    0x89, 0xE0,                       // mov eax, esp
+    0xBC, ...le32(spTop),             // mov esp, spTop  (so the ret below lands)
+  ], () => { e.set_esp(spTop - 0x20); dv.setUint16(g2w(spTop - 0x20), 0x1234, true); });
+  test('pop sp loads SP with the popped word, not word+2',
+    e.get_eax(), ((spTop - 0x20) & 0xFFFF0000) | 0x1234);
+
+  runCode([
+    0x66, 0x5C,                       // pop sp
+    0x89, 0xE0,                       // mov eax, esp
+    0xBC, ...le32(spTop),             // mov esp, spTop
+  ], () => { e.set_esp(spTop - 0x40); dv.setUint16(g2w(spTop - 0x40), 0xBEEF, true); });
+  test('pop sp is unaffected by where it was popped from',
+    e.get_eax(), ((spTop - 0x40) & 0xFFFF0000) | 0xBEEF);
+
+  // 80286 and later push SP as it was *before* the decrement; only the 8086
+  // pushed the already-decremented value.
+  runCode([
+    0x66, 0x54,                       // push sp
+    0x66, 0x58,                       // pop ax
+    0xBC, ...le32(spTop),             // mov esp, spTop
+  ], () => { e.set_esp(spTop - 0x20); });
+  test('push sp stores SP from before the decrement',
+    e.get_eax() & 0xFFFF, (spTop - 0x20) & 0xFFFF);
+
+  // The other seven registers must be untouched by the reordering.
+  runCode([
+    0x66, 0x53,                       // push bx
+    0x66, 0x5B,                       // pop bx
+    0x89, 0xE0,                       // mov eax, esp
+  ], () => { e.set_ebx(0x0000ABCD); });
+  test('push bx / pop bx leaves ESP where it started', e.get_eax(), spTop);
+  test('push bx / pop bx round-trips the value', e.get_ebx() & 0xFFFF, 0xABCD);
+
+  // ================================================================
   // Summary
   // ================================================================
   console.log(`\n${pass} passed, ${fail} failed`);
