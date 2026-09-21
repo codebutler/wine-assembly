@@ -597,6 +597,20 @@
             (local.set $flags (i32.and (local.get $flags) (i32.const 0xFFFFFFFE)))
             (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
               (then (global.set $capture_hwnd (i32.const 0))))
+            ;; Captured UP reaches this control even outside its client rect.
+            ;; Negative signed coordinates compare above the bounds unsigned;
+            ;; right/bottom edges are excluded. Cancel before auto-toggle or
+            ;; BN_CLICKED, but retire the pressed state and repaint normally.
+            (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
+            (if (i32.or
+                  (i32.ge_u (i32.shr_s (i32.shl (local.get $lParam) (i32.const 16)) (i32.const 16))
+                    (i32.and (local.get $sz) (i32.const 0xFFFF)))
+                  (i32.ge_u (i32.shr_s (local.get $lParam) (i32.const 16))
+                    (i32.shr_u (local.get $sz) (i32.const 16))))
+              (then
+                (call $btn_set_flags (local.get $state_w) (local.get $flags))
+                (call $invalidate_hwnd (local.get $hwnd))
+                (return (i32.const 0))))
             ;; USER changes state automatically only for BS_AUTOCHECKBOX(3),
             ;; BS_AUTO3STATE(6), and BS_AUTORADIOBUTTON(9). Plain
             ;; BS_CHECKBOX(2)/BS_3STATE(5) controls deliberately keep their

@@ -121,6 +121,31 @@ for (const screenRouter of [true, false]) {
   ], 'down/up use one owner and container, with screen or container-client coordinates');
   assert.strictEqual(classifications, 1, 'classify the clicked control once in its owner');
   assert.strictEqual(r._dialogBtnDrag, null, 'release retires the pending native press');
+  for (const modal of [false, true]) {
+    calls.length = 0;
+    r.wasm = owner;
+    const route = screenRouter ? 'dialog_route_mouse_screen' : 'dialog_route_mouse';
+    owner.exports[route] = (...args) => {
+      calls.push(['owner', ...args]);
+      return args[1] === 0x201 ? 1 : 0; // A missed UP must not be retried.
+    };
+    if (screenRouter) owner.exports.dialog_route_mouse = (...args) => {
+      calls.push(['unexpected-legacy-retry', ...args]); return 1;
+    };
+    r.handleMouseDown(45, 55, 0);
+    owner.exports.modal_dialog_hwnd = () => modal ? 300 : 0;
+    r.wasm = foreign;
+    r.handleMouseUp(-10, -20, 0);
+    assert.deepStrictEqual(calls, screenRouter ? [
+      ['owner', 300, 0x201, 1, 45, 55],
+      ['owner', 300, 0x202, 0, -10, -20],
+    ] : [
+      ['owner', 300, 0x201, 1, (35 << 16) | 35],
+      ['owner', 300, 0x202, 0, ((-40 & 0xffff) << 16 | (-20 & 0xffff)) >>> 0],
+    ], 'outside release reaches its owner exactly once, even outside a modal frame');
+    assert.strictEqual(r._dialogBtnDrag, null, 'outside release retires pending press');
+    owner.exports.modal_dialog_hwnd = () => 0;
+  }
 }
 
 console.log('PASS  multi-app modal input and native press ownership stay within the owning emulator instance');

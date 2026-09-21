@@ -2414,3 +2414,39 @@ correctly rejected the external worktree symlink with HTTP 403). Evidence:
 Date/Time insertion, inline DIB, toolbar and menu rendering; the synthetic
 multi-instance matrix, not this single-app browser smoke, proves the routed
 press-owner handoff. No WAT/Worker ABI or build-artifact change in this stage.
+
+### Cancel native presses at the actual release point
+
+The release audit found two independent shortcuts: the renderer retried a
+missed UP at the original DOWN coordinates, while the BUTTON procedure
+cleared capture but toggled/notified without checking the UP coordinates.
+The renderer also dropped an outstanding parent-routed press when UP was
+outside a modal frame, leaving USER's capture/pressed state behind.
+
+Pending routed releases now cross those modal bounds and reach the owning
+router exactly once at the actual point. A miss is not retried at the press
+point. Native BUTTON cancels releases beyond its client bounds, including
+signed negative coordinates and the exclusive right/bottom edges, before
+automatic state changes or BN_CLICKED. It clears pressed/capture state and
+invalidates the cancelled button for repaint. This respects the documented
+[capture delivery outside the window](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-mouse-input)
+and [BUTTON capture/client-rectangle processing](https://learn.microsoft.com/en-us/windows/win32/controls/button-messages);
+no new native Win98 notification-order capture is claimed.
+
+The renderer matrix covers both router ABIs, a foreign current emulator,
+modal and nonmodal parents, and missed UP with no synthetic retry. The real
+WAT router/button matrix covers four outside edges for push/default,
+auto-checkbox, auto-three-state, auto-radio and owner-drawn buttons, then
+verifies inside clicks still notify and automatic kinds still check.
+Independent old-JS and old-BUTTON negatives fail (extra release and unwanted
+BN_CLICKED respectively). This does not finish move-time pressed highlighting,
+capture-change cancellation, or the previously listed activation work.
+
+Final checks: native button matrix passes in main and the clean tree; four
+renderer/input suites pass; full clean build gates and normal/compat compile
+pass (1454113/1455019 bytes, layout `c5ccefca8909ee4b`). Rodent/Rattler,
+WEP3 7/7 and the WordPad browser regression all complete successfully.
+Evidence is `/private/tmp/wa-release-outside-{native-final,native-clean,
+native-negative,js-negative,build,vb,wep3,wordpad}.log`. The obsolete stored
+DOWN coordinate was removed along with its retry consumer. Other agents'
+uncommitted dialog-fixture changes remain excluded.

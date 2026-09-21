@@ -16,7 +16,7 @@ const { bootRenderHarness } = require('./render-helper');
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
   (func (export "test_create_dialog_button")
-    (param $dlgproc i32) (param $id i32) (result i32)
+    (param $dlgproc i32) (param $id i32) (param $kind i32) (result i32)
     (local $dlg i32)
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
@@ -26,7 +26,7 @@ const extraWat = String.raw`
     (call $ctrl_create_child
       (local.get $dlg) (i32.const 1) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 100) (i32.const 24)
-      (i32.const 0x50010000) (i32.const 0)))
+      (i32.or (i32.const 0x50010000) (local.get $kind)) (i32.const 0)))
 
   (func (export "test_button_click") (param $hwnd i32)
     (drop (call $button_wndproc
@@ -105,6 +105,28 @@ function u32(value) {
     view.getUint32(toWasm(result + 8), true),
   ];
 
+  // USER's native router retains capture across an outside release. The
+  // button must clear pressed/capture state without posting BN_CLICKED or
+  // toggling an automatic checkbox, including negative and exclusive edges.
+  for (const kind of [0, 1, 3, 6, 9, 11]) {
+    const button = e.test_create_dialog_button(proc, 1100 + kind, kind) >>> 0;
+    const parent = e.wnd_get_parent(button) >>> 0;
+    for (const [x, y] of [[-1, 5], [5, -1], [100, 5], [5, 24]]) {
+      assert.strictEqual(e.dialog_route_mouse(parent, 0x201, 1, (5 << 16) | 5), 1);
+      assert.strictEqual(e.get_capture_hwnd(), button);
+      assert.strictEqual(e.dialog_route_mouse(parent, 0x202, 0,
+        (((y & 0xffff) << 16) | (x & 0xffff)) >>> 0), 1);
+      assert.strictEqual(e.get_capture_hwnd(), 0, 'outside release retires capture');
+      assert.strictEqual(e.get_post_queue_count(), 0, 'outside release sends no BN_CLICKED');
+      assert.strictEqual(e.send_message(button, 0xf0, 0, 0), 0, 'outside release does not auto-check');
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0) & 4, 0, 'outside release clears BST_PUSHED');
+    }
+    e.test_button_click(button);
+    assert.strictEqual(e.get_post_queue_count(), 1, 'inside release still posts BN_CLICKED');
+    assert.strictEqual(e.send_message(button, 0xf0, 0, 0), [3, 6, 9].includes(kind) ? 1 : 0,
+      'inside release preserves automatic check behavior');
+    e.set_post_queue_count(0);
+  }
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
   const customParent = e.wnd_get_parent(custom) >>> 0;
   e.test_subclass_parent(custom, proc);
