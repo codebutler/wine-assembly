@@ -1773,19 +1773,14 @@
 
   ;; ---- Focus management ----
   ;;
-  ;; $set_focus(new_hwnd) is the single entry point for focus changes.
-  ;; Sends WM_KILLFOCUS to the previously focused hwnd (if any) and
-  ;; WM_SETFOCUS to the new one. Each control's wndproc updates its
-  ;; per-class focus bit and invalidates itself; the global $focus_hwnd
-  ;; is also updated by those handlers.
+  ;; Internal control focus handoff. Publish through the same transaction as
+  ;; SetFocus; do not rely on a native WM_SETFOCUS handler to own the global.
+  ;; The existing sender still posts far-procedure notifications: callers
+  ;; needing synchronous Win16 completion must use win16_focus_start.
   (func $set_focus (param $new_hwnd i32)
-    (local $old i32)
-    (local.set $old (global.get $focus_hwnd))
-    (if (i32.eq (local.get $old) (local.get $new_hwnd)) (then (return)))
-    (if (local.get $old)
-      (then (drop (call $wnd_send_message (local.get $old) (i32.const 0x0008) (local.get $new_hwnd) (i32.const 0)))))
-    (if (local.get $new_hwnd)
-      (then (drop (call $wnd_send_message (local.get $new_hwnd) (i32.const 0x0007) (local.get $old) (i32.const 0)))))
+    (if (i32.eqz (call $focus_target_allowed (local.get $new_hwnd))) (then (return)))
+    (if (i32.eq (global.get $focus_hwnd) (local.get $new_hwnd)) (then (return)))
+    (drop (call $focus_notify_transfer (local.get $new_hwnd)))
   )
 
   ;; $focus_restore_after_modal(owner) — hand focus back when a modal dialog
@@ -1799,9 +1794,9 @@
   ;;
   ;; The focus hwnd is set before the message goes out because that is the
   ;; order the app observes: its WM_SETFOCUS handler calls GetFocus() and
-  ;; compares. WM_SETFOCUS is posted rather than sent, matching
-  ;; $handle_SetFocus, so a teardown running inside a control's wndproc does
-  ;; not nest a guest call underneath itself.
+  ;; compares. This legacy restore path still posts guest WM_SETFOCUS rather
+  ;; than using SetFocus's synchronous transaction; its teardown/reentry
+  ;; behavior remains a separate migration.
   (func $focus_restore_after_modal (param $owner i32)
     (if (i32.eqz (local.get $owner))
       (then (local.set $owner (global.get $main_hwnd))))

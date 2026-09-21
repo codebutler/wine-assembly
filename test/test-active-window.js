@@ -472,6 +472,20 @@ const extraWat = String.raw`
   assert.strictEqual(view.getUint32(toWasm(seenActive), true), focusTarget);
   assert.strictEqual(e.test_focus(), focusChosen);
   assert(!records().some(r => r.hwnd === focusTarget && r.msg === 7));
+  // The renderer/control export must publish before KILLFOCUS too, and must
+  // not send a stale SETFOCUS after the guest redirects the transfer.
+  view.setUint32(toWasm(armed), 0, true);
+  e.set_focus(oldFocus);
+  resetRecords();
+  view.setUint32(toWasm(armed), 1, true);
+  harness.renderer._setInputFocus(harness.instance, focusTarget);
+  assert.strictEqual(view.getUint32(toWasm(seenActive), true), focusTarget);
+  assert.strictEqual(e.test_focus(), focusChosen);
+  assert(!records().some(r => r.hwnd === focusTarget && r.msg === 7));
+  resetRecords();
+  e.set_focus(disabled);
+  assert.strictEqual(e.test_focus(), focusChosen, 'internal focus rejects disabled targets');
+  assert.deepStrictEqual(records(), []);
   // Native reentry case 4: chaining to DefWindowProc after choosing C
   // reactivates B, unlike consuming the activation message.
   const defThunk = e.test_thunk(apiTable.find(api => api.name === 'DefWindowProcA').id);

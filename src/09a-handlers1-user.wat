@@ -1151,7 +1151,7 @@
           (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))))))
 
   (func $focus_set_core (param $hwnd i32) (result i32)
-    (local $old i32) (local $top i32) (local $serial i32)
+    (local $top i32)
     (if (i32.eqz (call $focus_target_allowed (local.get $hwnd))) (then (return (i32.const 0))))
     (if (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
       (then (return (local.get $hwnd))))
@@ -1163,6 +1163,13 @@
         (if (i32.or (i32.ne (global.get $active_hwnd) (local.get $top))
               (i32.eqz (call $focus_target_allowed (local.get $hwnd))))
           (then (return (i32.const 0))))))
+    (call $focus_notify_transfer (local.get $hwnd)))
+
+  ;; Publish before notifications and preserve a callback-selected winner.
+  ;; Internal control focus changes share this transaction; API activation
+  ;; and ABI-specific far completion remain the caller's responsibility.
+  (func $focus_notify_transfer (param $hwnd i32) (result i32)
+    (local $old i32) (local $serial i32)
     ;; Native Win98 snapshots the return HWND AFTER ancestor activation.
     ;; Do not short-circuit a same-focus value reached during that activation:
     ;; the outer transfer still sends the measured self kill/set pair.

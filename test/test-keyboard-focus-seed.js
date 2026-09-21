@@ -43,7 +43,7 @@ function rodentExports(overrides) {
     _geometry: geometry,
     get_focus_hwnd: () => geometry.focus | 0,
     set_focus_hwnd: (hwnd) => { geometry.focus = hwnd | 0; calls.push(['set_focus_hwnd', hwnd]); },
-    set_focus: (hwnd) => { calls.push(['set_focus', hwnd]); },
+    set_focus: (hwnd) => { geometry.focus = hwnd | 0; calls.push(['set_focus', hwnd]); },
     wnd_window_screen_x: () => 0,
     wnd_window_screen_y: () => 0,
     wnd_screen_w: (hwnd) => (hwnd === MAIN ? 292 : geometry.childW),
@@ -138,4 +138,27 @@ installInputHandlers(RendererProbe);
     'a disabled child must not be seeded with the focus');
 }
 
-console.log('PASS  a first keystroke seeds the focus USER would have given the app');
+// A live transaction can redirect or reject focus. JS must preserve both.
+for (const selected of [MAIN, 0]) {
+  const exports = rodentExports();
+  exports.set_focus = () => { exports._geometry.focus = selected; };
+  const renderer = new RendererProbe(exports);
+  renderer._setInputFocus(renderer.wasm, 0x10005);
+  assert.strictEqual(exports.get_focus_hwnd(), selected);
+  assert(!exports._calls.some(([name]) => name === 'set_focus_hwnd'),
+    'cooperative focus completion must not force the requested HWND');
+}
+
+{
+  const exports = rodentExports();
+  exports.set_focus = () => { throw new Error('must not enter the Worker shadow guest'); };
+  const renderer = new RendererProbe(exports);
+  renderer._inputWasmRunsInGuestWorker = () => true;
+  const published = [];
+  renderer._guestWorkerFocusPublishers = [(wasm, hwnd) => published.push([wasm, hwnd])];
+  renderer._setInputFocus(renderer.wasm, 0x10005);
+  assert.strictEqual(exports.get_focus_hwnd(), 0x10005);
+  assert.deepStrictEqual(published, [[renderer.wasm, 0x10005]]);
+}
+
+console.log('PASS  keyboard focus seed, guest-selected focus and Worker shadow isolation');

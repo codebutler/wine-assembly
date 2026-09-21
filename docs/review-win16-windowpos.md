@@ -1959,3 +1959,44 @@ the keyboard to it first. Acceptance must include answers 1–4, no-remove
 peeks, child/native targets, guest focus redirection, two overlapping apps,
 and an eaten down with its later up. Existing task-pump tests do not cover
 these browser boundaries.
+
+### Shared internal focus publication
+
+The notification-only internal `$set_focus` now validates the requested
+target and shares `$focus_notify_transfer` with public SetFocus. That helper
+publishes the HWND and transition serial before KILLFOCUS, then sends
+SETFOCUS only if the target is still live and no nested focus transaction
+superseded it. The API still owns ancestor activation and its measured
+post-activation return semantics; internal control handoff does not acquire
+a new activation policy in this change.
+
+The cooperative renderer treats `set_focus` completion as authoritative:
+it no longer follows it with a raw `set_focus_hwnd(requested)` write. The
+Worker branch retains its shadow update/publisher without entering guest
+code on the idle browser instance. The keyboard-seed mock now models focus
+publication rather than depending on the removed JS overwrite.
+
+The real x86 callback regression drives the renderer helper, observes the
+requested HWND inside KILLFOCUS, redirects through guest SetFocus, and
+requires the nested winner with no stale outer SETFOCUS. Internal disabled
+targets are also rejected. The JS regression covers guest redirection,
+rejection and Worker-shadow isolation; loading the pre-change renderer
+makes it fail (requested child replaces callback-selected main HWND).
+
+This does not close the full audit above: the existing internal sender still
+posts far-procedure notifications. Win16 callers need invocation-owned
+completion to become synchronous; public Win16 SetFocus already has that
+path. MDI and modal restore helpers also retain separate focus logic and
+must be audited, along with native control writes. Browser eager activation
+and direct native mouse routes remain open.
+
+Validation: keyboard-seed/Worker-shadow checks, real x86 renderer reentry,
+dialog initialization/tab-stop focus and far callback matrix pass. Two
+independent negatives fail: old renderer overwrites the guest winner
+(`wa-focus-host-negative.log`); old internal WAT helper sends a stale
+SETFOCUS (`wa-focus-internal-negative.log`). Full normal/compat build passes
+(`wa-focus-internal-build.log`, layout `c5ccefca8909ee4b`); Rodent/Rattler and
+all seven WEP3 gameplay checks pass against that artifact
+(`wa-focus-internal-vb.log`, `wa-focus-internal-wep.log`). Logs are under
+`/private/tmp`. Worker isolation here is a host-unit assertion, not an
+end-to-end browser no-activation test.
