@@ -13,6 +13,12 @@
 // is shown the card before its game starts, and that Join launches it with
 // +connect to the owner's seat over WebRTC. Each browser context is its own
 // cookie, so its own signaling user, as two people are.
+//
+// A third browser says "Not now", starts at the game's menu, and joins from
+// the toast the shell shows it later. That join reaches a game already past
+// its command line, so it goes through lan.join.inGame typing into Quake's
+// console. It is also the three-player room where an unread UDP socket used
+// to stall the wire.
 
 'use strict';
 
@@ -32,10 +38,12 @@ const arg = (name, dflt) => {
 };
 const flag = name => process.argv.includes(`--${name}`);
 
+const STARTED = Date.now();
 let passed = 0;
 let failed = 0;
 function check(what, ok, detail) {
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}${detail && !ok ? ` -- ${detail}` : ''}`);
+  const at = ((Date.now() - STARTED) / 1000).toFixed(0).padStart(4);
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${at}s  ${what}${detail && !ok ? ` -- ${detail}` : ''}`);
   ok ? passed++ : failed++;
 }
 
@@ -206,10 +214,66 @@ const snapWindow = () => {
     check(`the joiner is in the level (${pct(gp)})`, !!gp && gp.lit > 0.3 && gp.colours > 40);
     console.log(`  host picture: ${pct(hp)}`);
 
-    for (const side of [host, guest]) {
+    // ---- a third player, already playing when they take the offer --------
+    //
+    // "Not now" on the card, so the game starts at its own menu with no room.
+    // The shell keeps looking, offers the same host again as a toast, and a
+    // Join there has to reach a game that is past its command line: the
+    // recipe types `connect 10.0.0.1 into its console. Three players is also
+    // the room the unread-UDP stall used to freeze.
+    const third = await open('third', JOIN_ARGS);
+    const offered = await H.until(third.page, 'third: no Join card',
+      () => !!document.getElementById('wine-lan-card'), null, 60000);
+    if (offered) {
+      await third.page.evaluate(() => {
+        Array.from(document.querySelectorAll('#wine-lan-card button'))
+          .find(x => x.textContent === 'Not now').click();
+      });
+    }
+    const running = await H.until(third.page, 'third: game never started',
+      () => runningApps.length > 0 && !runningApps[0].wine.vlanWire, null, 60000);
+    check('"Not now" starts the game with no room', !!running);
+    const toast = await H.until(third.page, 'third: no toast',
+      () => { const c = document.getElementById('wine-lan-card'); return c ? c.textContent : null; },
+      null, 90000);
+    check(`the running game was offered the host as a toast (${toast ? JSON.stringify(toast) : 'none'})`,
+      !!toast && /is hosting Quake II/.test(toast));
+    if (toast) {
+      await third.page.evaluate(() => {
+        Array.from(document.querySelectorAll('#wine-lan-card button'))
+          .find(x => /^Join /.test(x.textContent)).click();
+      });
+    }
+    const thirdSeat = await H.until(third.page, 'third: never wired',
+      () => { const w = runningApps[0] && runningApps[0].wine.vlanWire; return w ? w.address : null; },
+      null, 60000);
+    check(`the toast put the third player at the next seat (${thirdSeat})`, thirdSeat === '10.0.0.3');
+    const thirdIn = await H.until(third.page, 'third: no traffic from the server',
+      () => { const w = runningApps[0] && runningApps[0].wine.vlanWire; return w && w.recvFrames > 300 ? w.recvFrames : null; },
+      null, 240000);
+    check(`the typed connect reached the server (${thirdIn || 0} frames received)`, !!thirdIn);
+    const threeUp = await H.until(host.page, 'host: never counted three',
+      () => {
+        const pane = document.getElementById('log');
+        return pane && /hosting noname demo1 3\/4/.test(pane.textContent);
+      }, null, 60000);
+    check('the server counts three players', !!threeUp);
+    const before = await guest.page.evaluate(wireOf);
+    await H.sleep(6000);
+    const after = await guest.page.evaluate(wireOf);
+    check(`the first joiner kept receiving with three in the room (${before && after ? after.recv - before.recv : 0} frames in 6s)`,
+      !!before && !!after && after.recv - before.recv > 20);
+    const hw3 = await host.page.evaluate(wireOf);
+    check('the owner counts two members', hw3 && hw3.members === 2, JSON.stringify(hw3));
+    await H.sleep(4000);
+    const tp = await snap(third, 'third-match');
+    check(`the third player is in the level (${pct(tp)})`, !!tp && tp.lit > 0.3 && tp.colours > 40);
+
+    for (const side of [host, guest, third]) {
       check(`${side.label}: no page errors`, side.problems.length === 0, side.problems.slice(0, 3).join(' | '));
     }
-    console.log(`--- host LAN log\n${await debugLog(host)}\n--- guest LAN log\n${await debugLog(guest)}`);
+    console.log(`--- host LAN log\n${await debugLog(host)}\n--- guest LAN log\n${await debugLog(guest)}`
+      + `\n--- third LAN log\n${await debugLog(third)}`);
   } catch (e) {
     check('the run completed', false, String(e && e.stack || e).split('\n').slice(0, 3).join(' '));
   } finally {

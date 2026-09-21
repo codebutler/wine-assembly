@@ -12,7 +12,7 @@
   {
     "test": "test/test-web-quake2-room.js",
     "seconds": 600,
-    "reason": "Two headless browsers each boot Quake II: the host loads demo1 as a listen server before it can be offered, then the joiner connects over WebRTC and loads the level. Its own 540-second budget covers both loads on a loaded box; allow 60 seconds for Chrome and cleanup."
+    "reason": "Three headless browsers each boot Quake II: the host loads demo1 as a listen server, then two joiners connect over WebRTC and load the level, the second after a 20-second toast poll. 136 seconds at load 36; its own 540-second budget covers a slower box, plus 60 seconds for Chrome and cleanup."
   },
   {
     "test": "test/test-diablo2-demo-gameplay.js",

@@ -609,7 +609,16 @@ not matter with two players and breaks at three. Each UDP socket now carries
 up on every `recvfrom` and spent on each stall. At 0 the datagram is dropped,
 as a real stack drops into a full receive buffer.
 
-Joining from the card launches with `lan.join.launchArgs` (`+connect {host}`).
+Joining from the card launches with `lan.join.launchArgs` (`+connect {host}`),
+leaving out `lan.join.dropArgs` (`+menu_main`, which would sit over the match).
+
 A game that is already running when the room is joined (the mid-game toast)
-gets `lan.join.hint` instead. **Still open:** typing `connect` into the
-running game's console.
+is joined by `lan.join.inGame`, which types `connect {host}` into the console.
+**The console key is the trap:** `Con_ToggleConsole_f` (exe `0x415710`) runs
+`d1`, the attract demo, while `cls.state` (`0xa86a60`) is 1 (disconnected),
+so a blind `` ` `` at the menus opens nothing and the menu eats the rest; the
+first try landed in the Game submenu. The recipe reads `cls.key_dest`
+(`0xa86a64`, 3 = menu) and presses Escape until the menus are closed. While
+disconnected, `key_game` already feeds `Key_Console`, so typing is enough; in
+a level, `` ` `` opens the console first. `test/test-web-quake2-room.js`
+covers both joins across three browsers.
