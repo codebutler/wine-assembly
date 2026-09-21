@@ -252,6 +252,55 @@ full screen). The one copy of the real DLL in this tree,
 a 16-bit DLL besides, which a 32-bit caller cannot load without thunks we do
 not have. Implementing the surface is the route, not finding the file.
 
+### What Pitfall actually wants from DISPDIB
+
+Read statically from `PITFALL.EXE` on 2026-09-20, so the API list below is what
+the loader really does, not what the DISPDIB documentation describes. The
+loader is the function at **`0x0044104e`**:
+
+1. `GetSystemDirectoryA(buf, 260)`, then appends the literal `\DISPDIB.DLL`
+   from `0x0046df38` — so the path it tests is
+   `C:\WINDOWS\SYSTEM\DISPDIB.DLL`, not a bare name.
+2. `LoadModule(path, &block)` at `0x00441055`. `cmp eax,0x20 / jl` — anything
+   below 32 is the failure that produces "Bad or missing dispdib.dll - error 2".
+3. `CreateWindowExA(0, "DisplayDibWindow", …, WS_POPUP, 0, 0, cx, cy, …)` at
+   `0x004410e1`, sized from two `GetSystemMetrics` calls. **`DisplayDibWindow`
+   at `0x0046df24` is a window class, not an exported function** — the whole
+   surface is driven through that window, which is why no `GetProcAddress`
+   appears anywhere in the trace. The HWND is kept at `0x0046c3a0`.
+4. `SendMessageA(hwnd, WM_COPYDATA, 0, &cds)` at `0x00441175`, with
+   `dwData = 0x400`, `cbData = 0x428` and `lpData` pointing at a
+   `BITMAPINFOHEADER` filled in at `0x0044111d`: `biSize=0x28`,
+   `biWidth=320`, `biHeight=200`, `biPlanes=1`, `biBitCount=8`. `0x428` is
+   `0x28 + 0x400`, i.e. the header plus 256 `RGBQUAD`s — so this one message
+   carries both the mode and the palette.
+
+The HWND at `0x0046c3a0` is read in exactly three places, so the whole
+protocol Pitfall uses is three sends:
+
+| site | send | meaning |
+|---|---|---|
+| `0x00441175` | `WM_COPYDATA`, `dwData=0x400` | set 320x200x8 + palette |
+| `0x0044123d` | `0x403` | start |
+| `0x00441442` | `0x404` | stop |
+
+**What is still unknown is how a frame of pixels gets there**, and it is not
+answerable statically — no fourth send exists, so the bits either come back as
+a pointer from one of these sends or go through an ordinary GDI call on that
+window. The flag at `0x0046c3dc` ("DISPDIB is available", set at `0x00441181`)
+is *not* the answer: its three readers are all in the dialog code at
+`0x0044072c`, choosing a control layout.
+
+So the next step is a runtime one, and it is small: make `LoadModule` of that
+path succeed and register a WAT-native `DisplayDibWindow` class whose wndproc
+implements the three messages above and calls `$crash_unimplemented` on
+anything else. The crash then *names* the fourth message, which is the one
+piece of the protocol reading the binary cannot supply. Do not try to design
+the whole surface before that run.
+
+There is no fallback path to find, either: Pitfall exits when the module is
+missing rather than degrading to GDI.
+
 ## Exile II: Crystal Souls (`ADV/EXILE`)
 
 Reaches its title screen as of 2026-09-20. Getting there is a **three-stage**
