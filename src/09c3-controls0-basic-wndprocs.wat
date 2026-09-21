@@ -314,9 +314,9 @@
       (then
         (local.set $state_w (call $g2w (local.get $state)))
         (local.set $flags (call $btn_flags (local.get $state_w)))
-        (if (i32.and (local.get $flags) (i32.const 1))
+        (if (i32.and (local.get $flags) (i32.const 0x201))
           (then
-            (call $btn_set_flags (local.get $state_w) (i32.and (local.get $flags) (i32.const -2)))
+            (call $btn_set_flags (local.get $state_w) (i32.and (local.get $flags) (i32.const -514)))
             (call $invalidate_hwnd (local.get $hwnd))))))
     (if (i32.eq (global.get $dialog_button_capture_hwnd) (local.get $hwnd))
       (then
@@ -572,7 +572,7 @@
           (then
             (local.set $state_w (call $g2w (local.get $state)))
             (local.set $flags
-              (i32.or (call $btn_flags (local.get $state_w)) (i32.const 0x01))) ;; pressed
+              (i32.or (call $btn_flags (local.get $state_w)) (i32.const 0x201))) ;; tracking + pressed
             (call $btn_set_flags (local.get $state_w) (local.get $flags))
             (global.set $capture_hwnd (local.get $hwnd))
             ;; BS_OWNERDRAW: ask parent to repaint via WM_DRAWITEM. Other
@@ -612,6 +612,35 @@
                           (local.get $hwnd)))))))))))
         (return (i32.const 0))))
 
+    ;; BM_SETSTATE changes appearance only; it must not manufacture a click
+    ;; when an otherwise unrelated UP arrives. Mouse tracking uses bit9.
+    ;; Captured movement updates that same appearance without ending tracking.
+    (if (i32.or (i32.eq (local.get $msg) (i32.const 0x00F3))
+                (i32.eq (local.get $msg) (i32.const 0x0200)))
+      (then
+        (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+        (local.set $state_w (call $g2w (local.get $state)))
+        (local.set $flags (call $btn_flags (local.get $state_w)))
+        (local.set $w (i32.ne (local.get $wParam) (i32.const 0)))
+        (if (i32.eq (local.get $msg) (i32.const 0x0200))
+          (then
+            (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x200)))
+              (then (return (i32.const 0))))
+            (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
+            (local.set $w (i32.and
+              (i32.lt_u (i32.shr_s (i32.shl (local.get $lParam) (i32.const 16)) (i32.const 16))
+                (i32.and (local.get $sz) (i32.const 0xFFFF)))
+              (i32.lt_u (i32.shr_s (local.get $lParam) (i32.const 16))
+                (i32.shr_u (local.get $sz) (i32.const 16)))))))
+        (if (i32.ne (i32.and (local.get $flags) (i32.const 1)) (local.get $w))
+          (then
+            (local.set $flags (i32.or (i32.and (local.get $flags) (i32.const -2)) (local.get $w)))
+            (call $btn_set_flags (local.get $state_w) (local.get $flags))
+            (call $invalidate_hwnd (local.get $hwnd))
+            (drop (call $wnd_send_message
+              (local.get $hwnd) (i32.const 0x000F) (i32.const 0) (i32.const 0)))))
+        (return (i32.const 0))))
+
     ;; ---------- WM_LBUTTONUP (0x0202) ----------
     ;; Clear pressed flag, derive button kind from style&0xF (BS_*), update
     ;; check state for automatic checkbox/radio kinds, then post WM_COMMAND with
@@ -627,10 +656,10 @@
             ;; Its subsequent UP must not produce a second BN_CLICKED unless
             ;; the native BUTTON actually began tracking that press. Diablo's
             ;; menu subclass posts its command on DOWN and chains only UP.
-            (if (i32.eqz (i32.and (local.get $flags) (i32.const 1)))
+            (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x200)))
               (then (return (i32.const 0))))
-            ;; clear pressed
-            (local.set $flags (i32.and (local.get $flags) (i32.const 0xFFFFFFFE)))
+            ;; Retire tracking and appearance together.
+            (local.set $flags (i32.and (local.get $flags) (i32.const -514)))
             (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
               (then (global.set $capture_hwnd (i32.const 0))))
             ;; Captured UP reaches this control even outside its client rect.
@@ -670,7 +699,7 @@
                 ;; the pressed bit that this UP has just retired locally.
                 (local.set $flags
                   (i32.or
-                    (i32.and (call $btn_flags (local.get $state_w)) (i32.const -2))
+                    (i32.and (call $btn_flags (local.get $state_w)) (i32.const -514))
                     (i32.const 0x02)))))
             (call $btn_set_flags (local.get $state_w) (local.get $flags))
             ;; BS_OWNERDRAW: dispatch WM_DRAWITEM to repaint the unpressed

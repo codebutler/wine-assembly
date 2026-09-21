@@ -2562,3 +2562,35 @@ assertions also pass (`wa-three-state-wordpad.log`).
 Remaining: BM_SETSTATE and move-time pressed highlighting, tracking versus
 visual pressed-state separation, eager activation/direct native input
 authority, and live cross-app Worker acceptance.
+
+### Button highlight is independent of mouse tracking
+
+BM_SETSTATE now updates the visual pressed flag without taking capture,
+changing a check value, or arming BN_CLICKED. This implements the appearance-only
+[Microsoft contract](https://learn.microsoft.com/en-us/windows/win32/controls/bm-setstate).
+Mouse tracking has its own private bit9 in the existing ButtonState flags;
+it is not exposed by BM_GETSTATE. Captured WM_MOUSEMOVE removes highlighting
+outside the client rectangle and restores it on reentry. UP and cancellation
+retire both flags, including cancellation after moving outside when the
+visual pressed bit is already clear. Autoradio's post-sibling reload also
+excludes both retired flags.
+
+The six-style native fixture exercises nonzero BM_SETSTATE, a stray UP that
+must not click, drag-out/in with retained capture and one final click,
+check-state preservation, and cancellation while unhighlighted followed by
+an inert UP. Browser capture routing already forwards child-relative moves
+to the owning native control (`renderer-input.js`); no new JS state was added.
+This does not resolve keyboard button semantics, activation-before-acceptance,
+or live cross-app Worker acceptance.
+
+Main and clean native matrices pass (`/private/tmp/wa-button-tracking-main.log`,
+`wa-button-tracking-final.log`). Restoring the old pressed-bit-as-tracking
+test fails at the unwanted BN_CLICKED assertion (`wa-button-tracking-negative.log`).
+Radio mutual exclusion, renderer multi-app ownership, mouse-drag button mask,
+and thread-owned capture/WM_CAPTURECHANGED tests also pass.
+Clean full build gates pass (`wa-button-tracking-build.log`), producing
+normal/compat 1454644/1455550-byte artifacts with unchanged layout
+`c5ccefca8909ee4b`. Rebuilt VB2, WEP3 7/7, and WordPad browser tests pass
+and exit successfully (`wa-button-tracking-{vb,wep3,wordpad}.log`). All
+logs are under `/private/tmp/`; foreign main-worktree edits were excluded
+from the clean build and the commit.

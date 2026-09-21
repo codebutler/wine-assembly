@@ -156,6 +156,37 @@ function u32(value) {
     e.set_post_queue_count(0);
   }
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
+  // Highlighting is not tracking: synthetic UP after BM_SETSTATE is inert.
+  for (const kind of [0, 1, 3, 6, 9, 11]) {
+    const button = e.test_create_dialog_button(proc, 1400 + kind, kind) >>> 0;
+    assert.strictEqual(e.send_message(button, 0xf3, 2, 0), 0);
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 4);
+    assert.strictEqual(e.get_capture_hwnd(), 0, 'highlight does not acquire capture');
+    e.send_message(button, 0x202, 0, (5 << 16) | 5);
+    assert.strictEqual(e.get_post_queue_count(), 0, 'highlight alone cannot generate BN_CLICKED');
+    e.send_message(button, 0xf3, 0, 0);
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0);
+    e.send_message(button, 0x201, 1, (5 << 16) | 5);
+    e.send_message(button, 0x200, 1, (5 << 16) | 0xffff);
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 8, 'dragging out removes highlight');
+    assert.strictEqual(e.get_capture_hwnd(), button, 'dragging out keeps capture');
+    e.send_message(button, 0x200, 1, (5 << 16) | 5);
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 12, 'dragging back restores highlight');
+    e.send_message(button, 0x202, 0, (5 << 16) | 5);
+    assert.strictEqual(e.get_post_queue_count(), 1, 'drag out/in still clicks once');
+    assert.strictEqual(e.button_get_flags(button) & 0x201, 0, 'release retires tracking and highlight');
+    e.set_post_queue_count(0);
+    const checked = e.send_message(button, 0xf0, 0, 0);
+    e.send_message(button, 0xf3, 1, 0);
+    assert.strictEqual(e.send_message(button, 0xf0, 0, 0), checked, 'highlight preserves check state');
+    e.send_message(button, 0x201, 1, (5 << 16) | 5);
+    e.send_message(button, 0x200, 1, (5 << 16) | 0xffff);
+    e.send_message(button, 0x1f, 0, 0);
+    assert.strictEqual(e.button_get_flags(button) & 0x201, 0, 'cancel clears tracking even while unhighlighted');
+    assert.strictEqual(e.get_capture_hwnd(), 0);
+    e.send_message(button, 0x202, 0, (5 << 16) | 5);
+    assert.strictEqual(e.get_post_queue_count(), 0, 'cancelled drag cannot click later');
+  }
   e.send_message(custom, 0xf1, 1, 0);
   assert.strictEqual(e.send_message(custom, 0xf0, 0, 0), 0, 'BM_SETCHECK has no effect on push buttons');
   for (const kind of [5, 6]) {
