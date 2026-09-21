@@ -71,7 +71,9 @@
     (field rx_head     i32)      ;; +48   read offset into the ring
     (field rx_len      i32)      ;; +52   bytes currently readable
     (field flags       i32)      ;; +56   bit0 read-closed, bit1 write-closed,
-                                 ;;       bit2 reset, bit3 connect result unreported
+                                 ;;       bit2 reset, bit3 connect result unreported,
+                                 ;;       bits16-23 datagram reader patience
+                                 ;;       ($VSOCK_UDP_PATIENCE, see $vsock_deliver)
     (field backlog     i32)      ;; +60   listener backlog, clamped 1..15
     (field acc_count   i32)      ;; +64   queued accepts
     (field acc_queue   i32 15))  ;; +68   15 child record indexes, ends at +128
@@ -79,6 +81,10 @@
   (global $VSOCK_MAX i32 (i32.const 64))
   (global $VSOCK_REC_SIZE i32 (i32.const 128))
   (global $VSOCK_RX_CAP i32 (i32.const 16384))
+  ;; How many wire drains a datagram may wait at the head of the wire for a
+  ;; socket whose one slot is still full. recvfrom refills it; each stall
+  ;; spends one. See the DGRAM branch of $vsock_deliver.
+  (global $VSOCK_UDP_PATIENCE i32 (i32.const 64))
   (global $VSOCK_HANDLE_TAG i32 (i32.const 0x53000000))
 
   ;; Room addressing. The host of the room owns 10.0.0.1 and every other
@@ -160,6 +166,11 @@
         (then
           (memory.fill (local.get $rec) (i32.const 0) (global.get $VSOCK_REC_SIZE))
           (store.field VSock peer (local.get $rec) (i32.const -1))
+          ;; A fresh socket starts with full datagram patience: an app that
+          ;; reads only when FD_READ or select() says so has not called
+          ;; recvfrom yet, and its first burst must not be lost for that.
+          (store.field VSock flags (local.get $rec)
+            (i32.shl (global.get $VSOCK_UDP_PATIENCE) (i32.const 16)))
           ;; Claim the record before releasing the lock. Every caller overwrites
           ;; this state a few instructions later, but "free until the caller gets
           ;; around to it" is exactly the window in which a second thread picks
@@ -641,7 +652,7 @@
   ;; byte stream may reorder nothing and lose nothing.
   (func $vsock_deliver (param $type i32) (param $sip i32) (param $sport i32)
                        (param $dip i32) (param $dport i32) (param $plen i32) (result i32)
-    (local $idx i32) (local $rec i32)
+    (local $idx i32) (local $rec i32) (local $fl i32)
     ;; Not ours: the wire is a broadcast segment, so silently ignore. Limited
     ;; broadcast is meaningful only for datagrams and is accepted below.
     (if (i32.and
@@ -661,8 +672,22 @@
         (if (i32.lt_s (local.get $idx) (i32.const 0))
           (then (return (i32.const 1))))
         (local.set $rec (call $vsock_rec (local.get $idx)))
+        ;; ...but only while somebody is reading it. The wire has one reader
+        ;; for every socket, so a datagram held here holds up every frame
+        ;; behind it, and a socket nobody reads would hold them for ever. That
+        ;; socket is ordinary: every Quake II client binds the server port and
+        ;; never reads it unless it hosts, so one player's broadcast server
+        ;; search froze every other client's game. recvfrom tops the patience
+        ;; up and each stall spends one; a socket with none left gets real
+        ;; UDP behaviour and loses the datagram, as a full buffer would.
         (if (load.field VSock rx_len (local.get $rec))
-          (then (return (i32.const 0))))
+          (then
+            (local.set $fl (load.field VSock flags (local.get $rec)))
+            (if (i32.eqz (i32.and (local.get $fl) (i32.const 0x00FF0000)))
+              (then (return (i32.const 1))))
+            (store.field VSock flags (local.get $rec)
+              (i32.sub (local.get $fl) (i32.const 0x10000)))
+            (return (i32.const 0))))
         (if (i32.eqz (call $vsock_alloc_ring (local.get $idx)))
           (then (return (i32.const 0))))
         (if (i32.gt_u (local.get $plen) (global.get $VSOCK_RX_CAP))
@@ -1354,6 +1379,10 @@
     (if (i32.ne (load.field VSock type (local.get $rec)) (i32.const 2))
       (then (call $vsock_set_error (i32.const 10044))
         (i32.store offset=0 (global.get $reg_base) (i32.const -1)) (return)))
+    ;; This socket has a reader: let a datagram wait for it (see $vsock_deliver).
+    (store.field VSock flags (local.get $rec)
+      (i32.or (i32.and (load.field VSock flags (local.get $rec)) (i32.const 0xFF00FFFF))
+              (i32.shl (global.get $VSOCK_UDP_PATIENCE) (i32.const 16))))
     (call $vsock_pump)
     (local.set $available (load.field VSock rx_len (local.get $rec)))
     (if (local.get $available)

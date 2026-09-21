@@ -582,3 +582,34 @@ i.e. once a player starts or joins a network game. So `$handle_socket` asks
 the registry entry sets `lan.onDemand`. The browser lobby then appears at
 *Start/Join Network Server* and never in a single-player game. Hosts without
 a lobby (the CLI, every non-`onDemand` app) answer 1 immediately.
+
+### The star room and the host probe (2026-09-20)
+
+The browser no longer shows a lobby for Quake II. `lan.room: 'auto'` in
+`lib/apps.js` puts it in a **star room** (`lib/vlan-room.js`,
+`lib/vlan-star.js`): whoever gets there first is the owner at `10.0.0.1`,
+everyone else holds one link to the owner at `.2` and up, and the owner routes
+member↔member frames.
+
+**The wire cannot tell a server from a client**, because a Quake II client
+binds 27910 just as a server does. So the owner's page asks its own guest the
+way a server browser does: `\xff\xff\xff\xffinfo 31` from seat `.254`, whose
+answer is caught before it reaches the wire. Only `SVC_Info` on a server with
+`maxclients > 1` answers, and its status line ("noname demo1 0/4") labels the
+Join card. **The protocol is 31, not the retail 34.** The demo's
+`CL_PingServers` pushes `0x1f` beside its `"info %i"` (exe `0x4094bb`), and a
+34 gets "wrong version". `test/test-quake2-host-probe.js` runs the real game
+both ways: the server answers, and a client stays silent through 77 questions.
+
+**An unread UDP socket used to freeze the whole wire.** A client binds 27910
+and never reads it, so the first broadcast `info` or probe landing there filled
+the slot, and `$vsock_deliver` stalled every later frame behind it. That did
+not matter with two players and breaks at three. Each UDP socket now carries
+"patience" (VSock flags bits 16-23, `$VSOCK_UDP_PATIENCE` = 64). It is topped
+up on every `recvfrom` and spent on each stall. At 0 the datagram is dropped,
+as a real stack drops into a full receive buffer.
+
+Joining from the card launches with `lan.join.launchArgs` (`+connect {host}`).
+A game that is already running when the room is joined (the mid-game toast)
+gets `lan.join.hint` instead. **Still open:** typing `connect` into the
+running game's console.

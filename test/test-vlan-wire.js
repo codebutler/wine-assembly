@@ -108,6 +108,51 @@ async function main() {
     assert.deepStrictEqual(host.readBuf(rx, two.length), two);
   });
 
+  // Every Quake II client binds the server port and never reads it unless it
+  // hosts. A datagram waiting for that socket sat at the head of the wire,
+  // and everything behind it waited too: one player's server search froze
+  // every other client in the room.
+  check('a datagram for a socket nobody reads does not stall the wire', () => {
+    const idle = host.wat.test_call_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) | 0;
+    host.nonblocking(idle);
+    assert.strictEqual(host.wat.test_call_bind(
+      idle, host.sockaddr('0.0.0.0', GAME_PORT + 2), 16) | 0, 0);
+    const toIdle = peer.sockaddr(HOST_IP, GAME_PORT + 2);
+    for (const d of [[7], [8]]) {
+      assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(d), 1, 0, toIdle, 16) | 0, 1);
+    }
+    const live = [9, 9];
+    assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(live), live.length, 0,
+      peer.sockaddr(HOST_IP, GAME_PORT + 1), 16) | 0, live.length);
+    for (let i = 0; i < 100; i++) host.wat.vlan_pump();
+    const rx = host.buf(8);
+    assert.strictEqual(host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0, live.length,
+      `the live socket got nothing: ${host.wire.pending} frame(s) still queued behind the idle one`);
+    assert.deepStrictEqual(host.readBuf(rx, live.length), live);
+    // The idle socket kept the datagram that fit and lost the one that did
+    // not, which is what a full UDP buffer does.
+    assert.strictEqual(host.wat.test_call_recvfrom(idle, rx, 8, 0, 0, 0) | 0, 1);
+    assert.deepStrictEqual(host.readBuf(rx, 1), [7]);
+    assert.strictEqual(host.wat.test_call_recvfrom(idle, rx, 8, 0, 0, 0) | 0, -1);
+  });
+
+  check('a socket that is being read keeps every datagram in order', () => {
+    const dst = peer.sockaddr(HOST_IP, GAME_PORT + 1);
+    const burst = [[1], [2], [3], [4], [5]];
+    for (const d of burst) {
+      assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(d), 1, 0, dst, 16) | 0, 1);
+    }
+    const rx = host.buf(8);
+    const got = [];
+    for (let i = 0; i < 40 && got.length < burst.length; i++) {
+      host.wat.vlan_pump();
+      host.wat.vlan_pump();
+      const n = host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0;
+      if (n > 0) got.push(host.readBuf(rx, n)[0]);
+    }
+    assert.deepStrictEqual(got, [1, 2, 3, 4, 5]);
+  });
+
   // ---- opening a connection across the wire ---------------------------
 
   const srv = host.wat.test_call_socket(AF_INET, SOCK_STREAM, 0) | 0;

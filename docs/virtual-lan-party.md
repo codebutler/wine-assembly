@@ -1412,3 +1412,16 @@ These questions do not change the architecture. The next useful engineering
 step remains the same: build real loopback Winsock semantics, launch the
 bundled server beside the client, and make `10.0.0.1:8035` work before adding
 an Internet transport.
+
+## Addendum 2026-09-20: always a star
+
+A room is always a star, never a mesh. The room owner is seat `10.0.0.1`. It
+hands out seats `.2`-`.253` and routes (`lib/vlan-star.js` `StarOwnerWire`);
+a member holds one link, to the owner (`StarMemberWire`). Seat `.254` belongs
+to the host probe. `lib/vlan-room.js` `openRoom` joins the owner it finds and
+becomes the owner when there is none (or the one it finds never answers). Two
+simultaneous owners settle by the higher userId stepping down. The owner's
+guest answering the app's `lan.hostProbe` marks the room *hosting* in presence,
+which is what the Join card shows: at launch ("Join alex / Not now"), at the
+first `socket()` ("Join / Play offline"), and as a toast over a running game.
+Apps without `lan.room: 'auto'` (Blobby, Liquid War) keep the lobby.
