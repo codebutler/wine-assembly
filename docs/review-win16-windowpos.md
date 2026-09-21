@@ -2775,3 +2775,46 @@ The subsequent confirmation (`wa-button-focus-matrix-confirm.*`) completed
 and produced byte-identical 27417-byte serial output, including the same
 callback ordering and all 48 isolated outcomes. No emulator runtime behavior
 was changed in this evidence-gathering stage.
+
+### Implemented: non-mouse focus-loss activation
+
+WM_KILLFOCUS now uses the measured native predicate: highlighted with no
+mouse-origin bit. It sends BM_SETSTATE(FALSE), retires press tracking,
+releases owned capture, then performs the accepted activation before clearing
+the focus flag. Pure BM_SETSTATE highlighting can therefore activate on
+focus loss; mouse-origin or unhighlighted presses do not. A late key-up
+cannot activate twice.
+
+`button_activate` now owns automatic check/radio changes, repaint, and
+parent notification for both release and focus loss. This replaces duplicated
+selection semantics rather than synthesizing mouse/key messages. The previous
+groupbox notification suppression was removed: ordinary hit-testing still
+skips groupboxes, but native Win98 accepts direct synthetic keyboard/focus
+activation, as the probe demonstrated. Existing deferred modal/VCL command
+delivery is preserved; this does not claim to remove that scheduling exception.
+
+State is revalidated after highlight/capture callbacks and after activation;
+the shared helper checks target survival after radio sibling painting and
+after repainting. The tests now cover 12 styles x5 focus-loss modes plus
+late release. A real synchronous x86 parent reads native state during
+BN_CLICKED and observes updated checking, retired tracking, and focus still
+set; after the call, focus is clear. Separate x86 callbacks call DestroyWindow
+during owner-draw repaint and during BN_CLICKED; both retire the target safely.
+Broader reentrant refocus/recapture ordering remains separate work.
+
+The first full build caught a non-normalized logical operand, corrected
+before the successful full build. The callback assertion initially included
+the private default-border flag; it now excludes that private bit while
+checking all other state. Clean callback matrix passes
+(`/private/tmp/wa-button-focus-fix-callbacks.log`); old source fails the
+missing focus-loss click (`wa-button-focus-fix-negative.log`). Clean full
+build passes (`wa-button-focus-fix-build2.log`), normal/compat sizes
+1454941/1455847, layout `c5ccefca8909ee4b`. Rebuilt VB2, WEP3 7/7 and WordPad
+browser assertions pass (`wa-button-focus-fix-{vb,wep3,wordpad}.log`).
+
+A main-tree run caught a concurrent CreateFileA edit before its `$existed`
+local declaration was present (`wa-button-focus-fix-main-final.log`), before
+executing tests. The declaration was present on immediate reinspection;
+no foreign source was edited to work around it.
+The main-tree repeat passes (`wa-button-focus-fix-main-repeat.log`), and the
+WordPad browser process exits successfully after its passing assertions.

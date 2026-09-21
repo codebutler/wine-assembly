@@ -323,6 +323,132 @@
         (global.set $dialog_button_capture_hwnd (i32.const 0))
         (global.set $dialog_button_capture_parent (i32.const 0)))))
 
+  ;; Commit an accepted activation after the caller has retired press tracking.
+  ;; Shared by release and Win98's non-mouse focus-loss activation.
+  (func $button_activate (param $hwnd i32)
+    (local $state i32) (local $state_w i32) (local $flags i32)
+    (local $w i32) (local $parent i32) (local $cmd_id i32)
+    (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
+    (if (i32.eqz (local.get $state)) (then (return)))
+    (local.set $state_w (call $g2w (local.get $state)))
+    (local.set $flags (call $btn_flags (local.get $state_w)))
+    ;; USER changes state automatically only for BS_AUTOCHECKBOX(3),
+    ;; BS_AUTO3STATE(6), and BS_AUTORADIOBUTTON(9). Plain
+    ;; BS_CHECKBOX(2)/BS_3STATE(5) controls deliberately keep their
+    ;; old state: frameworks such as VCL subclass those styles and
+    ;; update them while handling the reflected BN_CLICKED. Changing
+    ;; state here makes that handler observe the wrong old value.
+    ;; Push buttons (0,1), plain BS_RADIOBUTTON(4), and groupbox (7)
+    ;; likewise do not auto-toggle.
+    (local.set $w (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x0F)))
+    (if (i32.eq (local.get $w) (i32.const 3))
+      (then (local.set $flags (i32.xor (local.get $flags) (i32.const 0x02)))))
+    (if (i32.eq (local.get $w) (i32.const 6))
+      (then (local.set $flags (call $btn_flags_with_check (local.get $flags)
+        (i32.rem_u (i32.add (call $btn_check_from_flags (local.get $flags))
+          (i32.const 1)) (i32.const 3))))))
+    (if (i32.eq (local.get $w) (i32.const 9))
+      (then
+        (call $autoradio_clear_siblings (local.get $hwnd))
+        (if (i32.ne (call $wnd_get_state_ptr (local.get $hwnd)) (local.get $state))
+          (then (return)))
+        ;; $autoradio_clear_siblings cleared $hwnd's bit too — set it
+        ;; back on. Reload sibling-updated flags, but do not restore
+        ;; the press tracking that the activation caller has retired.
+        (local.set $flags
+          (i32.or
+            (i32.and (call $btn_flags (local.get $state_w)) (i32.const -1538))
+            (i32.const 0x02)))))
+    (call $btn_set_flags (local.get $state_w) (local.get $flags))
+    ;; BS_OWNERDRAW: dispatch WM_DRAWITEM to repaint the unpressed
+    ;; face. Other kinds use button_wndproc's WM_PAINT.
+    (if (i32.eq (local.get $w) (i32.const 0x0B))
+      (then (call $btn_send_drawitem (local.get $hwnd) (local.get $state_w) (local.get $flags)))
+      (else
+        (drop (call $wnd_send_message
+          (local.get $hwnd) (i32.const 0x000F) (i32.const 0) (i32.const 0)))))
+    ;; Painting can call guest code and destroy the target.
+    (if (i32.ne (call $wnd_get_state_ptr (local.get $hwnd)) (local.get $state))
+      (then (return)))
+    ;; Send WM_COMMAND(MAKEWPARAM(ctrl_id, BN_CLICKED=0), button_hwnd)
+    ;; to parent. Native BUTTON controls normally notify parents
+    ;; synchronously. A dialog command or an IDOK/IDCANCEL command on
+    ;; a native guest window may enter a nested modal loop, though.
+    ;; Running that through $wnd_send_message
+    ;; traps the browser inside its recursive interpreter frame, so no
+    ;; later click can reach the child modal dialog; if its bounded run
+    ;; expires, the live x86 continuation is abandoned. Queue those
+    ;; dialog commands instead. Wizard pages also use IDOK/IDCANCEL as
+    ;; ordinary Next/Back commands, and either one may open another
+    ;; modal dialog. A retained DLGPROC receives every WM_COMMAND on
+    ;; the main interpreter context. DefDlgProc applies an unhandled
+    ;; modal IDOK fallback when that queued message is dispatched.
+    ;; VCL's owned forms
+    ;; normally reflect that parent notification back to the control as
+    ;; CN_COMMAND; its HWND association is private framework state, so
+    ;; deliver the reflected message directly to the guest subclass.
+    (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    ;; GWL_ID can change after WM_CREATE (VCL creates TNewButton
+    ;; with hMenu=0, then assigns the HWND as its ID). CONTROL_TABLE
+    ;; is the canonical current value; ButtonState's creation-time
+    ;; copy may legitimately be stale.
+    (local.set $cmd_id
+      (i32.and (call $ctrl_table_get_id (local.get $hwnd))
+               (i32.const 0xFFFF)))
+    (global.set $dialog_last_proc_handled (i32.const 0))
+    (if (i32.or
+          (i32.ne (call $dialog_proc_get (local.get $parent))
+                  (i32.const 0))
+          (i32.and
+            (i32.or
+              (i32.eq (local.get $cmd_id) (i32.const 1))
+              (i32.eq (local.get $cmd_id) (i32.const 2)))
+            (i32.and
+              (i32.ne (call $wnd_table_get (local.get $parent))
+                      (i32.const 0))
+              (i32.lt_u (call $wnd_table_get (local.get $parent))
+                        (i32.const 0xFFFE0000)))))
+      (then
+        (drop (call $post_queue_push
+          (local.get $parent)
+          (i32.const 0x0111)  ;; WM_COMMAND
+          (local.get $cmd_id)
+          (local.get $hwnd))))
+      (else
+        (if (i32.and
+              (i32.and
+                (i32.ne (local.get $cmd_id) (i32.const 1))
+                (i32.ne (local.get $cmd_id) (i32.const 2)))
+              (i32.and
+                (i32.or
+                  (i32.ne (call $wnd_get_owner (local.get $parent))
+                          (i32.const 0))
+                  ;; VCL assigns each native child its HWND as
+                  ;; GWL_ID, then reflects WM_COMMAND back as
+                  ;; CN_COMMAND. Panels nested inside the main
+                  ;; form need the same queued reflection even
+                  ;; though the immediate panel has no owner.
+                  (i32.eq (local.get $cmd_id)
+                    (i32.and (local.get $hwnd) (i32.const 0xFFFF))))
+                (i32.and
+                  (i32.ne (call $wnd_table_get (local.get $parent))
+                          (i32.const 0))
+                  (i32.lt_u (call $wnd_table_get (local.get $parent))
+                            (i32.const 0xFFFE0000)))))
+          (then
+            ;; CN_BASE(0xBC00) + WM_COMMAND(0x0111).
+            (drop (call $post_queue_push
+              (local.get $hwnd) (i32.const 0xBD11)
+              (local.get $cmd_id) (local.get $hwnd))))
+          (else
+            (drop (call $wnd_send_message
+              (local.get $parent)
+              (i32.const 0x0111)  ;; WM_COMMAND
+              ;; wParam: low 16 = current ctrl_id, high 16 = BN_CLICKED (0)
+              (local.get $cmd_id)
+              (local.get $hwnd))))))) ;; lParam = button hwnd
+  )
+
   (func $button_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $state i32) (local $state_w i32)
     (local $cs_w i32) (local $hdc i32) (local $sz i32)
@@ -331,7 +457,8 @@
     (local $brush i32) (local $name_ptr i32)
     (local $kind i32) (local $box_y i32) (local $tw i32) (local $calc i32)
     (local $img i32) (local $img_w i32) (local $img_h i32) (local $img_x i32) (local $img_y i32)
-    (local $parent i32) (local $cmd_id i32)
+    (local $parent i32)
+    (local $click_on_focus_loss i32)
 
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
 
@@ -465,9 +592,24 @@
     ;; bit2 on the real default.
     (if (i32.eq (local.get $msg) (i32.const 0x0008))
       (then
+        ;; Native Win98 activates highlighted non-mouse state on focus loss,
+        ;; including BM_SETSTATE-only highlighting. Mouse-origin presses cancel.
+        (if (local.get $state)
+          (then
+            (local.set $flags (call $btn_flags (call $g2w (local.get $state))))
+            (local.set $click_on_focus_loss
+              (i32.eq (i32.and (local.get $flags) (i32.const 0x401)) (i32.const 1)))
+            (if (i32.and (local.get $flags) (i32.const 1))
+              (then (drop (call $wnd_send_message
+                (local.get $hwnd) (i32.const 0x00F3) (i32.const 0) (i32.const 0)))))
+            (if (i32.ne (call $wnd_get_state_ptr (local.get $hwnd)) (local.get $state))
+              (then (return (i32.const 0))))))
         (call $button_cancel_press (local.get $hwnd))
         (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
           (then (drop (call $capture_replace (i32.const 0)))))
+        (if (i32.and (i32.ne (local.get $click_on_focus_loss) (i32.const 0))
+              (i32.eq (call $wnd_get_state_ptr (local.get $hwnd)) (local.get $state)))
+          (then (call $button_activate (local.get $hwnd))))
         ;; Capture notification may destroy/subclass the button; do not use
         ;; the state pointer retained before that callback.
         (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
@@ -701,120 +843,8 @@
                 (call $btn_set_flags (local.get $state_w) (local.get $flags))
                 (call $invalidate_hwnd (local.get $hwnd))
                 (return (i32.const 0))))
-            ;; USER changes state automatically only for BS_AUTOCHECKBOX(3),
-            ;; BS_AUTO3STATE(6), and BS_AUTORADIOBUTTON(9). Plain
-            ;; BS_CHECKBOX(2)/BS_3STATE(5) controls deliberately keep their
-            ;; old state: frameworks such as VCL subclass those styles and
-            ;; update them while handling the reflected BN_CLICKED. Changing
-            ;; state here makes that handler observe the wrong old value.
-            ;; Push buttons (0,1), plain BS_RADIOBUTTON(4), and groupbox (7)
-            ;; likewise do not auto-toggle.
-            (local.set $w (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x0F)))
-            (if (i32.eq (local.get $w) (i32.const 3))
-              (then (local.set $flags (i32.xor (local.get $flags) (i32.const 0x02)))))
-            (if (i32.eq (local.get $w) (i32.const 6))
-              (then (local.set $flags (call $btn_flags_with_check (local.get $flags)
-                (i32.rem_u (i32.add (call $btn_check_from_flags (local.get $flags))
-                  (i32.const 1)) (i32.const 3))))))
-            (if (i32.eq (local.get $w) (i32.const 9))
-              (then
-                (call $autoradio_clear_siblings (local.get $hwnd))
-                ;; $autoradio_clear_siblings cleared $hwnd's bit too — set it
-                ;; back on. Reload sibling-updated flags, but do not restore
-                ;; the pressed bit that this UP has just retired locally.
-                (local.set $flags
-                  (i32.or
-                    (i32.and (call $btn_flags (local.get $state_w)) (i32.const -1538))
-                    (i32.const 0x02)))))
             (call $btn_set_flags (local.get $state_w) (local.get $flags))
-            ;; BS_OWNERDRAW: dispatch WM_DRAWITEM to repaint the unpressed
-            ;; face. Other kinds use button_wndproc's WM_PAINT.
-            (if (i32.eq (local.get $w) (i32.const 0x0B))
-              (then (call $btn_send_drawitem (local.get $hwnd) (local.get $state_w) (local.get $flags)))
-              (else
-                (drop (call $wnd_send_message
-                  (local.get $hwnd) (i32.const 0x000F) (i32.const 0) (i32.const 0)))))
-            ;; Send WM_COMMAND(MAKEWPARAM(ctrl_id, BN_CLICKED=0), button_hwnd)
-            ;; to parent. Native BUTTON controls normally notify parents
-            ;; synchronously. A dialog command or an IDOK/IDCANCEL command on
-            ;; a native guest window may enter a nested modal loop, though.
-            ;; Running that through $wnd_send_message
-            ;; traps the browser inside its recursive interpreter frame, so no
-            ;; later click can reach the child modal dialog; if its bounded run
-            ;; expires, the live x86 continuation is abandoned. Queue those
-            ;; dialog commands instead. Wizard pages also use IDOK/IDCANCEL as
-            ;; ordinary Next/Back commands, and either one may open another
-            ;; modal dialog. A retained DLGPROC receives every WM_COMMAND on
-            ;; the main interpreter context. DefDlgProc applies an unhandled
-            ;; modal IDOK fallback when that queued message is dispatched.
-            ;; VCL's owned forms
-            ;; normally reflect that parent notification back to the control as
-            ;; CN_COMMAND; its HWND association is private framework state, so
-            ;; deliver the reflected message directly to the guest subclass.
-            ;; Skip groupbox (kind 7) — it's not interactive.
-            (if (i32.ne (local.get $w) (i32.const 7))
-              (then
-                (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
-                ;; GWL_ID can change after WM_CREATE (VCL creates TNewButton
-                ;; with hMenu=0, then assigns the HWND as its ID). CONTROL_TABLE
-                ;; is the canonical current value; ButtonState's creation-time
-                ;; copy may legitimately be stale.
-                (local.set $cmd_id
-                  (i32.and (call $ctrl_table_get_id (local.get $hwnd))
-                           (i32.const 0xFFFF)))
-                (global.set $dialog_last_proc_handled (i32.const 0))
-                (if (i32.or
-                      (i32.ne (call $dialog_proc_get (local.get $parent))
-                              (i32.const 0))
-                      (i32.and
-                        (i32.or
-                          (i32.eq (local.get $cmd_id) (i32.const 1))
-                          (i32.eq (local.get $cmd_id) (i32.const 2)))
-                        (i32.and
-                          (i32.ne (call $wnd_table_get (local.get $parent))
-                                  (i32.const 0))
-                          (i32.lt_u (call $wnd_table_get (local.get $parent))
-                                    (i32.const 0xFFFE0000)))))
-                  (then
-                    (drop (call $post_queue_push
-                      (local.get $parent)
-                      (i32.const 0x0111)  ;; WM_COMMAND
-                      (local.get $cmd_id)
-                      (local.get $hwnd))))
-                  (else
-                    (if (i32.and
-                          (i32.and
-                            (i32.ne (local.get $cmd_id) (i32.const 1))
-                            (i32.ne (local.get $cmd_id) (i32.const 2)))
-                          (i32.and
-                            (i32.or
-                              (i32.ne (call $wnd_get_owner (local.get $parent))
-                                      (i32.const 0))
-                              ;; VCL assigns each native child its HWND as
-                              ;; GWL_ID, then reflects WM_COMMAND back as
-                              ;; CN_COMMAND. Panels nested inside the main
-                              ;; form need the same queued reflection even
-                              ;; though the immediate panel has no owner.
-                              (i32.eq (local.get $cmd_id)
-                                (i32.and (local.get $hwnd) (i32.const 0xFFFF))))
-                            (i32.and
-                              (i32.ne (call $wnd_table_get (local.get $parent))
-                                      (i32.const 0))
-                              (i32.lt_u (call $wnd_table_get (local.get $parent))
-                                        (i32.const 0xFFFE0000)))))
-                      (then
-                        ;; CN_BASE(0xBC00) + WM_COMMAND(0x0111).
-                        (drop (call $post_queue_push
-                          (local.get $hwnd) (i32.const 0xBD11)
-                          (local.get $cmd_id) (local.get $hwnd))))
-                      (else
-                        (drop (call $wnd_send_message
-                          (local.get $parent)
-                          (i32.const 0x0111)  ;; WM_COMMAND
-                          ;; wParam: low 16 = current ctrl_id, high 16 = BN_CLICKED (0)
-                          (local.get $cmd_id)
-                          (local.get $hwnd))))))) ;; lParam = button hwnd
-                ))
+            (call $button_activate (local.get $hwnd))
             ))
         (return (i32.const 0))))
 

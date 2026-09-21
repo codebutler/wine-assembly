@@ -16,6 +16,17 @@ const { createCanvas } = require('../lib/canvas-compat');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_thunk") (param $id i32) (result i32)
+    (local $p i32)
+    (global.set $thunk_guest_base (call $w2g (global.get $THUNK_BASE)))
+    (local.set $p (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $p) (i32.const 0))
+    (i32.store offset=4 (local.get $p) (local.get $id))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end)
+    (call $w2g (local.get $p)))
+  (func (export "test_button_state_ptr") (param $hwnd i32) (result i32)
+    (call $wnd_get_state_ptr (local.get $hwnd)))
   (func (export "test_legacy_check") (param $hwnd i32) (param $value i32) (result i32)
     (call $ctrl_set_check_state (local.get $hwnd) (local.get $value))
     (call $ctrl_get_check_state (local.get $hwnd)))
@@ -202,11 +213,90 @@ function u32(value) {
       if (cancel === 'sys-key') e.send_message(button, 0x105, 0x12, 0xe0380001);
       if (cancel === 'capture') e.test_capture_api(custom);
       e.send_message(button, 0x101, 0x20, 0xc0390001);
-      assert.strictEqual(e.get_post_queue_count(), 0, 'cancelled Space press cannot click');
+      assert.strictEqual(e.get_post_queue_count(), cancel === 'focus' ? 1 : 0,
+        'Win98 activates highlighted Space on focus loss, but capture/other-key cancellation does not');
+      e.set_post_queue_count(0);
       assert.strictEqual(e.button_get_flags(button) & 0x601, 0);
       if (cancel === 'capture') e.test_capture_api(0);
     }
   }
+  // Native focus-loss matrix, including direct synthetic groupbox delivery.
+  for (const kind of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
+    const button = e.test_create_dialog_button(proc, 1700 + kind, kind) >>> 0;
+    for (const mode of ['space', 'mouse', 'outside', 'space-clear', 'highlight']) {
+      e.set_focus(button);
+      e.send_message(button, 0xf1, 0, 0);
+      e.set_post_queue_count(0);
+      if (mode === 'mouse' || mode === 'outside') {
+        e.send_message(button, 0x201, 1, (5 << 16) | 5);
+        if (mode === 'outside') e.send_message(button, 0x200, 1, (5 << 16) | 0xffff);
+      } else if (mode === 'highlight') {
+        e.send_message(button, 0xf3, 1, 0);
+      } else {
+        e.send_message(button, 0x100, 32, 1);
+        if (mode === 'space-clear') e.send_message(button, 0xf3, 0, 0);
+      }
+      e.set_focus(custom);
+      const clicked = mode === 'space' || mode === 'highlight';
+      assert.strictEqual(e.get_post_queue_count(), clicked ? 1 : 0, `Win98 focus-loss kind=${kind} mode=${mode}`);
+      assert.strictEqual(e.get_capture_hwnd(), 0);
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0),
+        clicked && [3, 6, 9].includes(kind) ? 1 : 0, 'focus loss retires tracking/focus and applies automatic checking');
+      e.set_post_queue_count(0);
+      e.send_message(button, 0x101, 32, 0xc0390001);
+      assert.strictEqual(e.get_post_queue_count(), 0, 'late release cannot activate a second time');
+    }
+  }
+  // A synchronous guest parent observes automatic checking and retired
+  // tracking before WM_KILLFOCUS removes the focus flag, matching the oracle.
+  const observed = e.guest_alloc(4) >>> 0;
+  const observerProc = e.guest_alloc(32) >>> 0;
+  const observedButton = e.test_create_dialog_button(proc, 1800, 3) >>> 0;
+  const observedState = e.test_button_state_ptr(observedButton) >>> 0;
+  bytes.set(Uint8Array.from([
+    0x81, 0x7c, 0x24, 0x08, 0x11, 0x01, 0x00, 0x00,
+    0x75, 0x0a,
+    0xa1, ...u32(observedState + 8),
+    0xa3, ...u32(observed),
+    0x31, 0xc0, 0xc2, 0x10, 0x00,
+  ]), toWasm(observerProc));
+  e.test_make_unowned_guest_parent(observedButton, observerProc);
+  e.set_focus(observedButton);
+  e.send_message(observedButton, 0xf3, 1, 0);
+  view.setUint32(toWasm(observed), 0xffffffff, true);
+  e.set_focus(custom);
+  assert.strictEqual(view.getUint32(toWasm(observed), true) & ~4, 10,
+    'synchronous BN_CLICKED observes checked + focused, without press tracking');
+  assert.strictEqual(e.button_get_flags(observedButton), 2, 'focus clears only after notification');
+  assert.strictEqual(e.get_post_queue_count(), 0, 'ordinary parent notification is synchronous');
+
+  const apiTable = require('../src/api_table.json');
+  const destroyThunk = e.test_thunk(apiTable.find(api => api.name === 'DestroyWindow').id);
+  for (const stage of ['paint', 'command']) {
+    const victim = e.test_create_dialog_button(proc, 1900, stage === 'paint' ? 11 : 3) >>> 0;
+    const armed = e.guest_alloc(4) >>> 0;
+    const retireProc = e.guest_alloc(96) >>> 0;
+    const action = [
+      0xc7, 0x05, ...u32(armed), ...u32(0),
+      0x68, ...u32(victim), 0xb8, ...u32(destroyThunk), 0xff, 0xd0,
+    ];
+    const gate = [0x83, 0x3d, ...u32(armed), 0, 0x74, action.length, ...action];
+    bytes.set(Uint8Array.from([
+      0x81, 0x7c, 0x24, 0x08, ...u32(stage === 'paint' ? 0x2b : 0x111),
+      0x75, gate.length, ...gate,
+      0x31, 0xc0, 0xc2, 0x10, 0x00,
+    ]), toWasm(retireProc));
+    view.setUint32(toWasm(armed), 0, true);
+    e.test_make_unowned_guest_parent(victim, retireProc);
+    e.set_focus(victim);
+    e.send_message(victim, 0xf3, 1, 0);
+    view.setUint32(toWasm(armed), 1, true);
+    e.set_focus(custom);
+    assert.strictEqual(view.getUint32(toWasm(armed), true), 0, `${stage} callback actually ran`);
+    assert.strictEqual(e.test_button_state_ptr(victim), 0, `${stage} callback destroyed the target safely`);
+    assert.strictEqual(e.get_post_queue_count(), 0);
+  }
+
   // Highlighting is not tracking: synthetic UP after BM_SETSTATE is inert.
   for (const kind of [0, 1, 3, 6, 9, 11]) {
     const button = e.test_create_dialog_button(proc, 1400 + kind, kind) >>> 0;
