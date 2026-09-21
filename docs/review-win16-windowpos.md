@@ -2727,3 +2727,51 @@ The previous getter fails at mouse-down (`12 != 108`,
 (`wa-button-native-bits-build.log`), normal/compat 1454795/1455701 bytes,
 unchanged layout `c5ccefca8909ee4b`.
 Rebuilt WordPad browser assertions pass (`wa-button-native-bits-wordpad.log`).
+
+### Native focus-loss click rule: highlighted, non-mouse origin
+
+The next probe subclasses each native BUTTON only to trace entry/exit,
+then chains to its original procedure. The second Space DOWN leaves clicks
+at zero. The click occurs inside WM_KILLFOCUS: BM_SETSTATE(FALSE) clears
+highlight, WM_CAPTURECHANGED observes retired tracking, BN_CLICKED runs
+while the button still reports focus, then WM_KILLFOCUS clears that bit.
+This is native Win98 evidence, not the behavior promised by the current
+Microsoft description of focus cancellation.
+
+The expanded matrix isolates four additional cases for all 12 style values:
+
+| State before focus loss | Native result |
+| --- | --- |
+| Mouse press inside (`0x6c`) | capture released, no click |
+| Mouse press outside (`0x68`) | capture released, no click |
+| Space tracking, highlight cleared (`0x28`) | capture released, no click |
+| BM_SETSTATE(TRUE) only, no capture (`0x0c`) | one click |
+
+The original Space-held case (`0x2c`) also clicks. Therefore capture or
+tracking alone is not the selection condition: the measured condition is
+highlighted **without mouse origin**. Automatic styles update their check
+state before notification; manual styles do not. The 48 isolated outcomes
+were programmatically checked against those results. Full trace is preserved
+in [reference-button-focus-win98.txt](reference-button-focus-win98.txt).
+
+**Implementation still required:** share the native activation/check-change
+operation between release and focus loss, preserving callback ordering,
+without synthesizing guest mouse/key messages. Existing Space-focus-cancel
+and BM_SETSTATE-focus-loss behavior is not Win98-compatible. Keep the mouse
+cancellation behavior; do not simply make all focus loss click. Reentrant
+capture/notification callbacks must not resurrect retired state or use a
+destroyed ButtonState. Direct synthetic groupbox input and legacy style8
+normalization remain separate observed gaps.
+
+Reproduce with the existing button-input manifest and updated C probe.
+Metadata and output for this run are `/private/tmp/wa-button-focus-matrix.json`
+and `.serial`, using the same pinned native Win98/v86 profile as above.
+Compiled probe SHA-256:
+`1dfdc420109f147f6de448612e31bebfd1e46ef76be536da3d0c213e8003b54a`.
+The first repeat (`wa-button-focus-matrix-repeat.*`) returned exit0 but an
+empty serial log; its inspected screenshot shows the restored media player,
+not the probe. It is a failed reference launch, not confirmation of results.
+The subsequent confirmation (`wa-button-focus-matrix-confirm.*`) completed
+and produced byte-identical 27417-byte serial output, including the same
+callback ordering and all 48 isolated outcomes. No emulator runtime behavior
+was changed in this evidence-gathering stage.

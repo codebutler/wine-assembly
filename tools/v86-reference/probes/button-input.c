@@ -3,17 +3,32 @@
 unsigned long _tls_index = 0;
 static HANDLE serial;
 static int clicks;
+static int tracing, trace_kind;
+static WNDPROC original_button;
 static void row(const char *label, int a, int b, int c, int d) {
   char buf[160]; DWORD written;
   wsprintfA(buf, "%s %d %d %d %d\r\n", label, a, b, c, d);
   WriteFile(serial, buf, lstrlenA(buf), &written, NULL);
 }
 static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
-  if (m == WM_COMMAND && HIWORD(w) == BN_CLICKED) clicks++;
+  if (m == WM_COMMAND && HIWORD(w) == BN_CLICKED) {
+    clicks++;
+    if (tracing) row("CLICK kind/state/capture/count", trace_kind,
+      SendMessageA((HWND)l, BM_GETSTATE, 0, 0), GetCapture() == (HWND)l, clicks);
+  }
   return DefWindowProcA(h, m, w, l);
 }
+static LRESULT CALLBACK button_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  LRESULT result;
+  int log = tracing && (m == WM_KEYDOWN || m == WM_KEYUP || m == WM_KILLFOCUS ||
+    m == WM_CAPTURECHANGED || m == BM_SETSTATE || m == WM_LBUTTONUP);
+  if (log) row("ENTER kind/msg/state/clicks", trace_kind, m, SendMessageA(h, BM_GETSTATE, 0, 0), clicks);
+  result = CallWindowProcA(original_button, h, m, w, l);
+  if (log) row("LEAVE kind/msg/state/clicks", trace_kind, m, SendMessageA(h, BM_GETSTATE, 0, 0), clicks);
+  return result;
+}
 void WINAPI WinMainCRTStartup(void) {
-  WNDCLASSA wc = {0}; HWND parent, button; int kind, before, after;
+  WNDCLASSA wc = {0}; HWND parent, button; int kind, before, after, mode;
   serial = CreateFileA("COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
   wc.lpfnWndProc = proc; wc.hInstance = GetModuleHandleA(NULL);
   wc.lpszClassName = "ButtonReference";
@@ -46,9 +61,35 @@ void WINAPI WinMainCRTStartup(void) {
     row("MOUSE_BACK kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
     ReleaseCapture();
     row("CAPTURE_LOST kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    trace_kind = kind;
+    original_button = (WNDPROC)SetWindowLongA(button, GWL_WNDPROC, (LONG)button_proc);
+    tracing = 1;
     SendMessageA(button, WM_KEYDOWN, VK_SPACE, 1);
+    row("SECOND_SPACE_DOWN kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
     SetFocus(parent);
     row("FOCUS_LOST kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    tracing = 0;
+    /* Isolate origin and visual state, retaining the same native procedure. */
+    for (mode = 0; mode < 4; mode++) {
+      SetFocus(button);
+      SendMessageA(button, BM_SETCHECK, 0, 0);
+      clicks = 0;
+      row("FOCUS_CASE kind/mode", kind, mode, 0, 0);
+      if (mode < 2) {
+        SendMessageA(button, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(5, 5));
+        if (mode == 1) SendMessageA(button, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(-1, 5));
+      } else {
+        if (mode == 2) SendMessageA(button, WM_KEYDOWN, VK_SPACE, 1);
+        SendMessageA(button, BM_SETSTATE, mode == 3, 0);
+      }
+      row("FOCUS_CASE_BEFORE kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+      tracing = 1;
+      SetFocus(parent);
+      row("FOCUS_CASE_AFTER kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+      tracing = 0;
+      ReleaseCapture();
+    }
+    SetWindowLongA(button, GWL_WNDPROC, (LONG)original_button);
     DestroyWindow(button);
   }
   row("BUTTON_INPUT_DONE", 0, 0, 0, 0);
