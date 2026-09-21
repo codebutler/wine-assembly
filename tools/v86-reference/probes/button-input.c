@@ -34,6 +34,21 @@ void WINAPI WinMainCRTStartup(void) {
     row("SPACE_DOWN kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
     SendMessageA(button, WM_KEYUP, VK_SPACE, 0xc0390001);
     row("SPACE_UP kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    clicks = 0;
+    SendMessageA(button, BM_SETSTATE, TRUE, 0);
+    row("HIGHLIGHT kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    SendMessageA(button, BM_SETSTATE, FALSE, 0);
+    SendMessageA(button, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(5, 5));
+    row("MOUSE_DOWN kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    SendMessageA(button, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(-1, 5));
+    row("MOUSE_OUT kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    SendMessageA(button, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(5, 5));
+    row("MOUSE_BACK kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    ReleaseCapture();
+    row("CAPTURE_LOST kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
+    SendMessageA(button, WM_KEYDOWN, VK_SPACE, 1);
+    SetFocus(parent);
+    row("FOCUS_LOST kind/state/capture/clicks", kind, SendMessageA(button, BM_GETSTATE, 0, 0), GetCapture() == button, clicks);
     DestroyWindow(button);
   }
   row("BUTTON_INPUT_DONE", 0, 0, 0, 0);

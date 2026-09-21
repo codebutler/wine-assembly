@@ -2681,3 +2681,49 @@ instrumentation (line211), before guest execution (`wa-button-dlgcode-wordpad.lo
 An unchanged repeat passes all browser assertions
 (`wa-button-dlgcode-wordpad-repeat.log`); the initial harness failure is not
 counted as a guest regression or silently omitted.
+
+### Native Win98 press-tracking bits
+
+The expanded native probe distinguishes visual highlight from tracking:
+
+| Focused button, initially unchecked | BM_GETSTATE | Capture |
+| --- | --- | --- |
+| BM_SETSTATE(TRUE) only | `0x0c` | no |
+| Space held | `0x2c` | yes |
+| Mouse held inside | `0x6c` | yes |
+| Mouse held outside | `0x68` | yes |
+| Mouse reenters | `0x6c` | yes |
+| Capture released externally | `0x08` | no |
+
+These additional `0x20`/`0x40` bits are native Win98 observations, not modern
+BST_HOT/DROPDOWN flags. ButtonState now records mouse origin separately from
+tracking and visual highlight; BM_GETSTATE translates them to those values.
+UP, cancellation and the autoradio sibling reload retire both tracking bits.
+No state-record growth or parallel JS state was added. The prior exact
+`0x0c` press expectations were wrong for Win98 and have been corrected.
+
+Full native output is in
+[reference-button-tracking-win98.txt](reference-button-tracking-win98.txt).
+Use the same button-input command above with the expanded probe. Original
+dialog-code output remains preserved separately. Runtime provenance is the
+same pinned Win98/v86 profile; metadata is
+`/private/tmp/wa-button-tracking-native.json`.
+
+**New contradictory evidence, still open:** the sequence ReleaseCapture,
+Space DOWN, SetFocus(parent) emits a native BN_CLICKED and changes automatic
+check state. Our current focus-cancellation test expects no click. That
+test is an emulator regression assertion, not proof of Win98 compatibility.
+Isolate that sequence and mixed-input/default-processing behavior before
+changing focus transitions. This stage matches the measured state-reporting
+bits; it does not claim to close the focus-loss discrepancy.
+
+Two native runs produced byte-identical 5112-byte serial logs. Expanded
+probe executable SHA-256:
+`fb7d1336b450641734d78125df3703e9d90e1a20bb78a2bea0365ac75c43af1a`.
+Main and clean native-control matrices pass
+(`/private/tmp/wa-button-native-bits-main.log`, `wa-button-native-bits.log`).
+The previous getter fails at mouse-down (`12 != 108`,
+`wa-button-native-bits-negative.log`). Clean full build gates pass
+(`wa-button-native-bits-build.log`), normal/compat 1454795/1455701 bytes,
+unchanged layout `c5ccefca8909ee4b`.
+Rebuilt WordPad browser assertions pass (`wa-button-native-bits-wordpad.log`).

@@ -134,8 +134,8 @@ function u32(value) {
       'BM_GETSTATE must not expose the internal default-button border as BST_PUSHED');
     for (const [x, y] of [[-1, 5], [5, -1], [100, 5], [5, 24]]) {
       assert.strictEqual(e.dialog_route_mouse(parent, 0x201, 1, (5 << 16) | 5), 1);
-      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0x0c,
-        'BM_GETSTATE reports BST_PUSHED | BST_FOCUS during a real press');
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0x6c,
+        'BM_GETSTATE matches Win98 mouse tracking, pushed and focus bits');
       assert.strictEqual(e.get_capture_hwnd(), button);
       assert.strictEqual(e.dialog_route_mouse(parent, 0x202, 0,
         (((y & 0xffff) << 16) | (x & 0xffff)) >>> 0), 1);
@@ -181,7 +181,7 @@ function u32(value) {
     assert.strictEqual(e.get_post_queue_count(), 0, 'Enter activation belongs to dialog processing');
     for (const lp of [1, 0x40000001, 0x40000001]) {
       e.send_message(button, 0x100, 0x20, lp);
-      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 12, 'Space holds the focused button down');
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0x2c, 'Space reports tracking without mouse-origin bit');
       assert.strictEqual(e.get_capture_hwnd(), button);
       assert.strictEqual(e.get_post_queue_count(), 0, 'Space key-down/repeat does not click');
     }
@@ -203,7 +203,7 @@ function u32(value) {
       if (cancel === 'capture') e.test_capture_api(custom);
       e.send_message(button, 0x101, 0x20, 0xc0390001);
       assert.strictEqual(e.get_post_queue_count(), 0, 'cancelled Space press cannot click');
-      assert.strictEqual(e.button_get_flags(button) & 0x201, 0);
+      assert.strictEqual(e.button_get_flags(button) & 0x601, 0);
       if (cancel === 'capture') e.test_capture_api(0);
     }
   }
@@ -219,13 +219,13 @@ function u32(value) {
     assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0);
     e.send_message(button, 0x201, 1, (5 << 16) | 5);
     e.send_message(button, 0x200, 1, (5 << 16) | 0xffff);
-    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 8, 'dragging out removes highlight');
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0x68, 'dragging out removes only highlight, retaining Win98 tracking bits');
     assert.strictEqual(e.get_capture_hwnd(), button, 'dragging out keeps capture');
     e.send_message(button, 0x200, 1, (5 << 16) | 5);
-    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 12, 'dragging back restores highlight');
+    assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 0x6c, 'dragging back restores highlight');
     e.send_message(button, 0x202, 0, (5 << 16) | 5);
     assert.strictEqual(e.get_post_queue_count(), 1, 'drag out/in still clicks once');
-    assert.strictEqual(e.button_get_flags(button) & 0x201, 0, 'release retires tracking and highlight');
+    assert.strictEqual(e.button_get_flags(button) & 0x601, 0, 'release retires tracking, origin and highlight');
     e.set_post_queue_count(0);
     const checked = e.send_message(button, 0xf0, 0, 0);
     e.send_message(button, 0xf3, 1, 0);
@@ -233,7 +233,7 @@ function u32(value) {
     e.send_message(button, 0x201, 1, (5 << 16) | 5);
     e.send_message(button, 0x200, 1, (5 << 16) | 0xffff);
     e.send_message(button, 0x1f, 0, 0);
-    assert.strictEqual(e.button_get_flags(button) & 0x201, 0, 'cancel clears tracking even while unhighlighted');
+    assert.strictEqual(e.button_get_flags(button) & 0x601, 0, 'cancel clears tracking even while unhighlighted');
     assert.strictEqual(e.get_capture_hwnd(), 0);
     e.send_message(button, 0x202, 0, (5 << 16) | 5);
     assert.strictEqual(e.get_post_queue_count(), 0, 'cancelled drag cannot click later');

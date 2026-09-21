@@ -314,9 +314,9 @@
       (then
         (local.set $state_w (call $g2w (local.get $state)))
         (local.set $flags (call $btn_flags (local.get $state_w)))
-        (if (i32.and (local.get $flags) (i32.const 0x201))
+        (if (i32.and (local.get $flags) (i32.const 0x601))
           (then
-            (call $btn_set_flags (local.get $state_w) (i32.and (local.get $flags) (i32.const -514)))
+            (call $btn_set_flags (local.get $state_w) (i32.and (local.get $flags) (i32.const -1538)))
             (call $invalidate_hwnd (local.get $hwnd))))))
     (if (i32.eq (global.get $dialog_button_capture_hwnd) (local.get $hwnd))
       (then
@@ -593,7 +593,9 @@
           (then
             (local.set $state_w (call $g2w (local.get $state)))
             (local.set $flags
-              (i32.or (call $btn_flags (local.get $state_w)) (i32.const 0x201))) ;; tracking + pressed
+              (i32.or (call $btn_flags (local.get $state_w))
+                (select (i32.const 0x201) (i32.const 0x601)
+                  (i32.eq (local.get $msg) (i32.const 0x0100))))) ;; tracking + origin + pressed
             (call $btn_set_flags (local.get $state_w) (local.get $flags))
             (global.set $capture_hwnd (local.get $hwnd))
             ;; BS_OWNERDRAW: ask parent to repaint via WM_DRAWITEM. Other
@@ -682,7 +684,7 @@
             (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x200)))
               (then (return (i32.const 0))))
             ;; Retire tracking and appearance together.
-            (local.set $flags (i32.and (local.get $flags) (i32.const -514)))
+            (local.set $flags (i32.and (local.get $flags) (i32.const -1538)))
             (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
               (then (global.set $capture_hwnd (i32.const 0))))
             ;; Captured UP reaches this control even outside its client rect.
@@ -722,7 +724,7 @@
                 ;; the pressed bit that this UP has just retired locally.
                 (local.set $flags
                   (i32.or
-                    (i32.and (call $btn_flags (local.get $state_w)) (i32.const -514))
+                    (i32.and (call $btn_flags (local.get $state_w)) (i32.const -1538))
                     (i32.const 0x02)))))
             (call $btn_set_flags (local.get $state_w) (local.get $flags))
             ;; BS_OWNERDRAW: dispatch WM_DRAWITEM to repaint the unpressed
@@ -1149,14 +1151,16 @@
     ;; ---------- BM_GETSTATE (0x00F2) ----------
     ;; Public BST bits are not ButtonState.flags: pressed moves from bit0
     ;; to bit2, checked from bit1 to bit0, indeterminate from bit8 to bit1,
-    ;; focus stays bit3. Private default-border bit2 is not BST_PUSHED.
+    ;; focus stays bit3. Win98 also exposes tracking/origin at 0x20/0x40.
+    ;; Private default-border bit2 is not BST_PUSHED.
     (if (i32.eq (local.get $msg) (i32.const 0x00F2))
       (then
         (if (i32.eqz (local.get $state))
           (then (return (call $ctrl_get_check_state (local.get $hwnd)))))
         (local.set $state_w (call $g2w (local.get $state)))
         (local.set $flags (call $btn_flags (local.get $state_w)))
-        (return (i32.or (i32.and (local.get $flags) (i32.const 8))
+        (return (i32.or (i32.or (i32.and (local.get $flags) (i32.const 8))
+          (i32.shr_u (i32.and (local.get $flags) (i32.const 0x600)) (i32.const 4)))
           (i32.or
             (i32.shl (i32.and (local.get $flags) (i32.const 1)) (i32.const 2))
             (call $btn_check_from_flags (local.get $flags)))))))

@@ -78,6 +78,7 @@
   ;; which flips on focus — $btn_clear_sibling_default / $btn_restore_real_default)
   ;; bit3=focused, bit8=indeterminate (mutually exclusive with checked bit1);
   ;; bit9=press tracking (mouse/Space, independent of visual pressed bit0);
+  ;; bit10=mouse-origin tracking; BM_GETSTATE exposes bits9/10 as Win98 0x20/0x40.
   ;; read/written only through $btn_flags / $btn_set_flags, and by
   ;; $ctrl_get_check_state / $ctrl_set_check_state which share the native
   ;; unchecked/checked/indeterminate encoding with BM_GETCHECK.
