@@ -435,6 +435,14 @@ for (const v of d3d8Vtables) comInterfaces.push(v);
 comInterfaces.push({ prefix: 'IFtmInner', global: 'DX_VTBL_FTM_INNER' });
 comInterfaces.push({ prefix: 'IFtmMarshal', global: 'DX_VTBL_FTM_MARSHAL' });
 
+// IDirectInputDevice7: the v2 device vtable plus EnumEffectsInFile and
+// WriteEffectToFile. An app that asks for IID_IDirectInputDevice7A and is
+// refused has no fallback to try -- Pawn quits with "This program requires
+// DirectX 9 or later!" -- and a v2 vtable handed out under a v7 identity puts
+// those two slots on whatever interface's thunks follow ours. Tail again, same
+// registry-offset reason as every entry above.
+comInterfaces.push({ prefix: 'IDirectInputDevice7', global: 'DX_VTBL_DIDEV7', extends: 'IDirectInputDevice2' });
+
 // Build a map of prefix → { startId, count } from the api_table
 const byName = new Map(apiTable.map(a => [a.name, a]));
 const ifaceInfo = new Map();

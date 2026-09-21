@@ -329,8 +329,8 @@ const digest = crypto.createHash('sha256')
 // addition). Popping one dword too many left the caller's epilogue a slot
 // high, so its `ret` took the caller's own first argument as a return address
 // -- Diablo II's Direct3D backend jumped to 320/640 during the Act I load.
-const EXPECTED_COUNT = 251;
-const EXPECTED_SHA256 = '1740992f38d5f7d26a85496d9d0cab17df767de1896ec1f8fdda8384afa80c98';
+const EXPECTED_COUNT = 253;
+const EXPECTED_SHA256 = '3e65477317b083061629aa7599169523b2684af8cb5b5c9973b5731f3293a087';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

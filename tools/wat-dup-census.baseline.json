@@ -1,6 +1,6 @@
 {
   "comment": "Known exact duplicate members. --check allows groups/members to disappear, rejects a new member, and caps the group count.",
-  "maxExactGroups": 141,
+  "maxExactGroups": 142,
   "allowedMembers": [
     "01-header.wat:$host_create_window",
     "01-header.wat:$host_da_image_blit",
@@ -296,6 +296,8 @@
     "09a8-handlers-directx.wat:$handle_IDirectInputDevice2_GetForceFeedbackState",
     "09a8-handlers-directx.wat:$handle_IDirectInputDevice2_SendDeviceData",
     "09a8-handlers-directx.wat:$handle_IDirectInputDevice2_SendForceFeedbackCommand",
+    "09a8-handlers-directx.wat:$handle_IDirectInputDevice7_EnumEffectsInFile",
+    "09a8-handlers-directx.wat:$handle_IDirectInputDevice7_WriteEffectToFile",
     "09a8-handlers-directx.wat:$handle_IDirectInputDevice_Initialize",
     "09a8-handlers-directx.wat:$handle_IDirectInputDevice_RunControlPanel",
     "09a8-handlers-directx.wat:$handle_IDirectInput_RunControlPanel",

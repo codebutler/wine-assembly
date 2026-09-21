@@ -30852,5 +30852,19 @@
       }
     ],
     "ret": "BOOL"
+  },
+  {
+    "id": 3687,
+    "name": "IDirectInputDevice7_EnumEffectsInFile",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1637302889
+  },
+  {
+    "id": 3688,
+    "name": "IDirectInputDevice7_WriteEffectToFile",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2877870796
   }
 ]

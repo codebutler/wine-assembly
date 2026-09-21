@@ -193,7 +193,7 @@
   ;; guest code begins. Reserve the tail of the auxiliary-wrapper region
   ;; rather than overlapping VSOCK_TABLE at 0x07FFE000.
   (global $DX_VTBL_REGISTRY i32 (region.addr $DX_VTBL_REGISTRY 0))
-  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 70))
+  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 71))
 
   ;; Vtable blocks — arrays of thunk guest-addrs, one per interface type.
   ;; Must be in guest-reachable memory (above image_base), so allocated from heap.
@@ -286,6 +286,11 @@
   ;; Free-threaded marshaler: inner IUnknown and IMarshal.
   (global $DX_VTBL_FTM_INNER   (mut i32) (i32.const 0))
   (global $DX_VTBL_FTM_MARSHAL (mut i32) (i32.const 0))
+  ;; IDirectInputDevice7 — the v2 device vtable plus EnumEffectsInFile and
+  ;; WriteEffectToFile. v7 is a strict superset of v2 the way v2 is of v1, so
+  ;; a device hands out whichever face the caller asked for and QueryInterface
+  ;; answers all three from the same object.
+  (global $DX_VTBL_DIDEV7    (mut i32) (i32.const 0))
 
   (func $dx_vtable_registry_reset
     (i32.store (global.get $DX_VTBL_REGISTRY) (i32.const 0)))
@@ -380,7 +385,8 @@
     (global.set $DX_VTBL_D3D8 (i32.load offset=268 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_D3DDEV8 (i32.load offset=272 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_FTM_INNER (i32.load offset=276 (global.get $DX_VTBL_REGISTRY)))
-    (global.set $DX_VTBL_FTM_MARSHAL (i32.load offset=280 (global.get $DX_VTBL_REGISTRY))))
+    (global.set $DX_VTBL_FTM_MARSHAL (i32.load offset=280 (global.get $DX_VTBL_REGISTRY)))
+    (global.set $DX_VTBL_DIDEV7 (i32.load offset=284 (global.get $DX_VTBL_REGISTRY))))
 
   (func $dx_sync_thread_vtables_if_needed
     (if (i32.eqz (global.get $DX_VTBL_DDRAW))
@@ -7653,6 +7659,18 @@
       (then (return (i32.const 5)))) ;; IDirectInputDevice8A/W
     (i32.const 0))
 
+  ;; The device vtable a classifier kind asks for. v1/v2/v7 are nested
+  ;; supersets, so the three faces differ only in length and every caller
+  ;; gets the one it named. Kinds outside 1..4 never reach here -- each call
+  ;; site rejects them with DIERR_NOINTERFACE first -- and IUnknown (1) takes
+  ;; the v1 table, which is what its slots 0..2 are.
+  (func $dinput_device_vtable_for_kind (param $kind i32) (result i32)
+    (if (i32.eq (local.get $kind) (i32.const 4))
+      (then (return (global.get $DX_VTBL_DIDEV7))))
+    (if (i32.eq (local.get $kind) (i32.const 3))
+      (then (return (global.get $DX_VTBL_DIDEV2))))
+    (global.get $DX_VTBL_DIDEV))
+
   ;; IDirectInput7::CreateDeviceEx(this, rguid, riid, ppvOut, punkOuter)
   ;; Device1/2 are the complete ABI range implemented here. Device7 adds two
   ;; methods beyond that table, so do not manufacture a plausible wrong face.
@@ -7677,14 +7695,12 @@
     (local.set $iid_wa (call $g2w (local.get $arg2)))
     (local.set $kind (call $dinput_device_iid_kind_wa (local.get $iid_wa)))
     (if (i32.or (i32.lt_u (local.get $kind) (i32.const 2))
-                (i32.gt_u (local.get $kind) (i32.const 3)))
+                (i32.gt_u (local.get $kind) (i32.const 4)))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; DIERR_NOINTERFACE
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
-    (local.set $vtbl
-      (select (global.get $DX_VTBL_DIDEV2) (global.get $DX_VTBL_DIDEV)
-        (i32.eq (local.get $kind) (i32.const 3))))
+    (local.set $vtbl (call $dinput_device_vtable_for_kind (local.get $kind)))
     (local.set $obj (call $dx_create_com_obj (i32.const 7) (local.get $vtbl)))
     (if (i32.eqz (local.get $obj))
       (then
@@ -8046,14 +8062,19 @@
     (local.set $version (i32.load offset=16 (local.get $entry)))
     (if (i32.eqz (local.get $version))
       (then (local.set $version (i32.const 0x0700))))
-    ;; This emulator currently has complete Device1/2 vtables. Reject the
-    ;; recognized Device7/8 identities until their appended methods exist.
+    ;; Device1/2/7 have complete vtables here; Device8 (kind 5) does not, and
+    ;; is still refused rather than answered with a shorter table. A face is
+    ;; also only offered by a DirectInput of at least the version that defined
+    ;; it, which is how a v3 caller is kept from acquiring a v7 pointer.
     (if (i32.or
           (i32.eqz (local.get $kind))
           (i32.or
-            (i32.gt_u (local.get $kind) (i32.const 3))
-            (i32.and (i32.eq (local.get $kind) (i32.const 3))
-              (i32.lt_u (local.get $version) (i32.const 0x0500)))))
+            (i32.gt_u (local.get $kind) (i32.const 4))
+            (i32.or
+              (i32.and (i32.eq (local.get $kind) (i32.const 3))
+                (i32.lt_u (local.get $version) (i32.const 0x0500)))
+              (i32.and (i32.eq (local.get $kind) (i32.const 4))
+                (i32.lt_u (local.get $version) (i32.const 0x0700))))))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
@@ -8074,6 +8095,9 @@
     (if (i32.eq (local.get $kind) (i32.const 3))
       (then (local.set $obj (call $dx_get_wrapper_for_vtbl
         (local.get $slot) (global.get $DX_VTBL_DIDEV2)))))
+    (if (i32.eq (local.get $kind) (i32.const 4))
+      (then (local.set $obj (call $dx_get_wrapper_for_vtbl
+        (local.get $slot) (global.get $DX_VTBL_DIDEV7)))))
     (if (i32.eqz (local.get $obj))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
@@ -9028,6 +9052,24 @@
   ;; only; nothing here accepts device data.
   (func $handle_IDirectInputDevice2_SendDeviceData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+
+  ;; ── IDirectInputDevice7 (slots 27..28) ────────────────────────────────
+  ;; The two methods v7 adds over v2 both move force-feedback effects between
+  ;; a device and a .FFE file. The devices we expose are the system keyboard
+  ;; and mouse, neither of which has effects to read or write, so both answer
+  ;; DIERR_UNSUPPORTED exactly as the v2 effect methods above do. That is the
+  ;; same answer real DirectInput gives for a device with no force feedback,
+  ;; and it is what makes the v7 vtable honest rather than merely long enough.
+
+  ;; EnumEffectsInFile(this, lpszFileName, pec, pvRef, dwFlags)
+  (func $handle_IDirectInputDevice7_EnumEffectsInFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+
+  ;; WriteEffectToFile(this, lpszFileName, dwEntries, rgDiFileEft, dwFlags)
+  (func $handle_IDirectInputDevice7_WriteEffectToFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
