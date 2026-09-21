@@ -2227,6 +2227,28 @@ Resource-aware Win98 emulator
         if (box) box.checked = true;
       });
     }
+    // ?x87-fuse-debug=MASK[,LO,HI] bisects a fold divergence WITHOUT giving up
+    // the fold entirely: MASK picks families (1 pipeline4, 2 short, 4 tree4,
+    // 8 affine, 16 island) and only blocks starting in [LO,HI) are offered.
+    // It implies ?x87-fold, because a mask is meaningless with the fold off,
+    // and that is the whole point -- "off" and "every family but the island"
+    // are different experiments and only the second one names a culprit.
+    // Compare MASK=0 against MASK=31, both with the parameter present: setting
+    // it clears the code cache and block extents depend on cache history, so
+    // parameter-vs-no-parameter is two decode shapes, not one variable.
+    (() => {
+      const raw = new URLSearchParams(location.search).get('x87-fuse-debug');
+      if (raw === null) return;
+      const [mask = '31', lo = '0', hi = '0xFFFFFFFF'] = raw.split(',');
+      window.WineSuperops.x87Fusion = true;
+      window.WineSuperops.x87FuseDebug = [Number(mask) | 0, Number(lo) | 0, Number(hi) | 0];
+      window.addEventListener('load', () => {
+        const box = document.getElementById('x87-fold-toggle');
+        if (box) box.checked = true;
+        appendDebugLog(`[superop] x87 fold families=0x${(Number(mask) | 0).toString(16)} ` +
+          `range=[${lo},${hi})`);
+      });
+    })();
     // Direct3D 8/9 backend. The bridge picks it once per launch (host.js
     // passes window.WineD3D.renderer as ctx.d3d9Backend), so like the fold
     // switches this steers the next launch. ?d3d9-renderer=software|webgl

@@ -1993,6 +1993,21 @@ class WineAssembly {
     if (this.instance.exports.set_x87_affine_fusion) {
       this.instance.exports.set_x87_affine_fusion(x87Fusion);
     }
+    // ?x87-fuse-debug=MASK[,LO,HI] -- the bisect knob for a fold divergence.
+    // MASK picks families (1 pipeline4, 2 short, 4 tree4, 8 affine, 16 island)
+    // and only blocks whose guest start is in [LO,HI) are offered to them.
+    // A fold that only misbehaves in the browser cannot be bisected from the
+    // CLI at all, and until now this gate was exported by the guest and
+    // reachable from no host, so the only browser-side control was the whole
+    // fold on or off. A/B it as MASK=0 against MASK=31, both with the flag
+    // set: it clears the code cache, and block extents depend on cache
+    // history, so flag-vs-no-flag compares two different decode shapes.
+    const x87FuseDebug = this.x87FuseDebug ||
+      (window.WineSuperops && window.WineSuperops.x87FuseDebug) || null;
+    if (x87FuseDebug && this.instance.exports.set_x87_fuse_debug) {
+      this.instance.exports.set_x87_fuse_debug(
+        x87FuseDebug[0] | 0, x87FuseDebug[1] | 0, x87FuseDebug[2] | 0);
+    }
     const cpuSSE = this.cpuSSE === true ? 1 : 0;
     if (this.instance.exports.set_cpu_sse) this.instance.exports.set_cpu_sse(cpuSSE);
     this._wasmModule = wasmModule;
@@ -2028,6 +2043,10 @@ class WineAssembly {
       }
       if (this.instance.exports.set_x87_affine_fusion) {
         await this.guestWorker.callExport('set_x87_affine_fusion', x87Fusion);
+      }
+      if (x87FuseDebug && this.instance.exports.set_x87_fuse_debug) {
+        await this.guestWorker.callExport('set_x87_fuse_debug',
+          x87FuseDebug[0] | 0, x87FuseDebug[1] | 0, x87FuseDebug[2] | 0);
       }
       if (this.instance.exports.set_cpu_sse) {
         await this.guestWorker.callExport('set_cpu_sse', cpuSSE);
@@ -2140,6 +2159,14 @@ class WineAssembly {
     // mutable WASM global is instance-local, including the meaningful OFF=0.
     this.threadManager.recordInheritedWasmGlobal('set_x87_pipeline4_fusion', x87Fusion);
     this.threadManager.recordInheritedWasmGlobal('set_x87_affine_fusion', x87Fusion);
+    // The bisect mask has to reach every guest thread for the same reason the
+    // fold flags do: a thread decodes in its own instance, so a mask set only
+    // here leaves the threads folding under the default (every family on) and
+    // the bisect silently reports on the one thread that is not doing the work.
+    if (x87FuseDebug) {
+      this.threadManager.recordInheritedWasmGlobal('set_x87_fuse_debug',
+        x87FuseDebug[0] | 0, x87FuseDebug[1] | 0, x87FuseDebug[2] | 0);
+    }
     this.threadManager.recordInheritedWasmGlobal('set_cpu_sse', cpuSSE);
 
     // A room address is a property of this whole process, and the guest reads

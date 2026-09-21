@@ -224,6 +224,16 @@ function createRunnerExperiments({ hasFlag, getArg, env = process.env, log = con
       inheritWasm('set_x87_pipeline4_fusion', 1);
       inheritWasm('set_x87_affine_fusion', 1);
     }
+    // The bisect mask, for the same reason as the fold flags right above it:
+    // applyMain() sets it on the main instance only, and a guest thread
+    // decodes in its own. Without this line --x87-fuse-debug restricts the
+    // families on the one instance and leaves every thread folding under the
+    // default -1 (all families, all addresses), so the arm that is supposed to
+    // have the island switched off still runs islands wherever the work is.
+    if (X87_FUSE_DEBUG) {
+      const [mask, lo = '0', hi = '0xFFFFFFFF'] = X87_FUSE_DEBUG.split(',');
+      inheritWasm('set_x87_fuse_debug', Number(mask) | 0, Number(lo) | 0, Number(hi) | 0);
+    }
     if (TREE_FOLD || TRACE_TREE_FOLD) inheritWasm('set_tree_fold', 1);
     if (TRACE_TREE_FOLD) inheritWasm('set_tree_trace', 1);
     // The thresholds too: a guest thread decodes in its own instance, so a cap
