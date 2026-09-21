@@ -109,8 +109,9 @@
   ;; check_input_lparam() → lParam of last check_input event
   (import "host" "check_input_wparam" (func $host_check_input_wparam (result i32)))
   ;; check_input_wparam() → full wParam of last event (packed check_input keeps only 16 bits)
-  (import "host" "check_input_hwnd" (func $host_check_input_hwnd (result i32)))
-  ;; check_input_hwnd() → hwnd of last check_input event (0 = use main_hwnd)
+  ;; The polling guest owns focus; a browser/Worker shadow can be stale.
+  (import "host" "check_input_hwnd" (func $host_check_input_hwnd (param i32) (result i32)))
+  ;; check_input_hwnd(focus) → explicit event hwnd or keyboard focus (0 = use main_hwnd)
   (import "host" "queue_keyboard_input" (func $host_queue_keyboard_input (param i32 i32 i32 i32 i32) (result i32)))
   ;; queue_keyboard_input(vk, scan, flags, extraInfo, hwnd) → accepted. The
   ;; result makes Worker brokerage synchronous so an immediate PeekMessage

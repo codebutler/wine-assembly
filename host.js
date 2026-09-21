@@ -1598,9 +1598,6 @@ class WineAssembly {
       }
       self._lastInputEvent = evt;
       self.renderer._activeInputEvent = evt;
-      if (self.guestWorker && evt.type === 'mouse' && evt.msg === 0x0201 && evt.hwnd) {
-        self._workerFocusHwnd = evt.hwnd | 0;
-      }
       if (evt.msg !== 0x200) {
         self.logToUI('[input] hwnd=0x' + (evt.hwnd >>> 0).toString(16) + ' msg=0x' + evt.msg.toString(16) + ' wParam=0x' + evt.wParam.toString(16));
       }
@@ -1612,17 +1609,15 @@ class WineAssembly {
     h.check_input_wparam = () => {
       return self._lastInputEvent ? (self._lastInputEvent.wParam | 0) : 0;
     };
-    h.check_input_hwnd = () => {
+    h.check_input_hwnd = (focusHwnd) => {
       const evt = self._lastInputEvent;
       if (!evt) return 0;
       const ownerInstance = ctx.instance || self.instance;
       // The routing rule itself is shared with the CLI (lib/host-window.js).
-      // In browser Worker mode the local instance is deliberately idle and
-      // its per-instance focus global remains zero. Use the focus published by
-      // slot 0 so queued WM_KEYDOWN/WM_CHAR/WM_KEYUP reach native EDIT children.
-      const routingExports = self.guestWorker
-        ? { get_focus_hwnd: () => self._workerFocusHwnd | 0 }
-        : (self.instance && self.instance.exports);
+      // The polling guest passes its live focus through the import, including
+      // across Worker RPC. A previous slice snapshot (or a dequeued mouse
+      // candidate) cannot describe a focus callback that just ran this slice.
+      const routingExports = { get_focus_hwnd: () => focusHwnd | 0 };
       const keyboardFallback = self.guestWorker ? () => {
         const renderer = self.renderer;
         const windows = Object.values((renderer && renderer.windows) || {})

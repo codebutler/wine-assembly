@@ -15,7 +15,7 @@
         (if (i32.ne (local.get $packed) (i32.const 0))
           (then
             (global.set $pending_input_packed (local.get $packed))
-            (global.set $pending_input_hwnd (call $host_check_input_hwnd))
+            (global.set $pending_input_hwnd (call $host_check_input_hwnd (global.get $focus_hwnd)))
             (global.set $pending_input_lparam (call $host_check_input_lparam))))))
     (if (i32.or
           (i32.or

@@ -1700,7 +1700,7 @@
     (if (global.get $pending_input_packed) (then (return)))
     (local.set $packed (call $host_check_input))
     (if (i32.eqz (local.get $packed)) (then (return)))
-    (global.set $pending_input_hwnd (call $host_check_input_hwnd))
+    (global.set $pending_input_hwnd (call $host_check_input_hwnd (global.get $focus_hwnd)))
     (global.set $pending_input_lparam (call $host_check_input_lparam))
     (local.set $msg (i32.and (local.get $packed) (i32.const 0xFFFF)))
     (local.set $wparam (call $host_check_input_wparam))

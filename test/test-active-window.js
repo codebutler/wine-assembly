@@ -192,6 +192,7 @@ const extraWat = String.raw`
   let currentMouse = null;
   let inputRenderer = null;
   let desktopHost = null;
+  const polledFocus = new Set();
   assert.strictEqual(apiTable.find(api => api.name === 'SetActiveWindow').nargs, 1);
   assert.strictEqual(apiTable.find(api => api.name === 'GetActiveWindow').nargs, 0);
   assert.strictEqual(apiTable.find(api => api.name === 'GetForegroundWindow').nargs, 0);
@@ -210,7 +211,11 @@ const extraWat = String.raw`
           : (mouseInput.shift() || null);
         return currentMouse ? ((currentMouse.wp << 16) | currentMouse.msg) : 0;
       },
-      check_input_hwnd() { return currentMouse ? currentMouse.hwnd : 0; },
+      check_input_hwnd(focus) {
+        assert.strictEqual(focus, e.get_focus_hwnd(), 'compiled poll passes its live focus to the host');
+        polledFocus.add(focus);
+        return currentMouse ? currentMouse.hwnd : 0;
+      },
       check_input_lparam() { return currentMouse ? currentMouse.lp : 0; },
       activate_window(hwnd) {
         hostCalls.push(['activate', hwnd >>> 0]);
@@ -765,6 +770,7 @@ const extraWat = String.raw`
     assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x202, 0x202), 1,
       'even an eaten down retains its queued release');
   }
+  assert(polledFocus.size > 1, 'input polls observe changing guest focus owners');
   console.log('PASS Set/GetActiveWindow and removal-time mouse activation');
 })().catch(error => {
   console.error(error && error.stack || error);

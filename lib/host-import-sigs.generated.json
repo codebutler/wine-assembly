@@ -321,7 +321,9 @@
       ]
     },
     "check_input_hwnd": {
-      "params": [],
+      "params": [
+        "i32"
+      ],
       "results": [
         "i32"
       ]

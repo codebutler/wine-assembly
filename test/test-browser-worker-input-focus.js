@@ -2,12 +2,14 @@
 'use strict';
 
 // Browser Worker mode keeps the live guest main thread in slot 0. Its focus
-// global is not shared with the idle local WASM instance, so keyboard events
-// must route through focus published by the Worker rather than local exports.
+// global is not shared with the idle local WASM instance. Keyboard routing
+// must use the calling guest's live focus, not a previous slice snapshot.
 
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
+const { createHostImports } = require('../lib/host-imports');
 const { installInputHandlers } = require('../lib/renderer-input');
 const { Win98Renderer } = require('../lib/renderer');
 const { inputEventHwnd } = require('../lib/host-window');
@@ -24,16 +26,12 @@ assert(/msg\.sync\.focusHwnd !== undefined[\s\S]*?ex\.set_focus\(focus\)[\s\S]*?
   'guest Worker should apply renderer focus with real messages before running the next slice');
 assert(host.includes('self._workerFocusHwnd = r.focusHwnd | 0;'),
   'browser Worker loop should cache the focus returned by slot 0');
-assert(host.includes("evt.type === 'mouse' && evt.msg === 0x0201 && evt.hwnd"),
-  'dequeued mouse-down should update Worker focus before rapid following keys');
 assert(/const owns = \(self\._hwndBase && self\._multiApp\)[\s\S]*?if \(win && win\.processId\) return win\.processId === self\.processId;[\s\S]*?return e\.hwnd >= self\._hwndBase/.test(host),
   'multi-app input should prefer recorded process ownership over a stale HWND range');
 assert(/if \(win && win\.processId\) return win\.processId === self\.processId;/.test(host),
   'guest threads in one Win32 process should share ownership of queued window input');
 assert(/win\.processId\s*\? win\.processId === self\.processId\s*:\s*\(!win\.wasm \|\| win\.wasm === ownerInstance\)/.test(host),
   'Worker keyboard fallback should use process ownership before legacy WASM identity');
-assert(/const routingExports = self\.guestWorker[\s\S]*?get_focus_hwnd: \(\) => self\._workerFocusHwnd \| 0[\s\S]*?keyboardFallback[\s\S]*?inputEventHwnd\(evt, routingExports, null, keyboardFallback\)/.test(host),
-  'browser keyboard routing should consult Worker focus then its visible owner window');
 assert(host.includes('this.renderer._guestWorkerWasms.add(this.instance);'),
   'Worker-backed renderer ownership token should be marked');
 assert(input.includes('if (this._keyboardOwnerRunsInGuestWorker())'),
@@ -175,3 +173,41 @@ assert(wakes.some(item => item.depth === 0 && item.wake === true),
   'menu WM_COMMAND should force a Worker slice even with no browser input queued');
 
 console.log('PASS browser Worker keyboard and menu input avoid the idle WASM instance');
+
+// Exercise the actual browser host closures, not a regex describing a focus
+// guess. Within one Worker slice the guest may reject mouse activation, or
+// redirect focus in a callback; neither waits for the next slice snapshot.
+const context = { console, createHostImports, inputEventHwnd };
+vm.runInNewContext(host + '\n;globalThis.WineAssembly = WineAssembly;', context);
+for (const threaded of [false, true]) {
+  const wine = new context.WineAssembly();
+  wine.memory = { buffer: new ArrayBuffer(65536) };
+  wine.instance = { exports: { get_focus_hwnd() {
+    throw new Error('input router consulted idle/stale browser focus');
+  } } };
+  wine.guestWorker = threaded ? {} : null;
+  wine._workerFocusHwnd = 0x1111; // Deliberately stale throughout this slice.
+  wine.logToUI = () => {};
+  const r = new Win98Renderer(canvas);
+  r.wasm = wine.instance;
+  r.windows[0x2222] = { hwnd: 0x2222, visible: true, isChild: false,
+    zOrder: 1, wasm: wine.instance };
+  wine.renderer = r;
+  const h = wine.getImports().host;
+  r.inputQueue.push({ type: 'mouse', hwnd: 0x2222, msg: 0x201, wParam: 1 });
+  assert.strictEqual(h.check_input(), 0x10201);
+  assert.strictEqual(wine._workerFocusHwnd, 0x1111,
+    'dequeue is not a focus decision, even for an activation-bearing down');
+  assert.strictEqual(h.check_input_hwnd(0x3333), 0x2222, 'explicit pointer target wins');
+  for (const focus of [0x3333, 0x4444]) {
+    r.inputQueue.push({ type: 'key', hwnd: 0, msg: 0x100, wParam: 65 });
+    assert.strictEqual(h.check_input(), (65 << 16) | 0x100);
+    assert.strictEqual(h.check_input_hwnd(focus), focus,
+      'rapid following key uses guest focus after veto or callback redirection');
+    assert.strictEqual(wine._workerFocusHwnd, 0x1111, 'no snapshot update is needed');
+  }
+  r.inputQueue.push({ type: 'key', hwnd: 0x5555, msg: 0x100, wParam: 65 });
+  h.check_input();
+  assert.strictEqual(h.check_input_hwnd(0x3333), 0x5555, 'explicit injected key target remains explicit');
+}
+console.log('PASS browser input uses calling guest focus without speculative dequeue updates');

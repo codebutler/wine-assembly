@@ -2942,3 +2942,55 @@ Next authority gaps: `host.js` still guesses `_workerFocusHwnd` from a
 dequeued mouse-down, rather than the live guest's acceptance/focus decision;
 direct native/non-client routing remains separate; live cross-app Worker
 activation/deactivation has not been verified by this harness matrix.
+
+### Polling guest supplies live focus to the host (2026-09-20)
+
+`check_input_hwnd` now takes the calling guest's `$focus_hwnd` as an i32
+argument. All five WAT call sites pass it: GetMessage, PeekMessage,
+MsgWaitForMultipleObjects, console polling and the modal dispatch loop.
+The generated Worker import signature carries that argument through the
+existing synchronous RPC, without a separate round trip or shared shadow.
+Browser routing uses this live value in cooperative and Worker mode;
+explicit event HWNDs still win, and existing zero-focus fallback is unchanged.
+
+Removed the browser's `_workerFocusHwnd = evt.hwnd` on mouse-down dequeue.
+Dequeue cannot predict `WM_MOUSEACTIVATE` rejection or a subsequent focus
+callback's chosen child. Slice-result focus snapshots remain for diagnostics
+and existing consumers, but no longer decide this input import's key target.
+
+The browser-host regression executes real `getImports()` closures in both
+modes, with idle export access forbidden and a deliberately stale snapshot.
+Mouse dequeue leaves that snapshot alone; following keys use two successive
+live focus owners without waiting for another slice; explicit mouse and
+injected-key targets retain their HWND. The compiled activation/pump test
+checks the import argument against the guest global across changing focus
+owners. Both main and the isolated test copy pass. Old host code fails on
+stale export access; restoring the old zero-argument ABI fails with
+`undefined` versus live HWND 65619, not a compiler error.
+
+Main console input, modal timer/input pump and PeekMessage filter suites pass.
+Clean full build passes (`/private/tmp/wa-input-live-focus-build.log`),
+normal/compat sizes 1454942/1455848, layout `c5ccefca8909ee4b` unchanged.
+The rebuilt WordPad browser test passes with terminal exit 0
+(`/private/tmp/wa-input-live-focus-wordpad.log`).
+
+The first real Worker browser suite did not launch its guests: external
+temporary-corpus symlinks were rejected by the static server with HTTP 403.
+The Notepad screenshot identifies `binaries/notepad.exe`; both cooperative
+and Worker runs had zero windows. This is not a parity pass. Its terminal
+failure log is `/private/tmp/wa-input-live-focus-worker-browser.log`.
+Replaced the relevant temporary links with rsynced local corpus copies,
+preserving directory links in `/private/tmp/wa-input-live-links.R6Hv28`;
+no main-worktree corpus files were changed. The follow-up run is recorded
+separately below.
+
+The corrected-corpus rerun passed every check and exited 0:
+`/private/tmp/wa-input-live-focus-worker-browser-repeat.log`. Notepad and
+Calculator have matching cooperative/Worker windows and titles and no missing
+imports. Win16 Rodent's held arrows changed 221 sampled board bytes with
+focus `0x10005`; Rodent2000's real-menu new game and arrows changed 893.
+Winamp created three real guest threads and executed 14736 slices without
+traps; COM server load and missing-server completion also passed. These are
+live single-app Worker checks, not proof of cross-app activation/deactivation.
+Direct native/non-client mouse acceptance and multi-app Worker coordination
+remain open.

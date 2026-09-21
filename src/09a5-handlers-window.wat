@@ -1889,7 +1889,7 @@
         (local.set $packed (call $host_check_input))
         (if (i32.ne (local.get $packed) (i32.const 0))
           (then
-            (global.set $pending_input_hwnd (call $host_check_input_hwnd))
+            (global.set $pending_input_hwnd (call $host_check_input_hwnd (global.get $focus_hwnd)))
             (global.set $pending_input_lparam (call $host_check_input_lparam))))))
     (local.set $packed (call $input_route_to_owner (local.get $packed)))
     (if (i32.ne (local.get $packed) (i32.const 0))
@@ -2241,7 +2241,7 @@
         (if (i32.ne (local.get $packed) (i32.const 0))
           (then
             ;; Save hwnd and lparam immediately (only valid until next host_check_input)
-            (global.set $pending_input_hwnd (call $host_check_input_hwnd))
+            (global.set $pending_input_hwnd (call $host_check_input_hwnd (global.get $focus_hwnd)))
             (global.set $pending_input_lparam (call $host_check_input_lparam))
             ;; A PeekMessage filter scans without deleting messages it skips.
             ;; Cache first and consume only after this event is admitted.

@@ -927,7 +927,7 @@
             (local.set $arg1 (i32.and (local.get $arg0) (i32.const 0xFFFF)))      ;; msg
             (local.set $arg2 (i32.shr_u (local.get $arg0) (i32.const 16)))        ;; wParam
             (local.set $arg3 (call $host_check_input_lparam))                      ;; lParam
-            (local.set $arg0 (call $host_check_input_hwnd))                        ;; hwnd
+            (local.set $arg0 (call $host_check_input_hwnd (global.get $focus_hwnd))) ;; hwnd
             (if (local.get $arg0)
               (then
                 ;; Host specified a target hwnd — dispatch by its wndproc
