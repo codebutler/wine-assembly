@@ -156,6 +156,42 @@ function u32(value) {
     e.set_post_queue_count(0);
   }
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
+  // Space activates on release, with the same auto-check/notify transition
+  // as mouse release. Key repeats cannot enqueue repeated clicks.
+  for (const kind of [0, 1, 2, 3, 4, 5, 6, 9, 11]) {
+    const button = e.test_create_dialog_button(proc, 1500 + kind, kind) >>> 0;
+    e.set_focus(button);
+    e.set_post_queue_count(0);
+    e.send_message(button, 0x100, 0x0d, 1);
+    assert.strictEqual(e.get_post_queue_count(), 0, 'Enter activation belongs to dialog processing');
+    for (const lp of [1, 0x40000001, 0x40000001]) {
+      e.send_message(button, 0x100, 0x20, lp);
+      assert.strictEqual(e.send_message(button, 0xf2, 0, 0), 12, 'Space holds the focused button down');
+      assert.strictEqual(e.get_capture_hwnd(), button);
+      assert.strictEqual(e.get_post_queue_count(), 0, 'Space key-down/repeat does not click');
+    }
+    e.send_message(button, 0x101, 9, 0xc00f0001);
+    assert.strictEqual(e.get_capture_hwnd(), button, 'TAB release leaves cancellation to focus handling');
+    e.send_message(button, 0x101, 0x20, 0xc0390001);
+    assert.strictEqual(e.get_capture_hwnd(), 0);
+    assert.strictEqual(e.get_post_queue_count(), 1, 'Space release clicks once');
+    assert.strictEqual(e.send_message(button, 0xf0, 0, 0), [3, 6, 9].includes(kind) ? 1 : 0);
+    e.set_post_queue_count(0);
+    e.send_message(button, 0x101, 0x20, 0xc0390001);
+    assert.strictEqual(e.get_post_queue_count(), 0, 'a repeated release is inert');
+    for (const cancel of ['focus', 'other-key', 'sys-key', 'capture']) {
+      e.set_focus(button);
+      e.send_message(button, 0x100, 0x20, 1);
+      if (cancel === 'focus') e.set_focus(custom);
+      if (cancel === 'other-key') e.send_message(button, 0x101, 0x41, 0xc01e0001);
+      if (cancel === 'sys-key') e.send_message(button, 0x105, 0x12, 0xe0380001);
+      if (cancel === 'capture') e.test_capture_api(custom);
+      e.send_message(button, 0x101, 0x20, 0xc0390001);
+      assert.strictEqual(e.get_post_queue_count(), 0, 'cancelled Space press cannot click');
+      assert.strictEqual(e.button_get_flags(button) & 0x201, 0);
+      if (cancel === 'capture') e.test_capture_api(0);
+    }
+  }
   // Highlighting is not tracking: synthetic UP after BM_SETSTATE is inert.
   for (const kind of [0, 1, 3, 6, 9, 11]) {
     const button = e.test_create_dialog_button(proc, 1400 + kind, kind) >>> 0;

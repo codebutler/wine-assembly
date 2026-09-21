@@ -485,22 +485,22 @@
                       (local.get $hwnd)))))))))
         (return (i32.const 0))))
 
-    ;; ---------- WM_KEYDOWN (0x0100) ----------
-    ;; Space/Enter activate the button — post WM_COMMAND(BN_CLICKED) to
-    ;; the parent dialog. Mirrors WM_LBUTTONUP's parent-notify path.
-    (if (i32.eq (local.get $msg) (i32.const 0x0100))
+    ;; Space shares the native press/release transitions below. Enter belongs
+    ;; to dialog default-button processing, not a BUTTON key-down click.
+    (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0100))
+                 (i32.ne (local.get $wParam) (i32.const 0x20)))
+      (then (return (i32.const 0))))
+    ;; Other key releases cancel capture, except TAB (focus handling owns it).
+    (if (i32.and
+          (i32.or (i32.eq (local.get $msg) (i32.const 0x0101))
+                  (i32.eq (local.get $msg) (i32.const 0x0105)))
+          (i32.ne (local.get $wParam) (i32.const 0x20)))
       (then
-        (if (i32.or (i32.eq (local.get $wParam) (i32.const 0x20))   ;; VK_SPACE
-                    (i32.eq (local.get $wParam) (i32.const 0x0D)))  ;; VK_RETURN
+        (if (i32.ne (local.get $wParam) (i32.const 9))
           (then
-            (if (local.get $state)
-              (then
-                (local.set $state_w (call $g2w (local.get $state)))
-                (drop (call $post_queue_push
-                  (call $wnd_get_parent (local.get $hwnd))
-                  (i32.const 0x0111)
-                  (i32.and (call $ctrl_table_get_id (local.get $hwnd)) (i32.const 0xFFFF))
-                  (local.get $hwnd)))))))
+            (call $button_cancel_press (local.get $hwnd))
+            (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
+              (then (drop (call $capture_replace (i32.const 0)))))))
         (return (i32.const 0))))
 
     ;; ---------- WM_SETTEXT (0x000C) ----------
@@ -553,10 +553,11 @@
         (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
         (return (call $btn_text_len (call $g2w (local.get $state))))))
 
-    ;; ---------- WM_LBUTTONDOWN (0x0201) / WM_LBUTTONDBLCLK (0x0203) ----------
+    ;; ---------- Mouse DOWN/DBLCLK or Space KEYDOWN ----------
     (if (i32.or
-          (i32.eq (local.get $msg) (i32.const 0x0201))
-          (i32.eq (local.get $msg) (i32.const 0x0203)))
+          (i32.eq (local.get $msg) (i32.const 0x0100))
+          (i32.or (i32.eq (local.get $msg) (i32.const 0x0201))
+                  (i32.eq (local.get $msg) (i32.const 0x0203))))
       (then
         ;; USER gives a BUTTON the focus before delivering its button-down.
         ;; The renderer normally performs that transition while routing the
@@ -566,7 +567,8 @@
         ;; where both backends execute and where BS_NOTIFY's BN_SETFOCUS must be
         ;; generated. Diablo selects/populates Warrior from that notification;
         ;; BN_CLICKED merely confirms the already-selected class.
-        (if (i32.ne (global.get $focus_hwnd) (local.get $hwnd))
+        (if (i32.and (i32.ne (local.get $msg) (i32.const 0x0100))
+                    (i32.ne (global.get $focus_hwnd) (local.get $hwnd)))
           (then (call $set_focus (local.get $hwnd))))
         (if (local.get $state)
           (then
@@ -613,7 +615,7 @@
         (return (i32.const 0))))
 
     ;; BM_SETSTATE changes appearance only; it must not manufacture a click
-    ;; when an otherwise unrelated UP arrives. Mouse tracking uses bit9.
+    ;; when an otherwise unrelated UP arrives. Press tracking uses bit9.
     ;; Captured movement updates that same appearance without ending tracking.
     (if (i32.or (i32.eq (local.get $msg) (i32.const 0x00F3))
                 (i32.eq (local.get $msg) (i32.const 0x0200)))
@@ -641,12 +643,14 @@
               (local.get $hwnd) (i32.const 0x000F) (i32.const 0) (i32.const 0)))))
         (return (i32.const 0))))
 
-    ;; ---------- WM_LBUTTONUP (0x0202) ----------
+    ;; ---------- Mouse UP or Space KEYUP/SYSKEYUP ----------
     ;; Clear pressed flag, derive button kind from style&0xF (BS_*), update
     ;; check state for automatic checkbox/radio kinds, then post WM_COMMAND with
     ;; BN_CLICKED to the parent so a future $wndproc_dialog (or an existing
     ;; x86 dialog proc) can react.
-    (if (i32.eq (local.get $msg) (i32.const 0x0202))
+    (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0202))
+          (i32.or (i32.eq (local.get $msg) (i32.const 0x0101))
+                  (i32.eq (local.get $msg) (i32.const 0x0105))))
       (then
         (if (local.get $state)
           (then
@@ -667,11 +671,11 @@
             ;; right/bottom edges are excluded. Cancel before auto-toggle or
             ;; BN_CLICKED, but retire the pressed state and repaint normally.
             (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
-            (if (i32.or
+            (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0202)) (i32.or
                   (i32.ge_u (i32.shr_s (i32.shl (local.get $lParam) (i32.const 16)) (i32.const 16))
                     (i32.and (local.get $sz) (i32.const 0xFFFF)))
                   (i32.ge_u (i32.shr_s (local.get $lParam) (i32.const 16))
-                    (i32.shr_u (local.get $sz) (i32.const 16))))
+                    (i32.shr_u (local.get $sz) (i32.const 16)))))
               (then
                 (call $btn_set_flags (local.get $state_w) (local.get $flags))
                 (call $invalidate_hwnd (local.get $hwnd))

@@ -2594,3 +2594,35 @@ normal/compat 1454644/1455550-byte artifacts with unchanged layout
 and exit successfully (`wa-button-tracking-{vb,wep3,wordpad}.log`). All
 logs are under `/private/tmp/`; foreign main-worktree edits were excluded
 from the clean build and the commit.
+
+### Keyboard Space uses the button press/release transition
+
+The BUTTON key-down handler used to post BN_CLICKED immediately for both
+Space and Enter, without highlighting, capture, automatic check changes,
+or release cancellation. Space now shares the native press/release branches:
+key-down highlights and tracks, repeats do not notify, and key-up applies
+the same automatic check/radio transition and notification policy as mouse
+release. Keyboard lParam is not interpreted as mouse coordinates. Focus or
+capture loss cancels the pending press; a stray release cannot click.
+Enter is left to the dialog manager, not turned into a second control-level
+click. Other key-up/SYSKEYUP messages cancel except TAB, as specified by
+[Microsoft's button default-processing table](https://learn.microsoft.com/en-us/windows/win32/controls/button-messages#button-default-message-processing).
+
+This reuses the existing tracking flag and notification path rather than
+adding a keyboard-only copy. The native fixture covers nine button styles,
+three successive Space key-downs, exactly one release click, automatic versus
+manual check behavior, repeated release, and focus/key/capture cancellation.
+Mixed mouse/keyboard sequences, radio focus-selection notifications, and
+complete WM_GETDLGCODE/WM_CHAR behavior still need native fidelity coverage.
+
+Main and clean native matrices pass (`/private/tmp/wa-button-keyboard-main.log`,
+`wa-button-keyboard.log`); the final expanded TAB/SYSKEYUP matrix passes
+(`wa-button-keyboard-final.log`). The previous handler fails the premature
+Enter-click assertion (`wa-button-keyboard-negative.log`). The separate
+IsDialogMessage test passes focused-button Enter, Escape, Tab and arrow
+routing (`wa-button-keyboard-enter.log`), so removing the control-level
+Enter shortcut does not remove the tested dialog activation route.
+Clean full build passes (`wa-button-keyboard-build.log`), normal/compat
+sizes 1454688/1455594 with unchanged layout `c5ccefca8909ee4b`. Rebuilt
+VB2, WEP3 7/7 and WordPad browser checks pass
+(`wa-button-keyboard-{vb,wep3,wordpad}.log`, all under `/private/tmp/`).
