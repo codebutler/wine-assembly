@@ -215,6 +215,29 @@
     (global.set $fpu_sw
       (i32.or (i32.and (global.get $fpu_sw) (i32.const 0xB8FF)) (local.get $cc))))
 
+  ;; FSIN/FCOS/FSINCOS/FPTAN report argument reduction through C2: each clears
+  ;; it when |ST(0)| < 2^63 and otherwise SETS it and leaves the stack alone.
+  ;; Leaving C2 untouched is not harmless, because C2 is sticky and FXAM runs
+  ;; immediately before: every MSVC/Borland CRT sin/cos classifies its argument
+  ;; with FXAM -- which sets C2=1 for a normal number -- and its compute arm is
+  ;;
+  ;;     fsin ; fnstsw ax ; sahf ; jp out_of_range
+  ;;
+  ;; where SAHF takes PF from AH bit 2, i.e. C2. With C2 left set, the CRT
+  ;; believes every in-range argument needs reduction and takes its error path.
+  ;; boids.exe's projection matrix came out all +/-infinity for exactly this:
+  ;; cos(pi/8) returned -inf.
+  ;;
+  ;; Returns 1 when the operation should compute. NaN counts as in range (the
+  ;; result is a NaN and C2 is cleared); infinities do not.
+  (func $fpu_trig_c2 (param $v f64) (result i32)
+    (if (i32.eqz (f64.ge (f64.abs (local.get $v)) (f64.const 9223372036854775808.0)))
+      (then
+        (global.set $fpu_sw (i32.and (global.get $fpu_sw) (i32.const 0xFBFF)))
+        (return (i32.const 1))))
+    (global.set $fpu_sw (i32.or (global.get $fpu_sw) (i32.const 0x0400)))
+    (i32.const 0))
+
   (func $fpu_compare (param $a f64) (param $b f64)
     (local $cc i32)
     (if (f64.lt (local.get $a) (local.get $b))
@@ -753,8 +776,11 @@
           (then
             (if (i32.eq (local.get $rm) (i32.const 2))
               (then ;; FPTAN: ST(0) = tan(ST(0)), push 1.0
-                (call $fpu_set (i32.const 0) (call $host_math_tan (local.get $st0)))
-                (call $fpu_push (f64.const 1.0)) (return)))
+                (if (call $fpu_trig_c2 (local.get $st0))
+                  (then
+                    (call $fpu_set (i32.const 0) (call $host_math_tan (local.get $st0)))
+                    (call $fpu_push (f64.const 1.0))))
+                (return)))
             (if (i32.eq (local.get $rm) (i32.const 3))
               (then ;; FPATAN: ST(1) = atan2(ST(1), ST(0)), pop
                 (call $fpu_set (i32.const 1) (call $host_math_atan2 (call $fpu_get (i32.const 1)) (local.get $st0)))
@@ -802,9 +828,12 @@
                 (call $fpu_set (i32.const 0) (f64.sqrt (local.get $st0))) (return)))
             (if (i32.eq (local.get $rm) (i32.const 3))
               (then ;; FSINCOS: ST(0) = sin, push cos
-                (local.set $v (call $host_math_cos (local.get $st0)))
-                (call $fpu_set (i32.const 0) (call $host_math_sin (local.get $st0)))
-                (call $fpu_push (local.get $v)) (return)))
+                (if (call $fpu_trig_c2 (local.get $st0))
+                  (then
+                    (local.set $v (call $host_math_cos (local.get $st0)))
+                    (call $fpu_set (i32.const 0) (call $host_math_sin (local.get $st0)))
+                    (call $fpu_push (local.get $v))))
+                (return)))
             (if (i32.eq (local.get $rm) (i32.const 4))
               ;; FRNDINT — set C1 to 1 if result rounded up, else 0.
               (then
@@ -814,9 +843,15 @@
                   (else (global.set $fpu_sw (i32.and (global.get $fpu_sw) (i32.const 0xFDFF)))))
                 (call $fpu_set (i32.const 0) (local.get $v)) (return)))
             (if (i32.eq (local.get $rm) (i32.const 6))
-              (then (call $fpu_set (i32.const 0) (call $host_math_sin (local.get $st0))) (return))) ;; FSIN
+              (then ;; FSIN
+                (if (call $fpu_trig_c2 (local.get $st0))
+                  (then (call $fpu_set (i32.const 0) (call $host_math_sin (local.get $st0)))))
+                (return)))
             (if (i32.eq (local.get $rm) (i32.const 7))
-              (then (call $fpu_set (i32.const 0) (call $host_math_cos (local.get $st0))) (return))) ;; FCOS
+              (then ;; FCOS
+                (if (call $fpu_trig_c2 (local.get $st0))
+                  (then (call $fpu_set (i32.const 0) (call $host_math_cos (local.get $st0)))))
+                (return)))
             (if (i32.eq (local.get $rm) (i32.const 1))
               (then ;; FYL2XP1: ST(1) = ST(1) * log2(ST(0) + 1), pop
                 (call $fpu_set (i32.const 1) (f64.mul (call $fpu_get (i32.const 1)) (call $host_math_log2 (f64.add (local.get $st0) (f64.const 1.0)))))

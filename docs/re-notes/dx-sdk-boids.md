@@ -4,9 +4,15 @@
 Direct3D Immediate Mode **v2** sample: flocking birds over a wireframe ground
 grid.
 
-Status in `test-all-exes`: **WARN — BLANK (1 colour, 100%)**. This note records
-why, because the symptom reads convincingly like a dead rasterizer and is not
-one.
+**RESOLVED 2026-09-21 — it renders.** 1 colour → 223, wireframe terrain in
+perspective with the flock above it. The bug was ours and it was in the x87:
+`FSIN`/`FCOS`/`FSINCOS`/`FPTAN` never wrote **C2**. Jump to
+[the root cause](#root-cause-fsinfcos-never-cleared-c2); everything above it is
+the (correct) investigation that led there, kept because each step rules
+something out.
+
+Status was **WARN — BLANK (1 colour, 100%)**. This note records why, because
+the symptom reads convincingly like a dead rasterizer and is not one.
 
 ## The frame is blank because the guest's own projection matrix is ±infinity
 
@@ -82,15 +88,69 @@ the **volume**: 42k deliberate raises means the app's math library is taking an
 error path tens of thousands of times, which is consistent with the shared
 upstream zero above.
 
-Next step is to find which libm call returns 0 (or a domain error) where real
-Win98 returns a nonzero: `sin`/`cos` around the FOV, or whatever feeds
-`far−near`. `--trace-fpu` shows no `ZE` at all, so the infinities are not coming
-from a plain divide-by-zero in our FPU.
+`--trace-fpu` shows no `ZE` at all, so the infinities are not coming from a
+plain divide-by-zero in our FPU. They come from the CRT taking an error path.
+
+## Root cause: FSIN/FCOS never cleared C2
+
+The builder is `0x00407c1b`. It is **not** the SDK's
+`D3DUtil_SetProjectionMatrix`: it stores `cos(fov/2)` straight into `_11`.
+
+```
+00407c24  fld dword [ebp+0x14]        ; fov
+00407c27  fmul qword [0x41c020]       ; * 0.5
+00407c33  call 0x414eca               ; cos  -> [ebp-0xc]  -> _11
+00407c4d  call 0x414ec0               ; sin  -> [ebp-0x8]
+```
+
+`0x414ec0` is `mov edx,0x41e592 ; jmp 0x416125`, and `0x41e592` is a descriptor
+beginning with the Pascal string `"\x03sin"`; `0x414eca` is the same with
+`"\x03cos"` at `0x41e5b2`. Both funnel into the classifier at `0x00418a70`:
+
+```
+00418a9d  fxam
+00418aa6  fnstsw qword [ebp-0xa0]     ; DD /7, m2byte
+00418ab4  mov cl, [ebp-0x9f]          ; status high byte
+00418aba  shl cl,1 / sar cl,1 / rol cl,1
+00418ac2  and al, 0xf                 ; index = C3 | C0<<1 | C1<<2 | C2<<3
+00418ac4  xlat                        ; class table at 0x41f10d
+00418ad5  jmp [ebx]                   ; descriptor+0x10 + class
+```
+
+Class table `08 04 08 08 08 04 08 08 00 04 0c 08 00 04 0c 08`. A positive
+normal indexes 8 → `0x00` → the first handler, `0x00415f1a`:
+
+```
+00415f1a  fsin
+00415f1d  fnstsw ax
+00415f20  sahf
+00415f21  jp 0x415f2f                 ; taken when C2 is set
+00415f23  ret
+```
+
+**`SAHF` takes PF from `AH` bit 2, which is C2.** Real `FSIN` clears C2 when
+`|ST(0)| < 2^63` and sets it otherwise; that is how the CRT asks "did you need
+argument reduction?". Our `FSIN`, `FCOS`, `FSINCOS` and `FPTAN` never wrote C2
+at all — and C2 is **sticky**, so it still held the `1` that the `FXAM` two
+instructions earlier had set for a normal number. Every in-range argument took
+the reduction path and came back infinite.
+
+Fixed in `src/06-fpu.wat` with `$fpu_trig_c2`: clear C2 and compute when
+`|ST(0)| < 2^63`, otherwise set C2 and leave the stack untouched (NaN counts as
+in range). `FPREM`/`FPREM1` already did this; the trig ops were the gap.
+Regression cases in `test/test-x86-ops.js` run `FXAM` first **on purpose**,
+because that is what makes C2 dirty — without it the bug is invisible.
+
+`dx_flip3dtl` had the same root cause and now draws its textured rotating
+Windows 95 cube (77 colours).
+
+This is not a boids-specific bug: it is every guest that reaches x87 trig
+through an MSVC or Borland CRT, which is the usual way.
 
 ## Not the same bug as its neighbours
 
-`dx_flip3dtl` (black + a yellow text overlay, 115,686 GPU draws) may share this;
-unverified. `dx_globe` and `dx_viewer` are a different, known failure —
+`dx_flip3dtl` did share it and is fixed too (see above). `dx_globe` and
+`dx_viewer` are a different, known failure —
 `D3DRMERR_BADFILE` on `sphere3.x`/`camera.x`, the `.x` loader asset gap.
 
 The 2026-09-19 D3DIM/GL sweep scored `dx_boids` **IDENTICAL, 0% diff** between

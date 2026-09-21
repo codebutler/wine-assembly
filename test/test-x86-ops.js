@@ -267,6 +267,46 @@ async function main() {
   test('FXAM preserves negative-zero sign in C1', fxamStatus(-0), 0x4200);
   test('FXAM classifies positive infinity', fxamStatus(Infinity), 0x0500);
 
+  // FSIN/FCOS/FSINCOS/FPTAN own C2: cleared when |ST(0)| < 2^63, set (and the
+  // stack left alone) otherwise. C2 is sticky and FXAM runs immediately before
+  // in every MSVC/Borland CRT sin/cos, which then does
+  //     fsin ; fnstsw ax ; sahf ; jp out_of_range
+  // -- SAHF takes PF from C2. Leaving FXAM's C2 set sent the CRT down its
+  // argument-reduction path for every in-range argument, and boids.exe's
+  // projection matrix came back all +/-infinity because cos(pi/8) returned
+  // -inf. Each case runs FXAM first on purpose: that is what makes C2 dirty.
+  const trigAfterFxam = (value, op) => {
+    setFloat(scratch, value);
+    runCode([
+      0xDD, 0x05, ...le32(scratch), // fld qword [scratch]
+      0xD9, 0xE5,                   // fxam  -- sets C2 for a normal number
+      ...op,
+      0xDF, 0xE0,                   // fnstsw ax
+      0xDD, 0x1D, ...le32(scratch), // fstp qword [scratch]
+    ]);
+    return { c2: e.get_eax() & 0x0400, st0: dv.getFloat64(g2w(scratch), true) };
+  };
+  const FSIN = [0xD9, 0xFE], FCOS = [0xD9, 0xFF], FPTAN = [0xD9, 0xF2];
+
+  const sinInRange = trigAfterFxam(Math.PI / 8, FSIN);
+  test('FSIN clears C2 for an in-range argument', sinInRange.c2, 0);
+  testFloat('FSIN value after FXAM dirtied C2', sinInRange.st0, Math.sin(Math.PI / 8));
+
+  const cosInRange = trigAfterFxam(Math.PI / 8, FCOS);
+  test('FCOS clears C2 for an in-range argument', cosInRange.c2, 0);
+  testFloat('FCOS value after FXAM dirtied C2', cosInRange.st0, Math.cos(Math.PI / 8));
+
+  // FPTAN pushes 1.0, so ST(0) after it is the pushed 1.0, not the tangent.
+  const tanInRange = trigAfterFxam(Math.PI / 8, FPTAN);
+  test('FPTAN clears C2 for an in-range argument', tanInRange.c2, 0);
+  testFloat('FPTAN pushes 1.0 when in range', tanInRange.st0, 1.0);
+
+  // 2^63 exactly is out of range: C2 set and ST(0) left untouched.
+  const sinOutOfRange = trigAfterFxam(9223372036854775808.0, FSIN);
+  test('FSIN sets C2 for an out-of-range argument', sinOutOfRange.c2, 0x0400);
+  testFloat('FSIN leaves ST(0) alone when out of range',
+    sinOutOfRange.st0, 9223372036854775808.0, 1e4);
+
   // ================================================================
   // MUL dword [mem] — unsigned 32×32→64 multiply
   // ================================================================
