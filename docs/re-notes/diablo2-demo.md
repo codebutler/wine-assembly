@@ -798,3 +798,37 @@ register set that belongs to nobody, and it reads convincingly as memory
 corruption. And the tell is cheap once you know it: the bogus "return address"
 is one of the caller's own arguments, so a suspiciously round value like 320
 or 640 is not garbage, it is data being executed.
+
+### 2026-09-20: the black ground was a silent-success stub, and it is fixed
+
+Sprites, HUD, rain and torches rendered on `Render=1`; the floor was black.
+That shape is the tell. Diablo II batches its floor tiles through
+`IDirect3DDevice3::DrawIndexedPrimitiveVB` — vtable slot 35, a TRIANGLELIST
+over a Locked vertex buffer, the six-push call site at `0x10006445` already
+recorded above — while its sprites go through the implemented
+`DrawPrimitive`. `fb397db1` fixed that entry's *pop arity* (32 → 28) and left
+the body empty, so the handler stored S_OK, adjusted ESP and drew nothing.
+
+A silent-success stub is the worst failure shape we have: no trap, no
+`UNIMPLEMENTED API` line, no wrong return code. The only symptom is absent
+geometry, which reads as a texture, palette or format bug and sends the
+investigation into the sampler. Both v3 VB entries now forward into the
+Device7 VB cores (`$d3dim_vb_draw_primitive` /
+`$d3dim_vb_draw_indexed_primitive`), with `start = 0` and `count = -1` so the
+core clamps to the whole buffer.
+
+**Verified end to end**, not inferred. `test/test-d3dim-v3-vertex-buffer-draw.js`
+rasterizes both entries against a real TLVERTEX buffer (FVF `0x1c4`, stride 32)
+and asserts the 28-byte pop, and it fails with "drew nothing" when the stub is
+put back. Then the full route — SINGLE PLAYER, Barbarian, name, OK — was driven
+to the Rogue Encampment at batch 1650 with `d2direct3d.dll` LoadLibrary'd at
+runtime by the registry seeding, and the capture shows grass, the stone wall,
+the wagon, the campfire, the NPC and both orbs.
+
+**Budget note for whoever runs the gameplay test next.** That capture took
+569s of wall clock for 1680 batches (3 batches/s) on a box at load 13.6.
+`test/test-diablo2-demo-gameplay.js` caps its child at 220s, so on a loaded
+machine it now times out before it reaches Act I — the assertion is fine, the
+budget is not. It is the D3D route that is being timed since the
+`startupRegistry` seeding landed; the DirectDraw route the 220s was calibrated
+against is no longer what that test exercises.
