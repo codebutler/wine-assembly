@@ -43,6 +43,22 @@ function makeWndProc(observed, callback = []) {
 }
 
 const extraWat = String.raw`
+  (func (export "test_mdi_focus") (param $client i32) (param $target i32) (param $mode i32)
+    (local $state i32)
+    (local.set $state (call $heap_alloc (i32.const 16)))
+    (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 16))
+    (call $ctrl_table_set (call $wnd_table_find (local.get $client)) (i32.const 33) (i32.const 0))
+    (call $wnd_set_state_ptr (local.get $client) (local.get $state))
+    (if (i32.ne (local.get $mode) (i32.const 3))
+      (then (call $gs32 (i32.add (local.get $state) (i32.const 8)) (local.get $target))))
+    (if (i32.eqz (local.get $mode))
+      (then (drop (call $mdiclient_wndproc (local.get $client) (i32.const 7) (i32.const 0) (i32.const 0))))
+      (else (if (i32.eq (local.get $mode) (i32.const 1))
+        (then (drop (call $mdi_frame_message (call $wnd_get_parent (local.get $client))
+          (local.get $client) (i32.const 7) (i32.const 0) (i32.const 0))))
+        (else (drop (call $mdi_client_activate (local.get $client) (local.get $target)))))))
+    (call $wnd_set_state_ptr (local.get $client) (i32.const 0))
+    (call $heap_free (local.get $state)))
   (func (export "test_mouse_clear_nc")
     (local $h i32)
     (block $done (loop $next
@@ -486,6 +502,19 @@ const extraWat = String.raw`
   e.set_focus(disabled);
   assert.strictEqual(e.test_focus(), focusChosen, 'internal focus rejects disabled targets');
   assert.deepStrictEqual(records(), []);
+  const mdiClient = e.test_make_window(proc, WS_VISIBLE | WS_CHILD, focusA, 1);
+  const mdiTarget = e.test_make_window(proc, WS_VISIBLE | WS_CHILD, mdiClient, 1);
+  for (const mode of [0, 1, 2, 3]) {
+    view.setUint32(toWasm(armed), 0, true);
+    e.set_focus(oldFocus);
+    resetRecords();
+    view.setUint32(toWasm(armed), 1, true);
+    e.test_mdi_focus(mdiClient, mdiTarget, mode);
+    assert.strictEqual(view.getUint32(toWasm(seenActive), true), mdiTarget);
+    assert.strictEqual(e.test_focus(), focusChosen, `MDI route ${mode} preserves nested focus`);
+    assert(!records().some(r => r.hwnd === mdiTarget && r.msg === 7),
+      `MDI route ${mode} must not notify the superseded target`);
+  }
   // Native reentry case 4: chaining to DefWindowProc after choosing C
   // reactivates B, unlike consuming the activation message.
   const defThunk = e.test_thunk(apiTable.find(api => api.name === 'DefWindowProcA').id);

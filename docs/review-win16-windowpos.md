@@ -2000,3 +2000,39 @@ all seven WEP3 gameplay checks pass against that artifact
 (`wa-focus-internal-vb.log`, `wa-focus-internal-wep.log`). Logs are under
 `/private/tmp`. Worker isolation here is a host-unit assertion, not an
 end-to-end browser no-activation test.
+
+### MDI focus uses the shared handoff
+
+Removed `$mdi_set_focus`, a second publish/KILLFOCUS/SETFOCUS sequence that
+unconditionally notified the requested child after a callback had selected
+another window. All four callers now use `$set_focus`: already-active child
+selection, newly selected child, MDICLIENT WM_SETFOCUS and frame-default
+WM_SETFOCUS. This shares target validation, focus serial publication and the
+reentry guard without adding frame-activation policy to MDI child selection.
+
+The real x86 regression exercises those four paths with a KILLFOCUS handler
+that reads GetFocus and redirects via SetFocus. Each must expose the proposed
+child before the callback, keep the nested winner and omit stale SETFOCUS
+to the superseded child. The existing ANSI/Wide MDI default-procedure and
+maximized-child resize suites also pass. This is focus-handoff coverage,
+not proof that arbitrary reentrant WM_MDIACTIVATE state transitions are
+already correct.
+
+Modal restoration remains open for a concrete reason: the EndDialog branch
+in `09b-dispatch.wat` calls `$focus_restore_after_modal` **before** capturing
+`dlg_result` and `dlg_ret_addr` and restoring the enclosing modal state.
+Replacing its posted owner notification with a synchronous callback alone
+would permit a nested dialog to overwrite the retiring call's result.
+Snapshot/restore ownership must be fixed together with synchronous delivery;
+the native common-dialog completion path needs the same reentry audit.
+
+Validation logs under `/private/tmp`: `wa-mdi-focus.log`,
+`wa-mdi-default.log` and `wa-mdi-resize.log` pass; reverting only the MDI
+source makes route 0 fail on the stale notification
+(`wa-mdi-focus-negative.log`). Main-tree build stopped on an unrelated
+untracked test's 900-second timeout exceeding the 300-second runner cap.
+The clean test tree `/private/tmp/wa-mdi-focus-verify`, based on `7dc1743a`
+with only these three files copied by rsync, passes the callback suite and
+full normal/compatibility build (`wa-mdi-focus-clean-test.log`,
+`wa-mdi-focus-clean-build.log`, layout `c5ccefca8909ee4b`). No gate or foreign
+test was changed. No performance claim is made on the heavily loaded host.
