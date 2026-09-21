@@ -344,6 +344,7 @@ function makeRenderer(wasm) {
   assert.deepStrictEqual(wrongCalls, [], 'native child routing must not query the previously active app');
   const events = r.inputQueue.filter(event => event && event.type === 'mouse');
   assert.deepStrictEqual(events.map(event => [event.hwnd, event.msg, event.lParam]), [
+    [501, 0x0084, (70 << 16) | 50],
     [501, 0x0201, (10 << 16) | 10],
     [501, 0x0200, (40 << 16) | 40],
   ]);

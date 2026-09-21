@@ -2260,3 +2260,40 @@ WM_NCHITTEST event. Both failures reproduce with HEAD's unchanged renderer
 (`wa-disabled-frame-multi-baseline.log`, `wa-disabled-frame-caption-baseline.log`);
 they are not counted as passing validation or fixed here. They need updating
 before the broader browser activation acceptance matrix can be trusted.
+
+### Renderer acceptance fixtures repaired; cross-app prerequisite
+
+The two stale queue expectations above now include WM_NCHITTEST before the
+button down. They retain exact event ordering and assert screen coordinates
+for hit testing versus child-client coordinates for the button/drag. No event
+is filtered away to make the tests pass. Multi-app modality and caption/child
+drag suites now pass alongside mouse-drag and keyboard-focus suites, both in
+main and the temporary clean JS verification tree.
+
+The multi-app test also pins a useful boundary: with keyboard ownership set
+to app A, `takeInput(ownsB)` can drain B's hit-test/down/up events in order,
+while `takeInput(ownsA)` cannot consume them and dequeue itself does not
+change keyboard ownership. This proves target routing does not require the
+eager keyboard switch; it does not yet prove a guest activation transaction.
+
+Source inspection identifies an additional prerequisite for removing that
+switch. Both `message_mouse_activate32` and `win16_mouse_input_start` skip
+the query when the target top-level equals their instance-local `active_hwnd`.
+The renderer's `_setKeyboardInputOwner` changes host instance/memory tokens,
+and `activate_window` raises the accepted window and invokes that helper;
+neither path deactivates the old guest instance. Consequently a background
+app can retain a locally active HWND. Simply deleting eager host raising
+would then leave its click on the same-active fast path, with no query and
+no accepted-activation host callback to raise it.
+
+Next integration must distinguish local active-window state from desktop
+foreground ownership at the removal decision, preserve source provenance
+through queued input, and publish accepted ownership only after the result.
+Tests must cover two instances whose local active HWNDs remain set, answers
+1–4, no-remove, live Worker versus shadow execution, and the already-known
+direct native-control routes. Existing single-instance active-window tests
+cannot establish this cross-instance property. No runtime behavior changes
+in this fixture/audit stage.
+Negative controls confirm the repaired test rejects both dropping
+WM_NCHITTEST (`wa-input-order-negative.log`) and ignoring the queue's ownership
+predicate (`wa-input-owner-negative.log`); both are in `/private/tmp`.

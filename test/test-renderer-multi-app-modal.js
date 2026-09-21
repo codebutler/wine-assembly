@@ -54,9 +54,23 @@ renderer._nextZ = 4;
 renderer.handleMouseDown(40, 60, 0);
 renderer.handleMouseUp(40, 60, 0);
 assert.deepStrictEqual(renderer.inputQueue.map(event => [event.hwnd, event.msg]), [
+  [200, 0x0084],
   [200, 0x0201],
   [200, 0x0202],
 ], 'a dialog in app A must not outrank the frontmost overlapping window in app B');
+assert.strictEqual(renderer.inputQueue[0].lParam, (60 << 16) | 40,
+  'the owning app receives WM_NCHITTEST in screen coordinates before the click');
+
+// Consuming a pointer event for B does not require giving it the keyboard.
+// This is the separation needed while USER has not yet accepted activation.
+renderer._setKeyboardInputOwner(renderer.windows[100]);
+const owns = wasm => event => renderer.windows[event.hwnd]?.wasm === wasm;
+assert.strictEqual(renderer.takeInput(owns(appA)), null,
+  'app A cannot consume pending pointer events addressed to B');
+assert.deepStrictEqual([0x0084, 0x0201, 0x0202].map(() => renderer.takeInput(owns(appB)).msg),
+  [0x0084, 0x0201, 0x0202], 'app B consumes its query/down/up without keyboard ownership');
+assert.strictEqual(renderer._keyboardInputWasm, appA,
+  'pointer dequeue must not itself publish an activation decision');
 
 renderer.inputQueue.length = 0;
 renderer.windows[100].zOrder = renderer._nextZ++;
