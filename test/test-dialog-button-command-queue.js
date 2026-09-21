@@ -156,6 +156,21 @@ function u32(value) {
     e.set_post_queue_count(0);
   }
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
+  // Native Win98 reference: docs/reference-button-input-win98.txt.
+  for (const [kind, code] of [[0, 0x2020], [1, 0x2010], [2, 0x2000], [3, 0x2000],
+      [4, 0x2040], [5, 0x2000], [6, 0x2000], [7, 0x100], [9, 0x2040], [10, 0x2020], [11, 0x2000]]) {
+    const button = e.test_create_dialog_button(proc, 1600 + kind, kind) >>> 0;
+    for (const key of [0, 9, 13, 32, 65]) {
+      assert.strictEqual(e.send_message(button, 0x87, key, 0), code, `DLGC flags for button style ${kind}`);
+    }
+    assert.strictEqual(e.get_post_queue_count(), 0, 'dialog-code queries do not notify');
+    e.set_focus(button);
+    e.set_post_queue_count(0);
+    assert.strictEqual(e.send_message(button, 0x87, 0, 0), code, 'focus paint does not rewrite dialog capabilities');
+  }
+  e.wnd_set_style_export(custom, 0x50010001);
+  assert.strictEqual(e.send_message(custom, 0x87, 0, 0), 0x2010, 'dialog code follows current style');
+  e.wnd_set_style_export(custom, 0x50010000);
   // Space activates on release, with the same auto-check/notify transition
   // as mouse release. Key repeats cannot enqueue repeated clicks.
   for (const kind of [0, 1, 2, 3, 4, 5, 6, 9, 11]) {

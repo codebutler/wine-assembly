@@ -2626,3 +2626,58 @@ Clean full build passes (`wa-button-keyboard-build.log`), normal/compat
 sizes 1454688/1455594 with unchanged layout `c5ccefca8909ee4b`. Rebuilt
 VB2, WEP3 7/7 and WordPad browser checks pass
 (`wa-button-keyboard-{vb,wep3,wordpad}.log`, all under `/private/tmp/`).
+
+### Native Win98 button dialog-code reference
+
+WM_GETDLGCODE previously returned zero for all native BUTTON styles. The
+response now comes from the current low style nibble, independent of focus
+painting: push/pushbox `0x2020`, default push `0x2010`, radio `0x2040`,
+groupbox `0x0100`, checkbox/three-state/owner-drawn `0x2000`.
+
+Importantly, native Windows 98 **does not** return DLGC_WANTCHARS for the
+checkbox styles, contrary to the current [Microsoft button table](https://learn.microsoft.com/en-us/windows/win32/controls/button-messages#button-default-message-processing).
+The initial documentation-based implementation was corrected using native
+USER output, not Wine source. Full output is preserved in
+[reference-button-input-win98.txt](reference-button-input-win98.txt).
+
+Reproduction:
+
+```sh
+node tools/v86-reference/capture.js --online \
+  --manifest tools/v86-reference/button-apps.json --app button-input \
+  --output /private/tmp/wa-button-native.png \
+  --metadata /private/tmp/wa-button-native.json \
+  --serial-output /private/tmp/wa-button-native.serial
+```
+
+The CRT-free probe runs real USER on the pinned v86 Win98 profile, reports
+GetVersion `0xc0000a04`, and finishes with BUTTON_INPUT_DONE. v86 version
+`0.5.432+gf3d4472`, upstream `f3d4472a9c934b9ad78a311f5849ba711a296d23`;
+OS/firmware provenance is in `tools/v86-reference/SOURCES.md`. Probe executable
+SHA-256 `a590f51c8e4bde99e02e1444c7815842299b5a42f28a4583a8a7e6a64d85762f`.
+No OS assets or compiled executable are committed.
+
+The probe also exposes remaining differences: native creation converts
+BS_USERBUTTON (8) to style0, and BM_GETSTATE during Space reports `0x2c`
+instead of our documented-bit-only `0x0c`. Synthetic keyboard delivery to
+a groupbox also clicks on native Win98. These are recorded gaps, not
+silently incorporated assumptions. The measured Space release behavior
+for the nine tested interactive styles agrees with the previous change.
+Dialog-manager consumption of subclass WM_GETDLGCODE responses remains
+separate work; this change implements the native control's response only.
+
+Two native runs produced byte-identical serial output and screenshot SHA-256
+`3f5ce89714395d4cbfec8ff8f643998a7b8449414d066f6bb6b227600a66c329`.
+The corrected eleven-style emulator matrix passes in the clean tree
+(`/private/tmp/wa-button-dlgcode-final.log`); old source fails returning zero
+for style0 (`wa-button-dlgcode-negative.log`). IsDialogMessage regressions
+pass (`wa-button-dlgcode-enter.log`). Full pre-correction build gates pass
+(`wa-button-dlgcode-build.log`); after the native correction, final concat,
+paren, normal/compat compilation and data-overlap checks pass, sizes
+1454775/1455681, unchanged layout `c5ccefca8909ee4b`.
+The corrected matrix also passes on main (`wa-button-dlgcode-main.log`).
+The first WordPad browser attempt failed with `Uncaught` at its pre-launch
+instrumentation (line211), before guest execution (`wa-button-dlgcode-wordpad.log`).
+An unchanged repeat passes all browser assertions
+(`wa-button-dlgcode-wordpad-repeat.log`); the initial harness failure is not
+counted as a guest regression or silently omitted.

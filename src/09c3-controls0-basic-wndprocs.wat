@@ -335,6 +335,25 @@
 
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
 
+    ;; WM_GETDLGCODE: report the actual button style, not the temporary
+    ;; focused/default border paint flag. No input or check state is changed.
+    (if (i32.eq (local.get $msg) (i32.const 0x0087))
+      (then
+        (local.set $kind (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 15)))
+        (if (i32.eq (local.get $kind) (i32.const 7))
+          (then (return (i32.const 0x0100)))) ;; DLGC_STATIC
+        (if (i32.or (i32.eq (local.get $kind) (i32.const 0))
+                    (i32.eq (local.get $kind) (i32.const 10)))
+          (then (return (i32.const 0x2020)))) ;; BUTTON | UNDEFPUSHBUTTON
+        (if (i32.eq (local.get $kind) (i32.const 1))
+          (then (return (i32.const 0x2010)))) ;; BUTTON | DEFPUSHBUTTON
+        (if (i32.or (i32.eq (local.get $kind) (i32.const 4))
+                    (i32.eq (local.get $kind) (i32.const 9)))
+          (then (return (i32.const 0x2040)))) ;; BUTTON | RADIOBUTTON
+        ;; Native Win98 returns BUTTON without WANTCHARS for checkbox
+        ;; styles 2/3/5/6, unlike the current Microsoft documentation table.
+        (return (i32.const 0x2000)))) ;; other button kinds
+
     ;; Capture transfer has already published the next owner. Never release
     ;; or reacquire that owner's capture while processing WM_CAPTURECHANGED.
     (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0215))
