@@ -4,6 +4,34 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  (func (export "test_modal_template") (result i32)
+    (local $sel i32) (local $p i32)
+    ;; Reserve the three synthetic code/stack/thunk segments before using the
+    ;; real global allocator for an empty Win16 DLGTEMPLATE.
+    (if (i32.lt_u (global.get $win16_next_seg) (i32.const 4))
+      (then (global.set $win16_next_seg (i32.const 4))))
+    (local.set $sel (call $win16_global_alloc (i32.const 32)))
+    (local.set $p (call $win16_far_to_guest (local.get $sel) (i32.const 0)))
+    (call $zero_memory (call $g2w (local.get $p)) (i32.const 32))
+    (call $gs32 (local.get $p) (i32.const 0x80000000))
+    (call $gs16 (i32.add (local.get $p) (i32.const 9)) (i32.const 80))
+    (call $gs16 (i32.add (local.get $p) (i32.const 11)) (i32.const 40))
+    (local.get $sel))
+  (func (export "test_widen") (param $h i32) (result i32) (call $win16_h32 (local.get $h)))
+  (func (export "test_modal_finish") (param $dlg i32) (param $owner i32)
+        (param $main i32) (param $focus i32) (param $active i32)
+    (call $post_queue_reset)
+    (call $wnd_set_owner (local.get $dlg) (local.get $owner))
+    (global.set $main_hwnd (local.get $main))
+    (global.set $active_hwnd (local.get $active))
+    (global.set $focus_hwnd (local.get $focus))
+    (global.set $win16_dlg_result (i32.const 42))
+    (global.set $win16_dlg_ended (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (call $win16_h16 (local.get $dlg)))
+    (call $gs16 (i32.const 0x110802) (i32.const 0x90))
+    (call $gs16 (i32.const 0x110804) (i32.const 0x000f))
+    (call $win16_dlg_pump))
   (func (export "test_peek_thunk") (result i32)
     (call $win16_thunk_for (i32.const 2) (i32.const 109) (i32.const 0)))
   (func (export "test_modal_mouse") (param $h i32) (result i32)
@@ -1034,5 +1062,59 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     assert.strictEqual(messages.includes(0x201), answer !== 2 && answer !== 4, 'modal eat controls dispatch');
     assert(messages.includes(0x202), 'modal loop still dispatches button-up');
   }
-  console.log('PASS Win16 WINDOWPOS/focus and removal-time task/modal mouse callbacks');
+  // Closing the dialog restores its actual owner synchronously, not the
+  // unrelated main window. The focus callback may itself call SetFocus.
+  const template = e.test_modal_template();
+  const nestedEnd = [0xff, 0x76, 0x0e, 0x6a, 99,
+    0x9a, ...word(e.test_user_thunk(88)), 0x1f, 0,
+    0x8b, 0x46, 0x0e, 0x36, 0xa3, 0x46, 0x0f];
+  writeCode(0xb800, recorder([0x81, 0x7e, 0x0c, 0x10, 1,
+    0x75, nestedEnd.length, ...nestedEnd]));
+  const modes = ['owner', 'redirect', 'surviving-focus', 'nested-dialog', 'activate-owner', 'main-fallback'];
+  for (const [index, mode] of modes.entries()) {
+    const off = 0xb000 + index * 0x100;
+    const owner = e.test_window(off);
+    const main = mode === 'main-fallback' ? owner : e.test_window(0x5000);
+    const dlg = e.test_window(0x5000), child = e.test_window(0x5000);
+    const chosen = e.test_window(0x5000);
+    e.test_as_child(child, dlg);
+    e.test_as_child(chosen, owner);
+    const action = [0x9a, ...word(getFocus), 0x1f, 0, 0x36, 0xa3, 0x42, 0x0f,
+      ...(mode === 'redirect' ? [0x68, ...word(e.test_narrow(chosen)),
+        0x9a, ...word(setFocus), 0x1f, 0] : []),
+      ...(mode === 'nested-dialog' ? [0x6a, 0, 0x68, ...word(template),
+        0x68, ...word(e.test_narrow(owner)), 0x6a, 0x0f, 0x68, 0, 0xb8,
+        0x9a, ...word(e.test_user_thunk(218)), 0x1f, 0,
+        0x36, 0xa3, 0x44, 0x0f] : [])];
+    writeCode(off, recorder([0x83, 0x7e, 0x0c, 7, 0x75, action.length, ...action]));
+    e.guest_write32(0x110900, 0);
+    e.guest_write32(0x110f40, 0);
+    e.test_modal_finish(dlg, mode === 'main-fallback' ? 0 : owner, main,
+      mode === 'surviving-focus' ? chosen : child, mode === 'activate-owner' ? dlg : owner);
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 50; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090, 'modal close returns to its far caller');
+    assert.strictEqual(e.get_esp(), 0x110806, 'modal and focus continuation frames retired');
+    assert.strictEqual(e.test_long_result(), 42, 'focus callbacks preserve outer result');
+    assert.strictEqual(e.test_alive(dlg), 0, 'retiring dialog removed');
+    assert.strictEqual(e.test_alive(child), 0, 'retiring focused child removed');
+    assert.strictEqual(e.test_alive(owner), 1, 'owner remains live');
+    assert.strictEqual(e.test_focus(), mode === 'redirect' || mode === 'surviving-focus' ? chosen : owner);
+    assert.strictEqual(e.test_active(), owner, 'owner activation remains/restores correctly');
+    assert.strictEqual(e.test_post_count(), 0, 'restoration is not a posted notification');
+    if (mode !== 'surviving-focus') {
+      assert.strictEqual(e.guest_read32(0x110f40) >>> 16, e.test_narrow(owner),
+        'owner has focus before its real far WM_SETFOCUS callback');
+      assert(pumpMessages().some(m => m.msg === 7));
+    } else assert.deepStrictEqual(pumpMessages(), [], 'surviving guest focus is not replaced');
+    if (mode === 'nested-dialog') {
+      assert.strictEqual(e.guest_read32(0x110f44) & 0xffff, 99,
+        'actual nested DialogBoxIndirect/EndDialog returns its own result');
+      const nested = e.guest_read32(0x110f44) >>> 16;
+      assert(nested, 'nested WM_INITDIALOG ran');
+      assert.strictEqual(e.test_alive(e.test_widen(nested)), 0, 'nested dialog also retired');
+    }
+  }
+  console.log('PASS Win16 WINDOWPOS/focus, task/modal mouse and modal completion callbacks');
 })().catch(error => { console.error(error); process.exit(1); });

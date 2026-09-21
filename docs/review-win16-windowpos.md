@@ -2147,3 +2147,46 @@ Final clean-tree regression including distinct nested nonvolatile registers
 passes (`/private/tmp/wa-real-nested-final.log`). Embedded-WAT address and
 test-timeout gates also pass. This stage changes tests/notes only; the runtime
 fix remains `168ecb6d`, and no additional artifact rebuild is claimed.
+
+### Win16 modal completion uses the far focus continuation
+
+The Win16 modal pump no longer publishes `main_hwnd` and posts WM_SETFOCUS
+before removing a focused dialog child. After teardown it preserves any
+surviving focus window; otherwise it restores the actual owner (main-window
+fallback only for an ownerless dialog) through `win16_focus_start`. Owner
+activation and real far focus callbacks complete before DialogBox returns,
+using the existing target validation and reentry guards.
+
+The pump's six-byte `{dialog, return offset, return selector}` frame becomes
+`{result, return offset, return selector}` before teardown. This is already
+the representation `win16_cont_resume` consumes: no new continuation opcode,
+global scratch record or duplicated return machinery is needed. In particular,
+a focus callback's nested EndDialog cannot replace the outer return value.
+This preserves the deferred completion/result contract documented for
+[EndDialog](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enddialog).
+The reference is modern API documentation, not a new native Win98 trace of
+the entire destruction/activation sequence.
+
+The real far-code regression covers distinct owner/main windows, nested
+SetFocus redirection, surviving external focus, owner activation, ownerless
+fallback, and a genuine DialogBoxIndirect whose WM_INITDIALOG calls
+EndDialog(99) inside the retiring dialog's owner WM_SETFOCUS. Both dialogs
+must disappear, the owner must survive, and the outer invocation must retain
+42, DX:AX, its return PC and its six-byte stack cleanup. No restoration
+notification may remain posted. Replacing just the runtime with its old
+version fails by selecting the unrelated main window
+(`/private/tmp/wa-far-modal-negative.log`).
+
+Clean verification uses HEAD `9327e0ec` plus rsync of the two changed runtime/
+test files in `/private/tmp/wa-far-modal-verify`, excluding unrelated shared
+worktree edits. Full build gates and normal/compat compilation pass
+(`/private/tmp/wa-far-modal-build.log`), layout `c5ccefca8909ee4b`, artifact
+sizes 1453278/1454184 bytes. The initial nested far matrix passes
+(`/private/tmp/wa-far-modal-clean.log`), as does the final six-case matrix
+including activation/fallback (`/private/tmp/wa-far-modal-final.log`). Real
+Rodent/Rattler gameplay and all seven WEP3 gameplay cases pass on this
+artifact (`/private/tmp/wa-far-modal-vb.log`, `wa-far-modal-wep3.log`).
+Broader internal far notifications,
+native-child mouse forwarding, renderer eager activation, and browser/Worker
+acceptance remain open; this is not a general Win16 nested-dialog lifecycle
+rewrite.
