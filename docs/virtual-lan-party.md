@@ -1425,3 +1425,11 @@ guest answering the app's `lan.hostProbe` marks the room *hosting* in presence,
 which is what the Join card shows: at launch ("Join alex / Not now"), at the
 first `socket()` ("Join / Play offline"), and as a toast over a running game.
 Apps without `lan.room: 'auto'` (Blobby, Liquid War) keep the lobby.
+
+**Invite links.** While a page is in a star room, an Invite button under the
+status chip shares (on a phone) or copies `?app=ID&room=OWNER_USERID`. The
+link is the person's answer already, so it shows no card. If the owner is
+hosting, the game launches with `lan.join.launchArgs`. If the owner is in a
+room but not serving yet, the room is joined silently at the game's first
+`socket()`. If the owner is gone, the launch proceeds as usual. `room` is read
+only for the app the link names.

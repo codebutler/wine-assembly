@@ -18,7 +18,8 @@
 // the toast the shell shows it later. That join reaches a game already past
 // its command line, so it goes through lan.join.inGame typing into Quake's
 // console. It is also the three-player room where an unread UDP socket used
-// to stall the wire.
+// to stall the wire. A fourth opens the host's invite link
+// (?app=quake2_demo&room=USERID) and must land at the owner with no card.
 
 'use strict';
 
@@ -116,7 +117,7 @@ const snapWindow = () => {
     args: ['--no-sandbox', '--no-first-run', '--no-default-browser-check'],
   });
 
-  const open = async (label, args) => {
+  const open = async (label, args, link) => {
     const ctx = browser.createBrowserContext
       ? await browser.createBrowserContext()
       : await browser.createIncognitoBrowserContext();
@@ -131,6 +132,28 @@ const snapWindow = () => {
         problems.push(t.slice(0, 300));
       }
     });
+    if (link) {
+      // A link launches the app from the page's own ?app= handler at load,
+      // before anything here could run, so the arguments are swapped as the
+      // registry is defined, and every card the page ever shows is counted.
+      await page.evaluateOnNewDocument(a => {
+        let apps;
+        Object.defineProperty(window, 'wineApps', {
+          configurable: true,
+          get() { return apps; },
+          set(v) {
+            apps = v;
+            if (v && v.APPS && v.APPS.quake2_demo) v.APPS.quake2_demo.args = a;
+          },
+        });
+        window.__cards = 0;
+        new MutationObserver(() => {
+          if (document.getElementById('wine-lan-card')) window.__cards++;
+        }).observe(document, { childList: true, subtree: true });
+      }, args);
+      await page.goto(link, { waitUntil: 'load', timeout: 60000 });
+      return { label, page, problems, lanLog, ctx };
+    }
     await page.goto(`${base}/index.html`, { waitUntil: 'load', timeout: 60000 });
     await page.waitForFunction('typeof launchApp === "function"', { timeout: 60000 });
     await page.evaluate(a => {
@@ -269,11 +292,35 @@ const snapWindow = () => {
     const tp = await snap(third, 'third-match');
     check(`the third player is in the level (${pct(tp)})`, !!tp && tp.lit > 0.3 && tp.colours > 40);
 
-    for (const side of [host, guest, third]) {
+    // ---- a fourth, from the host's invite link ----------------------------
+    //
+    // The link names the owner, so it is the person's answer already: the
+    // game launches straight at the owner with no card at all.
+    const link = await host.page.evaluate(() => {
+      const b = document.getElementById('wine-lan-invite');
+      return b ? b.dataset.link : null;
+    });
+    check(`the host has an invite link (${link})`,
+      !!link && /[?&]app=quake2_demo\b/.test(link) && /[?&]room=[^&]+/.test(link));
+    const fourth = link ? await open('fourth', JOIN_ARGS, link) : null;
+    const fourthSeat = fourth && await H.until(fourth.page, 'fourth: never wired',
+      () => { const w = runningApps[0] && runningApps[0].wine.vlanWire; return w ? w.address : null; },
+      null, 60000);
+    check(`the invite put the fourth player at the next seat (${fourthSeat})`, fourthSeat === '10.0.0.4');
+    const fourthArgs = fourth && await fourth.page.evaluate(() => runningApps[0] && runningApps[0].wine._extraArgs);
+    check(`and launched it straight at the owner (${fourthArgs})`,
+      /\+connect 10\.0\.0\.1\b/.test(fourthArgs || '') && !/\+menu_main/.test(fourthArgs || ''));
+    check('without showing a card', !!fourth && await fourth.page.evaluate(() => window.__cards === 0));
+    const fourthIn = fourth && await H.until(fourth.page, 'fourth: no traffic from the server',
+      () => { const w = runningApps[0] && runningApps[0].wine.vlanWire; return w && w.recvFrames > 300 ? w.recvFrames : null; },
+      null, 240000);
+    check(`the fourth player reached the server (${fourthIn || 0} frames received)`, !!fourthIn);
+
+    const sides = [host, guest, third].concat(fourth ? [fourth] : []);
+    for (const side of sides) {
       check(`${side.label}: no page errors`, side.problems.length === 0, side.problems.slice(0, 3).join(' | '));
     }
-    console.log(`--- host LAN log\n${await debugLog(host)}\n--- guest LAN log\n${await debugLog(guest)}`
-      + `\n--- third LAN log\n${await debugLog(third)}`);
+    for (const side of sides) console.log(`--- ${side.label} LAN log\n${await debugLog(side)}`);
   } catch (e) {
     check('the run completed', false, String(e && e.stack || e).split('\n').slice(0, 3).join(' '));
   } finally {
