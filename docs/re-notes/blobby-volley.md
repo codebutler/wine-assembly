@@ -142,7 +142,7 @@ player two's set — while player two's stock jump `↑` is also how the menus
 move. One button could therefore never be both "jump" and "confirm", and the
 layout needed two, the `Jump` one walking the menu selection every time it was
 pressed there. With player two on `Enter`, both jump keys (`W` and `Enter`)
-are inert in the menus, so a single **`Jump / OK`** button does both jobs on
+are inert in the menus, so a single **`Jump`** button does both jobs on
 both sides and the pad's verticals become pure menu navigation.
 
 Only player two moves, and only when `TouchControls.shouldInstall()` is true:
