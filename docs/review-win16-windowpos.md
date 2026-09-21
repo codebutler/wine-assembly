@@ -2190,3 +2190,45 @@ Broader internal far notifications,
 native-child mouse forwarding, renderer eager activation, and browser/Worker
 acceptance remain open; this is not a general Win16 nested-dialog lifecycle
 rewrite.
+
+### Native-child mouse activation forwarding
+
+The native control dispatch now sends an unhandled WM_MOUSEACTIVATE through
+the shared default parent policy. Previously zero escaped directly to the
+input pump, which interpreted it as activation consent without consulting
+the parent. The [official WM_MOUSEACTIVATE contract](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mouseactivate)
+requires parent-first processing when the child delegates to DefWindowProc.
+
+Win16 needs a different execution mechanism, not different policy: the WAT
+synchronous sender posts far messages and cannot obtain their return values.
+`win16_mouseactivate_start` now walks native-control forwarding until it
+reaches a guest far procedure, then suspends through the existing FFBC
+continuation. Its invocation owns the original lParam and a default-fallback
+flag. This flag distinguishes an explicit guest zero result from zero passed
+back into DefWindowProc; the complete DX:AX answer survives either route.
+The walk is bounded by MAX_WINDOWS. Removed mouse input, explicit Win16
+SendMessage, and Win16 DefWindowProc share this query machinery.
+
+Regression coverage uses two native-control-dispatch HWNDs between the click
+and a real guest parent. The Win32 parent veto must leave activation alone;
+the far matrix covers answers 0, 1, 2, 3, 4 and a high-word-bearing value,
+with exact query parameters, delivery/eating, no posted query, and stack
+restoration. Existing nested query/modal/DefWindowProc cases remain in the
+same suite. These are dispatch/ABI tests, not a new native capture of each
+control class or end-to-end browser no-activation acceptance. Browser eager
+activation and other internal far sender paths remain separate work.
+
+Validation: both clean real-guest matrices pass (`wa-native-mouse32-clean.log`,
+`wa-native-mouse-final-clean.log`). Independent old-source negatives fail:
+without the native default epilog the Win32 parent sees no query and unwanted
+activation occurs; without the far bridge the parent sees no synchronous
+query (`wa-native-mouse32-negative.log`, `wa-native-mouse-negative.log`).
+The clean tree `/private/tmp/wa-native-mouse-verify` is based on `4506e725`
+plus only the claimed source/tests via rsync. Full gates/normal+compat build
+pass (`wa-native-mouse-build.log`); final compilation after adding explicit
+SendMessage routing and using MAX_WINDOWS also passes with no data overlaps,
+layout `c5ccefca8909ee4b`, sizes 1454186/1455092 bytes. The Win32 fixture adds
+no runtime changes after its clean pass; the final far fixture includes the
+explicit SendMessage matrix and its exact full-result/stack checks.
+Rodent/Rattler gameplay and WEP3 7/7 pass on the final artifact
+(`/private/tmp/wa-native-mouse-vb.log`, `wa-native-mouse-wep3.log`).

@@ -4,6 +4,8 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  (func (export "test_native_control") (param $h i32)
+    (call $wnd_table_set (local.get $h) (global.get $WNDPROC_CTRL_NATIVE)))
   (func (export "test_modal_template") (result i32)
     (local $sel i32) (local $p i32)
     ;; Reserve the three synthetic code/stack/thunk segments before using the
@@ -87,7 +89,7 @@ const extraWat = `
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x11080e))
     (call $win16_cont_push (i32.const 0x000f0090) (i32.const 42))
     (call $win16_activate_start_reason (local.get $h) (i32.const 2)))
-  (func (export "test_mouse") (param $h i32) (param $top i32) (param $lp i32)
+  (func (export "test_mouse") (param $h i32) (param $top i32) (param $lp i32) (param $send i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
     (call $gs16 (i32.const 0x110800) (i32.const 0x90))
     (call $gs16 (i32.const 0x110802) (i32.const 0x000f))
@@ -95,7 +97,9 @@ const extraWat = `
     (call $gs16 (i32.const 0x110808) (call $win16_h16 (local.get $top)))
     (call $gs16 (i32.const 0x11080a) (i32.const 0x21))
     (call $gs16 (i32.const 0x11080c) (call $win16_h16 (local.get $h)))
-    (call $win16_DefWindowProc))
+    (if (local.get $send)
+      (then (call $win16_SendMessage))
+      (else (call $win16_DefWindowProc))))
   (func (export "test_long_result") (result i32)
     (i32.or (i32.and (i32.load (global.get $reg_base)) (i32.const 0xFFFF))
       (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))
@@ -1019,6 +1023,34 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     }
   }
   const peek16 = e.test_peek_thunk();
+  // A native child (and a native intermediate parent) must query the far
+  // ancestor before input removal decides whether to activate or eat.
+  for (const answer of [0, 1, 2, 3, 4, 0x10003]) {
+    const off = 0xc000 + (answer === 0x10003 ? 5 : answer) * 0x100;
+    writeCode(off, queryProc(answer & 0xffff, answer >>> 16));
+    const parent = e.test_window(off), middle = e.test_window(0x5000), child = e.test_window(0x5000);
+    e.test_native_control(middle); e.test_native_control(child);
+    e.test_as_child(middle, parent); e.test_as_child(child, middle);
+    runFocus(focusA);
+    e.guest_write32(0x110900, 0);
+    mouseInput.push({hwnd: child, msg: 0x201, wp: 1, lp: 0x0014000a});
+    assert.strictEqual(runPump(1, 1), answer === 2 || answer === 4 ? 0 : 1);
+    assert.strictEqual(e.test_active(), answer === 3 || answer === 4 ? focusA : parent);
+    assert.deepStrictEqual(pumpMessages().filter(m => m.msg === 0x21),
+      [{msg: 0x21, wp: e.test_narrow(parent), lp: 0x02010001}],
+      'native child chain forwards one complete synchronous query to far parent');
+    assert.strictEqual(e.test_post_count(), 0, 'far query is never posted');
+    e.guest_write32(0x110900, 0);
+    e.test_mouse(child, parent, 0x02010001, 1);
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 50; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090);
+    assert.strictEqual(e.get_esp(), 0x11080e, 'SendMessage far forwarding retires its own frames');
+    assert.strictEqual(e.test_long_result(), answer || 1, 'explicit SendMessage retains complete parent result');
+    assert.strictEqual(pumpMessages().filter(m => m.msg === 0x21).length, 1);
+    assert.strictEqual(e.test_post_count(), 0);
+  }
   const nestedPump = [0x68, ...word(0x17), 0x68, ...word(0x0e00), 0x6a, 0,
     0x68, ...word(0x400), 0x68, ...word(0x400), 0x6a, 1,
     0x9a, ...word(peek16), 0x1f, 0];

@@ -1719,6 +1719,11 @@
     (if (i32.eq (local.get $wp) (global.get $WNDPROC_CTRL_NATIVE))
       (then
         (local.set $ret (call $control_wndproc_dispatch (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))
+        ;; An unhandled activation query follows DefWindowProc's parent-first
+        ;; policy, rather than allowing the input pump to treat zero as consent.
+        (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0021)) (i32.eqz (local.get $ret)))
+          (then (return (call $mouse_activate_defproc
+            (local.get $hwnd) (local.get $wParam) (local.get $lParam)))))
         ;; Built-in controls use DefWindowProc for the legacy geometry-message
         ;; epilog after their own WM_WINDOWPOSCHANGED handling.
         (if (i32.eq (local.get $msg) (i32.const 0x0047))

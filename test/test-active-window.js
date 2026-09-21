@@ -43,6 +43,8 @@ function makeWndProc(observed, callback = []) {
 }
 
 const extraWat = String.raw`
+  (func (export "test_native_control") (param $h i32)
+    (call $wnd_table_set (local.get $h) (global.get $WNDPROC_CTRL_NATIVE)))
   (func (export "test_restore_modal_focus") (param $owner i32)
     (call $focus_restore_after_modal (local.get $owner)))
   (func (export "test_mdi_focus") (param $client i32) (param $target i32) (param $mode i32)
@@ -646,6 +648,15 @@ const extraWat = String.raw`
     ({hwnd, msg: 0x21, wParam: mouseParent, lParam: 0x02010001})),
     'child default forwards the original query to its parent before delivering the click');
   assert.strictEqual(e.test_get_active(), focusA);
+  const nativeMiddle = e.test_make_window(0, WS_VISIBLE | WS_CHILD, mouseParent, 1);
+  const nativeChild = e.test_make_window(0, WS_VISIBLE | WS_CHILD, nativeMiddle, 1);
+  e.test_native_control(nativeMiddle); e.test_native_control(nativeChild);
+  resetRecords();
+  mouseInput.push({hwnd: nativeChild, msg: 0x201, wp: 1, lp: 0x0014000a});
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), 1);
+  assert.deepStrictEqual(records(), [{hwnd: mouseParent, msg: 0x21,
+    wParam: mouseParent, lParam: 0x02010001}], 'native child chain consults the guest parent');
+  assert.strictEqual(e.test_get_active(), focusA, 'native children honor the parent activation veto');
   resetRecords();
   mouseInput.push({hwnd: mouseChild, msg: 0x201, wp: 1, lp: 0x0014000a});
   assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x100, 0x100), 0);

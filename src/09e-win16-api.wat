@@ -7773,7 +7773,7 @@
   ;; The original API/modal frame remains above it, including retry arguments.
   (global $WIN16_CONT_MOUSE_INPUT i32 (i32.const 0xFFC4))
   (func $win16_mouse_input_start (param $dst i32) (param $tmp i32) (param $kind i32) (result i32)
-    (local $sp i32) (local $h i32) (local $top i32) (local $proc i32) (local $lp i32)
+    (local $sp i32) (local $h i32) (local $top i32) (local $lp i32)
     (if (i32.ne (i32.load (global.get $reg_base)) (i32.const 1)) (then (return (i32.const 0))))
     (if (i32.eqz (global.get $user_queue_input_flags)) (then (return (i32.const 0))))
     (if (i32.eqz (call $mouse_message_is_down (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))))
@@ -7795,17 +7795,9 @@
     (local.set $lp (call $mouse_activate_query_lparam
       (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
       (call $gl32 (i32.add (local.get $tmp) (i32.const 8)))))
-    (local.set $proc (call $wnd_table_get (local.get $h)))
-    (if (call $win16_is_far_proc (local.get $proc))
-      (then
-        (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $h))
-          (i32.const 0x21) (call $win16_h16 (local.get $top)) (local.get $lp)
-          (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_MOUSE_INPUT))
-        (return (i32.const 1))))
-    (call $gs32 (i32.add (local.get $sp) (i32.const 12))
-      (call $wnd_send_message (local.get $h) (i32.const 0x21) (local.get $top) (local.get $lp)))
-    (call $gs32 (i32.add (local.get $sp) (i32.const 16)) (i32.const 2))
-    (call $win16_mouse_input_continue)
+    (call $win16_mouseactivate_start (local.get $h) (local.get $top) (local.get $lp) (i32.const 0)
+      (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+        (global.get $WIN16_CONT_MOUSE_INPUT)))
     (i32.const 1))
 
   (func $win16_mouse_input_continue
@@ -8160,6 +8152,12 @@
     (local.set $lp (call $win16_arg32 (i32.const 0)))
     (local.set $hwnd (call $win16_h32 (local.get $hwnd16)))
     (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+    (if (i32.eq (local.get $msg) (i32.const 0x21))
+      (then
+        (call $win16_mouseactivate_start (local.get $hwnd)
+          (call $win16_h32 (local.get $wp)) (local.get $lp) (i32.const 0)
+          (call $win16_take_return (i32.const 10)))
+        (return)))
     (if (i32.eqz (call $win16_is_far_proc (local.get $proc)))
       (then
         (local.set $class (call $ctrl_table_get_class (local.get $hwnd)))
@@ -8254,15 +8252,52 @@
   ;; Parent WM_MOUSEACTIVATE must return synchronously, including nested far
   ;; DefWindowProc calls. The fallback lParam belongs to this invocation.
   (global $WIN16_CONT_MOUSEACTIVATE i32 (i32.const 0xFFBC))
+  ;; Native controls have no guest call frame. Walk their unhandled default
+  ;; forwarding here so reaching a far parent suspends the query, rather than
+  ;; posting it from the synchronous WAT sender and losing its answer.
+  (func $win16_mouseactivate_start (param $hwnd i32) (param $top i32)
+        (param $lp i32) (param $fallback i32) (param $ret i32)
+    (local $proc i32) (local $answer i32) (local $depth i32)
+    (call $win16_cont_push (local.get $ret) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base)
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $lp))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $fallback))
+    (block $done (loop $parent
+      (br_if $done (i32.eqz (local.get $hwnd)))
+      (br_if $done (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (local.set $proc (call $wnd_table_get (local.get $hwnd)))
+      (if (call $win16_is_far_proc (local.get $proc))
+        (then
+          (call $win16_enter_wndproc (local.get $proc) (call $win16_h16 (local.get $hwnd))
+            (i32.const 0x21) (call $win16_h16 (local.get $top)) (local.get $lp)
+            (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_MOUSEACTIVATE))
+          (return)))
+      (if (i32.eq (local.get $proc) (global.get $WNDPROC_CTRL_NATIVE))
+        (then
+          (local.set $answer (call $control_wndproc_dispatch (local.get $hwnd)
+            (i32.const 0x21) (local.get $top) (local.get $lp)))
+          (br_if $done (local.get $answer))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (i32.const 1))
+          (local.set $hwnd (call $mouse_activate_parent (local.get $hwnd)))
+          (br $parent)))
+      (local.set $answer (call $wnd_send_message (local.get $hwnd)
+        (i32.const 0x21) (local.get $top) (local.get $lp)))))
+    (i32.store (global.get $reg_base) (i32.and (local.get $answer) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $answer) (i32.const 16)))
+    (call $win16_mouseactivate_continue))
+
   (func $win16_mouseactivate_continue
     (local $sp i32) (local $answer i32)
     (local.set $answer (i32.or
       (i32.and (i32.load (global.get $reg_base)) (i32.const 0xFFFF))
       (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
-    (if (i32.eqz (local.get $answer))
+    (if (i32.and (i32.eqz (local.get $answer))
+          (i32.ne (call $gl32 (i32.add (local.get $sp) (i32.const 4))) (i32.const 0)))
       (then (local.set $answer (call $mouse_activate_default (call $gl32 (local.get $sp))))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 8)))
     (call $win16_cont_resume)
     (i32.store (global.get $reg_base) (i32.and (local.get $answer) (i32.const 0xFFFF)))
     (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $answer) (i32.const 16))))
@@ -8286,24 +8321,10 @@
     (if (i32.eq (local.get $message) (i32.const 0x0021))
       (then
         (local.set $parent (call $mouse_activate_parent (local.get $hwnd)))
-        (if (local.get $parent)
-          (then
-            (if (call $win16_is_far_proc (call $wnd_table_get (local.get $parent)))
-              (then
-                (call $win16_cont_push (call $win16_take_return (i32.const 10)) (i32.const 0))
-                (local.set $sp (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-                (i32.store offset=16 (global.get $reg_base) (local.get $sp))
-                (call $gs32 (local.get $sp) (local.get $lparam))
-                (call $win16_enter_wndproc (call $wnd_table_get (local.get $parent))
-                  (call $win16_h16 (local.get $parent)) (local.get $message)
-                  (local.get $wparam) (local.get $lparam)
-                  (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_MOUSEACTIVATE))
-                (return)))))
-        (local.set $flags (call $mouse_activate_defproc (local.get $hwnd)
-          (call $win16_h32 (local.get $wparam)) (local.get $lparam)))
-        (i32.store (global.get $reg_base) (i32.and (local.get $flags) (i32.const 0xFFFF)))
-        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $flags) (i32.const 16)))
-        (call $win16_api_return (i32.const 10))
+        (call $win16_mouseactivate_start (local.get $parent)
+          (call $win16_h32 (local.get $wparam)) (local.get $lparam)
+          (i32.const 1)
+          (call $win16_take_return (i32.const 10)))
         (return)))
     (if (i32.and (i32.eq (local.get $message) (i32.const 6))
           (i32.and (i32.ne (local.get $wparam) (i32.const 0))
