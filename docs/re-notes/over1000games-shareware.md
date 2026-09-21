@@ -223,6 +223,79 @@ Ruled out: the target is not a missing relocation (the whole region from
 `0x2fec60` on is zeros at batch 71, i.e. past the segment's real content), and
 it is not a far-call selector problem.
 
+**2026-09-20, correcting the above: DI is not the corrupt value.** Hit #1 and
+hit #3 in that table have the *same* `DI = 0x01e8` and only one of them is
+fatal, so DI cannot be what distinguishes them — and `0x2f5204` is not the
+pivot either. The pivot `8b e7 9d c3` (`mov sp,di; popf; ret`) is at
+**`0x2f5200`**, four bytes earlier; `0x2f5204` is a separate entry point that
+shares the tail of the same routine:
+
+```
+2f5204  59              pop cx              ; return address
+2f5205  36 89 1e 72 02  ss: mov [0x0272], bx
+2f520a  5b              pop bx              ; the index, from the caller's push
+2f520b  8b c3           mov ax, bx
+2f520d  03 db           add bx, bx
+2f520f  2e ff a7 5a 51  jmp word cs:[bx+0x515a]
+```
+
+So the fault is a **jump-table dispatch with an out-of-range index**, and the
+whole chain is now visible:
+
+| | working hit | fatal hit |
+|---|---|---|
+| caller | `0x2f4f0f` | `0x2f4c1f` |
+| popped index | `0x0002` | `0x0078` |
+| `bx` after doubling | `0x0004` | `0x00f0` |
+| entry read | `cs:0x515e` | `cs:0x524a` = `0xec83` |
+
+`0xec83` is not a bad pointer into a segment we failed to fill: **no VBRUN300
+segment is that large.** The module's 101 segments top out at `alloc=0x9d5a`
+(`node tools/ne-dump.js VBRUN300.DLL --segments`), so offset `0xec83` does not
+exist anywhere in it, and the zeros at `0x2fec60`+ are simply the unused tail
+of the 64KB selector stride. The word at `cs:0x524a` is `83 ec`, the first two
+bytes of a `sub sp,0x0a` in the *handler bodies* that follow the table — the
+index ran off the end of the table and read code.
+
+Where `0x78` comes from is settled too, with a watchpoint on the stack slot the
+dispatcher pops:
+
+```
+node test/run.js --exe=<dir>/SOKOBAN.EXE --vfs-include='*' \
+  --win16-lib=<dir>/VBRUN300.DLL --max-batches=4000 --no-close --quiet-api \
+  --watch-word=0x001170ca --watch-log --watch-value=0x0078
+```
+
+It is written by `push ax` at **`0x2f3ffe`** (`50`, immediately followed by
+`6a 02`, `push 2`), on the threaded path that then runs `es: lodsw; jmp ax` at
+`0x2f4001` — the FP library's own address-stream interpreter. So two words go
+on the stack, a `2` and a computed value, and by the time the dispatcher runs
+the `2` is gone, the return address `0x4c22` sits in its slot, and the
+dispatcher pops the *other* one as its index.
+
+**The bug is therefore a stack imbalance of exactly one word on the path from
+`jmp ax` to the call at `0x2f4c1f`, not a corrupt register.** The next step is
+to find which routine on that threaded path returns without popping the word it
+was given — the candidates are the x87 sequences in this segment (`9b 36 d9 1c`
+= `fwait; ss: fstp dword [si]` at `0x2f51f4`, and the `sub sp,0x0a; mov di,sp;
+fwait; ss: fstp qword [di]` bodies at `0x2f5240`+), because those are the only
+places where our emulation, rather than the guest's own code, decides what the
+stack looks like on the way out. Note this is the coprocessor-*present* path of
+the MS floating-point library, which is the right one for us to be on: the NE
+loader deliberately leaves OSFIXUP (type 3) records alone
+(`src/08c-ne-loader.wat:384`), so those really are x87 instructions and not
+emulator call sites.
+
+One named suspect to check first, because it is ours and it is stack-neutral
+by construction: `$th_int` (`src/05c-seg16-ops.wat:650`) services `INT 21h` and
+answers every other vector by setting CF and resuming, pushing nothing. The MS
+floating-point library's vectors are `INT 34h`–`3Eh`, and a real one pushes
+three words that an `IRET` on the far side takes back off. If any path in this
+segment still reaches an `IRET` — or a handler written to be entered by an
+INT — the word counts on the two sides do not match, and one word is exactly
+the discrepancy measured above. Confirm or eliminate that before hunting a
+missing `pop` in the guest's own code.
+
 ## MicroMan (`ARCADE/MICROMAN`)
 
 16-bit NE, and it needs nothing: `--max-batches=40000` off the CD directory
