@@ -5567,7 +5567,7 @@
     (local $dib_wa i32) (local $bmi_wa i32) (local $i i32) (local $val i32)
     (local $surface_id i32) (local $target_hwnd i32) (local $shared i32)
     (local $cl i32) (local $ct i32) (local $cx i32) (local $cy i32)
-    (local $cw i32) (local $ch i32) (local $offset i32)
+    (local $cw i32) (local $ch i32) (local $offset i32) (local $client_rel i32)
     (local.set $w (i32.load16_u (i32.add (local.get $entry_wa) (i32.const 12))))
     (local.set $h (i32.load16_u (i32.add (local.get $entry_wa) (i32.const 14))))
     (local.set $bpp (i32.load16_u (i32.add (local.get $entry_wa) (i32.const 16))))
@@ -5625,6 +5625,14 @@
         (local.set $cy (call $wnd_client_screen_y (local.get $target_hwnd)))
         (local.set $cw (call $wnd_client_w_for_clip (local.get $target_hwnd)))
         (local.set $ch (call $wnd_client_h_for_clip (local.get $target_hwnd)))
+        ;; ...but a windowed Direct3D 9 back buffer is CLIENT-relative: its
+        ;; (0,0) is the client's top-left, not the display's, so the source
+        ;; origin is 0,0 and the client's screen position says only where the
+        ;; pixels land, which the client DC already knows.
+        (local.set $client_rel
+          (call $d3d9_present_client_relative (local.get $target_hwnd)))
+        (if (local.get $client_rel)
+          (then (local.set $cx (i32.const 0)) (local.set $cy (i32.const 0))))
         ;; A window that already covers the display exactly needs none of this,
         ;; and the direct attach below is far cheaper per frame.
         (if (i32.and (i32.gt_s (local.get $cw) (i32.const 0))
@@ -5635,6 +5643,16 @@
                           (i32.ne (local.get $cy) (i32.const 0)))
                   (i32.or (i32.ne (local.get $cw) (local.get $w))
                           (i32.ne (local.get $ch) (local.get $h))))
+              (then (local.set $offset (i32.const 1))))
+            ;; A device window that is a CHILD owns no composited surface --
+            ;; repaint() blits top-level back-canvases only -- so the attach
+            ;; fast path below would hand the frame to a canvas nobody draws.
+            ;; Its client DC, on the other hand, resolves to the top-level
+            ;; surface at the child's offset. Pawn's device window is a
+            ;; 1024x768 STATIC child of a 352x353 client, so this is the case
+            ;; that has to blit even when nothing else forces it to.
+            (if (i32.ne (call $wnd_top_level (local.get $target_hwnd))
+                        (local.get $target_hwnd))
               (then (local.set $offset (i32.const 1))))))))
     (if (i32.and (i32.eqz (local.get $shared)) (i32.eqz (local.get $offset)))
       (then

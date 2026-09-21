@@ -14,6 +14,19 @@
   ;; place they belong on screen is the main window's client origin.
   (global $d3d9_windowed_hwnd (mut i32) (i32.const 0))
 
+  ;; True while a windowed D3D9 device is the thing presenting to this window,
+  ;; i.e. the surface handed to $dx_present holds CLIENT-relative pixels.
+  ;; $dx_present's windowed path was written for DirectDraw, where the primary
+  ;; is display-sized and the app Blts into it in SCREEN coordinates (that is
+  ;; what IDirectDrawClipper::SetHWnd buys), so it samples the frame at the
+  ;; client's screen origin. A D3D9 back buffer starts at the client's
+  ;; top-left, so the same arithmetic reads a rectangle that is past the end of
+  ;; the picture: Pawn draws its board at back-buffer (0,0) and was presented
+  ;; from (354,142), which is black, so its client area stayed empty.
+  (func $d3d9_present_client_relative (param $target_hwnd i32) (result i32)
+    (if (i32.eqz (global.get $d3d9_windowed_hwnd)) (then (return (i32.const 0))))
+    (i32.eq (local.get $target_hwnd) (global.get $d3d9_windowed_hwnd)))
+
   ;; D3D9-only programmable state, owned by DxObject.misc1 on a device.
   ;; Do not extend/reinterpret the shared D3DIM state at entry+16.
   ;; Guest heap block: +0 VS, +4 PS, +8 declaration, +12 FVF (reserved

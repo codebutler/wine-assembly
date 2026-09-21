@@ -8,6 +8,12 @@
 // move to prove the v7 face is complete rather than merely accepted: a v2
 // vtable handed out under a v7 identity would put slots 27/28 on whatever
 // interface's thunks follow ours.
+//
+// Every pixel assertion below reads the COMPOSITED DESKTOP inside the "Pawn 3"
+// window's client rectangle, never the D3D9 surface. Pawn points its windowed
+// device at a screen-sized STATIC child of that window, and for a while the
+// surface held a perfect board while the window showed empty grey: a capture
+// of the surface passes that state, a capture of the screen cannot.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -55,6 +61,12 @@ const run = spawnSync(process.execPath, [
   '--no-close',
   `--input=${input}`,
   `--png=${shot}`,
+  // The COMPOSITED desktop, not the raw D3D9 surface. --png prefers a DX
+  // surface, and that surface held a perfect board for a long time while the
+  // window's client area was empty -- Pawn presents to a screen-sized STATIC
+  // CHILD of its main window, and nothing composited that child's frame. A
+  // capture of the surface cannot tell the two apart; this one can.
+  '--png-canvas',
 ], { cwd: root, encoding: 'utf8', timeout: 150000, maxBuffer: 16 * 1024 * 1024 });
 
 const output = `${run.stdout || ''}\n${run.stderr || ''}`;
@@ -79,19 +91,29 @@ const count = (x0, y0, x1, y1, predicate) => {
   return n;
 };
 
+// The CLIENT AREA of the "Pawn 3" window, in screen coordinates: the window
+// is at 350,100 and its client starts at 354,142 and is 352x352. Every count
+// below is inside that rectangle, so a frame that exists only inside the D3D9
+// surface -- which is what this test used to read -- scores zero here.
+const CX = 354, CY = 142, CW = 352, CH = 352;
+const board = (predicate) => count(CX, CY, CX + CW, CY + CH, predicate);
+
 // The board itself: white pieces, black pieces, and wood squares between them.
-const whitePieces = count(0, 0, 352, 352, (r, g, b) => r > 200 && g > 200 && b > 180);
-const blackPieces = count(0, 0, 352, 352, (r, g, b) => r < 60 && g < 60 && b < 40);
-const wood = count(0, 0, 352, 352, (r, g, b) => r > 90 && r > b * 1.4 && g > b);
-assert(whitePieces > 2000, `white pieces are missing (${whitePieces} px)`);
-assert(blackPieces > 2000, `black pieces are missing (${blackPieces} px)`);
-assert(wood > 60000, `the board is missing (${wood} px)`);
+const whitePieces = board((r, g, b) => r > 200 && g > 200 && b > 180);
+const blackPieces = board((r, g, b) => r < 60 && g < 60 && b < 40);
+const wood = board((r, g, b) => r > 90 && r > b * 1.4 && g > b);
+// COLOR_BTNFACE. An empty client is ~124k of it; a drawn board has none.
+const grey = board((r, g, b) => r === 192 && g === 192 && b === 192);
+assert(whitePieces > 2000, `white pieces are missing from the window (${whitePieces} px)`);
+assert(blackPieces > 2000, `black pieces are missing from the window (${blackPieces} px)`);
+assert(wood > 60000, `the board never reached the window (${wood} px wood, ${grey} px grey)`);
+assert(grey < 1000, `the client area is still empty grey (${grey} px)`);
 
 // Pawn 3 outlines the engine's own last move in yellow. Those pixels exist
 // only after our drag was accepted as a legal move AND the engine replied, so
 // this one predicate covers the whole round trip -- input routing, the v7
 // device, and the engine actually running.
-const highlight = count(0, 0, 352, 352, (r, g, b) => r > 180 && g > 180 && b < 100);
+const highlight = board((r, g, b) => r > 180 && g > 180 && b < 100);
 assert(highlight > 100,
   `the engine did not answer the move (${highlight} highlight px)\n${output.slice(-2000)}`);
 

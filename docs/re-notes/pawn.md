@@ -52,6 +52,44 @@ Aliasing v2 under the v7 IID would have been wrong rather than merely
 incomplete: slots 27/28 would land on whatever interface's thunks follow ours
 in `$DX_VTBL_REGISTRY`.
 
+## The board that was only ever in the surface
+
+Pawn does not draw its board onto a window DC at all. It calls
+`IDirect3DSurface9::GetDC` on the D3D9 **back buffer**, draws 64 `StretchBlt`s
+plus the coordinate text into that, `ReleaseDC`s and `Present`s. So a
+`--png` capture, which prefers a DX surface over the composited desktop, showed
+a perfect chessboard for a long time while the window's client area was empty
+grey. `--png-canvas` (or `--dump-backcanvas`) is the honest oracle here, and
+`test/test-pawn-directinput7-gameplay.js` now uses it.
+
+The reason the frame never arrived is that **the device window is a child**:
+
+```
+CreateWindowExA(class="STATIC", WS_CHILD|WS_VISIBLE, 0,0, 1024x768, parent=0x10002) = 0x10003
+CreateDevice(hFocusWindow=0x10003, Windowed=TRUE)
+```
+
+so a screen-sized child sits inside a 352x353 client, and the presentation
+target is that child. Two separate paths then dropped the frame — Pawn takes
+the first one in the browser and under `--headless-gl`:
+
+1. **GPU present (`lib/d3d9-host.js`, opcode `0x30002`).** It parks the
+   presented canvas on the window record as `_dxFrameLayer`. `repaint()` and
+   `composeCanonicalScreenToMemory()` composite a *child's* canvas and layer
+   only when `_usesOwnWindowSurface(child)` holds, and that wants
+   `_canonicalOwnSurface`, which only `attachWindowSurface` ever set. Nothing
+   ever drew the layer. Fixed by marking a child device window as owning its
+   surface at the present.
+2. **CPU present (`$dx_present`, `src/09a8-handlers-directx.wat`).** Its
+   windowed branch passes the client's **screen** origin as the blit **source**
+   origin, which is right for a windowed DirectDraw primary (display-sized,
+   Blt'd in screen coordinates through the clipper) and wrong for a D3D9 back
+   buffer, which starts at the client's top-left. Pawn's board at (0,0) was
+   sampled from (354,142) — black. `$d3d9_present_client_relative` (in
+   `09ad`) now says which of the two a present is, and a child target always
+   takes the blit path, since attaching a surface to a child is invisible.
+
 ## Status
 
-Playable. Drags a pawn two ranks, the engine replies.
+Playable. Drags a pawn two ranks, the engine replies, and the board is now in
+the window rather than only in the surface.
