@@ -158,7 +158,9 @@
     ;; a selector one run laid a heap into is a different segment in the next.
     (call $zero_memory (call $win16_int_vectors) (i32.const 0x400))
     (call $zero_memory (call $win16_lheap_slot (i32.const 0))
-      (i32.mul (global.get $WIN16_LHEAPS) (i32.const 8))))
+      (i32.mul (global.get $WIN16_LHEAPS) (i32.const 8)))
+    (call $zero_memory (call $win16_mm_timer_slot (i32.const 0))
+      (i32.mul (global.get $WIN16_MM_TIMERS) (i32.const 24))))
 
   ;; 256 far pointers, in the same arena page as the handle table and the DLL
   ;; records. A program that hooks an interrupt saves the old vector and puts
@@ -1919,9 +1921,12 @@
     (global.set $win16_res_module_id (i32.const 0))
     (call $win16_api_return (i32.const 10)))
 
-  ;; KERNEL.61 LoadResource(hInstance, hResInfo) — nothing to load yet.
+  ;; KERNEL.61 LoadResource(hInstance, hResInfo) -> hResData, the selector
+  ;; the resource now lives in (see $win16_res_load), or NULL.
   (func $win16_LoadResource
-    (i32.store offset=0 (global.get $reg_base) (call $win16_arg16 (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $win16_res_load
+        (call $win16_res_desc_from_handle (call $win16_arg16 (i32.const 0)))))
     (call $win16_api_return (i32.const 4)))
 
   ;; Build C:\NAME.DLL for an app-local module into a guest buffer. The name
@@ -2017,7 +2022,7 @@
     (global.set $win16_res_module_id (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
-  ;; KERNEL.62 LockResource(hResData) -> far pointer.
+  ;; Load the resource DESC names into a global block; returns its selector.
   ;;
   ;; This is where the bytes finally have to become addressable by a 16-bit
   ;; pointer. Task/system resources still live in persistent staging; an
@@ -2025,21 +2030,20 @@
   ;; load image is deliberately reusable. GlobalAlloc supplies consecutive
   ;; selectors, so resources larger than 64KB retain Win16 huge-pointer
   ;; arithmetic instead of being rejected.
-  (func $win16_LockResource
-    (local $desc i32) (local $key i32) (local $module i32)
+  ;;
+  ;; This runs at LoadResource, not LockResource: in Win16 the HGLOBAL that
+  ;; LoadResource returns is an ordinary global handle, and callers lock it
+  ;; with GlobalLock as often as with LockResource (MAC2WIN's GetIndString
+  ;; does), or hand it to DialogBoxIndirect. Global handles are selectors
+  ;; here, so the resource has to be in its own selector by then.
+  (func $win16_res_load (param $desc i32) (result i32)
+    (local $key i32) (local $module i32)
     (local $data i32) (local $len i32) (local $sel i32) (local $buf i32)
     (local $path i32) (local $h i32) (local $read i32)
-    (local.set $desc (call $win16_res_desc_from_handle (call $win16_arg16 (i32.const 0))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (if (local.get $desc)
       (then
         (local.set $sel (i32.load offset=8 (local.get $desc)))
-        (if (local.get $sel)
-          (then
-            (i32.store offset=8 (global.get $reg_base) (local.get $sel))
-            (call $win16_api_return (i32.const 2))
-            (return)))
+        (if (local.get $sel) (then (return (local.get $sel))))
         (local.set $key (i32.load (local.get $desc)))
         (local.set $module (i32.load offset=4 (local.get $desc)))
         (global.set $win16_res_module_id (local.get $module))
@@ -2078,23 +2082,41 @@
                     (call $memcpy (call $g2w (local.get $buf)) (local.get $data) (local.get $len))
                     (local.set $read (local.get $len))))
                 (if (i32.eq (local.get $read) (local.get $len))
-                  (then
-                    (i32.store offset=8 (local.get $desc) (local.get $sel))
-                    (i32.store offset=8 (global.get $reg_base) (local.get $sel)))
-                  (else (call $win16_global_free (local.get $sel))))))))))
+                  (then (i32.store offset=8 (local.get $desc) (local.get $sel)))
+                  (else
+                    (call $win16_global_free (local.get $sel))
+                    (local.set $sel (i32.const 0))))))))))
     (global.set $win16_res_module_id (i32.const 0))
+    (local.get $sel))
+
+  ;; KERNEL.62 LockResource(hResData) -> hResData:0000. The handle is the
+  ;; selector $win16_res_load put the resource in, exactly as GlobalLock sees
+  ;; it.
+  (func $win16_LockResource
+    (local $h i32)
+    (local.set $h (call $win16_arg16 (i32.const 0)))
+    (i32.store offset=8 (global.get $reg_base) (local.get $h))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
-  ;; KERNEL.63 FreeResource(hResData). Release the cached global block while
-  ;; preserving the resource descriptor itself for another Load/Lock cycle.
+  ;; KERNEL.63 FreeResource(hResData). Release the global block and forget it
+  ;; in the descriptor that loaded it, which stays valid for another
+  ;; LoadResource. A handle no descriptor owns was never a resource.
   (func $win16_FreeResource
-    (local $desc i32) (local $sel i32)
-    (local.set $desc (call $win16_res_desc_from_handle (call $win16_arg16 (i32.const 0))))
-    (if (local.get $desc)
-      (then
-        (local.set $sel (i32.load offset=8 (local.get $desc)))
-        (if (local.get $sel) (then (call $win16_global_free (local.get $sel))))
-        (i32.store offset=8 (local.get $desc) (i32.const 0))))
+    (local $sel i32) (local $index i32) (local $desc i32)
+    (local.set $sel (call $win16_arg16 (i32.const 0)))
+    (local.set $index (i32.const 1))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $sel)))
+      (br_if $done (i32.gt_u (local.get $index) (global.get $win16_res_handle_next)))
+      (local.set $desc (call $win16_res_desc (local.get $index)))
+      (if (i32.eq (i32.load offset=8 (local.get $desc)) (local.get $sel))
+        (then
+          (call $win16_global_free (local.get $sel))
+          (i32.store offset=8 (local.get $desc) (i32.const 0))
+          (br $done)))
+      (local.set $index (i32.add (local.get $index) (i32.const 1)))
+      (br $scan)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
@@ -2468,6 +2490,102 @@
   (func $dos_set_ax (param $v i32)
     (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000))
                              (i32.and (local.get $v) (i32.const 0xFFFF)))))
+
+  ;; INT 31h — the DPMI services Windows gives every 16-bit task.
+  ;;
+  ;; Only the descriptor pair is here: 000Bh reads a selector's 8-byte
+  ;; descriptor into ES:DI, 000Ch writes one back. ClockWerx uses exactly that
+  ;; to set the D bit on its own code segment, which makes the segment's four
+  ;; blitters 32-bit code (they use 32-bit offsets into far pointers). The
+  ;; descriptor is built from WIN16_SEG_TABLE: base, limit, a present DPL-3
+  ;; code (0xFA) or data (0xF2) access byte by the same rule LAR uses, and the
+  ;; D bit from WIN16_SEG_BIG.
+  ;;
+  ;; A write may change the limit and the D bit. Anything else — a new base,
+  ;; another access byte, page granularity — would need the arena to move a
+  ;; segment, and traps with 0xCA16D031 naming the selector rather than being
+  ;; dropped. Setting D on the running CS takes effect at once, because the
+  ;; DPMI host returns with IRET and that reloads CS, and code already decoded
+  ;; from that segment in the other mode is thrown away.
+  ;;
+  ;; Every other function is DPMI's "unsupported function", carry set with
+  ;; AX = 8001h.
+  (func $win16_dpmi_int31
+    (local $fn i32) (local $sel i32) (local $index i32) (local $e i32)
+    (local $p i32) (local $base i32) (local $limit i32) (local $access i32)
+    (local $big i32) (local $nbase i32) (local $nlimit i32)
+    (local.set $fn (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (if (i32.and (i32.ne (local.get $fn) (i32.const 0x000B))
+                 (i32.ne (local.get $fn) (i32.const 0x000C)))
+      (then
+        (call $set_reg16 (i32.const 0) (i32.const 0x8001))
+        (call $dos_cf (i32.const 1))
+        (return)))
+    (local.set $sel (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (local.set $index (call $win16_sel_to_index (local.get $sel)))
+    (local.set $base (call $win16_seg_base (local.get $index)))
+    (if (i32.eqz (local.get $base))
+      (then
+        (call $set_reg16 (i32.const 0) (i32.const 0x8022)) ;; invalid selector
+        (call $dos_cf (i32.const 1))
+        (return)))
+    (local.set $e (i32.add (global.get $WIN16_SEG_TABLE)
+                           (i32.shl (local.get $index) (i32.const 4))))
+    ;; The table keeps the segment's size in bytes; a descriptor holds the
+    ;; offset of its last byte.
+    (local.set $limit (i32.sub (i32.load offset=4 (local.get $e)) (i32.const 1)))
+    (local.set $access
+      (if (result i32)
+        (i32.and (i32.ne (i32.load offset=12 (local.get $e)) (i32.const 0))
+                 (i32.eqz (i32.and (i32.load offset=8 (local.get $e)) (i32.const 1))))
+        (then (i32.const 0xFA)) (else (i32.const 0xF2))))
+    (local.set $big (i32.ne (i32.and (i32.load offset=8 (local.get $e))
+                                     (global.get $WIN16_SEG_BIG)) (i32.const 0)))
+    (local.set $p (i32.add (global.get $seg_base_es)
+      (i32.and (i32.load offset=28 (global.get $reg_base)) (i32.const 0xFFFF))))
+    (if (i32.eq (local.get $fn) (i32.const 0x000B))
+      (then
+        (call $gs16 (local.get $p) (local.get $limit))
+        (call $gs16 (i32.add (local.get $p) (i32.const 2)) (local.get $base))
+        (call $gs8 (i32.add (local.get $p) (i32.const 4)) (i32.shr_u (local.get $base) (i32.const 16)))
+        (call $gs8 (i32.add (local.get $p) (i32.const 5)) (local.get $access))
+        (call $gs8 (i32.add (local.get $p) (i32.const 6))
+          (i32.or (i32.and (i32.shr_u (local.get $limit) (i32.const 16)) (i32.const 0x0F))
+                  (select (i32.const 0x40) (i32.const 0) (local.get $big))))
+        (call $gs8 (i32.add (local.get $p) (i32.const 7)) (i32.shr_u (local.get $base) (i32.const 24)))
+        (call $dos_cf (i32.const 0))
+        (return)))
+    ;; 000Ch
+    (local.set $nbase (i32.or
+      (i32.or (call $gl16 (i32.add (local.get $p) (i32.const 2)))
+              (i32.shl (call $gl8 (i32.add (local.get $p) (i32.const 4))) (i32.const 16)))
+      (i32.shl (call $gl8 (i32.add (local.get $p) (i32.const 7))) (i32.const 24))))
+    (local.set $nlimit (i32.or (call $gl16 (local.get $p))
+      (i32.shl (i32.and (call $gl8 (i32.add (local.get $p) (i32.const 6))) (i32.const 0x0F))
+               (i32.const 16))))
+    (if (i32.or
+          (i32.or (i32.ne (local.get $nbase) (local.get $base))
+                  (i32.ne (call $gl8 (i32.add (local.get $p) (i32.const 5))) (local.get $access)))
+          (i32.ne (i32.and (call $gl8 (i32.add (local.get $p) (i32.const 6))) (i32.const 0xB0))
+                  (i32.const 0)))
+      (then
+        (call $host_log_i32 (i32.const 0xCA16D031)) ;; DPMI descriptor change not modelled
+        (call $host_log_i32 (local.get $sel))
+        (call $host_log_i32 (local.get $nbase))
+        (call $host_log_i32 (call $gl8 (i32.add (local.get $p) (i32.const 5))))
+        (call $host_log_i32 (call $gl8 (i32.add (local.get $p) (i32.const 6))))
+        (unreachable)))
+    (i32.store offset=4 (local.get $e) (i32.add (local.get $nlimit) (i32.const 1)))
+    (if (i32.ne (local.get $big)
+          (i32.ne (i32.and (call $gl8 (i32.add (local.get $p) (i32.const 6))) (i32.const 0x40))
+                  (i32.const 0)))
+      (then
+        (i32.store offset=8 (local.get $e)
+          (i32.xor (i32.load offset=8 (local.get $e)) (global.get $WIN16_SEG_BIG)))
+        (call $invalidate_code_range (local.get $base) (i32.const 0x10000))
+        (if (i32.eq (call $win16_sel_to_index (global.get $sreg_cs)) (local.get $index))
+          (then (global.set $cs_big (i32.eqz (local.get $big)))))))
+    (call $dos_cf (i32.const 0)))
 
   (func $win16_dos_int21
     (local $ah i32) (local $h i32) (local $n i32) (local $tmp i32)
@@ -2898,6 +3016,152 @@
     (i32.add (call $g2w (i32.add (global.get $WIN16_ARENA)
                                  (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))
              (i32.add (i32.const 0xE400) (i32.mul (local.get $i) (i32.const 8)))))
+
+  ;; Multimedia timers (MMSYSTEM.602 timeSetEvent / 603 timeKillEvent).
+  ;;
+  ;; Windows 3.1 calls a TimeProc from the timer interrupt, whatever the task
+  ;; is doing. Nothing here interrupts guest code, so a due timer is run from
+  ;; the task's own GetMessage or PeekMessage instead: the one moment the task
+  ;; is known to be between things with its stack its own. A game that polls
+  ;; its message queue every frame sees its tick at frame granularity, which is
+  ;; all a 50 ms game clock needs.
+  ;;
+  ;; The callback is entered with the pump call's own thunk as its far return
+  ;; address, and the pump call's frame left untouched beneath it. The TimeProc
+  ;; RETFs its sixteen bytes of arguments straight into that thunk, and the
+  ;; task finds itself calling GetMessage exactly as it did a moment ago — no
+  ;; continuation state to keep, and a second due timer is simply taken on the
+  ;; next pass.
+  ;;
+  ;; These are kept apart from the Win32 MM_TIMER table on purpose. That table
+  ;; is delivered as a queue message the 32-bit DispatchMessage knows how to
+  ;; run, and a 16-bit task narrows every message it reads: dwUser would be
+  ;; pushed through the handle map as though it were an hwnd.
+  ;;
+  ;; Eight slots of six dwords at 0xE800 of the arena's hidden page, above the
+  ;; extra local heaps: id (0 = free), period, far TimeProc, dwUser, the tick
+  ;; the current period started on, and a one-shot flag.
+  (global $WIN16_MM_TIMERS i32 (i32.const 8))
+  (global $win16_mm_timer_next (mut i32) (i32.const 0))
+  ;; Thunk offset of the Win16 call being dispatched, which a due TimeProc
+  ;; returns into to make that call again.
+  (global $win16_cur_thunk_off (mut i32) (i32.const 0))
+
+  (func $win16_mm_timer_slot (param $i i32) (result i32)
+    (i32.add (call $g2w (i32.add (global.get $WIN16_ARENA)
+                                 (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))
+             (i32.add (i32.const 0xE800) (i32.mul (local.get $i) (i32.const 24)))))
+
+  (func $win16_mm_timer_find (param $id i32) (result i32)
+    (local $i i32) (local $slot i32)
+    (if (i32.eqz (local.get $id)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $WIN16_MM_TIMERS)))
+      (local.set $slot (call $win16_mm_timer_slot (local.get $i)))
+      (if (i32.eq (i32.load (local.get $slot)) (local.get $id))
+        (then (return (local.get $slot))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; timeSetEvent(uDelay, uResolution, lpFunction, dwUser, uFlags) -> UINT.
+  ;; uFlags bit 0 is TIME_PERIODIC; clear, the timer fires once and is gone.
+  ;; A zero delay is outside timeGetDevCaps' 1..65535 and fails with a zero id.
+  (func $win16_timeSetEvent
+    (local $delay i32) (local $proc i32) (local $user i32) (local $flags i32)
+    (local $i i32) (local $slot i32) (local $id i32)
+    (local.set $delay (call $win16_arg16 (i32.const 6)))
+    (local.set $proc (call $win16_arg32 (i32.const 3)))
+    (local.set $user (call $win16_arg32 (i32.const 1)))
+    (local.set $flags (call $win16_arg16 (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (i32.and (i32.ne (local.get $delay) (i32.const 0))
+                 (i32.ne (i32.shr_u (local.get $proc) (i32.const 16)) (i32.const 0)))
+      (then
+        (block $found (loop $scan
+          (br_if $found (i32.ge_u (local.get $i) (global.get $WIN16_MM_TIMERS)))
+          (local.set $slot (call $win16_mm_timer_slot (local.get $i)))
+          (if (i32.eqz (i32.load (local.get $slot)))
+            (then
+              ;; Ids are 16-bit and never 0; skip any still held by a live timer.
+              (loop $pick
+                (global.set $win16_mm_timer_next
+                  (i32.and (i32.add (global.get $win16_mm_timer_next) (i32.const 1))
+                           (i32.const 0xFFFF)))
+                (br_if $pick (i32.eqz (global.get $win16_mm_timer_next)))
+                (br_if $pick (i32.ne (call $win16_mm_timer_find
+                  (global.get $win16_mm_timer_next)) (i32.const 0))))
+              (local.set $id (global.get $win16_mm_timer_next))
+              (i32.store (local.get $slot) (local.get $id))
+              (i32.store offset=4 (local.get $slot) (local.get $delay))
+              (i32.store offset=8 (local.get $slot) (local.get $proc))
+              (i32.store offset=12 (local.get $slot) (local.get $user))
+              (i32.store offset=16 (local.get $slot) (call $host_get_ticks))
+              (i32.store offset=20 (local.get $slot)
+                (i32.eqz (i32.and (local.get $flags) (i32.const 1))))
+              (i32.store offset=0 (global.get $reg_base) (local.get $id))
+              (br $found)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $scan)))))
+    (call $win16_api_return (i32.const 14)))
+
+  ;; timeKillEvent(uTimerID) -> TIMERR_NOERROR, or MMSYSERR_INVALPARAM (11)
+  ;; for an id that is not a live timer.
+  (func $win16_timeKillEvent
+    (local $slot i32)
+    (local.set $slot (call $win16_mm_timer_find (call $win16_arg16 (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 11))
+    (if (local.get $slot)
+      (then
+        (i32.store (local.get $slot) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (call $win16_api_return (i32.const 2)))
+
+  ;; Enter the first due TimeProc, if any, and return 1: the caller must then
+  ;; return without touching the stack, because the pump call is going to be
+  ;; made again when the callback comes back. A period is charged before the
+  ;; callback runs, and a late pump skips the periods it missed rather than
+  ;; replaying them back to back, the way the Win32 table does.
+  (func $win16_mm_timer_run_due (result i32)
+    (local $i i32) (local $slot i32) (local $now i32) (local $period i32)
+    (local $proc i32)
+    (local.set $now (call $host_get_ticks))
+    (block $none (loop $scan
+      (br_if $none (i32.ge_u (local.get $i) (global.get $WIN16_MM_TIMERS)))
+      (local.set $slot (call $win16_mm_timer_slot (local.get $i)))
+      (local.set $period (i32.load offset=4 (local.get $slot)))
+      (if (i32.and
+            (i32.ne (i32.load (local.get $slot)) (i32.const 0))
+            (i32.ge_u (i32.sub (local.get $now) (i32.load offset=16 (local.get $slot)))
+                      (local.get $period)))
+        (then
+          (i32.store offset=16 (local.get $slot)
+            (i32.add (i32.load offset=16 (local.get $slot))
+              (i32.mul (local.get $period)
+                (i32.div_u (i32.sub (local.get $now) (i32.load offset=16 (local.get $slot)))
+                           (local.get $period)))))
+          (local.set $proc (i32.load offset=8 (local.get $slot)))
+          ;; TimeProc(wTimerID, wMsg, dwUser, dw1, dw2), FAR PASCAL.
+          (call $win16_push16 (i32.load (local.get $slot)))
+          (call $win16_push16 (i32.const 0))
+          (call $win16_push16 (i32.shr_u (i32.load offset=12 (local.get $slot)) (i32.const 16)))
+          (call $win16_push16 (i32.and (i32.load offset=12 (local.get $slot)) (i32.const 0xFFFF)))
+          (call $win16_push16 (i32.const 0))
+          (call $win16_push16 (i32.const 0))
+          (call $win16_push16 (i32.const 0))
+          (call $win16_push16 (i32.const 0))
+          (call $win16_push16 (global.get $WIN16_THUNK_SEL))
+          (call $win16_push16 (global.get $win16_cur_thunk_off))
+          (if (i32.load offset=20 (local.get $slot))
+            (then (i32.store (local.get $slot) (i32.const 0))))
+          (call $win16_set_sreg (i32.const 1) (i32.shr_u (local.get $proc) (i32.const 16)))
+          (global.set $eip (i32.add (global.get $seg_base_cs)
+                                    (i32.and (local.get $proc) (i32.const 0xFFFF))))
+          (global.set $steps (i32.const 0))
+          (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
 
   ;; The slot for the current DS, or -1 when this is the task's own heap.
   (func $win16_lheap_current (result i32)
@@ -6085,6 +6349,83 @@
       (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 12)))
 
+  ;; USER.163-169 and 183, the caret family, over the one caret the Win32
+  ;; handlers keep ($caret_hwnd/x/y/w/h/visible) and the renderer draws. Each
+  ;; forwards to its $handle_* twin so the two ABIs cannot disagree about what
+  ;; a caret is; only the argument shapes differ. Coordinates are signed
+  ;; words. CreateCaret's hBitmap is passed through as a handle except for the
+  ;; documented 0 (solid) and 1 (gray) values, which are not handles at all.
+  (func $win16_caret (param $ordinal i32)
+    (local $a i32) (local $b i32) (local $c i32) (local $d i32) (local $p i32)
+    (if (i32.eq (local.get $ordinal) (i32.const 163)) ;; CreateCaret(hwnd, hbm, w, h)
+      (then
+        (local.set $a (call $win16_h32 (call $win16_arg16 (i32.const 3))))
+        (local.set $b (call $win16_arg16 (i32.const 2)))
+        (if (i32.gt_u (local.get $b) (i32.const 1))
+          (then (local.set $b (call $win16_h32 (local.get $b)))))
+        (local.set $c (i32.extend16_s (call $win16_arg16 (i32.const 1))))
+        (local.set $d (i32.extend16_s (call $win16_arg16 (i32.const 0))))
+        (call $win16_call32_begin (i32.const 4))
+        (call $handle_CreateCaret (local.get $a) (local.get $b) (local.get $c)
+          (local.get $d) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (call $win16_api_return (i32.const 8))
+        (return)))
+    (if (i32.eq (local.get $ordinal) (i32.const 164)) ;; DestroyCaret()
+      (then
+        (call $win16_call32_begin (i32.const 0))
+        (call $handle_DestroyCaret (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (call $win16_api_return (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $ordinal) (i32.const 165)) ;; SetCaretPos(x, y)
+      (then
+        (local.set $a (i32.extend16_s (call $win16_arg16 (i32.const 1))))
+        (local.set $b (i32.extend16_s (call $win16_arg16 (i32.const 0))))
+        (call $win16_call32_begin (i32.const 2))
+        (call $handle_SetCaretPos (local.get $a) (local.get $b) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (call $win16_api_return (i32.const 4))
+        (return)))
+    (if (i32.or (i32.eq (local.get $ordinal) (i32.const 166))  ;; HideCaret(hwnd)
+                (i32.eq (local.get $ordinal) (i32.const 167))) ;; ShowCaret(hwnd)
+      (then
+        (local.set $a (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+        (call $win16_call32_begin (i32.const 1))
+        (if (i32.eq (local.get $ordinal) (i32.const 166))
+          (then (call $handle_HideCaret (local.get $a) (i32.const 0) (i32.const 0)
+                  (i32.const 0) (i32.const 0) (i32.const 0)))
+          (else (call $handle_ShowCaret (local.get $a) (i32.const 0) (i32.const 0)
+                  (i32.const 0) (i32.const 0) (i32.const 0))))
+        (call $win16_call32_end)
+        (call $win16_api_return (i32.const 2))
+        (return)))
+    (if (i32.eq (local.get $ordinal) (i32.const 168)) ;; SetCaretBlinkTime(ms)
+      (then
+        (local.set $a (call $win16_arg16 (i32.const 0)))
+        (call $win16_call32_begin (i32.const 1))
+        (call $handle_SetCaretBlinkTime (local.get $a) (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (call $win16_api_return (i32.const 2))
+        (return)))
+    (if (i32.eq (local.get $ordinal) (i32.const 169)) ;; GetCaretBlinkTime()
+      (then
+        (i32.store offset=0 (global.get $reg_base)
+          (i32.and (global.get $caret_blink_time) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 0))
+        (return)))
+    ;; 183 GetCaretPos(LPPOINT) — a Win16 POINT is two signed words.
+    (local.set $p (call $win16_far_to_guest (call $win16_arg16 (i32.const 1))
+                                            (call $win16_arg16 (i32.const 0))))
+    (if (local.get $p)
+      (then
+        (call $gs16 (local.get $p) (global.get $caret_x))
+        (call $gs16 (i32.add (local.get $p) (i32.const 2)) (global.get $caret_y))))
+    (call $win16_api_return (i32.const 4)))
+
   (func $win16_user (param $ordinal i32) (result i32)
     (local $arg i32) (local $arg2 i32) (local $arg3 i32)
     ;; USER.13 GetTickCount and USER.15 GetCurrentTime are the same clock; the
@@ -6093,6 +6434,19 @@
       (then (call $win16_GetCurrentTime) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 47))
       (then (call $win16_IsWindow) (return (i32.const 1))))
+    (if (i32.or (i32.and (i32.ge_u (local.get $ordinal) (i32.const 163))
+                         (i32.le_u (local.get $ordinal) (i32.const 169)))
+                (i32.eq (local.get $ordinal) (i32.const 183)))
+      (then (call $win16_caret (local.get $ordinal)) (return (i32.const 1))))
+    ;; USER.21 GetDoubleClickTime — the same interval the Win32 twin reports.
+    (if (i32.eq (local.get $ordinal) (i32.const 21))
+      (then
+        (call $win16_call32_begin (i32.const 0))
+        (call $handle_GetDoubleClickTime (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (call $win16_api_return (i32.const 0))
+        (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 48))
       (then (call $win16_IsChild) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 205))
@@ -8015,6 +8369,7 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 14)))
         (call $win16_dde_ask_enter (local.get $ask))
         (return)))
+    (if (call $win16_mm_timer_run_due) (then (return)))
     (local.set $tmp (global.get $GUEST_STACK))
     (call $win16_call32_begin (i32.const 4))
     (call $handle_GetMessageA (local.get $tmp) (i32.const 0) (i32.const 0) (i32.const 0)
@@ -10642,6 +10997,7 @@
   (func $win16_PeekMessage
     (local $dst i32) (local $remove i32) (local $tmp i32)
     (local $hwnd i32) (local $min i32) (local $max i32)
+    (if (call $win16_mm_timer_run_due) (then (return)))
     (local.set $dst (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 3))))
@@ -12346,6 +12702,19 @@
   ;; GDI.483 MoveToEx(hDC, X, Y, lpPoint) -> BOOL. GDI.20 returns the old
   ;; point packed in DX:AX; the Windows 3.1 form writes it through an optional
   ;; POINT16 and returns success instead.
+  ;; GDI.78 GetCurrentPosition(hDC) -> DWORD, x in AX and y in DX: the pen
+  ;; position MoveTo and LineTo leave behind, in logical coordinates.
+  (func $win16_GetCurrentPosition
+    (local $hdc i32)
+    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (i32.and
+      (call $gdi_dc_get_field (local.get $hdc) (i32.const 12) (i32.const 0))
+      (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.and
+      (call $gdi_dc_get_field (local.get $hdc) (i32.const 16) (i32.const 0))
+      (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 2)))
+
   (func $win16_MoveToEx
     (local $hdc i32) (local $x i32) (local $y i32)
     (local $dst i32) (local $tmp i32) (local $ok i32)
@@ -12487,6 +12856,26 @@
     (i32.store offset=0 (global.get $reg_base)
       (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 2)))
+
+  ;; GDI.445 CreateDIBPatternBrush(hPackedDIB, fnColorSpec). Where Win32 takes
+  ;; a pointer (CreateDIBPatternBrushPt), Win16 takes the global handle of a
+  ;; packed DIB, which is a selector, so the DIB starts at its offset 0. The
+  ;; brush keeps a copy of the pixels: ClockWerx has already unlocked the
+  ;; block when it asks, and frees it straight after.
+  (func $win16_CreateDIBPatternBrush
+    (local $dib i32) (local $usage i32)
+    (local.set $usage (call $win16_arg16 (i32.const 0)))
+    (if (call $win16_arg16 (i32.const 1))
+      (then (local.set $dib (call $win16_far_to_guest
+        (call $win16_arg16 (i32.const 1)) (i32.const 0)))))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_CreateDIBPatternBrushPt (local.get $dib) (local.get $usage)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (if (i32.load offset=0 (global.get $reg_base))
+      (then (i32.store offset=0 (global.get $reg_base)
+        (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))))
+    (call $win16_api_return (i32.const 4)))
 
   ;; GDI.442 CreateDIBitmap(hDC, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage).
   (func $win16_CreateDIBitmap
@@ -13052,6 +13441,8 @@
       (then (call $win16_SetDIBitsToDevice) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 442))
       (then (call $win16_CreateDIBitmap) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 445))
+      (then (call $win16_CreateDIBPatternBrush) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 489))
       (then (call $win16_CreateDIBSection) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 602))
@@ -13064,6 +13455,8 @@
       (then (call $win16_dc_point (i32.const 0)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 483))
       (then (call $win16_MoveToEx) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 78))
+      (then (call $win16_GetCurrentPosition) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 468))
       (then (call $win16_GetBitmapDimensionEx) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 29))
@@ -13962,6 +14355,27 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 2))
         (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 602))
+      (then (call $win16_timeSetEvent) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 603))
+      (then (call $win16_timeKillEvent) (return (i32.const 1))))
+    ;; 604 timeGetDevCaps(lpTimeCaps, wSize). The 16-bit TIMECAPS is two
+    ;; UINTs, so four bytes, not Win32's eight. Win 3.1 and Win9x answer a
+    ;; 1 ms minimum period and a 65535 ms maximum; a buffer that cannot hold
+    ;; the structure is TIMERR_STRUCT. ClockWerx sizes its game timer by it.
+    (if (i32.eq (local.get $ordinal) (i32.const 604))
+      (then
+        (local.set $p1 (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 129)) ;; TIMERR_STRUCT
+        (if (i32.and (i32.ne (local.get $p1) (i32.const 0))
+                     (i32.ge_u (call $win16_arg16 (i32.const 0)) (i32.const 4)))
+          (then
+            (call $gs16 (local.get $p1) (i32.const 1))
+            (call $gs16 (i32.add (local.get $p1) (i32.const 2)) (i32.const 0xFFFF))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+        (call $win16_api_return (i32.const 6))
+        (return (i32.const 1))))
     ;; 607 timeGetTime() uses the same host-backed guest clock as Win32.
     (if (i32.eq (local.get $ordinal) (i32.const 607))
       (then
@@ -14455,6 +14869,7 @@
     (local.set $ordinal (call $win16_thunk_ordinal (local.get $thunk_off)))
     (global.set $win16_last_module (local.get $module))
     (global.set $win16_last_ordinal (local.get $ordinal))
+    (global.set $win16_cur_thunk_off (local.get $thunk_off))
     ;; The continuation slot. An API that handed control to a window procedure
     ;; pushed this as the far return address, so arriving here means that
     ;; procedure has returned and the API can finish: put its own result back

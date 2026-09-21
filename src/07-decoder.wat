@@ -2659,6 +2659,20 @@
         (i32.and (i32.add (global.get $d_pc) (local.get $disp)) (i32.const 0xFFFF))))))
     (i32.add (global.get $d_pc) (local.get $disp)))
 
+  ;; Control transfers whose 32-bit operand-size form in a 32-bit segment of a
+  ;; 16-bit task is not modelled: they would push or pop a doubleword EIP (or
+  ;; a 32-bit far pointer) where every handler here moves a word. ClockWerx's
+  ;; 32-bit blitters use none of them — they are entered by a 16-bit far call
+  ;; and leave by an o16 RETF — so this names the first program that does,
+  ;; instead of letting it return to half an address.
+  (func $use32_gap (param $op i32) (param $p66 i32)
+    (if (i32.and (global.get $cs_big) (i32.eqz (local.get $p66)))
+      (then
+        (call $host_log_i32 (i32.const 0xCA163200)) ;; 32-bit transfer in a USE32 Win16 segment
+        (call $host_log_i32 (local.get $op))
+        (call $host_log_i32 (global.get $d_pc))
+        (unreachable))))
+
   ;; Opcodes that only mean anything in a segmented task. Reaching one from
   ;; flat 32-bit code means the decoder has lost the instruction stream, and
   ;; saying so here beats emitting a segment load that corrupts addressing
@@ -4784,8 +4798,9 @@
       ;; operands and 16-bit addresses, with 0x66/0x67 selecting 32. Inverting
       ;; the two flags here means every `if prefix_66` test further down —
       ;; there are hundreds — reads correctly for both modes without being
-      ;; touched.
-      (if (global.get $code16)
+      ;; touched. A segment with its D bit set ($cs_big) keeps the 32-bit
+      ;; defaults while still addressing through its selectors.
+      (if (i32.and (global.get $code16) (i32.eqz (global.get $cs_big)))
         (then
           (local.set $prefix_66 (i32.xor (local.get $prefix_66) (i32.const 1)))
           (local.set $prefix_67 (i32.xor (local.get $prefix_67) (i32.const 1)))))
@@ -4903,7 +4918,9 @@
           ;; does `push ds / pop es` to alias segments.
           (if (global.get $code16)
             (then
-              (call $te (i32.const 374) (i32.and (i32.shr_u (local.get $op) (i32.const 3)) (i32.const 3)))
+              (call $te (i32.const 374) (i32.or
+                (i32.and (i32.shr_u (local.get $op) (i32.const 3)) (i32.const 3))
+                (select (i32.const 0) (i32.const 0x10) (local.get $prefix_66))))
               (br $decode)))
           (local.set $imm (i32.const 0x23)) ;; ES/SS/DS
           (if (i32.eq (local.get $op) (i32.const 0x0E))
@@ -4918,7 +4935,9 @@
         (then
           (if (global.get $code16)
             (then
-              (call $te (i32.const 375) (i32.and (i32.shr_u (local.get $op) (i32.const 3)) (i32.const 3)))
+              (call $te (i32.const 375) (i32.or
+                (i32.and (i32.shr_u (local.get $op) (i32.const 3)) (i32.const 3))
+                (select (i32.const 0) (i32.const 0x10) (local.get $prefix_66))))
               (br $decode)))
           (call $te (i32.const 360) (local.get $prefix_66))
           (br $decode)))
@@ -4961,6 +4980,7 @@
       ;; in flat memory just round-trips CS=0x1B, so the selector word is dead.
       (if (i32.eq (local.get $op) (i32.const 0x9A))
         (then
+          (call $use32_gap (local.get $op) (local.get $prefix_66))
           ;; In a 16-bit task this is ptr16:16 and the selector is the whole
           ;; point: it says which segment, and a selector equal to the import
           ;; thunk segment says this is an API call.
@@ -5562,6 +5582,10 @@
       (if (i32.eq (local.get $op) (i32.const 0xFF))
         (then
           (call $decode_modrm)
+          (if (i32.and (i32.ge_u (global.get $mr_reg) (i32.const 2))
+                       (i32.le_u (global.get $mr_reg) (i32.const 5)))
+            (then (call $use32_gap (i32.or (i32.const 0xFF00) (global.get $mr_reg))
+                    (local.get $prefix_66))))
           ;; 0=INC, 1=DEC, 2=CALL, 3=CALL far, 4=JMP, 5=JMP far, 6=PUSH
           (if (i32.eq (global.get $mr_reg) (i32.const 0)) ;; INC r/m32 (or r/m16 with 66h)
             (then
@@ -5779,6 +5803,7 @@
       ;; ---- CALL rel32 (0xE8) / CALL rel16 with 66h ----
       (if (i32.eq (local.get $op) (i32.const 0xE8))
         (then
+          (call $use32_gap (local.get $op) (local.get $prefix_66))
           (if (local.get $prefix_66)
             (then
               (local.set $disp (call $d_fetch16))
@@ -5802,17 +5827,21 @@
       ;; A near return in a 16-bit segment pops IP, not a linear address, so
       ;; the address has to be rebuilt from the CS base.
       (if (i32.eq (local.get $op) (i32.const 0xC3))
-        (then (call $te (if (result i32) (global.get $code16) (then (i32.const 365)) (else (i32.const 41))) (i32.const 0))
+        (then (call $use32_gap (local.get $op) (local.get $prefix_66))
+              (call $te (if (result i32) (global.get $code16) (then (i32.const 365)) (else (i32.const 41))) (i32.const 0))
               (local.set $done (i32.const 1)) (br $decode)))
       (if (i32.eq (local.get $op) (i32.const 0xC2))
-        (then (call $te (if (result i32) (global.get $code16) (then (i32.const 366)) (else (i32.const 42))) (call $d_fetch16))
+        (then (call $use32_gap (local.get $op) (local.get $prefix_66))
+              (call $te (if (result i32) (global.get $code16) (then (i32.const 366)) (else (i32.const 42))) (call $d_fetch16))
               (local.set $done (i32.const 1)) (br $decode)))
       ;; ---- RETF (0xCB) / RETF imm16 (0xCA) ----
       (if (i32.eq (local.get $op) (i32.const 0xCB))
         (then (call $win16_only (local.get $op))
+              (call $use32_gap (local.get $op) (local.get $prefix_66))
               (call $te (i32.const 371) (i32.const 0)) (local.set $done (i32.const 1)) (br $decode)))
       (if (i32.eq (local.get $op) (i32.const 0xCA))
         (then (call $win16_only (local.get $op))
+              (call $use32_gap (local.get $op) (local.get $prefix_66))
               (call $te (i32.const 371) (call $d_fetch16)) (local.set $done (i32.const 1)) (br $decode)))
 
       ;; ---- JMP rel8 (0xEB) / JMP rel32 (0xE9) ----
@@ -5821,11 +5850,13 @@
               (call $te (i32.const 43) (i32.const 0)) (call $te_raw (call $branch_target (local.get $disp)))
               (local.set $done (i32.const 1)) (br $decode)))
       (if (i32.eq (local.get $op) (i32.const 0xE9))
-        ;; JMP rel is rel16 in a 16-bit segment. Flat 32-bit code that takes a
-        ;; 0x66 prefix here keeps reading rel32 as it always has — correcting
-        ;; that is a separate change with its own blast radius.
+        ;; In a 16-bit task the displacement follows the operand size: rel16
+        ;; by default, rel32 under 0x66 or in a segment whose D bit is set.
+        ;; Flat 32-bit code that takes a 0x66 prefix here keeps reading rel32
+        ;; as it always has — correcting that is a separate change with its
+        ;; own blast radius.
         (then (local.set $disp
-                (if (result i32) (global.get $code16)
+                (if (result i32) (i32.and (global.get $code16) (local.get $prefix_66))
                   (then (call $sign_ext16 (call $d_fetch16)))
                   (else (call $d_fetch32))))
               (call $te (i32.const 43) (i32.const 0)) (call $te_raw (call $branch_target (local.get $disp)))
@@ -5834,6 +5865,7 @@
       ;; Flat-mode emulation: ignore the selector, treat as near JMP to offset.
       (if (i32.eq (local.get $op) (i32.const 0xEA))
         (then
+          (call $use32_gap (local.get $op) (local.get $prefix_66))
           (if (global.get $code16)
             (then
               (local.set $disp (call $d_fetch16))  ;; offset
@@ -5928,7 +5960,9 @@
                 (i32.const 4)))
             (i32.or
               (i32.shl (local.get $prefix_rep) (i32.const 8))
-              (i32.shl (global.get $mr_seg) (i32.const 12)))))
+              (i32.or
+                (i32.shl (global.get $mr_seg) (i32.const 12))
+                (select (i32.const 0) (i32.const 0x10000) (local.get $prefix_67))))))
           (br $decode)))
       (if (i32.eq (local.get $op) (i32.const 0xA4)) ;; MOVSB
         (then (if (local.get $prefix_rep) (then (call $te (i32.const 82) (i32.const 0))) (else (call $te (i32.const 86) (i32.const 0)))) (br $decode)))
@@ -6027,6 +6061,7 @@
       ;; which is better refused than approximated.
       (if (i32.eq (local.get $op) (i32.const 0xC8))
         (then
+          (call $use32_gap (local.get $op) (local.get $prefix_66))
           (local.set $imm (call $d_fetch16))
           (local.set $disp (call $d_fetch8))
           (if (local.get $disp)
@@ -6041,7 +6076,8 @@
             (local.get $imm))
           (br $decode)))
       (if (i32.eq (local.get $op) (i32.const 0xC9))
-        (then (call $te (if (result i32) (global.get $code16) (then (i32.const 384)) (else (i32.const 113)))
+        (then (call $use32_gap (local.get $op) (local.get $prefix_66))
+              (call $te (if (result i32) (global.get $code16) (then (i32.const 384)) (else (i32.const 113)))
                 (i32.const 0))
               (br $decode))) ;; LEAVE
       (if (i32.eq (local.get $op) (i32.const 0xCC)) (then (call $te (i32.const 45) (global.get $d_pc)) (local.set $done (i32.const 1)) (br $decode))) ;; INT3
@@ -6172,8 +6208,10 @@
           ;; 0x0F 0x80-0x8F: Jcc rel32, or rel16 in a 16-bit segment
           (if (i32.and (i32.ge_u (local.get $op) (i32.const 0x80)) (i32.le_u (local.get $op) (i32.const 0x8F)))
             (then
+              ;; The displacement follows the operand size, so a 32-bit
+              ;; segment of a 16-bit task takes rel32 like flat code.
               (local.set $disp
-                (if (result i32) (global.get $code16)
+                (if (result i32) (i32.and (global.get $code16) (local.get $prefix_66))
                   (then (call $sign_ext16 (call $d_fetch16)))
                   (else (call $d_fetch32))))
               (call $te
@@ -6589,6 +6627,21 @@
           ;; at the top of its inner loops, so every Allegro game reached this
           ;; and stopped. Flat mode: the selector is decorative, but the stack
           ;; width is not, and 66h makes it a 2-byte push.
+          ;; In a 16-bit task FS and GS are real selectors and go through the
+          ;; segmented handlers, which keep their values.
+          (if (i32.and (global.get $code16)
+                (i32.or (i32.or (i32.eq (local.get $op) (i32.const 0xA0))
+                                (i32.eq (local.get $op) (i32.const 0xA8)))
+                        (i32.or (i32.eq (local.get $op) (i32.const 0xA1))
+                                (i32.eq (local.get $op) (i32.const 0xA9)))))
+            (then
+              (call $te
+                (select (i32.const 374) (i32.const 375)
+                  (i32.eqz (i32.and (local.get $op) (i32.const 1))))
+                (i32.or
+                  (select (i32.const 5) (i32.const 4) (i32.ge_u (local.get $op) (i32.const 0xA8)))
+                  (select (i32.const 0) (i32.const 0x10) (local.get $prefix_66))))
+              (br $decode)))
           (if (i32.or (i32.eq (local.get $op) (i32.const 0xA0))
                       (i32.eq (local.get $op) (i32.const 0xA8)))
             (then

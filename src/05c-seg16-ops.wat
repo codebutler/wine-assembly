@@ -31,10 +31,32 @@
     (call $host_log_i32 (local.get $id))
     (unreachable))
 
+  ;; A 16-bit task can still run 32-bit code. A segment whose descriptor has
+  ;; the D bit set (WIN16_SEG_BIG in its table flags, which only DPMI's
+  ;; set-descriptor call turns on) defaults to 32-bit operands and addresses,
+  ;; and $cs_big is that bit for the CS currently loaded — the decoder reads
+  ;; it, exactly as the CPU reads the D bit it cached when CS was loaded.
+  ;; Addressing stays segmented either way; only the defaults change.
+  (global $cs_big (mut i32) (i32.const 0))
+  (global $WIN16_SEG_BIG i32 (i32.const 0x80000))
+  ;; FS is an ordinary data selector in a 16-bit task. Its base has always
+  ;; been kept; its value is kept too, so PUSH FS / POP FS round-trip it.
+  (global $sreg_fs16 (mut i32) (i32.const 0))
+
+  (func $win16_seg_is_big (param $sel i32) (result i32)
+    (local $index i32)
+    (local.set $index (call $win16_sel_to_index (local.get $sel)))
+    (if (i32.eqz (call $win16_seg_base (local.get $index))) (then (return (i32.const 0))))
+    (i32.ne (i32.and
+      (i32.load offset=8 (i32.add (global.get $WIN16_SEG_TABLE)
+                                  (i32.shl (local.get $index) (i32.const 4))))
+      (global.get $WIN16_SEG_BIG)) (i32.const 0)))
+
   (func $seg16_value (param $id i32) (result i32)
     (if (i32.eq (local.get $id) (i32.const 0)) (then (return (global.get $sreg_es))))
     (if (i32.eq (local.get $id) (i32.const 1)) (then (return (global.get $sreg_cs))))
     (if (i32.eq (local.get $id) (i32.const 2)) (then (return (global.get $sreg_ss))))
+    (if (i32.eq (local.get $id) (i32.const 4)) (then (return (global.get $sreg_fs16))))
     (if (i32.eq (local.get $id) (i32.const 5)) (then (return (global.get $sreg_gs))))
     (global.get $sreg_ds))
 
@@ -109,7 +131,11 @@
     (if (i32.eq (local.get $id) (i32.const 0))
       (then (global.set $sreg_es (local.get $sel)) (global.set $seg_base_es (local.get $base)) (return)))
     (if (i32.eq (local.get $id) (i32.const 1))
-      (then (global.set $sreg_cs (local.get $sel)) (global.set $seg_base_cs (local.get $base)) (return)))
+      (then
+        (global.set $sreg_cs (local.get $sel))
+        (global.set $seg_base_cs (local.get $base))
+        (global.set $cs_big (call $win16_seg_is_big (local.get $sel)))
+        (return)))
     (if (i32.eq (local.get $id) (i32.const 2))
       (then
         (global.set $sreg_ss (local.get $sel))
@@ -119,7 +145,7 @@
     (if (i32.eq (local.get $id) (i32.const 3))
       (then (global.set $sreg_ds (local.get $sel)) (global.set $seg_base_ds (local.get $base)) (return)))
     (if (i32.eq (local.get $id) (i32.const 4))
-      (then (global.set $fs_base (local.get $base)) (return)))
+      (then (global.set $sreg_fs16 (local.get $sel)) (global.set $fs_base (local.get $base)) (return)))
     (if (i32.eq (local.get $id) (i32.const 5))
       (then (global.set $sreg_gs (local.get $sel)) (global.set $gs_base (local.get $base)) (return)))
     (call $host_log_i32 (i32.const 0xCA165E67))
@@ -383,18 +409,26 @@
      (local $nx_fn i32) (local $nx_op i32) (call $win16_set_sreg (local.get $op) (call $gl16 (call $read_addr)))
     (dispatch-next))
 
-  ;; 374: PUSH Sreg (16-bit stack) — op = sreg id
+  ;; 374: PUSH Sreg — op = sreg id, plus 0x10 for a 32-bit operand size, which
+  ;; takes a doubleword slot with the selector in its low word.
   (func $th_push_sreg16 (param $op i32)
-     (local $nx_fn i32) (local $nx_op i32) (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
-    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (call $seg16_value (local.get $op)))
+     (local $nx_fn i32) (local $nx_op i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base))
+      (select (i32.const 4) (i32.const 2) (i32.and (local.get $op) (i32.const 0x10)))))
+    (if (i32.and (local.get $op) (i32.const 0x10))
+      (then (call $gs32 (i32.load offset=16 (global.get $reg_base))
+        (call $seg16_value (i32.and (local.get $op) (i32.const 7)))))
+      (else (call $gs16 (i32.load offset=16 (global.get $reg_base))
+        (call $seg16_value (i32.and (local.get $op) (i32.const 7))))))
     (dispatch-next))
 
-  ;; 375: POP Sreg (16-bit stack) — op = sreg id
+  ;; 375: POP Sreg — op = sreg id, plus 0x10 for a 32-bit operand size.
   (func $th_pop_sreg16 (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $sel i32)
     (local.set $sel (call $gl16 (i32.load offset=16 (global.get $reg_base))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
-    (call $win16_set_sreg (local.get $op) (local.get $sel))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base))
+      (select (i32.const 4) (i32.const 2) (i32.and (local.get $op) (i32.const 0x10)))))
+    (call $win16_set_sreg (i32.and (local.get $op) (i32.const 7)) (local.get $sel))
     (dispatch-next))
 
   ;; 376: LES/LDS r16, m16:16 — op = sreg<<4 | reg, address in next word
@@ -547,30 +581,35 @@
   ;;   bits 0-2    element size in bytes, 1, 2 or 4
   ;;   bits 4-6    kind: 0 MOVS, 1 STOS, 2 LODS, 3 CMPS, 4 SCAS
   ;;   bits 8-9    repeat: 0 none, 1 REP/REPE, 2 REPNE
-  ;;   bits 12-13  source segment, for a prefix override; ES:DI is fixed
+  ;;   bits 12-14  source segment, for a prefix override; ES:DI is fixed
+  ;;   bit 16      32-bit address size: ESI, EDI and ECX in full
   ;;
   ;; SI and DI are offsets within their segments, so they wrap at 16 bits
   ;; rather than running into the next segment's arena slot — a `rep stosw`
   ;; that walks off the end of a segment is a guest bug, and wrapping is what
-  ;; the hardware does with it.
+  ;; the hardware does with it. With a 32-bit address size — code in a
+  ;; segment whose D bit is set, or a 0x67 prefix — the registers are used
+  ;; whole, as ClockWerx's `rep movsd` rectangle copy expects.
   (func $th_string16 (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $size i32) (local $kind i32) (local $rep i32)
     (local $src_base i32) (local $dst_base i32) (local $step i32)
-    (local $si i32) (local $di i32) (local $a i32) (local $b i32)
+    (local $si i32) (local $di i32) (local $a i32) (local $b i32) (local $amask i32)
+    (local.set $amask (select (i32.const -1) (i32.const 0xFFFF)
+      (i32.and (local.get $op) (i32.const 0x10000))))
     (local.set $size (i32.and (local.get $op) (i32.const 7)))
     (local.set $kind (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 7)))
     (local.set $rep  (i32.and (i32.shr_u (local.get $op) (i32.const 8)) (i32.const 3)))
     (local.set $src_base (call $seg16_base
-      (i32.and (i32.shr_u (local.get $op) (i32.const 12)) (i32.const 3))))
+      (i32.and (i32.shr_u (local.get $op) (i32.const 12)) (i32.const 7))))
     (local.set $dst_base (global.get $seg_base_es))
     (local.set $step (select (i32.sub (i32.const 0) (local.get $size)) (local.get $size)
                              (global.get $df)))
-    (local.set $si (i32.and (i32.load offset=24 (global.get $reg_base)) (i32.const 0xFFFF)))
-    (local.set $di (i32.and (i32.load offset=28 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (local.set $si (i32.and (i32.load offset=24 (global.get $reg_base)) (local.get $amask)))
+    (local.set $di (i32.and (i32.load offset=28 (global.get $reg_base)) (local.get $amask)))
 
     (block $done (loop $step_one
       (if (local.get $rep)
-        (then (br_if $done (i32.eqz (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF))))))
+        (then (br_if $done (i32.eqz (i32.and (i32.load offset=4 (global.get $reg_base)) (local.get $amask))))))
 
       ;; The element itself. $a is what was read from the source side, $b what
       ;; the destination side holds, so CMPS and SCAS share one comparison.
@@ -618,14 +657,17 @@
                   (i32.or (i32.eq (local.get $kind) (i32.const 2))
                           (i32.eq (local.get $kind) (i32.const 3))))
         (then (local.set $si (i32.and (i32.add (local.get $si) (local.get $step))
-                                      (i32.const 0xFFFF)))))
+                                      (local.get $amask)))))
       (if (i32.ne (local.get $kind) (i32.const 2))
         (then (local.set $di (i32.and (i32.add (local.get $di) (local.get $step))
-                                      (i32.const 0xFFFF)))))
+                                      (local.get $amask)))))
 
       (br_if $done (i32.eqz (local.get $rep)))
-      (call $set_reg16 (i32.const 1)
-        (i32.sub (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF)) (i32.const 1)))
+      (if (i32.and (local.get $op) (i32.const 0x10000))
+        (then (i32.store offset=4 (global.get $reg_base)
+          (i32.sub (i32.load offset=4 (global.get $reg_base)) (i32.const 1))))
+        (else (call $set_reg16 (i32.const 1)
+          (i32.sub (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF)) (i32.const 1)))))
       ;; A repeated compare also stops on the flag the prefix names: REPE runs
       ;; while equal, REPNE while not.
       (if (i32.ge_u (local.get $kind) (i32.const 3))
@@ -636,8 +678,13 @@
             (then (br_if $done (call $get_zf))))))
       (br $step_one)))
 
-    (call $set_reg16 (i32.const 6) (local.get $si))
-    (call $set_reg16 (i32.const 7) (local.get $di))
+    (if (i32.and (local.get $op) (i32.const 0x10000))
+      (then
+        (i32.store offset=24 (global.get $reg_base) (local.get $si))
+        (i32.store offset=28 (global.get $reg_base) (local.get $di)))
+      (else
+        (call $set_reg16 (i32.const 6) (local.get $si))
+        (call $set_reg16 (i32.const 7) (local.get $di))))
     (dispatch-next))
 
   ;; 387: XLAT — AL = DS:[BX + AL], with the same segment override the string
@@ -659,5 +706,7 @@
   (func $th_int (param $op i32)
     (global.set $eip (call $read_thread_word))
     (if (i32.eq (local.get $op) (i32.const 0x21))
-      (then (call $win16_dos_int21))
-      (else (call $dos_cf (i32.const 1)))))
+      (then (call $win16_dos_int21) (return)))
+    (if (i32.eq (local.get $op) (i32.const 0x31))
+      (then (call $win16_dpmi_int31) (return)))
+    (call $dos_cf (i32.const 1)))
