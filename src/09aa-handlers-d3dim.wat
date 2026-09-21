@@ -925,29 +925,27 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; IDirect3DDevice2_Begin — 4 args (incl. this)
+  ;; The v2 half of the unimplemented immediate-mode family; see the comment on
+  ;; $handle_IDirect3DDevice3_Begin for why these trap instead of returning
+  ;; S_OK and dropping the vertices on the floor.
   (func $handle_IDirect3DDevice2_Begin (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; IDirect3DDevice2_BeginIndexed — 6 args (incl. this)
   (func $handle_IDirect3DDevice2_BeginIndexed (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; IDirect3DDevice2_Vertex — 2 args (incl. this)
   (func $handle_IDirect3DDevice2_Vertex (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; IDirect3DDevice2_Index — 2 args (incl. this)
   (func $handle_IDirect3DDevice2_Index (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; IDirect3DDevice2_End — 2 args (incl. this)
   (func $handle_IDirect3DDevice2_End (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; IDirect3DDevice2_GetRenderState — 3 args (incl. this)
   (func $handle_IDirect3DDevice2_GetRenderState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1719,9 +1717,12 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IDirect3DVertexBuffer_ProcessVertices — 8 args (incl. this)
+  ;; Transforms and lights source vertices INTO this buffer. Returning S_OK
+  ;; without doing it leaves the destination as the zeros CreateVertexBuffer
+  ;; wrote, so every later draw off that buffer collapses to a single point --
+  ;; a silent-success stub whose symptom is again missing geometry.
   (func $handle_IDirect3DVertexBuffer_ProcessVertices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; IDirect3DVertexBuffer_GetVertexBufferDesc — 2 args (incl. this)
   (func $handle_IDirect3DVertexBuffer_GetVertexBufferDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1762,8 +1763,7 @@
 
   ;; IDirect3DVertexBuffer7_ProcessVertices — 8 args (incl. this)
   (func $handle_IDirect3DVertexBuffer7_ProcessVertices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
   ;; IDirect3DVertexBuffer7_GetVertexBufferDesc — 2 args (incl. this)
   (func $handle_IDirect3DVertexBuffer7_GetVertexBufferDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1777,8 +1777,7 @@
 
   ;; IDirect3DVertexBuffer7_ProcessVerticesStrided — 9 args (incl. this)
   (func $handle_IDirect3DVertexBuffer7_ProcessVerticesStrided (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40))))
+    (call $crash_unimplemented (local.get $name_ptr)))
 
 
   ;; ── IDirect3DTexture — 8 methods ─────────────
