@@ -65,7 +65,7 @@
   (func $win32_dispatch (param $thunk_idx i32)
     (local $api_id i32) (local $name_rva i32) (local $name_ptr i32)
     (local $arg0 i32) (local $arg1 i32) (local $arg2 i32) (local $arg3 i32)
-    (local $arg4 i32)
+    (local $arg4 i32) (local $ending_dlg i32)
     (local $queued i32)
     (local $saved_ebx i32) (local $saved_esi i32)
     (local $saved_edi i32) (local $saved_ebp i32)
@@ -729,25 +729,29 @@
         ;; If EndDialog was called, destroy dialog and return result
         (if (global.get $dlg_ended)
           (then
+            ;; Teardown and owner notification can reenter USER. The retiring
+            ;; call owns its result/return address, not the mutable pump globals.
+            (local.set $ending_dlg (global.get $dlg_pump_hwnd))
+            (local.set $arg0 (global.get $dlg_result))
+            (local.set $arg1 (global.get $dlg_ret_addr))
             ;; Destroy WAT-managed child controls (sends WM_DESTROY to each)
             ;; but not the dialog itself — its x86 dlg_proc would interpret
             ;; WM_DESTROY as app shutdown and call PostQuitMessage.
-            ;; Use $dlg_pump_hwnd: $dlg_hwnd may have been clobbered by a
-            ;; nested modeless CreateDialogParamA inside the modal's dlgproc.
-            (local.set $arg4 (call $wnd_get_owner (global.get $dlg_pump_hwnd)))
-            (if (call $wnd_table_get (global.get $dlg_pump_hwnd))
+            ;; Use the captured pump HWND: $dlg_hwnd may already have been
+            ;; clobbered by modeless creation, and teardown may replace the
+            ;; pump global as well.
+            (local.set $arg4 (call $wnd_get_owner (local.get $ending_dlg)))
+            (if (call $wnd_table_get (local.get $ending_dlg))
               (then
-                (call $wnd_destroy_children (global.get $dlg_pump_hwnd))
-                (call $wnd_table_remove (global.get $dlg_pump_hwnd))
-                (call $host_destroy_window (global.get $dlg_pump_hwnd))))
+                (call $wnd_destroy_children (local.get $ending_dlg))
+                (call $wnd_table_remove (local.get $ending_dlg))
+                (call $host_destroy_window (local.get $ending_dlg))))
             ;; The dialog and its controls held the focus; hand it back to the
             ;; owner so an app that paused on WM_KILLFOCUS resumes.
             (call $focus_restore_after_modal (local.get $arg4))
             ;; The consumed DialogBoxParamA frame remains at ESP. Preserve the
             ;; completed call's return/result while restoring the previous
             ;; modal pump saved in its five argument slots.
-            (local.set $arg0 (global.get $dlg_result))
-            (local.set $arg1 (global.get $dlg_ret_addr))
             (global.set $dlg_pump_hwnd
               (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
             (global.set $dlg_proc

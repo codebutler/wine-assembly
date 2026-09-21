@@ -12,6 +12,24 @@ const { bootRenderHarness } = require('./render-helper');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_set_child_proc") (param $h i32) (param $proc i32)
+    (call $wnd_table_set (local.get $h) (local.get $proc)))
+  (func (export "test_clobber_modal_completion") (param $nested i32)
+    (global.set $dlg_pump_hwnd (local.get $nested))
+    (global.set $dlg_result (i32.const 99))
+    (global.set $dlg_ret_addr (i32.const 0x405999)))
+
+  (func (export "test_finish_modal") (param $dlg i32) (param $stack i32)
+    (global.set $dlg_pump_hwnd (local.get $dlg))
+    (global.set $dlg_init_focus_hwnd (i32.const 0))
+    (global.set $dlg_ended (i32.const 1))
+    (global.set $dlg_result (i32.const 42))
+    (global.set $dlg_ret_addr (i32.const 0x405678))
+    (i32.store (global.get $SHARED_DLG_ENDED) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (memory.fill (call $g2w (local.get $stack)) (i32.const 0) (i32.const 24))
+    (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA0004))
+    (call $win32_dispatch (i32.const 0)))
   (func (export "test_create_modeless_dialog")
     (param $dlgproc i32) (result i64)
     (local $dlg i32) (local $child i32)
@@ -83,7 +101,9 @@ function u32(value) {
 }
 
 (async () => {
-  const { exports: e, memory } = await bootRenderHarness({ extraWat });
+  let onTick = () => 0;
+  const { exports: e, memory } = await bootRenderHarness({ extraWat,
+    extraHostOverrides: { get_ticks: () => onTick() } });
   const fixture = fs.readFileSync(path.join(ROOT, 'test', 'binaries', 'calc.exe'));
   new Uint8Array(memory.buffer).set(fixture, e.get_staging());
   assert(e.load_pe(fixture.length), 'fixture PE initializes x86 callback support');
@@ -179,7 +199,37 @@ function u32(value) {
   assert.strictEqual(e.test_window_exists(modelessReentrant), 0,
     'a modeless DLGPROC that calls EndDialog from WM_DESTROY still gets torn down once');
 
-  console.log('PASS  EndDialog preserves recursive window teardown lifecycle');
+  // A child WM_DESTROY calls GetTickCount, whose test host reenters USER.
+  // Simulate the writes of a nested modal completion, not an entire second
+  // dialog loop: the outer call must retain its HWND, result and return PC.
+  const retiringPacked = BigInt.asUintN(64, e.test_create_modeless_dialog(proc));
+  const retiring = Number(retiringPacked & 0xffffffffn) >>> 0;
+  const retiringChild = Number(retiringPacked >> 32n) >>> 0;
+  const nestedPacked = BigInt.asUintN(64, e.test_create_modeless_dialog(proc));
+  const nested = Number(nestedPacked & 0xffffffffn) >>> 0;
+  const completionStack = (e.guest_alloc(8192) + 4096) >>> 0;
+  const apiTable = require('../src/api_table.json');
+  const tickThunk = e.test_make_api_thunk(apiTable.find(a => a.name === 'GetTickCount').id);
+  const teardownProc = e.guest_alloc(64) >>> 0;
+  bytes.set(Uint8Array.from([0xb8, ...u32(tickThunk), 0xff, 0xd0,
+    0x31, 0xc0, 0xc2, 0x10, 0]), toWasm(teardownProc));
+  e.test_set_child_proc(retiringChild, teardownProc);
+  let reentries = 0;
+  onTick = () => {
+    if (!reentries) {
+      reentries++;
+      e.test_clobber_modal_completion(nested);
+    }
+    return 1000;
+  };
+  e.test_finish_modal(retiring, completionStack);
+  assert.strictEqual(reentries, 1);
+  assert.strictEqual(e.test_window_exists(retiring), 0, 'teardown removes the retiring HWND');
+  assert.strictEqual(e.test_window_exists(nested), 1, 'nested HWND is not mistaken for the retiring dialog');
+  assert.strictEqual(e.get_eax(), 42, 'retiring DialogBox keeps its own result');
+  assert.strictEqual(e.get_eip(), 0x405678, 'retiring DialogBox keeps its own return address');
+  assert.strictEqual(e.get_esp(), completionStack + 24, 'modal completion consumes its own frame');
+  console.log('PASS  EndDialog lifecycle and reentrant completion ownership');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

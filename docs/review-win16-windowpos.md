@@ -2036,3 +2036,39 @@ with only these three files copied by rsync, passes the callback suite and
 full normal/compatibility build (`wa-mdi-focus-clean-test.log`,
 `wa-mdi-focus-clean-build.log`, layout `c5ccefca8909ee4b`). No gate or foreign
 test was changed. No performance claim is made on the heavily loaded host.
+
+### Modal completion snapshots before teardown
+
+The CACA0004 EndDialog completion now retains the retiring HWND, result and
+return address in invocation-local variables **before** child teardown and
+owner restoration. Child WM_DESTROY can reenter USER; rereading
+`dlg_pump_hwnd` afterward could remove a nested dialog instead of the outer
+one, and rereading `dlg_result`/`dlg_ret_addr` could return the nested call's
+answer to its caller. The saved parent-pump frame and 24-byte API cleanup
+remain unchanged.
+
+`test-end-dialog-lifecycle.js` now gives a child a real x86 WM_DESTROY
+procedure that calls GetTickCount. Its test host reenters the module and
+changes the modal globals to a different live HWND, result 99 and return PC.
+The retiring call must remove only its own HWND, retain the other live
+dialog, return its original 42/address and consume exactly its own frame.
+This deliberately injects the nested completion's shared-state writes; it
+does not claim to run a full second DialogBox loop or establish native
+notification timing. An earlier result-only variant reproduced 99 instead
+of 42 with the old source.
+
+This is a prerequisite ownership repair, not the synchronous focus migration
+itself. Native common dialogs additionally retain return PC, saved ESP,
+cleanup size, four nonvolatile registers and restore-pending state in modal
+globals (`modal_begin`/`modal_capture_nonvolatile`, consumed by CACA0006).
+Those need invocation ownership across focus callbacks too. The posted owner
+notification is unchanged until that completion protocol is covered.
+
+Validation: the final lifecycle test passes in the clean verification tree
+(`wa-modal-result-final-clean.log`). Replacing only `09b-dispatch.wat` with
+the pre-fix source fails because the retiring HWND remains alive
+(`wa-modal-result-final-negative.log`). Normal/compatibility builds pass all
+gates (`wa-modal-result-final-build.log`, layout `c5ccefca8909ee4b`). These
+logs are under `/private/tmp`; verification reused the clean MDI tree above,
+adding only the dispatch/lifecycle changes via rsync. Unrelated main-tree
+test work was excluded, not modified.
