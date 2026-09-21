@@ -79,6 +79,22 @@ assert.deepStrictEqual([0x0084, 0x0201, 0x0202].map(() => renderer.takeInput(own
 assert.strictEqual(renderer._keyboardInputWasm, appA,
   'pointer dequeue must not itself publish an activation decision');
 
+// Secondary apps expose send_message too, but pointer delivery must not use
+// that capability as a reason to omit their right-button down. USER needs
+// the down to ask WM_MOUSEACTIVATE; an orphan UP cannot substitute for it.
+renderer.mainWasm = appA;
+appB.exports.send_message = () => { throw new Error('right click entered guest inline'); };
+renderer.handleMouseDown(40, 60, 2);
+renderer.handleMouseUp(40, 60, 2);
+assert.deepStrictEqual(renderer.inputQueue.map(event => [event.hwnd, event.msg]), [
+  [200, 0x84], [200, 0x204], [200, 0x205],
+], 'secondary app receives the complete queued right-click sequence');
+assert.strictEqual(renderer.inputQueue[1].wParam & 2, 2, 'right down carries MK_RBUTTON');
+assert.strictEqual(renderer._keyboardInputWasm, appA, 'right click also awaits activation consent');
+assert.strictEqual(renderer.windows[200].zOrder, oldZ);
+assert.strictEqual(prematureFocus, 0);
+renderer.inputQueue.length = 0;
+
 // Accepted foreground, not the provisional click owner or highest surface,
 // selects the keyboard app. Restoring the routing context must not execute
 // guest focus callbacks (the browser instance may only be a Worker shadow).

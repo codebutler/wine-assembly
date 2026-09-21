@@ -725,10 +725,13 @@ const extraWat = String.raw`
     get_focus_hwnd: e.get_focus_hwnd,
     set_focus: e.set_focus,
     wnd_get_style_export: e.wnd_get_style_export,
+    send_message() { throw new Error('queued pointer must not call guest inline'); },
   }};
   inputRenderer = r;
   desktopHost = createWindowHost({ renderer: r }, {}).imports;
-  for (const answer of [1, 2, 3, 4]) {
+  for (const button of [0, 2]) for (const answer of [1, 2, 3, 4]) {
+    const down = button === 2 ? 0x204 : 0x201;
+    const up = down + 1;
     const query = e.guest_alloc(256) >>> 0;
     bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 0x21, 0x75, 8,
       0xb8, ...u32(answer), 0xc2, 0x10, 0]), toWasm(query));
@@ -740,15 +743,16 @@ const extraWat = String.raw`
     r.windows = { [focusA]: old, [target]: clicked };
     r._nextZ = 11;
     r._foregroundWindow = old;
+    r.mainWasm = previousApp;
     r._setKeyboardInputOwner(old);
     r.inputQueue.length = 0;
     e.test_set_active(focusA, stack);
     e.test_focus_api(focusA, stack);
     e.test_mouse_clear_nc();
     resetRecords(); hostCalls.length = 0;
-    r.handleMouseDown(40, 60, 0);
-    r.handleMouseUp(40, 60, 0);
-    assert.deepStrictEqual(r.inputQueue.map(event => event.msg), [0x84, 0x201, 0x202],
+    r.handleMouseDown(40, 60, button);
+    r.handleMouseUp(40, 60, button);
+    assert.deepStrictEqual(r.inputQueue.map(event => event.msg), [0x84, down, up],
       `answer ${answer}: renderer queues hit-test/down/up`);
     assert.strictEqual(clicked.zOrder, 1, 'renderer cannot preempt USER z-order decision');
     assert.strictEqual(r._keyboardInputWasm, previousApp, 'renderer retains accepted keyboard app');
@@ -757,7 +761,7 @@ const extraWat = String.raw`
     assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x84, 0x84), 1,
       'hit-test message precedes the activation-bearing down');
     assert.strictEqual(r._foregroundWindow, old, 'removing hit-test does not activate');
-    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201),
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, down, down),
       answer === 2 || answer === 4 ? 0 : 1, `answer ${answer}: USER decides whether the queued down survives`);
     const activates = answer <= 2;
     assert.strictEqual(r._foregroundWindow, activates ? clicked : old,
@@ -767,7 +771,9 @@ const extraWat = String.raw`
       'only accepted activation raises the clicked surface');
     if (!activates) assert.strictEqual(e.get_focus_hwnd(), focusA, 'activation veto retains guest focus');
     assert.strictEqual(records().filter(event => event.msg === 0x21).length, 1);
-    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x202, 0x202), 1,
+    assert.strictEqual(records().find(event => event.msg === 0x21).lParam, (down << 16) | 1,
+      'activation query identifies the actual initiating button');
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, up, up), 1,
       'even an eaten down retains its queued release');
   }
   assert(polledFocus.size > 1, 'input polls observe changing guest focus owners');

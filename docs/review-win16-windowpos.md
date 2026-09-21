@@ -2994,3 +2994,25 @@ traps; COM server load and missing-server completion also passed. These are
 live single-app Worker checks, not proof of cross-app activation/deactivation.
 Direct native/non-client mouse acceptance and multi-app Worker coordination
 remain open.
+
+### Secondary-app right-button down is no longer dropped (2026-09-21)
+
+The generic client router had an early return for a right-button press when
+the target belonged to a non-main instance exposing `send_message`. It saved
+the release target but neither sent nor queued the down. Thus ordinary
+secondary apps received an orphan `WM_RBUTTONUP`, with no down for USER's
+activation transaction. Removed that branch: secondary apps now use the
+same queued hit-test/down/up path, without inline guest dispatch.
+
+The multi-app regression supplies a throwing `send_message` export and
+checks the complete right-click sequence, MK_RBUTTON and unchanged pre-query
+keyboard/focus/z-order. The real renderer → compiled USER → desktop host
+matrix now covers both left and right buttons across all four `MA_*`
+answers, including the initiating button encoded in the activation query.
+Main and isolated-copy matrices plus focused renderer/Worker-host tests pass; the previous router
+fails the new complete-sequence assertion. No WAT runtime source changed.
+
+This does not remove `_openWorkerContextMenu`, the separate title-matched
+Winamp wVis release workaround. That helper can still consume the release
+and synthesize a menu; it needs a real-app regression before replacement.
+Nor does this establish live cross-app Worker activation/deactivation.
