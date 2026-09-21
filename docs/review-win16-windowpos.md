@@ -1815,3 +1815,59 @@ passes (`wa-ischild-build.log`) and both artifacts match the generated layout
 `74b29198cdc0b91f`. Real Win16 Rodent and Rattler gameplay tests pass using
 that completed artifact (`wa-ischild-vb.log`). Foreign SetSysColors and GDI
 ordinal changes in the shared adapter files are excluded from this commit.
+
+### Win32 removal-time mouse transaction (2026-09-20)
+
+GetMessageA and PeekMessageA now separate message fetching from the Win32
+mouse-removal transaction. Only successfully removed input-origin button-down
+messages enter it; PM_NOREMOVE and explicit PostMessage clicks remain inert.
+The target receives WM_MOUSEACTIVATE before activation and before the down is
+returned. Client messages use HTCLIENT; non-client messages retain their hit
+code. The top-level HWND is passed unchanged through child default forwarding.
+
+The measured Win98 answers are implemented: 0/1 activate and deliver,
+2 activates and eats, 3 delivers without activation, and 4 eats without
+activation. Activation uses WA_CLICKACTIVE. Eating restarts the same fetch
+with the original filters and stack frame: PeekMessage may return FALSE,
+whereas GetMessage continues to the next available message. Button-up is not
+discarded with button-down. A target destroyed during the transaction is not
+returned as a surviving click target. All seven MSG fields are held in WAT
+locals across callbacks and restored afterward, so a nested pump using the
+same LPMSG cannot replace the outer message. Callback-driven activation
+already uses the existing transition-generation safeguards.
+
+This is deliberately the Win32 integration stage, not complete desktop mouse
+activation. `code16` callers bypass it and far procedures are not sent through
+the synchronous 32-bit sender; Win16 task/modal pumps still need their own
+invocation-owned query/activation continuation. The renderer still eagerly
+raises/focuses on mouse-down, so MA_NOACTIVATE is not yet an end-to-end browser
+guarantee. Cross-app foreground arbitration, custom non-client hit-test
+semantics and native comparisons for reentrant WM_MOUSEACTIVATE choices also
+remain open. None of these are treated as completed by the unit tests.
+
+The real-x86 callback matrix in test-active-window.js covers both public
+pumps and all five observed answers, repeated no-remove peeks, exact query
+parameters, WA_CLICKACTIVE, posted-click exclusion, button-up preservation,
+stack cleanup, nested reuse of LPMSG, parent forwarding and filter migration
+into the shared queue. The existing queue-selection fixture now calls the
+fetch helpers explicitly because its artificial wndproc addresses are not
+executable; the public-handler callback behavior is covered by the real guest
+matrix. Earlier activation tests leave non-client work pending, so that fixture
+state is drained before the mouse matrix rather than mistaken for a mouse
+transaction failure. Synthetic NC filtering remains a separate open issue.
+
+Validation passes: final callback matrix (`wa-mouse-pump32-final.log`), queue
+selection (`wa-mouse-queue.log`), keyboard hooks (`wa-mouse-hook.log`) and
+console input (`wa-mouse-console.log`). A source-transform negative control
+that replaces the two processing calls with zero fails the first removal's
+activation assertion (`wa-mouse-pump32-negative.log`). Full normal/compat
+build passes (`wa-mouse-build.log`, layout `74b29198cdc0b91f`). WinRAR installer/
+file-manager acceptance passes with 28/28 owner-draw drive rows containing ink
+(`wa-mouse-winrar.log`). Logs are under `/private/tmp`; this acceptance is not
+a claim that renderer activation/no-activation behavior is already correct.
+The existing Notepad taskbar minimize/restore browser regression passes in
+both cooperative and Worker modes (`wa-mouse-browser.log`); it verifies the
+adjacent activation/restore paths, not the still-open browser mouse policy.
+Rodent/Rattler gameplay also passes with the completed artifact
+(`wa-mouse-vb.log`), checking that the explicit Win16 bypass preserves those
+existing input paths while the far transaction is still pending.

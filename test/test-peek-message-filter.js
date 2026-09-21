@@ -58,7 +58,9 @@ const extraWat = String.raw`
     (local $saved_esp i32) (local $saved_eip i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (local.set $saved_eip (global.get $eip))
-    (call $handle_GetMessageA (local.get $msg) (i32.const -1)
+    ;; Queue selection is tested with synthetic non-executable wndproc values;
+    ;; real removal-time callbacks are covered in test-active-window.js.
+    (call $handle_GetMessageA_fetch (local.get $msg) (i32.const -1)
       (i32.const 0x400) (i32.const 0x400) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (global.set $eip (local.get $saved_eip)))
@@ -68,7 +70,7 @@ const extraWat = String.raw`
     (local $saved_esp i32) (local $saved_eip i32) (local $result i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (local.set $saved_eip (global.get $eip))
-    (call $handle_PeekMessageA
+    (call $handle_PeekMessageA_fetch
       (local.get $msg) (local.get $hwnd) (local.get $min)
       (local.get $max) (local.get $remove) (i32.const 0))
     (local.set $result (i32.load offset=0 (global.get $reg_base)))

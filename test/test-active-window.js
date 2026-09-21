@@ -43,6 +43,26 @@ function makeWndProc(observed, callback = []) {
 }
 
 const extraWat = String.raw`
+  (func (export "test_mouse_clear_nc")
+    (local $h i32)
+    (block $done (loop $next
+      (local.set $h (call $nc_flags_scan (i32.const 7)))
+      (br_if $done (i32.eqz (local.get $h)))
+      (call $nc_flags_clear (local.get $h) (i32.const 7))
+      (br $next))))
+  (func (export "test_mouse_state") (param $h i32) (result i32)
+    (i32.or (global.get $code16) (i32.or
+      (i32.shl (global.get $user_queue_input_flags) (i32.const 4))
+      (i32.shl (call $win16_is_far_proc (call $wnd_table_get (local.get $h))) (i32.const 8)))))
+  (func (export "test_mouse_pump") (param $ptr i32) (param $sp i32) (param $peek i32)
+      (param $remove i32) (param $min i32) (param $max i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (if (local.get $peek)
+      (then (call $handle_PeekMessageA (local.get $ptr) (i32.const 0)
+        (local.get $min) (local.get $max) (local.get $remove) (i32.const 0)))
+      (else (call $handle_GetMessageA (local.get $ptr) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+    (i32.load (global.get $reg_base)))
   (func (export "test_focus_api") (param $h i32) (param $stack i32) (result i32)
     (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_SetFocus (local.get $h) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
@@ -147,6 +167,8 @@ const extraWat = String.raw`
 `;
 
 (async () => {
+  const mouseInput = [];
+  let currentMouse = null;
   assert.strictEqual(apiTable.find(api => api.name === 'SetActiveWindow').nargs, 1);
   assert.strictEqual(apiTable.find(api => api.name === 'GetActiveWindow').nargs, 0);
   assert.strictEqual(apiTable.find(api => api.name === 'GetForegroundWindow').nargs, 0);
@@ -157,6 +179,12 @@ const extraWat = String.raw`
     extraWat,
     fonts: 'none',
     extraHostOverrides: {
+      check_input() {
+        currentMouse = mouseInput.shift() || null;
+        return currentMouse ? ((currentMouse.wp << 16) | currentMouse.msg) : 0;
+      },
+      check_input_hwnd() { return currentMouse ? currentMouse.hwnd : 0; },
+      check_input_lparam() { return currentMouse ? currentMouse.lp : 0; },
       activate_window(hwnd) {
         hostCalls.push(['activate', hwnd >>> 0]);
         return hwnd ? 1 : 0;
@@ -468,7 +496,116 @@ const extraWat = String.raw`
     {hwnd: chainB, msg: 8, wParam: chainB, lParam: 0},
     {hwnd: chainB, msg: 7, wParam: chainB, lParam: 0},
   ], 'native reentry ends with the outer self-focus pair');
-  console.log('PASS Set/GetActiveWindow retain per-thread USER activation state');
+  const mouseMsg = e.guest_alloc(28) >>> 0;
+  // Earlier restore/focus cases deliberately left NC work pending. Keep the
+  // input transaction matrix independent of that synthetic message source.
+  e.test_mouse_clear_nc();
+  const readMouse = () => Array.from({length: 7}, (_, i) => view.getUint32(toWasm(mouseMsg) + i * 4, true));
+  for (const peek of [1, 0]) {
+    for (const answer of [0, 1, 2, 3, 4]) {
+      const mouseProc = e.guest_alloc(256) >>> 0;
+      bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 0x21, 0x75, 8,
+        0xb8, ...u32(answer), 0xc2, 0x10, 0]), toWasm(mouseProc));
+      const target = e.test_make_window(mouseProc, WS_VISIBLE, 0, 1);
+      e.test_set_active(focusA, stack);
+      resetRecords();
+      hostCalls.length = 0;
+      mouseInput.push({hwnd: target, msg: 0x201, wp: 1, lp: 0x0014000a});
+      if (peek) {
+        for (let i = 0; i < 2; i++) {
+          assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 0, 0x201, 0x201), 1);
+          assert.deepStrictEqual(records(), [], 'PM_NOREMOVE never queries or activates');
+          assert.strictEqual(e.test_get_active(), focusA);
+        }
+      }
+      // GetMessage must continue to the button-up when the down is eaten.
+      mouseInput.push({hwnd: target, msg: 0x202, wp: 0, lp: 0x0014000a});
+      const eats = answer === 2 || answer === 4;
+      const activates = answer !== 3 && answer !== 4;
+      const result = e.test_mouse_pump(mouseMsg, stack, peek, 1, 0x201, 0x201);
+      assert.strictEqual(result, peek && eats ? 0 : 1, `answer ${answer}: pump result`);
+      assert.strictEqual(e.get_esp(), stack + (peek ? 24 : 20), 'eaten-message retry preserves stdcall cleanup');
+      assert.strictEqual(e.test_get_active(), activates ? target : focusA,
+        `peek=${peek} answer=${answer} state=${e.test_mouse_state(target)} esp=${e.get_esp().toString(16)} msg=${readMouse()} events=${JSON.stringify(records())}`);
+      assert.strictEqual(records().filter(r => r.msg === 0x21).length, 1, 'query once on removal');
+      assert.deepStrictEqual(records()[0], {hwnd: target, msg: 0x21, wParam: target, lParam: 0x02010001});
+      assert.strictEqual(records().some(r => r.hwnd === target && r.msg === 6 && r.wParam === 2), activates,
+        'mouse activation uses WA_CLICKACTIVE');
+      assert.strictEqual(hostCalls.filter(r => r[0] === 'activate').length, activates ? 1 : 0);
+      if (!peek && eats) assert.strictEqual(readMouse()[1], 0x202, 'GetMessage skips eaten down and returns up');
+      else {
+        if (!eats) assert.strictEqual(readMouse()[1], 0x201);
+        assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x202, 0x202), 1,
+          'eating down does not eat button-up');
+      }
+      e.test_set_active(focusA, stack);
+      resetRecords();
+      e.post_message_q(target, 0x201, 1, 0x0014000a);
+      assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), 1);
+      assert.deepStrictEqual(records(), [], 'PostMessage button-down never queries/activates');
+    }
+  }
+  const peekThunk = e.test_thunk(apiTable.find(entry => entry.name === 'PeekMessageA').id);
+  const nestedMouseProc = e.guest_alloc(256) >>> 0;
+  const nestedMouseCall = [0x6a, 1, 0x68, ...u32(0x400), 0x68, ...u32(0x400),
+    0x6a, 0, 0x68, ...u32(mouseMsg), 0xb8, ...u32(peekThunk), 0xff, 0xd0,
+    0xb8, ...u32(3), 0xc2, 0x10, 0];
+  bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 0x21, 0x75, nestedMouseCall.length,
+    ...nestedMouseCall]), toWasm(nestedMouseProc));
+  const nestedMouseTarget = e.test_make_window(nestedMouseProc, WS_VISIBLE, 0, 1);
+  e.test_set_active(focusA, stack);
+  resetRecords();
+  e.post_message_q(nestedMouseTarget, 0x400, 0xdead, 0xbeef);
+  mouseInput.push({hwnd: nestedMouseTarget, msg: 0x201, wp: 1, lp: 0x0014000a});
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 0, 0x201, 0x201), 1);
+  const outerMouse = readMouse();
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), 1);
+  // MSG.time may be refreshed when removed; all remaining fields must survive
+  // the nested callback's PeekMessage into exactly the same destination.
+  assert.deepStrictEqual(readMouse().filter((_, i) => i !== 4), outerMouse.filter((_, i) => i !== 4));
+  assert.strictEqual(e.test_get_active(), focusA);
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x400, 0x400), 0,
+    'the nested pump actually consumed the posted sentinel');
+
+  const parentMouseProc = e.guest_alloc(256) >>> 0;
+  bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 0x21, 0x75, 8,
+    0xb8, ...u32(3), 0xc2, 0x10, 0]), toWasm(parentMouseProc));
+  const childMouseProc = e.guest_alloc(256) >>> 0;
+  const parentMouseCall = [...Array(4).fill([0xff, 0x74, 0x24, 16]).flat(),
+    0xb8, ...u32(defThunk), 0xff, 0xd0, 0xc2, 0x10, 0];
+  bytes.set(makeWndProc(observed, [0x83, 0x7c, 0x24, 8, 0x21, 0x75, parentMouseCall.length,
+    ...parentMouseCall]), toWasm(childMouseProc));
+  const mouseParent = e.test_make_window(parentMouseProc, WS_VISIBLE, 0, 1);
+  const mouseChild = e.test_make_window(childMouseProc, WS_VISIBLE | WS_CHILD, mouseParent, 1);
+  resetRecords();
+  mouseInput.push({hwnd: mouseChild, msg: 0x201, wp: 1, lp: 0x0014000a});
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), 1);
+  assert.deepStrictEqual(records(), [mouseChild, mouseParent].map(hwnd =>
+    ({hwnd, msg: 0x21, wParam: mouseParent, lParam: 0x02010001})),
+    'child default forwards the original query to its parent before delivering the click');
+  assert.strictEqual(e.test_get_active(), focusA);
+  resetRecords();
+  mouseInput.push({hwnd: mouseChild, msg: 0x201, wp: 1, lp: 0x0014000a});
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x100, 0x100), 0);
+  assert.deepStrictEqual(records(), [], 'filter migration alone never queries the guest');
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), 1);
+  assert.strictEqual(records().filter(r => r.msg === 0x21).length, 2,
+    'input routed through the shared queue still runs child/parent queries on removal');
+  for (const msg of [0x204, 0x207, 0xA1, 0xA4, 0xA7]) {
+    resetRecords();
+    const nonClient = msg < 0x200;
+    mouseInput.push({hwnd: mouseParent, msg, wp: nonClient ? 2 : 0, lp: 0x0014000a});
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, msg, msg), 1);
+    assert.deepStrictEqual(records(), [{hwnd: mouseParent, msg: 0x21,
+      wParam: mouseParent, lParam: ((msg << 16) | (nonClient ? 2 : 1)) >>> 0}],
+      'other button-downs retain their initiating message and hit code');
+  }
+  e.test_set_active(mouseParent, stack);
+  resetRecords();
+  mouseInput.push({hwnd: mouseChild, msg: 0x201, wp: 1, lp: 0x0014000a});
+  assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, 0x201, 0x201), 1);
+  assert.deepStrictEqual(records(), [], 'an already-active top level needs no activation query');
+  console.log('PASS Set/GetActiveWindow and removal-time mouse activation');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);
