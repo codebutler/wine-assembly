@@ -15,6 +15,18 @@ const { bootRenderHarness } = require('./render-helper');
 
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
+  (func (export "test_capture_api") (param $next i32) (result i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (if (local.get $next)
+      (then (call $handle_SetCapture (local.get $next) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0)))
+      (else (call $handle_ReleaseCapture (i32.const 0) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load (global.get $reg_base)))
+  (func (export "test_dialog_capture") (result i32)
+    (global.get $dialog_button_capture_hwnd))
   (func (export "test_create_dialog_button")
     (param $dlgproc i32) (param $id i32) (param $kind i32) (result i32)
     (local $dlg i32)
@@ -119,7 +131,7 @@ function u32(value) {
       assert.strictEqual(e.get_capture_hwnd(), 0, 'outside release retires capture');
       assert.strictEqual(e.get_post_queue_count(), 0, 'outside release sends no BN_CLICKED');
       assert.strictEqual(e.send_message(button, 0xf0, 0, 0), 0, 'outside release does not auto-check');
-      assert.strictEqual(e.send_message(button, 0xf2, 0, 0) & 4, 0, 'outside release clears BST_PUSHED');
+      assert.strictEqual(e.button_get_flags(button) & 1, 0, 'outside release clears native pressed state');
     }
     e.test_button_click(button);
     assert.strictEqual(e.get_post_queue_count(), 1, 'inside release still posts BN_CLICKED');
@@ -129,6 +141,23 @@ function u32(value) {
   }
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
   const customParent = e.wnd_get_parent(custom) >>> 0;
+  const replacement = e.test_create_dialog_button(proc, 1200) >>> 0;
+  for (const cancel of ['transfer', 'release', 'cancel-mode', 'focus-loss']) {
+    assert.strictEqual(e.dialog_route_mouse(customParent, 0x201, 1, (5 << 16) | 5), 1);
+    assert.strictEqual(e.test_dialog_capture(), custom);
+    assert(e.button_get_flags(custom) & 1, 'press starts highlighted');
+    if (cancel === 'transfer') assert.strictEqual(e.test_capture_api(replacement), custom);
+    else if (cancel === 'release') assert.strictEqual(e.test_capture_api(0), 1);
+    else if (cancel === 'focus-loss') e.set_focus(replacement);
+    else e.send_message(custom, 0x1f, 0, 0);
+    assert.strictEqual(e.get_capture_hwnd(), cancel === 'transfer' ? replacement : 0,
+      `${cancel} does not erase a replacement capture owner`);
+    assert.strictEqual(e.test_dialog_capture(), 0, `${cancel} retires the dialog router's target`);
+    assert.strictEqual(e.button_get_flags(custom) & 1, 0, `${cancel} clears native pressed state`);
+    e.test_button_release(custom);
+    assert.strictEqual(e.get_post_queue_count(), 0, `${cancel} prevents a later stray UP from clicking`);
+    if (cancel === 'transfer') e.test_capture_api(0);
+  }
   e.test_subclass_parent(custom, proc);
   e.test_button_release(custom);
   assert.strictEqual(e.get_post_queue_count(), 0,

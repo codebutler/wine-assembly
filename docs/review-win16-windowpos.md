@@ -2450,3 +2450,43 @@ Evidence is `/private/tmp/wa-release-outside-{native-final,native-clean,
 native-negative,js-negative,build,vb,wep3,wordpad}.log`. The obsolete stored
 DOWN coordinate was removed along with its retry consumer. Other agents'
 uncommitted dialog-fixture changes remain excluded.
+
+### BUTTON cancellation on capture/focus loss
+
+BUTTON previously ignored WM_CAPTURECHANGED and WM_CANCELMODE, and its
+WM_KILLFOCUS branch cleared focus/default decoration without cancelling a
+tracked press. Public SetCapture/ReleaseCapture already sent the capture
+notification, but the control left its pressed bit and the native dialog
+router's capture target behind. A later UP could still notify BN_CLICKED.
+
+A shared control cancellation helper now clears pressed state and the
+matching dialog-router target without touching check/default/focus bits.
+WM_CAPTURECHANGED never changes the already-published replacement owner;
+WM_CANCELMODE and focus loss release capture only when this button owns it.
+Focus-loss processing refreshes the state pointer after capture notification,
+since a callback may destroy the control. These follow Microsoft's
+[capture-change rule](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-capturechanged)
+and [BUTTON focus-loss cancellation](https://learn.microsoft.com/en-us/windows/win32/controls/button-messages).
+
+The regression exercises the real SetCapture/ReleaseCapture handlers,
+WM_CANCELMODE, and shared focus transfer, proving a nonzero pressed state
+before cancellation, preserving a replacement owner, clearing the dialog
+router target, and rejecting a later stray UP without a command.
+
+**Correction to the previous release tests:** their BM_GETSTATE zero check
+was too weak. BUTTON does not yet implement BM_GETSTATE, so that observation
+did not prove the pressed state had cleared. The tests now inspect the
+actual ButtonState flags via the existing diagnostic export; outside-release
+notification, check-state and capture assertions were independent and remain
+valid. BM_GETSTATE remains an explicit open API gap, alongside move-time
+highlighting and the broader input/activation work. No native Win98 ordering
+trace or live Worker acceptance is claimed by this stage.
+
+Verification: corrected native matrix passes in main and the clean tree
+(`wa-button-cancel-main.log`, `wa-button-cancel-final2.log`); the old-source
+negative fails on the retained dialog capture (`wa-button-cancel-negative2.log`).
+Both main and clean full builds pass; only the clean build isolates this
+change from other agents' edits. Its normal/compat sizes are 1454258/1455164,
+layout `c5ccefca8909ee4b` (`wa-button-cancel-clean-build.log`). Rodent/Rattler,
+WEP3 7/7 and WordPad browser checks pass (`wa-button-cancel-{vb,wep3,wordpad}.log`).
+All logs are under `/private/tmp/`.

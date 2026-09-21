@@ -304,6 +304,25 @@
   ;; below become live. Until then, the legacy CONTROL_TABLE path is the
   ;; only thing exercised by tests.
 
+  ;; Cancel tracking without toggling a check state or notifying BN_CLICKED.
+  ;; Clear both the control state and the dialog router's retained target
+  ;; before a capture notification can reenter guest code.
+  (func $button_cancel_press (param $hwnd i32)
+    (local $state i32) (local $state_w i32) (local $flags i32)
+    (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
+    (if (local.get $state)
+      (then
+        (local.set $state_w (call $g2w (local.get $state)))
+        (local.set $flags (call $btn_flags (local.get $state_w)))
+        (if (i32.and (local.get $flags) (i32.const 1))
+          (then
+            (call $btn_set_flags (local.get $state_w) (i32.and (local.get $flags) (i32.const -2)))
+            (call $invalidate_hwnd (local.get $hwnd))))))
+    (if (i32.eq (global.get $dialog_button_capture_hwnd) (local.get $hwnd))
+      (then
+        (global.set $dialog_button_capture_hwnd (i32.const 0))
+        (global.set $dialog_button_capture_parent (i32.const 0)))))
+
   (func $button_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $state i32) (local $state_w i32)
     (local $cs_w i32) (local $hdc i32) (local $sz i32)
@@ -315,6 +334,17 @@
     (local $parent i32) (local $cmd_id i32)
 
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
+
+    ;; Capture transfer has already published the next owner. Never release
+    ;; or reacquire that owner's capture while processing WM_CAPTURECHANGED.
+    (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0215))
+                (i32.eq (local.get $msg) (i32.const 0x001F)))
+      (then
+        (call $button_cancel_press (local.get $hwnd))
+        (if (i32.and (i32.eq (local.get $msg) (i32.const 0x001F))
+              (i32.eq (global.get $capture_hwnd) (local.get $hwnd)))
+          (then (drop (call $capture_replace (i32.const 0)))))
+        (return (i32.const 0))))
 
     ;; EDIT scrollbars are standard non-client strips. Messages sent through
     ;; the control dispatcher do not pass through DefWindowProc automatically,
@@ -416,6 +446,12 @@
     ;; bit2 on the real default.
     (if (i32.eq (local.get $msg) (i32.const 0x0008))
       (then
+        (call $button_cancel_press (local.get $hwnd))
+        (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
+          (then (drop (call $capture_replace (i32.const 0)))))
+        ;; Capture notification may destroy/subclass the button; do not use
+        ;; the state pointer retained before that callback.
+        (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
         (if (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
           (then (global.set $focus_hwnd (i32.const 0))))
         (if (local.get $state)
