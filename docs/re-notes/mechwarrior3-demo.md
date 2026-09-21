@@ -945,3 +945,26 @@ pixels in the central foreground box instead of an all-black fan. The focused
 sampler regression uses a uniform RGB565 texture with NaN/Infinity coordinates;
 the gameplay test separately guards the actual near-terrain coverage in both
 cooperative and Threads modes.
+
+## The two D3DIM backends disagree about terrain colour (2026-09-20)
+
+The `test/test-mw3-gameplay.js` route reaches the cockpit on the WebGL D3DIM
+executor as well — same command with `--headless-gl --d3dim-gpu` added (and the
+display held awake: `nohup caffeinate -d -u -t 2400 &`). The GPU arm reports
+`draws=74594 triangles=136528 fallbacks=0`, so the executor is doing all of it.
+
+The frames are not the same. Sky, cockpit, HUD, radar and the 'Mech thumbnail
+agree; **the terrain does not** — it is green on the software rasterizer and
+brown/tan on the executor. Measured at `--tolerance=32`: 4.07% of pixels differ
+between arms, against a null band of 0.026% (the software arm run twice). At
+tolerance 0 the software arm differs from itself by 33%, so only the toleranced
+number means anything on this scene.
+
+That is a hue difference on one textured surface, not a sharpness or filtering
+difference, which makes it look like a real disagreement rather than a
+convention gap. Not yet chased. Captures:
+`build/d3d-backend-coverage/mw3-{software,gpu}-canvas.png`, plus a diff image;
+full method in [docs/d3d-backend-coverage.md](../d3d-backend-coverage.md).
+
+Note the 2026-09-19 corpus sweep scored MW3 `IDENTICAL, 0%`. It was comparing a
+menu: a startup slice never reaches the cockpit.

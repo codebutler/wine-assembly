@@ -102,3 +102,22 @@ node tools/d3dim-mode-sweep.js --apps=gta2_demo --batches=6000 --seconds=45 --co
 
 Captures land in `build/d3dim-mode-sweep/<app>-{sw,glsw,glgpu,sw2}.png`, so any
 row can be re-diffed by hand with `tools/png-diff.js --out=`.
+
+## Extended, 2026-09-20
+
+[docs/d3d-backend-coverage.md](d3d-backend-coverage.md) drove four of these
+apps to actual gameplay on both backends and found three things this table
+cannot show:
+
+- `mcm` NODRAW was a modal ("test your video memory"), not an absence of 3D.
+  With `200:dlg-cmd:1` it races on both backends.
+- `mw3` IDENTICAL/0% was a menu. At gameplay the two arms differ by 4.07% of
+  pixels at tolerance 32 against a 0.026% null band, with the terrain green on
+  software and brown on the executor.
+- `dx_boids` and `dx_flip3dtl` IDENTICAL/0% are two **blank** frames agreeing:
+  the composited screen is one distinct colour (boids) or black plus a text
+  overlay (flip3dtl) while the executor reports tens of thousands of draws. A
+  diff-only method cannot tell that apart from agreement; check the frame's
+  distinct-colour count (`tools/png-inspect.js stats`) before reading a verdict.
+- `dx_globe`/`dx_viewer` NODRAW is a modal `D3DRMERR_BADFILE` on `sphere3.x` /
+  `camera.x` — the `.x` loader asset gap, not a renderer question.

@@ -89,7 +89,33 @@ the first one in the browser and under `--headless-gl`:
    `09ad`) now says which of the two a present is, and a child target always
    takes the blit path, since attaching a surface to a child is invisible.
 
+## The D3D9 software backend cannot run it (2026-09-20)
+
+`--headless-gl` is what the "Running it" command uses, and that is the **GPU**
+D3D9 backend. On the software one Pawn gets a device and then dies:
+
+```
+node test/run.js --app=pawn --no-build --d3d9-renderer=software \
+  --screen=1024x768 --max-batches=9000 --max-seconds=120 --no-close
+...
+[API] IDirect3DSurface9_GetDC
+[1658] EIP=0x075030d8 EAX=0x8876086c ...
+[API] IDirect3DSurface9_GetDC
+[eip-zero] guest called through NULL at batch 1764
+  dbg_prev_eip=0x0041c100
+```
+
+`CreateDevice`, `GetBackBuffer`, `Clear` and the first `Present` all succeed;
+the **second** `IDirect3DSurface9::GetDC` on the back buffer returns
+`D3DERR_INVALIDCALL` (`EAX=0x8876086c`), Pawn calls through the NULL HDC and
+traps at `0x0041c100`. The composited window is left as caption + menu over an
+empty grey client. `--d3d9-programmable` makes no difference. Since the board
+is drawn entirely inside that `GetDC`, this one call gates the whole app on the
+software backend. Captures: `build/d3d-backend-coverage/pawn-{gpu,software}-canvas.png`;
+context in [docs/d3d-backend-coverage.md](../d3d-backend-coverage.md).
+
 ## Status
 
-Playable. Drags a pawn two ranks, the engine replies, and the board is now in
-the window rather than only in the surface.
+Playable on the GPU (`--headless-gl`) D3D9 backend. Drags a pawn two ranks, the
+engine replies, and the board is now in the window rather than only in the
+surface. Crashes on `--d3d9-renderer=software` (above).

@@ -106,6 +106,22 @@ directory. The registry entry therefore mounts every asset under
 - DirectDraw `Blt` must apply `DDBLT_KEYSRC` to nearest-neighbour stretches as
   well as equal-size copies. MCM exercises that path for scaled 2D art.
 
+### Both D3DIM backends reach the race (2026-09-20)
+
+The headless route above works verbatim on the WebGL D3DIM executor too — add
+`--headless-gl --d3dim-gpu` (and hold the display awake with
+`nohup caffeinate -d -u -t 2400 &`, or GLFW reports zero displays and
+`D3DIMGpu._target` throws "WebGL is unavailable"). Both arms race; the
+batch-60000 loading screen is **bit-identical** between them, and the batch-185000
+race frames differ by 1.39% of pixels at `--tolerance=32` — the software arm's
+terrain texture is blocky and dithered where the GPU arm's is filtered.
+
+This corrects the `mcm NODRAW` row in
+[docs/d3dim-gl-sweep-2026-09-19.md](../d3dim-gl-sweep-2026-09-19.md): MCM was
+not failing to draw, it was parked behind the video-memory MessageBox that a
+startup slice never answers. Captures and the full command are in
+[docs/d3d-backend-coverage.md](../d3d-backend-coverage.md).
+
 The focused coverage is in `test/test-d3dim-indexed-texture.js` and
 `test/test-directdraw-cursor-background-restore.js`. The verified final race
 screenshots from the investigation were
