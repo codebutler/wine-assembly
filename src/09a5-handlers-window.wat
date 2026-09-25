@@ -1701,7 +1701,11 @@
                     (i32.eq (local.get $msg) (i32.const 0x0106)))   ;; WM_SYSCHAR
             (i32.eqz (global.get $thread_translates)))
           (i32.eqz (call $dialog_ancestor (local.get $hwnd))))
-      (then (return (i32.const 0))))
+      (then
+        ;; Consumed, not deferred: PeekMessage parks the event here until it
+        ;; is admitted, and a parked WM_CHAR nobody admits blocks the queue.
+        (global.set $pending_input_packed (i32.const 0))
+        (return (i32.const 0))))
     (local.set $owner (call $wnd_get_thread (local.get $hwnd)))
     (if (i32.and (i32.ne (local.get $owner) (i32.const 0))
                  (i32.ne (local.get $owner) (global.get $current_thread_id)))
