@@ -591,8 +591,13 @@
     ;; window) have WAT-native wndprocs, not guest x86 callbacks. Win98 USER
     ;; calls the system class proc directly during CreateWindowEx; do the same
     ;; and return to the API caller instead of jumping through a null/marker
-    ;; callback address.
-    (if (i32.ge_u (local.get $tmp) (i32.const 0xFFFF0000))
+    ;; callback address. With a CBT hook installed, USER fires HCBT_CREATEWND
+    ;; for system classes as well (MFC attaches a CToolTipCtrl's m_hWnd in
+    ;; the hook), so fall through to the hook path; CACA0002 finishes the
+    ;; native create when the hook leaves the class proc in place.
+    (if (i32.and
+          (i32.ge_u (local.get $tmp) (i32.const 0xFFFF0000))
+          (i32.eqz (global.get $cbt_hook_proc)))
       (then
         (drop (call $wat_wndproc_dispatch
           (local.get $hwnd)
@@ -744,24 +749,12 @@
     ;; If a CBT hook is installed, fire HCBT_CREATEWND for this child so MFC
     ;; (and anything else using per-hwnd subclassing) can swap in its real
     ;; wndproc via SetWindowLongA before we start delivering messages.
-    (if (i32.and
-          (i32.ne (global.get $cbt_hook_proc) (i32.const 0))
-          (i32.or
-            (i32.ne (call $wnd_table_get (local.get $hwnd)) (global.get $WNDPROC_CTRL_NATIVE))
-            ;; ToolbarWindow32 is WAT-native only as the common-control
-            ;; default proc. MFC still needs its CBT subclass hook so it can
-            ;; own WM_SIZEPARENT and chain TB_* messages to this default proc.
-            (i32.or
-              (i32.eq (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 21))
-              (i32.or
-                ;; MFC CComboBox wrappers also attach their m_hWnd through the
-                ;; WH_CBT/HCBT_CREATEWND hook. Without this, toolbar-hosted
-                ;; WordPad font/size combo setup calls SendMessageA(hwnd=0).
-                (i32.eq (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 5))
-                ;; Paint creates its text editor as a native EDIT through a
-                ;; CEdit wrapper. It likewise needs the hook to attach m_hWnd;
-                ;; otherwise Paint later calls ShowWindow/SetFocus with NULL.
-                (i32.eq (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 2))))))
+    ;; Real USER fires the hook for EVERY window, system control classes
+    ;; included: MFC attaches m_hWnd for a CListCtrl/CTreeCtrl/CStatusBar/...
+    ;; in the hook, and CWnd::CreateEx asserts hWnd == m_hWnd without it
+    ;; (Comic Chat's SysListView32 tripped wincore.cpp:708). CACA0026 already
+    ;; returns straight to the caller when the hook leaves the proc native.
+    (if (i32.ne (global.get $cbt_hook_proc) (i32.const 0))
     (then
     ;; Save state for CACA0026 continuation, clean CreateWindowExA frame (52 bytes).
     (global.set $child_cbt_saved_hwnd (local.get $hwnd))

@@ -664,6 +664,21 @@
             (call $hook_dispatch_leave
               (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
             (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))))
+        ;; A system-class top-level (tooltips_class32, a hidden EDIT pump)
+        ;; the hook only observed keeps its WAT-native proc: finish exactly
+        ;; like the no-hook native path -- WM_CREATE directly, then return
+        ;; the HWND -- instead of jumping to the marker address.
+        (if (i32.ge_u (call $wnd_table_get (global.get $createwnd_saved_hwnd)) (i32.const 0xFFFF0000))
+          (then
+            (drop (call $wat_wndproc_dispatch
+              (global.get $createwnd_saved_hwnd)
+              (i32.const 0x0001)
+              (i32.const 0)
+              (i32.add (global.get $image_base) (i32.const 0x100))))
+            (i32.store offset=0 (global.get $reg_base) (global.get $createwnd_saved_hwnd))
+            (global.set $eip (global.get $createwnd_saved_ret))
+            (global.set $steps (i32.const 0))
+            (return)))
         ;; Push saved_hwnd and saved_ret below WndProc args (for CACA0001 to pop)
         (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_saved_hwnd))
