@@ -2074,12 +2074,21 @@
     (global.set $wait_timeout (i32.const 0xFFFFFFFF))
     (global.set $wait_stack_bytes (i32.const 12)))
   (func (export "resume_message_wait") (result i32)
-    (local $msg_ptr i32)
+    (local $msg_ptr i32) (local $eip_parked i32)
     (if (i32.ne (global.get $yield_reason) (i32.const 7))
       (then (return (i32.const 0))))
     (local.set $msg_ptr (global.get $message_wait_msg_ptr))
     (global.set $message_wait_msg_ptr (i32.const 0))
     (global.set $yield_reason (i32.const 0))
+    ;; Resume exactly as an ordinary API dispatch would: EIP is the caller's
+    ;; return address unless the handler redirects it. GetMessage can enter a
+    ;; WH_KEYBOARD hook (keyboard_hook_begin sets EIP to the HookProc over a
+    ;; KHK1 frame), so the host must not overwrite EIP after this returns --
+    ;; doing so skipped mIRC's hook and returned the KHK1 frame's EAX=0 as
+    ;; WM_QUIT on the first key typed while the pump was parked. If the
+    ;; handler parks again, the wait keeps its original EIP.
+    (local.set $eip_parked (global.get $eip))
+    (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     (if (local.get $msg_ptr)
       (then
         (call $handle_GetMessageA
@@ -2094,6 +2103,7 @@
         ;; Complete only its zero-argument stdcall frame.
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+    (if (global.get $yield_reason) (then (global.set $eip (local.get $eip_parked))))
     (i32.eqz (global.get $yield_reason)))
   (func (export "get_sync_table") (result i32) (global.get $SYNC_TABLE))
   (func (export "get_yield_flag") (result i32) (global.get $yield_flag))
