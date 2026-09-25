@@ -353,6 +353,14 @@
       (then
         (call $defwndproc_setredraw (local.get $hwnd) (local.get $wParam))
         (return (i32.const 0))))
+    ;; ...and the frame. Dropping WM_NCPAINT here left a dialog's caption as
+    ;; whatever it was first drawn as: PuTTY's configuration box is activated
+    ;; by WM_INITDIALOG's SetFocus only after its first frame paint, so it
+    ;; kept an inactive caption for its whole life.
+    (if (i32.eq (local.get $msg) (i32.const 0x0085))
+      (then
+        (call $defwndproc_do_ncpaint (local.get $hwnd))
+        (return (i32.const 0))))
     (i32.const 0))
 
   ;; Route a client-relative mouse event to the first WAT-managed child
