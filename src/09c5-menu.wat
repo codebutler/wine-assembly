@@ -4308,6 +4308,24 @@
     (local.set $dx (call $menu_dropdown_x (local.get $hwnd) (local.get $top)))
     (local.set $dy (call $menu_dropdown_y (local.get $hwnd)))
     (local.set $dw (call $menu_dropdown_width (local.get $hwnd) (local.get $top)))
+    ;; Menu-bar tracking: with one dropdown open, pointing at another bar item
+    ;; that has a popup switches to it -- no click, as in Win32's menu loop.
+    ;; A bar command item is only highlighted by USER, never run on hover, so
+    ;; those are left alone; TrackPopupMenu popups (explicit anchor) are not a
+    ;; bar-tracking session at all.
+    (if (i32.lt_s (global.get $menu_open_x) (i32.const 0))
+      (then
+        (local.set $idx (call $menu_hittest_bar
+          (local.get $hwnd) (local.get $bar_x) (local.get $bar_y)
+          (local.get $sx) (local.get $sy)))
+        (if (i32.and
+              (i32.and (i32.ge_s (local.get $idx) (i32.const 0))
+                       (i32.ne (local.get $idx) (local.get $top)))
+              (i32.ne (call $menu_child_count (local.get $hwnd) (local.get $idx))
+                      (i32.const 0)))
+          (then
+            (call $menu_open (local.get $hwnd) (local.get $idx))
+            (return (i32.const -1))))))
     ;; When a cascading submenu is open, prefer the submenu tracking region
     ;; over lower parent rows on the right side of the dropdown. Otherwise a
     ;; diagonal move toward "2 Players" can briefly hit "&Sounds" and close
