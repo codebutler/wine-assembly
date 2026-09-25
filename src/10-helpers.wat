@@ -4650,6 +4650,33 @@
     (i32.load (i32.add (global.get $NC_FLAGS) (i32.mul (local.get $idx) (i32.const 4)))))
 
   ;; $nc_flags_scan(mask) → hwnd of first slot with any $mask bit set, else 0.
+  ;; The first visible top-level window, other than $exclude, with a
+  ;; WM_NCPAINT pending. A modal DialogBox pump services these for the rest of
+  ;; the thread's frames -- an owner that just lost activation to the dialog
+  ;; has to repaint its caption inactive -- while still ignoring the non-client
+  ;; bits child controls pick up from InvalidateRect.
+  (func $nc_flags_scan_frame (param $exclude i32) (result i32)
+    (local $i i32) (local $hwnd i32)
+    (if (i32.eqz (global.get $nc_flags_count)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (if (i32.and (i32.load (i32.add (global.get $NC_FLAGS) (i32.mul (local.get $i) (i32.const 4))))
+                   (i32.const 1))
+        (then
+          (local.set $hwnd (i32.load (call $wnd_record_addr (local.get $i))))
+          (if (i32.and
+                (i32.and (i32.ge_u (local.get $hwnd) (i32.const 0x10000))
+                         (i32.lt_u (local.get $hwnd) (global.get $next_hwnd)))
+                (i32.and (i32.ne (local.get $hwnd) (local.get $exclude))
+                         (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd))
+                                           (i32.const 0x40000000)))))  ;; WS_CHILD
+            (then
+              (if (call $wnd_is_effectively_visible (local.get $hwnd))
+                (then (return (local.get $hwnd))))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   (func $nc_flags_scan (param $mask i32) (result i32)
     (local $i i32) (local $ptr i32) (local $flags i32) (local $hwnd i32) (local $new i32)
     (if (i32.eqz (global.get $nc_flags_count)) (then (return (i32.const 0))))

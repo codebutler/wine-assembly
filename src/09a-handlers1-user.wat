@@ -2018,6 +2018,11 @@
     (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0x0110))         ;; WM_INITDIALOG
     (global.set $dlg_init_focus_hwnd (local.get $ctrl_hwnd))
     (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (global.get $dlg_init_focus_hwnd)) ;; wParam (focus hwnd)
+    ;; A dialog with no tab stop still has its post-WM_INITDIALOG step: USER
+    ;; activates it there. -1 keeps that step armed without naming a control
+    ;; ($dialog_apply_init_focus finds no target for it).
+    (if (i32.eqz (local.get $ctrl_hwnd))
+      (then (global.set $dlg_init_focus_hwnd (i32.const -1))))
     (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $init_param))   ;; lParam
     ;; Fire WH_CBT/HCBT_CREATEWND before WM_INITDIALOG, exactly as the modeless
     ;; $handle_CreateDialogParamA path does. MFC's modal creation installs a CBT

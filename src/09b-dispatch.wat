@@ -209,6 +209,16 @@
         ;; retain their own decision state.
         (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x44494643)) ;; "DIFC"
           (then
+            ;; A visible top-level dialog is shown now, and ShowWindow's
+            ;; SW_SHOWNORMAL activates it: MFC's DoModal (Comic Chat's
+            ;; nickname prompt) takes the active caption from its disabled
+            ;; owner here. A template without WS_VISIBLE stays as created.
+            (local.set $arg1
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+            (if (i32.eq
+                  (i32.and (call $wnd_get_style (local.get $arg1)) (i32.const 0x50000000))
+                  (i32.const 0x10000000))  ;; WS_VISIBLE, not WS_CHILD
+              (then (drop (call $activate_window_with_host (local.get $arg1)))))
             (call $dialog_apply_init_focus
               (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
               (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
@@ -736,6 +746,11 @@
         ;; EM_SETSEL(0,-1), matching Win98's selected default edit text.
         (if (global.get $dlg_init_focus_hwnd)
           (then
+            ;; DialogBox shows the dialog once WM_INITDIALOG returns, and that
+            ;; ShowWindow activates it: the dialog, not its disabled owner, has
+            ;; the active caption and the keyboard (mIRC's About box, Comic
+            ;; Chat's nickname prompt).
+            (drop (call $activate_window_with_host (global.get $dlg_pump_hwnd)))
             (call $dialog_apply_init_focus
               (global.get $dlg_pump_hwnd)
               (global.get $dlg_init_focus_hwnd)
@@ -829,11 +844,23 @@
         ;; nested CreateDialogParamA calls inside WM_INITDIALOG) never
         ;; render while the dialog is modal — the outer frame draws via
         ;; synchronous NC paint but the client area stays blank.
-        (if (call $paint_flag_any)
+        ;; Frame repaints of the thread's other top-level windows come first:
+        ;; a real modal loop dispatches the owner's WM_NCPAINT like any other
+        ;; message, which is how it redraws the caption it lost to the dialog.
+        (local.set $arg0 (call $nc_flags_scan_frame (global.get $dlg_pump_hwnd)))
+        (if (local.get $arg0)
           (then
-            (local.set $arg0 (call $paint_flag_take))  ;; hwnd
-            (local.set $arg1 (i32.const 0x000F))       ;; WM_PAINT
-            (local.set $arg2 (i32.const 0))            ;; wParam
+            (call $nc_flags_clear (local.get $arg0) (i32.const 1))
+            (local.set $arg1 (i32.const 0x0085))       ;; WM_NCPAINT
+            (local.set $arg2 (i32.const 1)))           ;; hrgn=1 (entire window)
+          (else
+            (if (call $paint_flag_any)
+              (then
+                (local.set $arg0 (call $paint_flag_take))  ;; hwnd
+                (local.set $arg1 (i32.const 0x000F))       ;; WM_PAINT
+                (local.set $arg2 (i32.const 0))))))        ;; wParam
+        (if (local.get $arg0)
+          (then
             (local.set $arg3 (i32.const 0))            ;; lParam
             (local.set $arg4 (call $wnd_table_get (local.get $arg0)))
             ;; A WAT-native control paints itself, whether or not the app has
