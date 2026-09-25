@@ -1007,10 +1007,26 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 
+  ;; The class style (GCL_STYLE) of a window's class. The host's input path
+  ;; reads CS_DBLCLKS from it: USER turns a second press into a double-click
+  ;; message only for windows whose class asked for them.
+  (func (export "wnd_class_style") (param $hwnd i32) (result i32)
+    (call $class_long_get (local.get $hwnd) (i32.const -26)))
+
   (func $class_long_get (param $hwnd i32) (param $index i32) (result i32)
     (local $addr i32)
     (local.set $addr (call $class_long_addr (local.get $hwnd) (local.get $index)))
-    (if (i32.eqz (local.get $addr)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $addr))
+      (then
+        ;; A built-in control has no registered class record here, but it
+        ;; still has USER's class style -- the same 0x400B GetClassInfo
+        ;; reports (CS_VREDRAW|CS_HREDRAW|CS_DBLCLKS|CS_GLOBALCLASS). Without
+        ;; CS_DBLCLKS a listbox never got WM_LBUTTONDBLCLK, so it never sent
+        ;; LBN_DBLCLK (mIRC expands its Options tree on it).
+        (if (i32.and (i32.eq (local.get $index) (i32.const -26))  ;; GCL_STYLE
+              (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0)))
+          (then (return (i32.const 0x400B))))
+        (return (i32.const 0))))
     (i32.load (local.get $addr)))
 
   (func $class_long_set (param $hwnd i32) (param $index i32) (param $value i32) (result i32)
