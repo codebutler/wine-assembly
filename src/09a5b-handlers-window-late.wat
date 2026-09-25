@@ -1538,8 +1538,25 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (i32.add (local.get $id) (i32.const 1)))
     (local.get $id))
 
+  ;; Is focus on $hwnd or one of its descendants? MDI activation gives the
+  ;; child focus only when it does not already hold it: re-activating the
+  ;; active child while its edit has focus must leave the edit focused. mIRC's
+  ;; status window re-focuses its input box from EN_KILLFOCUS, so stealing it
+  ;; here recursed until the stack ran out.
+  (func $mdi_focus_within (param $hwnd i32) (result i32)
+    (local $walk i32) (local $depth i32)
+    (local.set $walk (global.get $focus_hwnd))
+    (block $done (loop $up
+      (br_if $done (i32.eqz (local.get $walk)))
+      (if (i32.eq (local.get $walk) (local.get $hwnd)) (then (return (i32.const 1))))
+      (br_if $done (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+      (local.set $walk (call $wnd_get_parent (local.get $walk)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $up)))
+    (i32.const 0))
+
   ;; Select a live immediate child, tell both sides of the transition, and
-  ;; move keyboard focus to the newly active MDI child.
+  ;; move keyboard focus to the newly active MDI child unless it already holds it.
   (func $mdi_client_activate (param $client i32) (param $child i32) (result i32)
     (local $state i32) (local $old i32)
     (local.set $state (call $mdi_client_state (local.get $client)))
@@ -1551,7 +1568,9 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local.set $old (call $gl32 (i32.add (local.get $state) (i32.const 8))))
     (if (i32.eq (local.get $old) (local.get $child))
       (then
-        (if (local.get $child) (then (call $set_focus (local.get $child))))
+        (if (i32.and (i32.ne (local.get $child) (i32.const 0))
+              (i32.eqz (call $mdi_focus_within (local.get $child))))
+          (then (call $set_focus (local.get $child))))
         (return (i32.const 1))))
     (call $gs32 (i32.add (local.get $state) (i32.const 8)) (local.get $child))
     (if (local.get $old)
@@ -1564,7 +1583,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (drop (call $wnd_send_message
           (local.get $child) (i32.const 0x0222)
           (local.get $old) (local.get $child)))
-        (call $set_focus (local.get $child))))
+        (if (i32.eqz (call $mdi_focus_within (local.get $child)))
+          (then (call $set_focus (local.get $child))))))
     (i32.const 1))
 
   ;; Give a newly created MDI child the next CLIENTCREATESTRUCT command ID

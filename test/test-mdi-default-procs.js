@@ -65,6 +65,10 @@ const extraWat = String.raw`
     (call $mdi_client_active (local.get $client)))
   (func (export "test_focus") (result i32)
     (global.get $focus_hwnd))
+  (func (export "test_make_grandchild") (param $child i32) (result i32)
+    (call $test_make_window (local.get $child) (i32.const 0) (i32.const 1)))
+  (func (export "test_put_focus") (param $hwnd i32)
+    (global.set $focus_hwnd (local.get $hwnd)))
   (func (export "test_child_id") (param $child i32) (result i32)
     (call $ctrl_table_get_id (local.get $child)))
   (func (export "test_parent") (param $hwnd i32) (result i32)
@@ -238,6 +242,25 @@ const extraWat = String.raw`
     'WM_MDINEXT wraps at the last child');
   assert.strictEqual(e.test_client_message(client, 0x0229, 0, 0) >>> 0, first,
     'WM_MDIGETACTIVE returns the selected child');
+
+  // Focus inside the active child (its edit) stays put when the child is
+  // activated again. Taking it back made mIRC's EN_KILLFOCUS re-focus the
+  // edit, which re-activated the child: unbounded recursion.
+  const edit = e.test_make_grandchild(first) >>> 0;
+  e.test_put_focus(edit);
+  e.test_client_message(client, 0x0222, first, 0);
+  assert.strictEqual(e.test_focus() >>> 0, edit,
+    're-activating the active child keeps focus on its descendant');
+  const secondEdit = e.test_make_grandchild(second) >>> 0;
+  e.test_put_focus(secondEdit);
+  e.test_client_message(client, 0x0222, second, 0);
+  assert.strictEqual(e.test_active(client) >>> 0, second,
+    'WM_MDIACTIVATE selects the child');
+  assert.strictEqual(e.test_focus() >>> 0, secondEdit,
+    'activating a child that already holds focus keeps it on the descendant');
+  e.test_client_message(client, 0x0222, first, 0);
+  assert.strictEqual(e.test_focus() >>> 0, first,
+    'activating a child that does not hold focus gives it the focus');
 
   const observed = e.guest_alloc(4) >>> 0;
   const proc = e.guest_alloc(32) >>> 0;
