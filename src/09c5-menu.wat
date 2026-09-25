@@ -2830,7 +2830,7 @@
 
   ;; Dropdown box height for top item $tidx (0 if no children).
   ;; Used by JS to size the dropdown rect for hit-testing.
-  (func (export "menu_dropdown_height")
+  (func $menu_dropdown_height (export "menu_dropdown_height")
         (param $hwnd i32) (param $tidx i32) (result i32)
     (local $blob i32) (local $hdr i32) (local $count i32)
     (local.set $blob (call $menu_dropdown_blob_w (local.get $hwnd)))
@@ -4120,6 +4120,38 @@
     (global.set $menu_open_y     (i32.const -1))
     (call $menu_init_popup (local.get $hwnd) (local.get $top_idx)))
 
+  ;; Where TrackPopupMenu puts a w-by-h popup for the point (x, y). The
+  ;; TPM_*ALIGN flags pick which corner or edge the point anchors; a popup that
+  ;; would still cross the screen's right or bottom edge flips to the other
+  ;; side of the point, then is clamped on screen, as USER does. A tray icon's
+  ;; menu opens at a point on the bottom edge (mIRC's did), so without this
+  ;; it was drawn entirely below the screen.
+  (func $menu_track_popup_place (param $flags i32) (param $x i32) (param $y i32)
+        (param $w i32) (param $h i32)
+    (local $sw i32) (local $sh i32)
+    (local.set $sw (call $screen_metric_w))
+    (local.set $sh (call $screen_metric_h))
+    (if (i32.and (local.get $flags) (i32.const 0x0008)) ;; TPM_RIGHTALIGN
+      (then (local.set $x (i32.sub (local.get $x) (local.get $w))))
+      (else (if (i32.and (local.get $flags) (i32.const 0x0004)) ;; TPM_CENTERALIGN
+        (then (local.set $x (i32.sub (local.get $x) (i32.shr_s (local.get $w) (i32.const 1))))))))
+    (if (i32.and (local.get $flags) (i32.const 0x0020)) ;; TPM_BOTTOMALIGN
+      (then (local.set $y (i32.sub (local.get $y) (local.get $h))))
+      (else (if (i32.and (local.get $flags) (i32.const 0x0010)) ;; TPM_VCENTERALIGN
+        (then (local.set $y (i32.sub (local.get $y) (i32.shr_s (local.get $h) (i32.const 1))))))))
+    (if (i32.gt_s (i32.add (local.get $x) (local.get $w)) (local.get $sw))
+      (then (local.set $x (i32.sub (local.get $x) (local.get $w)))))
+    (if (i32.gt_s (i32.add (local.get $y) (local.get $h)) (local.get $sh))
+      (then (local.set $y (i32.sub (local.get $y) (local.get $h)))))
+    (if (i32.gt_s (i32.add (local.get $x) (local.get $w)) (local.get $sw))
+      (then (local.set $x (i32.sub (local.get $sw) (local.get $w)))))
+    (if (i32.gt_s (i32.add (local.get $y) (local.get $h)) (local.get $sh))
+      (then (local.set $y (i32.sub (local.get $sh) (local.get $h)))))
+    (if (i32.lt_s (local.get $x) (i32.const 0)) (then (local.set $x (i32.const 0))))
+    (if (i32.lt_s (local.get $y) (i32.const 0)) (then (local.set $y (i32.const 0))))
+    (global.set $menu_open_x (local.get $x))
+    (global.set $menu_open_y (local.get $y)))
+
   (func $menu_track_popup_open (export "menu_track_popup_open")
         (param $hmenu i32) (param $flags i32) (param $x i32) (param $y i32) (param $hwnd i32)
         (result i32)
@@ -4142,8 +4174,9 @@
         (global.set $menu_open_top   (i32.const 0))
         (global.set $menu_open_hover (i32.const -1))
         (global.set $menu_open_sub_hover (i32.const -1))
-        (global.set $menu_open_x     (local.get $x))
-        (global.set $menu_open_y     (local.get $y))
+        (call $menu_track_popup_place (local.get $flags) (local.get $x) (local.get $y)
+          (call $menu_dropdown_width (local.get $hwnd) (i32.const 0))
+          (call $menu_dropdown_height (local.get $hwnd) (i32.const 0)))
         (return (i32.const 1))))
     (if (global.get $menu_open_popup_blob)
       (then
@@ -4167,8 +4200,9 @@
     (global.set $menu_open_top   (local.get $top_idx))
     (global.set $menu_open_hover (i32.const -1))
     (global.set $menu_open_sub_hover (i32.const -1))
-    (global.set $menu_open_x     (local.get $x))
-    (global.set $menu_open_y     (local.get $y))
+    (call $menu_track_popup_place (local.get $flags) (local.get $x) (local.get $y)
+      (call $menu_dropdown_width (local.get $hwnd) (local.get $top_idx))
+      (call $menu_dropdown_height (local.get $hwnd) (local.get $top_idx)))
     (i32.const 1))
 
   (func (export "menu_track_popup_open_module")

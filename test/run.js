@@ -1858,6 +1858,13 @@ async function main() {
         scheduledInput.push({ batch, action: 'dump-scrollbar',
           axis: parts[2] === 'v' ? 'v' : 'h', label: parts[3] || '',
           target: parts[4] || '' });
+      } else if (kind === 'tray') {
+        // B:tray:MSG[:X:Y] — deliver a notification-icon mouse message
+        // (e.g. 0x205 for WM_RBUTTONUP) to the first icon, as the shell does,
+        // with the cursor at X,Y.
+        scheduledInput.push({ batch, action: 'tray', msg: Number(parts[2]) >>> 0,
+          x: parts[3] === undefined ? null : Number(parts[3]),
+          y: parts[4] === undefined ? null : Number(parts[4]) });
       } else if (kind === 'png') {
         // B:png:PATH — write a PNG snapshot of renderer.canvas at this batch.
         scheduledInput.push({ batch, action: 'png', path: parts.slice(2).join(':') });
@@ -8299,6 +8306,19 @@ async function main() {
           deferScheduledWait(ev, batch);
         } else {
           logs.push(`[input] wait-canvas-dark-pixels TIMEOUT ${dark} not in ${ev.min}..${ev.max} at batch ${batch}`);
+        }
+      } else if (ev.action === 'tray' && renderer) {
+        let icon = null;
+        for (const perProcess of renderer._notifyIcons.values()) {
+          for (const candidate of perProcess.values()) { icon = candidate; break; }
+          if (icon) break;
+        }
+        if (icon) {
+          if (ev.x !== null) { renderer._mouseX = ev.x; renderer._mouseY = ev.y; }
+          renderer._notifyIconMessage(icon, ev.msg);
+          logs.push(`[input] tray msg=0x${ev.msg.toString(16)} hwnd=0x${(icon.hwnd >>> 0).toString(16)} id=${icon.id} at batch ${batch}`);
+        } else {
+          logs.push(`[input] tray: no notification icon at batch ${batch}`);
         }
       } else if (ev.action === 'png' && renderer && renderer.canvas) {
         try {
