@@ -140,6 +140,162 @@
   ;; Paint an interned icon. Returns 0 for any handle we did not intern, which
   ;; keeps the old opaque handles (and system icons we ship no pixels for)
   ;; behaving exactly as before instead of drawing garbage.
+  ;; The natural size of an interned icon (packed w | h << 16), or 0 when it
+  ;; has no drawable pixels. A resource icon is drawn from its group's first
+  ;; image, so that image's directory entry is the size (a zero byte is 256).
+  (func $icon_handle_natural_size (param $hicon i32) (result i32)
+    (local $slot i32) (local $p i32) (local $group i32) (local $bmp i32)
+    (local $w i32) (local $h i32)
+    (if (i32.ne (i32.and (local.get $hicon) (i32.const 0xFFFF0000))
+                (global.get $ICON_HANDLE_TAG))
+      (then (return (i32.const 0))))
+    (local.set $slot (i32.and (local.get $hicon) (i32.const 0xFFFF)))
+    (if (i32.ge_u (local.get $slot) (global.get $MAX_ICONS))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (global.get $ICON_TABLE)
+                   (i32.mul (local.get $slot) (i32.const 8))))
+    (if (i32.eqz (i32.load offset=4 (local.get $p))) (then (return (i32.const 0))))
+    (if (i32.eq (i32.load (local.get $p)) (global.get $ICON_FROM_OPAQUE))
+      (then (return (i32.const 0))))
+    (if (i32.eq (i32.load (local.get $p)) (global.get $ICON_FROM_BITMAP))
+      (then
+        (local.set $bmp (i32.and (i32.load offset=4 (local.get $p)) (i32.const 0x7FFFFFFF)))
+        (return (i32.or (call $host_gdi_get_object_w (local.get $bmp))
+          (i32.shl (call $host_gdi_get_object_h (local.get $bmp)) (i32.const 16))))))
+    (if (i32.eq
+          (i32.and (i32.load (local.get $p)) (i32.const 0xFF000000))
+          (global.get $ICON_FROM_WIN16))
+      (then
+        (global.set $win16_res_module_id
+          (i32.and (i32.load (local.get $p)) (i32.const 0x00FFFFFF)))
+        (local.set $group (call $win16_find_resource (i32.const 14)
+          (i32.and (i32.load offset=4 (local.get $p)) (i32.const 0x7FFFFFFF))))
+        (global.set $win16_res_module_id (i32.const 0)))
+      (else
+        (call $push_rsrc_ctx (i32.load (local.get $p)))
+        (local.set $group (call $rsrc_find_data_wa (i32.const 14)
+          (i32.and (i32.load offset=4 (local.get $p)) (i32.const 0x7FFFFFFF))))
+        (call $pop_rsrc_ctx)))
+    (if (i32.or (i32.eqz (local.get $group))
+          (i32.eqz (i32.load16_u offset=4 (local.get $group))))
+      (then (return (i32.const 0))))
+    (local.set $w (i32.load8_u offset=6 (local.get $group)))
+    (local.set $h (i32.load8_u offset=7 (local.get $group)))
+    (if (i32.eqz (local.get $w)) (then (local.set $w (i32.const 256))))
+    (if (i32.eqz (local.get $h)) (then (local.set $h (i32.const 256))))
+    (i32.or (local.get $w) (i32.shl (local.get $h) (i32.const 16))))
+
+  ;; GetIconInfo for an interned icon: fresh copies of its two planes, as
+  ;; Win32 returns them -- hbmColor is the XOR image (black where the icon is
+  ;; transparent) and hbmMask a monochrome AND mask (white where it is). mIRC
+  ;; builds its notification-area icon out of these two bitmaps.
+  (func $icon_handle_iconinfo_planes (param $hicon i32) (param $info i32) (result i32)
+    (local $size i32) (local $w i32) (local $h i32) (local $dc i32)
+    (local $color i32) (local $mask i32) (local $old i32)
+    (local.set $size (call $icon_handle_natural_size (local.get $hicon)))
+    (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))
+    (local.set $w (i32.and (local.get $size) (i32.const 0xFFFF)))
+    (local.set $h (i32.shr_u (local.get $size) (i32.const 16)))
+    (local.set $color (call $host_gdi_create_compat_bitmap (i32.const 0)
+      (local.get $w) (local.get $h) (i32.const 0)))
+    (local.set $mask (call $host_gdi_create_bitmap
+      (local.get $w) (local.get $h) (i32.const 1) (i32.const 0)))
+    (local.set $dc (call $host_gdi_create_compat_dc (i32.const 0)))
+    (if (i32.or (i32.eqz (local.get $dc))
+          (i32.or (i32.eqz (local.get $color)) (i32.eqz (local.get $mask))))
+      (then
+        (if (local.get $dc) (then (drop (call $host_gdi_delete_dc (local.get $dc)))))
+        (if (local.get $color) (then (drop (call $gdi_object_delete_full (local.get $color)))))
+        (if (local.get $mask) (then (drop (call $gdi_object_delete_full (local.get $mask)))))
+        (return (i32.const 0))))
+    (local.set $old (call $host_gdi_select_object (local.get $dc) (local.get $color)))
+    (drop (call $host_gdi_fill_rect (local.get $dc) (i32.const 0) (i32.const 0)
+      (local.get $w) (local.get $h) (i32.const 0x30014))) ;; BLACK_BRUSH
+    (drop (call $icon_draw_handle (local.get $hicon) (local.get $dc)
+      (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (global.get $DI_IMAGE)))
+    (drop (call $host_gdi_select_object (local.get $dc) (local.get $mask)))
+    (drop (call $host_gdi_fill_rect (local.get $dc) (i32.const 0) (i32.const 0)
+      (local.get $w) (local.get $h) (i32.const 0x30010))) ;; WHITE_BRUSH
+    (drop (call $icon_draw_handle (local.get $hicon) (local.get $dc)
+      (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (global.get $DI_MASK)))
+    (drop (call $host_gdi_select_object (local.get $dc) (local.get $old)))
+    (drop (call $host_gdi_delete_dc (local.get $dc)))
+    (i32.store (local.get $info) (i32.const 1))                           ;; fIcon
+    (i32.store offset=4 (local.get $info) (i32.shr_u (local.get $w) (i32.const 1)))
+    (i32.store offset=8 (local.get $info) (i32.shr_u (local.get $h) (i32.const 1)))
+    (i32.store offset=12 (local.get $info) (local.get $mask))
+    (i32.store offset=16 (local.get $info) (local.get $color))
+    (i32.const 1))
+
+  ;; Rasterize any HICON (resource-interned or CreateIconIndirect) to
+  ;; size x size straight RGBA at $dst, through the same painter DrawIconEx
+  ;; uses. The icon is composited over black and over white: a pixel that
+  ;; reads the same both times is opaque, one that follows the background is
+  ;; transparent. Win98 icons have binary transparency, and an inverse pixel
+  ;; (which follows the background too) has no RGBA equivalent anyway. A
+  ;; host that shows guest icons outside the guest (a notification area)
+  ;; reads them this way.
+  (func $icon_rasterize_rgba (export "icon_rasterize_rgba")
+        (param $hicon i32) (param $size i32) (param $dst i32) (result i32)
+    (local $dc i32) (local $bmp i32) (local $old i32) (local $desc i32)
+    (local $pass i32) (local $x i32) (local $y i32) (local $p i32)
+    (local $c i32) (local $first i32)
+    (if (i32.or (i32.eqz (local.get $hicon))
+          (i32.or (i32.le_s (local.get $size) (i32.const 0))
+            (i32.gt_s (local.get $size) (i32.const 256))))
+      (then (return (i32.const 0))))
+    (local.set $dc (call $host_gdi_create_compat_dc (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
+    (local.set $bmp (call $host_gdi_create_compat_bitmap (i32.const 0)
+      (local.get $size) (local.get $size) (i32.const 0)))
+    (if (i32.eqz (local.get $bmp))
+      (then (drop (call $host_gdi_delete_dc (local.get $dc))) (return (i32.const 0))))
+    (local.set $old (call $host_gdi_select_object (local.get $dc) (local.get $bmp)))
+    (local.set $desc (global.get $GDI_LINE_DESC))
+    (block $fail
+      (loop $passes
+        (drop (call $host_gdi_fill_rect (local.get $dc) (i32.const 0) (i32.const 0)
+          (local.get $size) (local.get $size)
+          (select (i32.const 0x30010) (i32.const 0x30014) (local.get $pass)))) ;; WHITE / BLACK
+        (br_if $fail (i32.eqz (call $icon_draw_handle (local.get $hicon) (local.get $dc)
+          (i32.const 0) (i32.const 0) (local.get $size) (local.get $size)
+          (global.get $DI_NORMAL))))
+        (br_if $fail (i32.eqz (call $gdi_surface_descriptor (local.get $dc) (local.get $desc))))
+        (local.set $y (i32.const 0))
+        (block $rows_done (loop $rows
+          (br_if $rows_done (i32.ge_s (local.get $y) (local.get $size)))
+          (local.set $x (i32.const 0))
+          (block $cols_done (loop $cols
+            (br_if $cols_done (i32.ge_s (local.get $x) (local.get $size)))
+            (local.set $p (i32.add (local.get $dst)
+              (i32.shl (i32.add (i32.mul (local.get $y) (local.get $size)) (local.get $x))
+                (i32.const 2))))
+            (local.set $c (i32.and (call $gdi_raster_read (local.get $desc)
+              (local.get $x) (local.get $y)) (i32.const 0xFFFFFF)))
+            (if (i32.eqz (local.get $pass))
+              (then
+                (i32.store8 (local.get $p) (i32.shr_u (local.get $c) (i32.const 16)))
+                (i32.store8 offset=1 (local.get $p) (i32.shr_u (local.get $c) (i32.const 8)))
+                (i32.store8 offset=2 (local.get $p) (local.get $c))
+                (i32.store8 offset=3 (local.get $p) (i32.const 0xFF)))
+              (else
+                (local.set $first (i32.or
+                  (i32.shl (i32.load8_u (local.get $p)) (i32.const 16))
+                  (i32.or (i32.shl (i32.load8_u offset=1 (local.get $p)) (i32.const 8))
+                    (i32.load8_u offset=2 (local.get $p)))))
+                (if (i32.ne (local.get $first) (local.get $c))
+                  (then (i32.store (local.get $p) (i32.const 0))))))
+            (local.set $x (i32.add (local.get $x) (i32.const 1)))
+            (br $cols)))
+          (local.set $y (i32.add (local.get $y) (i32.const 1)))
+          (br $rows)))
+        (local.set $pass (i32.add (local.get $pass) (i32.const 1)))
+        (br_if $passes (i32.lt_u (local.get $pass) (i32.const 2)))))
+    (drop (call $host_gdi_select_object (local.get $dc) (local.get $old)))
+    (drop (call $host_gdi_delete_dc (local.get $dc)))
+    (drop (call $gdi_object_delete_full (local.get $bmp)))
+    (i32.eq (local.get $pass) (i32.const 2)))
+
   (func $icon_draw_handle (param $hicon i32) (param $hdc i32)
         (param $x i32) (param $y i32) (param $cx i32) (param $cy i32)
         (param $di_flags i32) (result i32)

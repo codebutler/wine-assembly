@@ -872,6 +872,12 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
+    ;; An interned (resource) icon: hand back copies of its planes.
+    (if (call $icon_handle_iconinfo_planes (local.get $arg0) (local.get $ptr))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (return)))
     (i32.store (local.get $ptr) (i32.const 1))           ;; fIcon = TRUE (it's an icon)
     (i32.store offset=4 (local.get $ptr) (i32.const 0))  ;; xHotspot
     (i32.store offset=8 (local.get $ptr) (i32.const 0))  ;; yHotspot
