@@ -932,6 +932,14 @@
   ;; ever and no guest waits. Answering 1 with no wire at all is also correct:
   ;; that is a machine with no cable, and the search simply finds nobody.
   (import "host" "net_link_open" (func $host_net_link_open (result i32)))
+  ;; The optional uplink: a host-provided peer on the same frame wire that
+  ;; answers for addresses outside the room (see $vsock_addr_routable).
+  ;; net_uplink_routes(ipHostOrder) → 1 when the wire carries frames for that
+  ;; non-room address, 0 otherwise (the default: the room stays sealed).
+  (import "host" "net_uplink_routes" (func $host_net_uplink_routes (param i32) (result i32)))
+  ;; net_uplink_resolve(nameWA) → host-order IPv4 address for a NUL-terminated
+  ;; host name, 0 when the uplink cannot resolve it (or there is none).
+  (import "host" "net_uplink_resolve" (func $host_net_uplink_resolve (param i32) (result i32)))
 
   ;; Minimum 8192 pages (512MB) and maximum 32768 (2GB): a host that creates
   ;; the 512MB memory every platform has always used still satisfies this

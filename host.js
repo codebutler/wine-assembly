@@ -1093,6 +1093,10 @@ class WineAssembly {
       // getter, not a copy: the shell installs it on the WineAssembly after
       // this context is built, and a wire may be joined later still.
       get openLanLink() { return self.openLanLink || null; },
+      // Optional uplink beyond the room ({ routes(ip), resolve(name) }; see
+      // net_uplink_routes in lib/host-imports.js). An embedder sets it on the
+      // WineAssembly; absent, the room is sealed.
+      get netUplink() { return opts.netUplink || self.netUplink || null; },
       get availableDllFiles() { return opts.availableDllFiles || self._availableDllFiles || null; },
       // Live guest thread count, for HKEY_DYN_DATA\PerfStats KERNEL\Threads.
       get threadManager() { return self.threadManager; },

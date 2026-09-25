@@ -207,6 +207,16 @@
       (then (return (i32.const 1))))
     (i32.const 0))
 
+  ;; A destination the guest may send to: the room, or -- only when the host
+  ;; attaches an uplink and says it carries that address -- somewhere outside
+  ;; it. The uplink is one more peer on the same frame wire: SYN/DATA/FIN for
+  ;; an address beyond the room are emitted exactly as for another room
+  ;; member, and the host terminates them (a browser host can bridge them to
+  ;; a TCP relay). A host without one answers 0 and the room stays sealed.
+  (func $vsock_addr_routable (param $ip i32) (result i32)
+    (if (call $vsock_addr_in_room (local.get $ip)) (then (return (i32.const 1))))
+    (i32.ne (call $host_net_uplink_routes (local.get $ip)) (i32.const 0)))
+
   ;; Read a guest sockaddr_in into locals. Returns 1 on success, 0 when the
   ;; family is not AF_INET or the length is too small.
   ;; Results land in the caller-visible globals below to keep the WAT flat.
@@ -1034,8 +1044,9 @@
         (return)))
     (local.set $ip (global.get $vsock_sa_ip))
     (local.set $port (global.get $vsock_sa_port))
-    ;; Isolation boundary: only room addresses are routable.
-    (if (i32.eqz (call $vsock_addr_in_room (local.get $ip)))
+    ;; Isolation boundary: only room addresses are routable, plus whatever
+    ;; the host's uplink explicitly carries.
+    (if (i32.eqz (call $vsock_addr_routable (local.get $ip)))
       (then
         (call $vsock_set_error (i32.const 10051))          ;; WSAENETUNREACH
         (i32.store offset=0 (global.get $reg_base) (i32.const -1))
@@ -1337,7 +1348,7 @@
     (local.set $dip (global.get $vsock_sa_ip))
     (local.set $dport (global.get $vsock_sa_port))
     (if (i32.and (i32.ne (local.get $dip) (i32.const -1))
-                 (i32.eqz (call $vsock_addr_in_room (local.get $dip))))
+                 (i32.eqz (call $vsock_addr_routable (local.get $dip))))
       (then (call $vsock_set_error (i32.const 10051))
         (i32.store offset=0 (global.get $reg_base) (i32.const -1)) (return)))
     (if (i32.gt_u (local.get $arg2) (global.get $VLN_MAX_PAYLOAD))
@@ -1748,6 +1759,14 @@
     (i32.store offset=0 (global.get $reg_base) (call $bswap32 (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
+  ;; htonl: the same involutive 32-bit swap as ntohl. PuTTY resolves it by
+  ;; name through GetProcAddress and calls it unchecked for every connect.
+  (func $handle_htonl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_ntohl
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr)))
+
   ;; ---- WsControl: the Win95/98 TDI query interface -------------------------
   ;; winipcfg reads the whole adapter configuration through WSOCK32 ordinal
   ;; 1001, not through the registry: it asks for the entity list, then the type
@@ -2117,22 +2136,33 @@
     (i32.store8 offset=2 (local.get $name_wa) (i32.const 0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
-  ;; gethostbyname(name) — version 1 resolves numeric room addresses only.
+  ;; gethostbyname(name) — numeric addresses, the machine's own name, and,
+  ;; when the host attaches an uplink, whatever name it resolves.
   ;; Layout: hostent at +0 (16 bytes), addr-list pointer array at +16,
   ;; the in_addr at +32, and the name copy at +40.
   (func $handle_gethostbyname (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                               (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ip i32) (local $base i32) (local $base_wa i32) (local $i i32) (local $ch i32)
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    ;; -1 (INADDR_NONE) is the parser's only failure: an address from
+    ;; 128.0.0.0 up is negative as an i32 and still an address.
     (local.set $ip (call $vsock_parse_ipv4 (local.get $arg0)))
     ;; Our own name resolves to our room address. Without this the
     ;; gethostname/gethostbyname pair an app uses to find its own address
     ;; fails, and the app reports 0.0.0.0 rather than the address anyone
     ;; could actually reach it on.
-    (if (i32.and (i32.lt_s (local.get $ip) (i32.const 0))
+    (if (i32.and (i32.eq (local.get $ip) (i32.const -1))
                  (call $vsock_is_own_name (local.get $arg0)))
       (then (local.set $ip (global.get $vsock_local_ip))))
-    (if (i32.lt_s (local.get $ip) (i32.const 0))
+    ;; Any other name is the uplink's to answer (0 = unknown). It returns a
+    ;; host-order IPv4 address its wire will carry, which may be a stand-in
+    ;; the host maps back to the name when the SYN arrives -- the guest never
+    ;; needs to learn the real address for the connection to reach it.
+    (if (i32.eq (local.get $ip) (i32.const -1))
+      (then
+        (local.set $ch (call $host_net_uplink_resolve (call $g2w (local.get $arg0))))
+        (if (local.get $ch) (then (local.set $ip (local.get $ch))))))
+    (if (i32.eq (local.get $ip) (i32.const -1))
       (then
         (call $vsock_set_error (i32.const 11001))          ;; WSAHOST_NOT_FOUND
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))

@@ -30887,5 +30887,12 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 708737070
+  },
+  {
+    "id": 3692,
+    "name": "htonl",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2734536568
   }
 ]

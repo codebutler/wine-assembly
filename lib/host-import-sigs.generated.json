@@ -1,6 +1,6 @@
 {
   "generated_from": "src/01-header.wat",
-  "count": 245,
+  "count": 247,
   "sigs": {
     "log": {
       "params": [
@@ -2228,6 +2228,22 @@
     },
     "net_link_open": {
       "params": [],
+      "results": [
+        "i32"
+      ]
+    },
+    "net_uplink_routes": {
+      "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "net_uplink_resolve": {
+      "params": [
+        "i32"
+      ],
       "results": [
         "i32"
       ]
