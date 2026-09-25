@@ -32,7 +32,22 @@
   ;; bits are the $win16_res_module selector (task=1, DLL=0x10000|id).
   (global $ICON_FROM_WIN16 i32 (i32.const 0x16000000))
 
+  (func $icon_slot_size_set (param $slot i32) (param $size i32)
+    (i32.store (i32.add (global.get $ICON_SIZE_TABLE)
+      (i32.shl (local.get $slot) (i32.const 2))) (local.get $size)))
+
+  (func $icon_slot_size (param $slot i32) (result i32)
+    (i32.load (i32.add (global.get $ICON_SIZE_TABLE)
+      (i32.shl (local.get $slot) (i32.const 2)))))
+
   (func $icon_intern (param $hinst i32) (param $resid i32) (result i32)
+    (call $icon_intern_sized (local.get $hinst) (local.get $resid) (i32.const 0)))
+
+  ;; LoadImage(IMAGE_ICON) at a size: one handle per {module, resource, size},
+  ;; so a 16x16 and a 48x48 load of one group are different icons, while a
+  ;; repeat load of either still returns its first handle.
+  (func $icon_intern_sized (param $hinst i32) (param $resid i32) (param $size i32)
+      (result i32)
     (local $i i32) (local $p i32) (local $free i32)
     (local.set $free (i32.const -1))
     (block $done (loop $scan
@@ -41,8 +56,10 @@
                      (i32.mul (local.get $i) (i32.const 8))))
       ;; A repeat load of the same resource must hand back the same handle:
       ;; apps compare HICONs, and DestroyIcon on a duplicate is common.
-      (if (i32.and (i32.eq (i32.load (local.get $p)) (local.get $hinst))
-                   (i32.eq (i32.load offset=4 (local.get $p)) (local.get $resid)))
+      (if (i32.and
+            (i32.and (i32.eq (i32.load (local.get $p)) (local.get $hinst))
+                     (i32.eq (i32.load offset=4 (local.get $p)) (local.get $resid)))
+            (i32.eq (call $icon_slot_size (local.get $i)) (local.get $size)))
         (then (return (i32.or (global.get $ICON_HANDLE_TAG) (local.get $i)))))
       (if (i32.and (i32.lt_s (local.get $free) (i32.const 0))
                    (i32.eqz (i32.load offset=4 (local.get $p))))
@@ -54,6 +71,7 @@
                    (i32.mul (local.get $free) (i32.const 8))))
     (i32.store (local.get $p) (local.get $hinst))
     (i32.store offset=4 (local.get $p) (local.get $resid))
+    (call $icon_slot_size_set (local.get $free) (local.get $size))
     (i32.or (global.get $ICON_HANDLE_TAG) (local.get $free)))
 
   ;; Draw a bitmap-backed ICONINFO record.  cursor_rasterize is the one place
@@ -141,11 +159,11 @@
   ;; keeps the old opaque handles (and system icons we ship no pixels for)
   ;; behaving exactly as before instead of drawing garbage.
   ;; The natural size of an interned icon (packed w | h << 16), or 0 when it
-  ;; has no drawable pixels. A resource icon is drawn from its group's first
-  ;; image, so that image's directory entry is the size (a zero byte is 256).
+  ;; has no drawable pixels: the size LoadImage asked for, and otherwise its
+  ;; group's first image's directory entry (a zero byte is 256).
   (func $icon_handle_natural_size (param $hicon i32) (result i32)
     (local $slot i32) (local $p i32) (local $group i32) (local $bmp i32)
-    (local $w i32) (local $h i32)
+    (local $w i32) (local $h i32) (local $asked i32)
     (if (i32.ne (i32.and (local.get $hicon) (i32.const 0xFFFF0000))
                 (global.get $ICON_HANDLE_TAG))
       (then (return (i32.const 0))))
@@ -183,6 +201,11 @@
     (local.set $h (i32.load8_u offset=7 (local.get $group)))
     (if (i32.eqz (local.get $w)) (then (local.set $w (i32.const 256))))
     (if (i32.eqz (local.get $h)) (then (local.set $h (i32.const 256))))
+    (local.set $asked (call $icon_slot_size (local.get $slot)))
+    (if (i32.and (local.get $asked) (i32.const 0xFFFF))
+      (then (local.set $w (i32.and (local.get $asked) (i32.const 0xFFFF)))))
+    (if (i32.shr_u (local.get $asked) (i32.const 16))
+      (then (local.set $h (i32.shr_u (local.get $asked) (i32.const 16)))))
     (i32.or (local.get $w) (i32.shl (local.get $h) (i32.const 16))))
 
   ;; GetIconInfo for an interned icon: fresh copies of its two planes, as
@@ -296,9 +319,31 @@
     (drop (call $gdi_object_delete_full (local.get $bmp)))
     (i32.eq (local.get $pass) (i32.const 2)))
 
+  ;; DrawIconEx semantics: the group image nearest cx x cy, scaled to fill
+  ;; it. cx/cy of 0 mean the icon's own size, or SM_CXICON/SM_CYICON with
+  ;; DI_DEFAULTSIZE (which DrawIcon passes).
   (func $icon_draw_handle (param $hicon i32) (param $hdc i32)
         (param $x i32) (param $y i32) (param $cx i32) (param $cy i32)
         (param $di_flags i32) (result i32)
+    (local $size i32)
+    (if (i32.or (i32.le_s (local.get $cx) (i32.const 0)) (i32.le_s (local.get $cy) (i32.const 0)))
+      (then
+        (local.set $size (select (i32.const 0x00200020)
+          (call $icon_handle_natural_size (local.get $hicon))
+          (i32.and (local.get $di_flags) (i32.const 0x0008)))) ;; DI_DEFAULTSIZE
+        (if (i32.le_s (local.get $cx) (i32.const 0))
+          (then (local.set $cx (i32.and (local.get $size) (i32.const 0xFFFF)))))
+        (if (i32.le_s (local.get $cy) (i32.const 0))
+          (then (local.set $cy (i32.shr_u (local.get $size) (i32.const 16)))))))
+    (call $icon_draw_handle_mode (local.get $hicon) (local.get $hdc)
+      (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
+      (local.get $di_flags) (i32.const 1)))
+
+  ;; $stretch 0 is a static control's placement: the group's first image at
+  ;; its own size, centred in (or clipped to) the cx x cy box.
+  (func $icon_draw_handle_mode (param $hicon i32) (param $hdc i32)
+        (param $x i32) (param $y i32) (param $cx i32) (param $cy i32)
+        (param $di_flags i32) (param $stretch i32) (result i32)
     (local $slot i32) (local $p i32) (local $ok i32)
     (if (call $cursor_draw_handle
           (local.get $hicon) (local.get $hdc)
@@ -351,7 +396,7 @@
           (local.get $hdc) (i32.and (i32.load offset=4 (local.get $p))
             (i32.const 0x7FFFFFFF))
           (local.get $cx) (local.get $cy) (i32.const 1)
-          (local.get $x) (local.get $y) (local.get $di_flags)))
+          (local.get $x) (local.get $y) (local.get $di_flags) (local.get $stretch)))
         (global.set $win16_res_module_id (i32.const 0))
         (return (local.get $ok))))
     ;; The icon belongs to the module it was loaded from, which need not be
@@ -361,7 +406,7 @@
       (local.get $hdc) (i32.and (i32.load offset=4 (local.get $p))
         (i32.const 0x7FFFFFFF))
       (local.get $cx) (local.get $cy) (i32.const 1)
-      (local.get $x) (local.get $y) (local.get $di_flags)))
+      (local.get $x) (local.get $y) (local.get $di_flags) (local.get $stretch)))
     (call $pop_rsrc_ctx)
     (local.get $ok))
 

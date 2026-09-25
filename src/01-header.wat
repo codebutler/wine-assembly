@@ -2511,6 +2511,11 @@
   ;; then got the placeholder handle, rejected it, and the app exited.
   (global $ICON_TABLE i32 (region.addr $ICON_TABLE 0))
   (global $ICON_TABLE_SIZE i32 (region.size $ICON_TABLE))
+  ;; ICON_SIZE_TABLE: per ICON_TABLE slot, the size the handle was loaded at
+  ;; (w | h << 16; 0 in either half means the resource's own). LoadImage
+  ;; asks for a size, and an icon is drawn from the group image nearest it.
+  (global $ICON_SIZE_TABLE i32 (region.addr $ICON_SIZE_TABLE 0))
+  (global $ICON_SIZE_TABLE_SIZE i32 (region.size $ICON_SIZE_TABLE))
   (global $MAX_ICONS i32 (i32.const 512))
   (global $ICON_HANDLE_TAG i32 (i32.const 0x00650000))
   ;; CURSOR_TABLE: an icon or cursor BUILT from bitmaps, which ICON_TABLE

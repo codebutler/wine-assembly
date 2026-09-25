@@ -839,12 +839,13 @@
   )
 
   ;; DrawIcon(hdc, x, y, hIcon) — 4 args stdcall. The fixed-size sibling of
-  ;; DrawIconEx: always the icon's natural size, always the full composite.
+  ;; DrawIconEx: always SM_CXICON x SM_CYICON, always the full composite.
   (func $handle_DrawIcon (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (drop (call $icon_draw_handle
       (local.get $arg3) (local.get $arg0)
       (local.get $arg1) (local.get $arg2)
-      (i32.const 0) (i32.const 0) (global.get $DI_NORMAL)))
+      (i32.const 0) (i32.const 0)
+      (i32.or (global.get $DI_NORMAL) (i32.const 0x0008))))  ;; DI_DEFAULTSIZE
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; ret + 4 args
   )
@@ -1544,7 +1545,12 @@
       (then
         (local.set $resid (call $gdi_bitmap_clone_owned (local.get $resid)))
         (if (i32.eqz (local.get $resid)) (then (return (i32.const 0))))))
-    (call $icon_private_slot (local.get $hinst) (local.get $resid)))
+    (local.set $copy (call $icon_private_slot (local.get $hinst) (local.get $resid)))
+    ;; A copy is the same icon, at the size the original was loaded at.
+    (if (i32.and (i32.ne (local.get $copy) (i32.const 0)) (i32.ne (local.get $record) (i32.const 0)))
+      (then (call $icon_slot_size_set (i32.and (local.get $copy) (i32.const 0xFFFF))
+        (call $icon_slot_size (i32.and (local.get $handle) (i32.const 0xFFFF))))))
+    (local.get $copy))
 
   (func $icon_destroy_handle (param $handle i32) (result i32)
     (local $record i32) (local $resid i32)
@@ -1586,6 +1592,7 @@
           (i32.store (local.get $record) (local.get $hinst))
           (i32.store offset=4 (local.get $record)
             (i32.or (local.get $resid) (i32.const 0x80000000)))
+          (call $icon_slot_size_set (local.get $i) (i32.const 0))
           (return (i32.or (global.get $ICON_HANDLE_TAG) (local.get $i)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))

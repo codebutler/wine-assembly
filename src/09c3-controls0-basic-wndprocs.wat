@@ -1702,9 +1702,9 @@
                   (i32.and (local.get $image) (i32.const 0xFFFF0000))
                   (global.get $ICON_HANDLE_TAG))
               (then
-                (if (call $icon_draw_handle (local.get $image) (local.get $hdc)
+                (if (call $icon_draw_handle_mode (local.get $image) (local.get $hdc)
                       (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
-                      (global.get $DI_NORMAL))
+                      (global.get $DI_NORMAL) (i32.const 0))
                   (then (return (i32.const 0)))))
               (else
                 (if (call $gdi_icon_draw_resource

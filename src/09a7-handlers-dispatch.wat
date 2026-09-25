@@ -177,11 +177,20 @@
     ;; IMAGE_ICON (1): intern the resource so DrawIconEx can find its pixels
     ;; later — same handle space as LoadIconA. Named resources keep the old
     ;; opaque handle, since the RT_GROUP_ICON walker addresses by ordinal.
+    ;; cx/cy pick the image in the group and the size it is drawn at; 0 means
+    ;; the resource's own size, or SM_CXICON/SM_CYICON with LR_DEFAULTSIZE.
     (if (i32.eq (local.get $arg2) (i32.const 1))
       (then
+        (if (i32.and (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+                     (i32.const 0x40))  ;; LR_DEFAULTSIZE
+          (then
+            (if (i32.eqz (local.get $arg3)) (then (local.set $arg3 (i32.const 32))))
+            (if (i32.eqz (local.get $arg4)) (then (local.set $arg4 (i32.const 32))))))
         (if (i32.and (i32.ne (local.get $arg0) (i32.const 0))
                      (i32.le_u (local.get $arg1) (i32.const 0xFFFF)))
-          (then (local.set $tmp (call $icon_intern (local.get $arg0) (local.get $arg1))))
+          (then (local.set $tmp (call $icon_intern_sized (local.get $arg0) (local.get $arg1)
+            (i32.or (i32.and (local.get $arg3) (i32.const 0xFFFF))
+              (i32.shl (i32.and (local.get $arg4) (i32.const 0xFFFF)) (i32.const 16))))))
           (else (local.set $tmp (i32.const 0))))
         (if (i32.eqz (local.get $tmp)) (then (local.set $tmp (i32.const 0x60001))))
         (i32.store offset=0 (global.get $reg_base) (local.get $tmp))

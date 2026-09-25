@@ -1105,7 +1105,43 @@
         (result i32)
     (call $gdi_icon_draw_resource_at (local.get $hdc) (local.get $resource_id)
       (local.get $control_w) (local.get $control_h) (local.get $origin_clip)
-      (i32.const 0) (i32.const 0) (global.get $DI_NORMAL)))
+      (i32.const 0) (i32.const 0) (global.get $DI_NORMAL) (i32.const 0)))
+
+  ;; The RT_GROUP_ICON entry USER draws for a cx x cy request: an exact size
+  ;; match if the group has one, otherwise the nearest size, and among equal
+  ;; sizes the deepest colour. Returns the entry's address.
+  (func $gdi_icon_group_best_entry (param $group i32) (param $cx i32) (param $cy i32)
+      (result i32)
+    (local $count i32) (local $i i32) (local $entry i32) (local $best i32)
+    (local $w i32) (local $h i32) (local $bpp i32) (local $dist i32)
+    (local $best_dist i32) (local $best_bpp i32)
+    (local.set $count (i32.load16_u offset=4 (local.get $group)))
+    (local.set $best (i32.add (local.get $group) (i32.const 6)))
+    (local.set $best_dist (i32.const 0x7FFFFFFF))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $entry (i32.add (i32.add (local.get $group) (i32.const 6))
+        (i32.mul (local.get $i) (i32.const 14))))
+      (local.set $w (i32.load8_u (local.get $entry)))
+      (local.set $h (i32.load8_u offset=1 (local.get $entry)))
+      (if (i32.eqz (local.get $w)) (then (local.set $w (i32.const 256))))
+      (if (i32.eqz (local.get $h)) (then (local.set $h (i32.const 256))))
+      (local.set $bpp (i32.load16_u offset=6 (local.get $entry)))
+      (local.set $dist (i32.add
+        (select (i32.sub (local.get $w) (local.get $cx)) (i32.sub (local.get $cx) (local.get $w))
+          (i32.ge_s (local.get $w) (local.get $cx)))
+        (select (i32.sub (local.get $h) (local.get $cy)) (i32.sub (local.get $cy) (local.get $h))
+          (i32.ge_s (local.get $h) (local.get $cy)))))
+      (if (i32.or (i32.lt_s (local.get $dist) (local.get $best_dist))
+            (i32.and (i32.eq (local.get $dist) (local.get $best_dist))
+              (i32.gt_u (local.get $bpp) (local.get $best_bpp))))
+        (then
+          (local.set $best (local.get $entry))
+          (local.set $best_dist (local.get $dist))
+          (local.set $best_bpp (local.get $bpp))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $best))
 
   ;; The same painter with the two things DrawIconEx needs and a centered
   ;; static does not: an explicit destination origin, and the DI_* flags that
@@ -1121,8 +1157,10 @@
   (func $gdi_icon_draw_resource_at (param $hdc i32) (param $resource_id i32)
         (param $control_w i32) (param $control_h i32) (param $origin_clip i32)
         (param $at_x i32) (param $at_y i32) (param $di_flags i32)
+        (param $stretch i32)
         (result i32)
     (local $group i32) (local $group_size i32) (local $entry i32)
+    (local $sx i32) (local $sy i32)
     (local $image i32) (local $image_size i32) (local $image_id i32)
     (local $header_size i32) (local $width i32) (local $stored_h i32)
     (local $height i32) (local $bpp i32) (local $palette_count i32)
@@ -1151,8 +1189,13 @@
               (i32.eqz (i32.load16_u offset=4 (local.get $group))))))
       (then (return (i32.const 0))))
     ;; A group entry is 14 bytes. The first entry is the Win9x dialog icon;
-    ;; multi-size groups put their default small image first as well.
+    ;; multi-size groups put their default small image first as well. An icon
+    ;; handle drawn at a size (DrawIconEx; $stretch) instead takes the entry
+    ;; nearest that size, and is scaled to fill it, as USER does.
     (local.set $entry (i32.add (local.get $group) (i32.const 6)))
+    (if (local.get $stretch)
+      (then (local.set $entry (call $gdi_icon_group_best_entry
+        (local.get $group) (local.get $control_w) (local.get $control_h)))))
     (local.set $image_id (i32.load16_u offset=12 (local.get $entry)))
     (if (global.get $is_win16)
       (then
@@ -1236,27 +1279,32 @@
     ;; of a 32x32 icon DIB and rely on origin clipping; the caller identifies
     ;; those resource layouts explicitly.
     (local.set $draw_w (local.get $width))
-    (if (i32.gt_s (local.get $draw_w) (local.get $control_w))
-      (then
-        (if (i32.eqz (local.get $origin_clip))
-          (then (local.set $src_x (i32.div_s
-            (i32.sub (local.get $width) (local.get $control_w)) (i32.const 2)))))
-        (local.set $draw_w (local.get $control_w)))
-      (else
-        (if (i32.eqz (local.get $origin_clip))
-          (then (local.set $dst_x (i32.div_s
-            (i32.sub (local.get $control_w) (local.get $width)) (i32.const 2)))))))
     (local.set $draw_h (local.get $height))
-    (if (i32.gt_s (local.get $draw_h) (local.get $control_h))
+    (if (local.get $stretch)
       (then
-        (if (i32.eqz (local.get $origin_clip))
-          (then (local.set $src_y (i32.div_s
-            (i32.sub (local.get $height) (local.get $control_h)) (i32.const 2)))))
+        (local.set $draw_w (local.get $control_w))
         (local.set $draw_h (local.get $control_h)))
       (else
-        (if (i32.eqz (local.get $origin_clip))
-          (then (local.set $dst_y (i32.div_s
-            (i32.sub (local.get $control_h) (local.get $height)) (i32.const 2)))))))
+        (if (i32.gt_s (local.get $draw_w) (local.get $control_w))
+          (then
+            (if (i32.eqz (local.get $origin_clip))
+              (then (local.set $src_x (i32.div_s
+                (i32.sub (local.get $width) (local.get $control_w)) (i32.const 2)))))
+            (local.set $draw_w (local.get $control_w)))
+          (else
+            (if (i32.eqz (local.get $origin_clip))
+              (then (local.set $dst_x (i32.div_s
+                (i32.sub (local.get $control_w) (local.get $width)) (i32.const 2)))))))
+        (if (i32.gt_s (local.get $draw_h) (local.get $control_h))
+          (then
+            (if (i32.eqz (local.get $origin_clip))
+              (then (local.set $src_y (i32.div_s
+                (i32.sub (local.get $height) (local.get $control_h)) (i32.const 2)))))
+            (local.set $draw_h (local.get $control_h)))
+          (else
+            (if (i32.eqz (local.get $origin_clip))
+              (then (local.set $dst_y (i32.div_s
+                (i32.sub (local.get $control_h) (local.get $height)) (i32.const 2)))))))))
     (local.set $dst_x (call $gdi_line_map_x (local.get $dst)
       (i32.add (local.get $dst_x) (local.get $at_x))))
     (local.set $dst_y (call $gdi_line_map_y (local.get $dst)
@@ -1264,7 +1312,10 @@
 
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.ge_u (local.get $y) (local.get $draw_h)))
-      (local.set $mask_row (i32.add (local.get $src_y) (local.get $y)))
+      (local.set $sy (if (result i32) (local.get $stretch)
+        (then (i32.div_u (i32.mul (local.get $y) (local.get $height)) (local.get $draw_h)))
+        (else (i32.add (local.get $src_y) (local.get $y)))))
+      (local.set $mask_row (local.get $sy))
       (if (i32.ge_s (local.get $stored_h) (i32.const 0))
         (then (local.set $mask_row
           (i32.sub (i32.sub (local.get $height) (local.get $mask_row)) (i32.const 1)))))
@@ -1275,17 +1326,19 @@
               (i32.add (local.get $dst_x) (local.get $x))
               (i32.add (local.get $dst_y) (local.get $y)))
           (then
+            (local.set $sx (if (result i32) (local.get $stretch)
+              (then (i32.div_u (i32.mul (local.get $x) (local.get $width)) (local.get $draw_w)))
+              (else (i32.add (local.get $src_x) (local.get $x)))))
             (local.set $mask_bit (i32.and
               (i32.shr_u (i32.load8_u (i32.add (local.get $image)
                     (i32.add (local.get $mask_offset)
                       (i32.add (i32.mul (local.get $mask_row) (local.get $mask_stride))
-                        (i32.shr_u (i32.add (local.get $src_x) (local.get $x)) (i32.const 3))))))
+                        (i32.shr_u (local.get $sx) (i32.const 3))))))
                 (i32.sub (i32.const 7)
-                  (i32.and (i32.add (local.get $src_x) (local.get $x)) (i32.const 7))))
+                  (i32.and (local.get $sx) (i32.const 7))))
               (i32.const 1)))
             (local.set $source_color (call $gdi_raster_read (local.get $src)
-              (i32.add (local.get $src_x) (local.get $x))
-              (i32.add (local.get $src_y) (local.get $y))))
+              (local.get $sx) (local.get $sy)))
             ;; DI_MASK on its own asks for the transparency plane, not the
             ;; picture: the mask bit becomes the pixel and the colour plane is
             ;; never consulted.
