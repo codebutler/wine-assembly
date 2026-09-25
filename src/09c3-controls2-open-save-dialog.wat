@@ -45,6 +45,7 @@
     (local $find_handle i32) (local $fd_g i32) (local $fd_w i32)
     (local $name_g i32) (local $name_w i32) (local $attrs i32)
     (local $tmp_g i32) (local $tmp_w i32) (local $name_len i32)
+    (local $drive_mask i32) (local $letter i32)
     ;; Reset listbox first.
     (drop (call $wnd_send_message (local.get $lb) (i32.const 0x0184) (i32.const 0) (i32.const 0)))
     ;; Add ".." entry as the first row so the user can navigate up.
@@ -59,6 +60,35 @@
     (local.set $fd_w (call $g2w (local.get $fd_g)))
     (local.set $tmp_g (call $heap_alloc (i32.const 280)))
     (local.set $tmp_w (call $g2w (local.get $tmp_g)))
+    ;; At a drive root, list every other logical drive as "[-x-]" (the
+    ;; Windows 3.1 file dialog's spelling) so the user can reach it; this
+    ;; dialog has no separate drive combo. $opendlg_try_navigate opens the
+    ;; chosen drive's root.
+    (if (i32.eq (call $strlen (call $g2w (global.get $opendlg_current_dir))) (i32.const 3))
+      (then
+        (local.set $drive_mask (call $host_fs_logical_drive_mask))
+        (local.set $letter (i32.const 0))
+        (block $drives_done (loop $drives
+          (br_if $drives_done (i32.ge_u (local.get $letter) (i32.const 26)))
+          (if (i32.and
+                (i32.ne (i32.and (local.get $drive_mask)
+                                 (i32.shl (i32.const 1) (local.get $letter)))
+                        (i32.const 0))
+                (i32.ne (i32.add (i32.const 0x61) (local.get $letter))
+                        (i32.or (i32.load8_u (call $g2w (global.get $opendlg_current_dir)))
+                                (i32.const 0x20))))
+            (then
+              (i32.store8 (local.get $tmp_w) (i32.const 0x5B))                  ;; '['
+              (i32.store8 offset=1 (local.get $tmp_w) (i32.const 0x2D))         ;; '-'
+              (i32.store8 offset=2 (local.get $tmp_w)
+                (i32.add (i32.const 0x61) (local.get $letter)))                 ;; 'a'..'z'
+              (i32.store8 offset=3 (local.get $tmp_w) (i32.const 0x2D))         ;; '-'
+              (i32.store8 offset=4 (local.get $tmp_w) (i32.const 0x5D))         ;; ']'
+              (i32.store8 offset=5 (local.get $tmp_w) (i32.const 0))
+              (drop (call $wnd_send_message (local.get $lb) (i32.const 0x0180) (i32.const 0)
+                      (local.get $tmp_g)))))
+          (local.set $letter (i32.add (local.get $letter) (i32.const 1)))
+          (br $drives)))))
     (local.set $find_handle (call $host_fs_find_first_file
       (call $g2w (local.get $pattern_g)) (local.get $fd_g) (i32.const 0)))
     (if (i32.eq (local.get $find_handle) (i32.const -1))
@@ -428,6 +458,25 @@
         (local.set $new_w (call $g2w (local.get $new_g)))
         (call $memcpy (local.get $new_w) (local.get $cur_w) (i32.add (local.get $i) (i32.const 1)))
         (i32.store8 (i32.add (local.get $new_w) (i32.add (local.get $i) (i32.const 1))) (i32.const 0))
+        (call $opendlg_set_dir (local.get $dlg) (local.get $new_g))
+        (call $heap_free (local.get $new_g))
+        (call $heap_free (local.get $buf_g))
+        (return (i32.const 1))))
+    ;; Case 1b: "[-x-]" → the root of drive x (see $opendlg_populate_listbox).
+    (if (i32.and
+          (i32.and (i32.eq (local.get $n) (i32.const 5))
+                   (i32.eq (i32.load8_u (local.get $buf_w)) (i32.const 0x5B)))
+          (i32.and (i32.eq (i32.load8_u offset=1 (local.get $buf_w)) (i32.const 0x2D))
+                   (i32.and (i32.eq (i32.load8_u offset=3 (local.get $buf_w)) (i32.const 0x2D))
+                            (i32.eq (i32.load8_u offset=4 (local.get $buf_w)) (i32.const 0x5D)))))
+      (then
+        (local.set $new_g (call $heap_alloc (i32.const 4)))
+        (local.set $new_w (call $g2w (local.get $new_g)))
+        (i32.store8 (local.get $new_w)
+          (i32.and (i32.load8_u offset=2 (local.get $buf_w)) (i32.const 0xDF)))  ;; upper case
+        (i32.store8 offset=1 (local.get $new_w) (i32.const 0x3A))  ;; ':'
+        (i32.store8 offset=2 (local.get $new_w) (i32.const 0x5C))  ;; '\'
+        (i32.store8 offset=3 (local.get $new_w) (i32.const 0))
         (call $opendlg_set_dir (local.get $dlg) (local.get $new_g))
         (call $heap_free (local.get $new_g))
         (call $heap_free (local.get $buf_g))
