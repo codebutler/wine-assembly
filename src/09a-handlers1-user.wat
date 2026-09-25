@@ -1944,8 +1944,18 @@
     ;; WM_INITDIALOG. Template styles commonly omit WS_VISIBLE; USER's modal
     ;; creation path still makes the HWND visible, so keep WAT style in sync
     ;; before visibility-dependent hit-testing/painting runs.
-    (call $wnd_set_parent (local.get $hwnd) (i32.const 0))
-    (call $wnd_set_owner (local.get $hwnd) (local.get $arg2))
+    ;; Parent vs owner follows CreateWindow's rules, as in CreateDialogParam: a
+    ;; WS_CHILD template makes a child of hWndParent. mIRC builds each Options
+    ;; page that way (its DLGPROC copies the page's controls into the Options
+    ;; dialog from WM_INITDIALOG, parented by GetParent(page), then ends it);
+    ;; owned instead, GetParent was NULL and every copy became parentless.
+    (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000))
+      (then
+        (call $wnd_set_parent (local.get $hwnd) (local.get $arg2))
+        (call $wnd_set_owner (local.get $hwnd) (i32.const 0)))
+      (else
+        (call $wnd_set_parent (local.get $hwnd) (i32.const 0))
+        (call $wnd_set_owner (local.get $hwnd) (local.get $arg2))))
     (drop (call $wnd_set_style (local.get $hwnd)
       (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000)))) (call $wnd_note_active_popup (local.get $hwnd))
     ;; Tell the renderer the dialog has been loaded; JS reads geom /
