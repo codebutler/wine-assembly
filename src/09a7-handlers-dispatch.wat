@@ -4572,31 +4572,55 @@
 
   ;; GetComputerName reports the required size including NUL on overflow,
   ;; but the copied character count excluding NUL on success.
+  ;; The machine's name, NUL-terminated, at a WASM address. The embedder
+  ;; supplies it through the computer_name host import (a browser host knows
+  ;; what the machine is called); with none it is "PC". Read once: Windows
+  ;; fixes the computer name at boot.
+  (global $computer_name_buf (mut i32) (i32.const 0))
+  (func $computer_name_wa (result i32)
+    (local $wa i32) (local $len i32)
+    (if (i32.eqz (global.get $computer_name_buf))
+      (then
+        (global.set $computer_name_buf (call $heap_alloc (i32.const 64)))
+        (if (i32.eqz (global.get $computer_name_buf)) (then (return "PC")))
+        (local.set $wa (call $g2w (global.get $computer_name_buf)))
+        (local.set $len (call $host_computer_name (local.get $wa) (i32.const 64)))
+        (if (i32.or (i32.le_s (local.get $len) (i32.const 0))
+                    (i32.ge_s (local.get $len) (i32.const 64)))
+          (then
+            (i32.store8 (local.get $wa) (i32.const 80))              ;; 'P'
+            (i32.store8 offset=1 (local.get $wa) (i32.const 67))     ;; 'C'
+            (local.set $len (i32.const 2))))
+        (i32.store8 (i32.add (local.get $wa) (local.get $len)) (i32.const 0))))
+    (call $g2w (global.get $computer_name_buf)))
+
   (func $get_computer_name (param $buf_g i32) (param $size_g i32)
         (param $wide i32) (result i32)
-    (local $buf_wa i32) (local $size_wa i32)
+    (local $buf_wa i32) (local $size_wa i32) (local $own i32) (local $len i32) (local $i i32)
     (if (i32.eqz (local.get $size_g))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (return (i32.const 0))))
+    (local.set $own (call $computer_name_wa))
+    (local.set $len (call $strlen (local.get $own)))
     (local.set $size_wa (call $g2w (local.get $size_g)))
     (if (i32.or (i32.eqz (local.get $buf_g))
-                (i32.lt_u (i32.load (local.get $size_wa)) (i32.const 3)))
+                (i32.le_u (i32.load (local.get $size_wa)) (local.get $len)))
       (then
-        (i32.store (local.get $size_wa) (i32.const 3))
+        (i32.store (local.get $size_wa) (i32.add (local.get $len) (i32.const 1)))
         (global.set $last_error (i32.const 111)) ;; ERROR_BUFFER_OVERFLOW
         (return (i32.const 0))))
     (local.set $buf_wa (call $g2w (local.get $buf_g)))
-    (if (local.get $wide)
-      (then
-        (i32.store16 offset=0 (local.get $buf_wa) (i32.const 80)) ;; 'P'
-        (i32.store16 offset=2 (local.get $buf_wa) (i32.const 67)) ;; 'C'
-        (i32.store16 offset=4 (local.get $buf_wa) (i32.const 0)))
-      (else
-        (i32.store8 offset=0 (local.get $buf_wa) (i32.const 80)) ;; 'P'
-        (i32.store8 offset=1 (local.get $buf_wa) (i32.const 67)) ;; 'C'
-        (i32.store8 offset=2 (local.get $buf_wa) (i32.const 0))))
-    (i32.store (local.get $size_wa) (i32.const 2))
+    (block $done (loop $copy
+      (if (local.get $wide)
+        (then (i32.store16 (i32.add (local.get $buf_wa) (i32.shl (local.get $i) (i32.const 1)))
+                (i32.load8_u (i32.add (local.get $own) (local.get $i)))))
+        (else (i32.store8 (i32.add (local.get $buf_wa) (local.get $i))
+                (i32.load8_u (i32.add (local.get $own) (local.get $i))))))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (i32.store (local.get $size_wa) (local.get $len))
     (global.set $last_error (i32.const 0))
     (i32.const 1))
 

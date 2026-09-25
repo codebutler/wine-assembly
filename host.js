@@ -1097,6 +1097,8 @@ class WineAssembly {
       // net_uplink_routes in lib/host-imports.js). An embedder sets it on the
       // WineAssembly; absent, the room is sealed.
       get netUplink() { return opts.netUplink || self.netUplink || null; },
+      // The machine's name (GetComputerName / gethostname); absent → "PC".
+      get computerName() { return opts.computerName || self.computerName || null; },
       get availableDllFiles() { return opts.availableDllFiles || self._availableDllFiles || null; },
       // Live guest thread count, for HKEY_DYN_DATA\PerfStats KERNEL\Threads.
       get threadManager() { return self.threadManager; },

@@ -30894,5 +30894,110 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2734536568
+  },
+  {
+    "id": 3693,
+    "name": "inet_pton",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3317905125
+  },
+  {
+    "id": 3694,
+    "name": "inet_ntop",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3753247261
+  },
+  {
+    "id": 3695,
+    "name": "WSAHtons",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3267209284
+  },
+  {
+    "id": 3696,
+    "name": "WSANtohs",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3921936444
+  },
+  {
+    "id": 3697,
+    "name": "WSAHtonl",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3384652617
+  },
+  {
+    "id": 3698,
+    "name": "WSANtohl",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3770937873
+  },
+  {
+    "id": 3699,
+    "name": "gethostbyaddr",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3907152291
+  },
+  {
+    "id": 3700,
+    "name": "getaddrinfo",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2489840940
+  },
+  {
+    "id": 3701,
+    "name": "freeaddrinfo",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 918316552
+  },
+  {
+    "id": 3702,
+    "name": "getservbyport",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3864718989
+  },
+  {
+    "id": 3703,
+    "name": "getprotobynumber",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3358182331
+  },
+  {
+    "id": 3704,
+    "name": "WSASetBlockingHook",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4164697230
+  },
+  {
+    "id": 3705,
+    "name": "WSAUnhookBlockingHook",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1244460290
+  },
+  {
+    "id": 3706,
+    "name": "WSACancelBlockingCall",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1649100535
+  },
+  {
+    "id": 3707,
+    "name": "WSAIsBlocking",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3164277069
   }
 ]

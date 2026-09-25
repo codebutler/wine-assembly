@@ -940,6 +940,10 @@
   ;; net_uplink_resolve(nameWA) → host-order IPv4 address for a NUL-terminated
   ;; host name, 0 when the uplink cannot resolve it (or there is none).
   (import "host" "net_uplink_resolve" (func $host_net_uplink_resolve (param i32) (result i32)))
+  ;; computer_name(bufWA, cap) → length of the machine's name written at
+  ;; bufWA (no NUL), 0 for the default "PC". Read once, at the first
+  ;; GetComputerName / gethostname.
+  (import "host" "computer_name" (func $host_computer_name (param i32 i32) (result i32)))
 
   ;; Minimum 8192 pages (512MB) and maximum 32768 (2GB): a host that creates
   ;; the 512MB memory every platform has always used still satisfies this

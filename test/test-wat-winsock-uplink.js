@@ -201,6 +201,57 @@ async function main() {
     assert.strictEqual(wat.test_call_closesocket(s) | 0, 0);
   });
 
+  await check('getaddrinfo resolves numbers, the machine name and uplink names', async () => {
+    const uplink = { routes: () => false, resolve: name => (name === 'telnet.example' ? OUTSIDE_IP : 0) };
+    const n = await makeNode(wasm, { netUplink: uplink, computerName: 'BUTTERCUP' });
+    const { wat } = n;
+    const view = () => new DataView(n.memory.buffer);
+    const first = (node, svc) => {
+      const out = n.alloc(4);
+      const rc = wat.test_call_getaddrinfo(node ? n.cstr(node) : 0, svc ? n.cstr(svc) : 0, 0, out) | 0;
+      if (rc) return { rc };
+      const ai = view().getUint32(n.wa(out), true);
+      const sa = view().getUint32(n.wa(ai) + 24, true);
+      return {
+        rc,
+        family: view().getUint32(n.wa(ai) + 4, true),
+        socktype: view().getUint32(n.wa(ai) + 8, true),
+        port: view().getUint16(n.wa(sa) + 2, false),
+        ip: view().getUint32(n.wa(sa) + 4, false) >>> 0,
+      };
+    };
+    assert.deepStrictEqual(first('93.184.216.34', '80'),
+      { rc: 0, family: AF_INET, socktype: SOCK_STREAM, port: 80, ip: 0x5DB8D822 });
+    assert.strictEqual(first('buttercup', 'telnet').ip, ROOM_IP, 'own name, any case');
+    assert.strictEqual(first('buttercup', 'telnet').port, 23, 'service by name');
+    assert.strictEqual(first('telnet.example', '23').ip, OUTSIDE_IP, 'through the uplink');
+    assert.strictEqual(first('nowhere.example', '23').rc, WSAHOST_NOT_FOUND);
+    assert.strictEqual(first('93.184.216.34', 'no-such-service').rc, 10109, 'EAI_SERVICE');
+
+    const hb = n.alloc(64);
+    assert.strictEqual(wat.test_call_gethostname(hb, 64) | 0, 0);
+    let host = '';
+    for (let i = 0; n.bytes()[n.wa(hb) + i]; i++) host += String.fromCharCode(n.bytes()[n.wa(hb) + i]);
+    assert.strictEqual(host, 'BUTTERCUP', 'gethostname is the embedder\'s machine name');
+    assert.strictEqual(wat.test_call_gethostname(hb, 4) | 0, SOCKET_ERROR, 'too small a buffer');
+  });
+
+  await check('inet_pton / inet_ntop round-trip IPv4 text', async () => {
+    const n = await makeNode(wasm, {});
+    const { wat } = n;
+    const buf = n.alloc(4);
+    assert.strictEqual(wat.test_call_inet_pton(AF_INET, n.cstr('10.0.2.15'), buf) | 0, 1);
+    assert.strictEqual(new DataView(n.memory.buffer).getUint32(n.wa(buf), false) >>> 0, 0x0A00020F);
+    assert.strictEqual(wat.test_call_inet_pton(AF_INET, n.cstr('not.an.address'), buf) | 0, 0);
+    assert.strictEqual(wat.test_call_inet_pton(23, n.cstr('::1'), buf) | 0, SOCKET_ERROR, 'AF_INET6');
+    const text = n.alloc(16);
+    assert.strictEqual(wat.test_call_inet_ntop(AF_INET, buf, text, 16) >>> 0, text);
+    let s = '';
+    for (let i = 0; n.bytes()[n.wa(text) + i]; i++) s += String.fromCharCode(n.bytes()[n.wa(text) + i]);
+    assert.strictEqual(s, '10.0.2.15');
+    assert.strictEqual(wat.test_call_inet_ntop(AF_INET, buf, text, 8) | 0, 0, 'buffer too small');
+  });
+
   console.log(`\n${passed}/${passed} uplink checks passed`);
 }
 
