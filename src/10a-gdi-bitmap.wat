@@ -1079,15 +1079,22 @@
     (local.get $handle))
 
   (func $gdi_bitmap_create_resource (param $data i32) (param $size i32) (result i32)
+    (call $gdi_bitmap_create_resource_as (local.get $data) (local.get $size) (i32.const 0)))
+
+  (func $gdi_bitmap_create_resource_as (param $data i32) (param $size i32)
+        (param $object_flags i32) (result i32)
     (if (i32.eqz (call $gdi_bitmap_parse_dib
           (local.get $data) (local.get $size) (global.get $GDI_BITMAP_PLAN)))
       (then (return (i32.const 0))))
-    (if (call $gdi_bitmap_plan_is_colored_mono (global.get $GDI_BITMAP_PLAN))
+    ;; A colored monochrome resource becomes a DDB; a DIB section keeps its
+    ;; two-entry color table instead.
+    (if (i32.and (i32.eqz (local.get $object_flags))
+          (call $gdi_bitmap_plan_is_colored_mono (global.get $GDI_BITMAP_PLAN)))
       (then (return (call $gdi_bitmap_create_colored_mono_resource
         (global.get $GDI_BITMAP_PLAN)))))
     (call $gdi_bitmap_create_owned (global.get $GDI_BITMAP_PLAN)
       (i32.load offset=28 (global.get $GDI_BITMAP_PLAN))
-      (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0) (i32.const 0)))
+      (i32.const 1) (i32.const 1) (local.get $object_flags) (i32.const 0) (i32.const 0)))
 
   ;; Paint an RT_GROUP_ICON resource into an HDC without routing pixels through
   ;; Canvas. Classic icon DIBs contain a color (XOR) plane followed by a 1-bpp
@@ -1345,6 +1352,14 @@
 
   (func $gdi_bitmap_load_resource (param $instance i32) (param $name i32)
         (param $wide i32) (result i32)
+    (call $gdi_bitmap_load_resource_as (local.get $instance) (local.get $name)
+      (local.get $wide) (i32.const 0)))
+
+  ;; $object_flags 1 makes the result a DIB section (LoadImage's
+  ;; LR_CREATEDIBSECTION): its pixels are guest-visible through GetObject's
+  ;; bmBits, which is how mIRC recolours its About-box logo in place.
+  (func $gdi_bitmap_load_resource_as (param $instance i32) (param $name i32)
+        (param $wide i32) (param $object_flags i32) (result i32)
     (local $resource_name i32) (local $data i32) (local $size i32)
     (if (i32.eq (local.get $instance) (i32.const -1))
       (then (return (call $gdi_bitmap_create_common_toolbar (local.get $name)))))
@@ -1355,7 +1370,8 @@
     (local.set $data (call $rsrc_find_data_wa (i32.const 2) (local.get $resource_name)))
     (local.set $size (global.get $rsrc_last_size))
     (local.set $resource_name
-      (call $gdi_bitmap_create_resource (local.get $data) (local.get $size)))
+      (call $gdi_bitmap_create_resource_as
+        (local.get $data) (local.get $size) (local.get $object_flags)))
     (call $pop_rsrc_ctx)
     (local.get $resource_name))
 

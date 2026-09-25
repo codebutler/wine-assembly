@@ -12,7 +12,45 @@
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
+const RegionMap = require('../lib/region-map.generated.js');
+
 const WIDTH = 4, HEIGHT = 2, STRIDE = WIDTH * 4;
+
+// Same minimal RT_BITMAP tree as test-static-bitmap-control: resource 101,
+// a 4x2 bottom-up 24-bpp DIB.
+function installBitmapResource(memory) {
+  const bytes = new Uint8Array(memory.buffer);
+  const dv = new DataView(memory.buffer);
+  const guestBase = RegionMap.GUEST_BASE;
+  const root = guestBase + 0x1000;
+  const payload = guestBase + 0x1100;
+
+  // Minimal PE resource tree: RT_BITMAP / 101 / 1033.
+  dv.setUint32(guestBase + 0x3C, 0x80, true);
+  dv.setUint32(guestBase + 0x80 + 136, 0x1000, true);
+  dv.setUint16(root + 14, 1, true);
+  dv.setUint32(root + 16, 2, true);
+  dv.setUint32(root + 20, 0x80000020, true);
+  dv.setUint16(root + 0x20 + 14, 1, true);
+  dv.setUint32(root + 0x30, 101, true);
+  dv.setUint32(root + 0x34, 0x80000040, true);
+  dv.setUint16(root + 0x40 + 14, 1, true);
+  dv.setUint32(root + 0x50, 1033, true);
+  dv.setUint32(root + 0x54, 0x60, true);
+  dv.setUint32(root + 0x60, 0x1100, true);
+  dv.setUint32(root + 0x64, 64, true);
+
+  // 4x2 bottom-up 24-bpp RT_BITMAP. Each row is exactly 12 bytes.
+  dv.setUint32(payload, 40, true);
+  dv.setInt32(payload + 4, 4, true);
+  dv.setInt32(payload + 8, 2, true);
+  dv.setUint16(payload + 12, 1, true);
+  dv.setUint16(payload + 14, 24, true);
+  bytes.set([
+    0, 0, 0, 0, 255, 255, 255, 255, 0, 255, 0, 255,
+    0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255,
+  ], payload + 40);
+}
 
 function makeBmp() {
   const pixels = Buffer.alloc(STRIDE * HEIGHT);
@@ -112,6 +150,26 @@ function writeCString(wat, ptr, text) {
   check('a missing file returns NULL, not a stand-in bitmap', () => {
     assert.strictEqual(wat.test_call_LoadImageA(0, missingGa, 0, 0, 0, 0x2010) >>> 0, 0);
     assert.strictEqual(wat.test_call_LoadImageA(0, missingGa, 0, 0, 0, 0x10) >>> 0, 0);
+  });
+
+  // A resource load honours LR_CREATEDIBSECTION too. mIRC loads its About-box
+  // logo with LoadImage(hInst, 50, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION) and
+  // recolours it through bmBits; a DDB left it black-on-white.
+  installBitmapResource(harness.memory);
+  wat.init_thread(0, 0, 0, 0, 0, 0, 0, 0x1000); // point the resource walker at it
+  const resSection = wat.test_call_LoadImageA(0, 101, 0, 0, 0, 0x2000) >>> 0;
+  check('a resource LR_CREATEDIBSECTION load is a DIB section', () => {
+    assert.ok(resSection, 'resource LoadImageA returned NULL');
+    const res = readBitmap(resSection);
+    assert.strictEqual(res.width, 4);
+    assert.strictEqual(res.height, 2);
+    assert.strictEqual(res.bpp, 24);
+    assert.notStrictEqual(res.bits, 0, 'resource DIB section reported bmBits=0');
+  });
+  const resDdb = wat.test_call_LoadImageA(0, 101, 0, 0, 0, 0) >>> 0;
+  check('a plain resource load is still a DDB', () => {
+    assert.ok(resDdb, 'resource LoadImageA returned NULL');
+    assert.strictEqual(readBitmap(resDdb).bits, 0, 'a DDB must report bmBits=0');
   });
 
   console.log(`\n${passed} checks passed`);

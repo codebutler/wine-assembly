@@ -160,10 +160,15 @@
             (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
             (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
             (return)))
-        (local.set $tmp (call $host_gdi_load_bitmap (local.get $arg0)
+        ;; LR_CREATEDIBSECTION (0x2000) asks for a DIB section rather than a
+        ;; device-compatible bitmap.
+        (local.set $tmp (call $gdi_bitmap_load_resource_as (local.get $arg0)
           (if (result i32) (i32.gt_u (local.get $arg1) (i32.const 0xFFFF))
             (then (local.get $arg1))
-            (else (i32.and (local.get $arg1) (i32.const 0xFFFF))))))
+            (else (i32.and (local.get $arg1) (i32.const 0xFFFF))))
+          (i32.const 0)
+          (i32.ne (i32.and (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+                           (i32.const 0x2000)) (i32.const 0))))
         (if (i32.eqz (local.get $tmp))
           (then (local.set $tmp (call $host_gdi_create_compat_bitmap
             (i32.const 0) (i32.const 32) (i32.const 32) (i32.const 0)))))
