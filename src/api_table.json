@@ -30999,5 +30999,26 @@
     "nargs": 0,
     "convention": "stdcall",
     "hash": 3164277069
+  },
+  {
+    "id": 3708,
+    "name": "WSAAsyncGetHostByName",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1834724666
+  },
+  {
+    "id": 3709,
+    "name": "WSAAsyncGetHostByAddr",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 2364661438
+  },
+  {
+    "id": 3710,
+    "name": "WSACancelAsyncRequest",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4084317733
   }
 ]

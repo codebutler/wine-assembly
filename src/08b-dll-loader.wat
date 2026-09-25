@@ -480,6 +480,9 @@
         (if (i32.eq (local.get $ordinal) (i32.const 113))  (then (return (call $lookup_api_id "WSACancelBlockingCall"))))
         (if (i32.eq (local.get $ordinal) (i32.const 114))  (then (return (call $lookup_api_id "WSAIsBlocking"))))
         (if (i32.eq (local.get $ordinal) (i32.const 101))  (then (return (call $lookup_api_id "WSAAsyncSelect"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 102))  (then (return (call $lookup_api_id "WSAAsyncGetHostByAddr"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 103))  (then (return (call $lookup_api_id "WSAAsyncGetHostByName"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 108))  (then (return (call $lookup_api_id "WSACancelAsyncRequest"))))
         (if (i32.eq (local.get $ordinal) (i32.const 1001)) (then (return (call $lookup_api_id "WsControl"))))
       ))
     ;; WINMM. Welcome98 imports PlaySound purely by ordinal; the name is

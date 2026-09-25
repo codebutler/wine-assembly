@@ -2560,6 +2560,84 @@
     (i32.store offset=12 (local.get $base_wa) (i32.add (local.get $base) (i32.const 16)))
     (i32.store offset=0 (global.get $reg_base) (local.get $base)))
 
+  ;; WSAAsyncGetHostByName / WSAAsyncGetHostByAddr: Winsock 1.1's
+  ;; non-blocking resolver. The answer lands in the caller's buffer and is
+  ;; announced by posting wMsg to hWnd with wParam = the task handle and
+  ;; lParam = MAKELONG(bytes needed, error). Resolution here never waits, so the
+  ;; request completes before the call returns; the message still arrives
+  ;; through the queue as the application expects (mIRC resolves every server
+  ;; this way). The synchronous resolvers run with their own stack effect
+  ;; undone, and their hostent is copied with its pointers rebased.
+  (global $wsa_async_task (mut i32) (i32.const 0))
+
+  (func $vsock_async_hostent_reply (param $hwnd i32) (param $msg i32)
+                                   (param $he i32) (param $buf i32) (param $buflen i32)
+                                   (result i32)
+    (local $task i32) (local $err i32) (local $i i32)
+    (global.set $wsa_async_task (i32.add (global.get $wsa_async_task) (i32.const 1)))
+    (if (i32.gt_u (global.get $wsa_async_task) (i32.const 0x7FFF))
+      (then (global.set $wsa_async_task (i32.const 1))))
+    (local.set $task (global.get $wsa_async_task))
+    (if (i32.eqz (local.get $he))
+      (then (local.set $err (global.get $wsa_last_error)))
+      (else
+        (if (i32.lt_u (local.get $buflen) (i32.const 128))
+          (then (local.set $err (i32.const 10055)))            ;; WSAENOBUFS
+          (else
+            (block $done (loop $copy
+              (br_if $done (i32.ge_u (local.get $i) (i32.const 128)))
+              (call $gs32 (i32.add (local.get $buf) (local.get $i))
+                (call $gl32 (i32.add (local.get $he) (local.get $i))))
+              (local.set $i (i32.add (local.get $i) (i32.const 4)))
+              (br $copy)))
+            ;; hostent +0 h_name → +40, +12 h_addr_list → +16, list[0] → +32.
+            (call $gs32 (local.get $buf) (i32.add (local.get $buf) (i32.const 40)))
+            (call $gs32 (i32.add (local.get $buf) (i32.const 12)) (i32.add (local.get $buf) (i32.const 16)))
+            (call $gs32 (i32.add (local.get $buf) (i32.const 16)) (i32.add (local.get $buf) (i32.const 32)))))))
+    (drop (call $post_queue_push (local.get $hwnd) (local.get $msg) (local.get $task)
+      (i32.or (i32.shl (local.get $err) (i32.const 16))
+              (select (i32.const 0) (i32.const 128) (local.get $err)))))
+    (local.get $task))
+
+  ;; WSAAsyncGetHostByName(hWnd, wMsg, name, buf, buflen) → task handle
+  (func $handle_WSAAsyncGetHostByName (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $esp i32) (local $he i32)
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_gethostbyname (local.get $arg2) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (local.get $name_ptr))
+    (local.set $he (i32.load offset=0 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $vsock_async_hostent_reply (local.get $arg0) (local.get $arg1)
+        (local.get $he) (local.get $arg3) (local.get $arg4))))
+
+  ;; WSAAsyncGetHostByAddr(hWnd, wMsg, addr, len, type, buf, buflen) → task handle
+  (func $handle_WSAAsyncGetHostByAddr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $esp i32) (local $he i32) (local $buf i32) (local $buflen i32)
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $buf (call $gl32 (i32.add (local.get $esp) (i32.const 24))))
+    (local.set $buflen (call $gl32 (i32.add (local.get $esp) (i32.const 28))))
+    (call $handle_gethostbyaddr (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (i32.const 0) (i32.const 0) (local.get $name_ptr))
+    (local.set $he (i32.load offset=0 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $esp) (i32.const 32)))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $vsock_async_hostent_reply (local.get $arg0) (local.get $arg1)
+        (local.get $he) (local.get $buf) (local.get $buflen))))
+
+  ;; WSACancelAsyncRequest(hAsyncTaskHandle) → 0 or SOCKET_ERROR. Every
+  ;; request has already completed, which Winsock reports as WSAEALREADY.
+  (func $handle_WSACancelAsyncRequest (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (call $vsock_set_error
+      (select (i32.const 10037) (i32.const 10022)                ;; WSAEALREADY / WSAEINVAL
+        (i32.and (i32.ne (local.get $arg0) (i32.const 0))
+                 (i32.le_u (local.get $arg0) (global.get $wsa_async_task)))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const -1)))
+
   ;; Parse a service string: decimal digits, or a name from the services
   ;; table. -1 when it is neither.
   (func $vsock_service_or_port (param $ga i32) (result i32)
