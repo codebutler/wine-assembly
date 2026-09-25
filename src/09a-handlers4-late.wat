@@ -1763,6 +1763,26 @@ SetColorAdjustment — validate and copy complete per-DC state.
     (i32.store offset=0 (global.get $reg_base) (i32.const -2))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
+  ;; ImmGetCompositionStringW: the wide twin. With no context the answer is
+  ;; encoding-neutral, so it is the ANSI one.
+  (func $handle_ImmGetCompositionStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_ImmGetCompositionStringA (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  ;; ImmSetCompositionWindow(hIMC, lpCompForm) / ImmSetCompositionFontA(hIMC,
+  ;; lpLogFont) → BOOL. Where to draw the composition window, and in what
+  ;; font. A terminal calls these every time its caret moves (PuTTY does, from
+  ;; its first paint), and with no context there is nothing to position, so
+  ;; FALSE -- the documented result for an invalid HIMC, and exactly the
+  ;; (hIMC, x) -> FALSE setter ImmSetOpenStatus already is.
+  (func $handle_ImmSetCompositionWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_ImmSetOpenStatus (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  (func $handle_ImmSetCompositionFontA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_ImmSetCompositionWindow (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
   ;; ImmGetCandidateListA(hIMC, dwIndex, lpCandList, dwBufLen) → DWORD, the
   ;; size copied or required. Zero is the documented failure here (unlike the
   ;; composition string above, this one returns a size, not a count that could

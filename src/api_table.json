@@ -30866,5 +30866,26 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 2877870796
+  },
+  {
+    "id": 3689,
+    "name": "ImmSetCompositionWindow",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 915565444
+  },
+  {
+    "id": 3690,
+    "name": "ImmSetCompositionFontA",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 821956012
+  },
+  {
+    "id": 3691,
+    "name": "ImmGetCompositionStringW",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 708737070
   }
 ]
