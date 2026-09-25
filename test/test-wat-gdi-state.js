@@ -351,11 +351,15 @@ async function main() {
   assert.strictEqual(wat.test_call_SelectObject(hdcA, 0x30021), 0x3001D);
   assert.strictEqual(wat.test_call_GetCurrentObject(hdcA, 6), 0x30021);
   const logfont = wat.guest_alloc(92) >>> 0;
+  // Windows 98 (measured under v86): DEFAULT_GUI_FONT reads back as
+  // lfHeight -11, lfWeight 400, "MS Sans Serif".
   assert.strictEqual(wat.test_call_GetObjectA(0x30021, 60, logfont), 60);
-  assert.strictEqual(wat.guest_read32(logfont), 11);
+  assert.strictEqual(wat.guest_read32(logfont) | 0, -11);
   assert.strictEqual(wat.guest_read32(logfont + 16), 400);
+  assert.strictEqual(Array.from({ length: 13 }, (_, i) =>
+    String.fromCharCode(wat.guest_read8(logfont + 28 + i))).join(''), 'MS Sans Serif');
   assert.strictEqual(wat.test_call_GetObjectW(0x30021, 92, logfont), 92);
-  assert.strictEqual(wat.guest_read32(logfont), 11);
+  assert.strictEqual(wat.guest_read32(logfont) | 0, -11);
   const bitmapStruct = wat.guest_alloc(24) >>> 0;
   assert.strictEqual(wat.test_call_GetObjectA(bitmap, 24, bitmapStruct), 24);
   assert.strictEqual(wat.guest_read32(bitmapStruct + 4), 17);

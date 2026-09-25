@@ -1263,6 +1263,22 @@
   ;; Paint-only control. No input handling. Same dormancy caveat as
   ;; $button_wndproc — runs when STEP 5 wires WAT dialog creation.
 
+  ;; Send one of the WM_CTLCOLOR* messages and return the brush the receiver
+  ;; answers with, or $default when it answers NULL. The DC is first given
+  ;; DefWindowProc's colors (COLOR_WINDOWTEXT on COLOR_3DFACE) so a receiver
+  ;; that only returns a brush still paints standard text.
+  (func $ctl_color_brush (param $target i32) (param $msg i32) (param $hdc i32)
+        (param $ctl i32) (param $default i32) (result i32)
+    (local $brush i32)
+    (drop (call $host_gdi_set_text_color (local.get $hdc)
+      (call $win98_sys_color (i32.const 8))))   ;; COLOR_WINDOWTEXT
+    (drop (call $host_gdi_set_bk_color (local.get $hdc)
+      (call $win98_sys_color (i32.const 15))))  ;; COLOR_3DFACE
+    (if (i32.eqz (local.get $target)) (then (return (local.get $default))))
+    (local.set $brush (call $wnd_send_message (local.get $target)
+      (local.get $msg) (local.get $hdc) (local.get $ctl)))
+    (select (local.get $brush) (local.get $default) (i32.ne (local.get $brush) (i32.const 0))))
+
   (func $static_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $state i32) (local $state_w i32) (local $cs_w i32)
     (local $hdc i32) (local $sz i32) (local $w i32) (local $h i32)
@@ -1558,6 +1574,14 @@
                   (select (i32.const 0x30010) (i32.const 0x30011)
                     (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd))
                       (i32.const 0x00800000)) (i32.const 0))))
+                ;; USER asks the parent first: WM_CTLCOLORSTATIC hands it the
+                ;; paint DC (already holding the default colors) and takes back
+                ;; the brush the static erases with. Colors the parent sets on
+                ;; the DC carry into the label text below. mIRC's About box
+                ;; answers with a white brush.
+                (local.set $brush (call $ctl_color_brush
+                  (call $wnd_get_parent (local.get $hwnd)) (i32.const 0x0138)
+                  (local.get $hdc) (local.get $hwnd) (local.get $brush)))
                 (drop (call $host_gdi_fill_rect (local.get $hdc)
                         (i32.const 0) (i32.const 0)
                         (local.get $w) (local.get $h)

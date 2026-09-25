@@ -835,7 +835,7 @@
             (if (i32.and (local.get $arg1) (i32.const 2))
               (then
                 (call $nc_flags_clear (global.get $dlg_pump_hwnd) (i32.const 2))
-                (drop (call $host_erase_background (global.get $dlg_pump_hwnd) (i32.const 16)))
+                (drop (call $dialog_send_erase (global.get $dlg_pump_hwnd)))
                 (global.set $eip (global.get $dlg_loop_thunk))
                 (global.set $steps (i32.const 0))
                 (return)))))

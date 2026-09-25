@@ -251,6 +251,43 @@
   ;; default behavior must consult this immediately after synchronous dispatch.
   (global $dialog_last_proc_handled (mut i32) (i32.const 0))
 
+  ;; DefDlgProc's erase: the dialog is asked for its face brush with
+  ;; WM_CTLCOLORDLG on the erase DC and COLOR_3DFACE is used when it declines.
+  (func $dialog_erase_background (param $hwnd i32) (result i32)
+    (local $hdc i32) (local $brush i32) (local $result i32)
+    (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 0)))
+    (if (i32.eqz (local.get $hdc)) (then (return (i32.const 0))))
+    (local.set $brush (call $ctl_color_brush (local.get $hwnd) (i32.const 0x0136)
+      (local.get $hdc) (local.get $hwnd) (i32.const 16))) ;; COLOR_BTNFACE+1
+    (call $dc_apply_client_erase_clip (local.get $hdc) (local.get $hwnd))
+    (local.set $result (call $erase_background_dc
+      (local.get $hwnd) (local.get $hdc) (local.get $brush)))
+    (drop (call $host_release_dc (local.get $hdc)))
+    (local.get $result))
+
+  ;; USER erases a dialog by sending it WM_ERASEBKGND on a DC clipped to the
+  ;; update region; the DLGPROC may paint its own face (mIRC's About box fills
+  ;; white over a grey footer) and a FALSE answer reaches DefDlgProc's
+  ;; default erase below. The pumps used to fill COLOR_BTNFACE directly, so a
+  ;; DLGPROC never saw the message.
+  (func $dialog_send_erase (param $hwnd i32) (result i32)
+    (local $hdc i32) (local $result i32)
+    (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 0)))
+    (if (i32.eqz (local.get $hdc)) (then (return (i32.const 0))))
+    (call $dc_apply_client_erase_clip (local.get $hdc) (local.get $hwnd))
+    (global.set $dialog_last_proc_handled (i32.const 0))
+    (local.set $result (call $wnd_send_message (local.get $hwnd)
+      (i32.const 0x0014) (local.get $hdc) (i32.const 0)))
+    (drop (call $host_release_dc (local.get $hdc)))
+    ;; Nobody erased it: no DLGPROC is installed yet, or a subclass swallowed
+    ;; the message. Keep the dialog face rather than leave it unpainted. A
+    ;; DLGPROC that answered TRUE painted its own face (typically leaving
+    ;; DWL_MSGRESULT 0), so that case is left alone.
+    (if (i32.and (i32.eqz (local.get $result))
+          (i32.eqz (global.get $dialog_last_proc_handled)))
+      (then (local.set $result (call $dialog_erase_background (local.get $hwnd)))))
+    (local.get $result))
+
   ;; Minimal DefDlgProc semantics around the stored per-window DLGPROC.
   ;; The DLGPROC returns BOOL; when TRUE, the actual message result comes from
   ;; DWL_MSGRESULT. $send_proc_override lets the established synchronous
@@ -292,7 +329,13 @@
                   (i32.eq (local.get $msg) (i32.const 0x002E)) ;; WM_VKEYTOITEM
                   (i32.or
                     (i32.eq (local.get $msg) (i32.const 0x002F))   ;; WM_CHARTOITEM
-                    (i32.eq (local.get $msg) (i32.const 0x0037)))))) ;; WM_QUERYDRAGICON
+                    (i32.or
+                      (i32.eq (local.get $msg) (i32.const 0x0037)) ;; WM_QUERYDRAGICON
+                      ;; WM_CTLCOLORMSGBOX..WM_CTLCOLORSTATIC: the "BOOL" is
+                      ;; the HBRUSH itself.
+                      (i32.and
+                        (i32.ge_u (local.get $msg) (i32.const 0x0132))
+                        (i32.le_u (local.get $msg) (i32.const 0x0138))))))))
           (then (return (local.get $handled))))
         (return (call $dialog_extra_get (local.get $hwnd) (i32.const 0)))))
     ;; BUTTON notifications arrive through the ordinary message pump so a
@@ -332,8 +375,7 @@
     (if (i32.eq (local.get $msg) (i32.const 0x0014)) ;; WM_ERASEBKGND
       (then
         (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
-        (return (call $host_erase_background
-          (local.get $hwnd) (i32.const 16))))) ;; COLOR_BTNFACE+1
+        (return (call $dialog_erase_background (local.get $hwnd)))))
     (if (i32.eq (local.get $msg) (i32.const 0x000F)) ;; WM_PAINT
       (then
         ;; Preserve the parent's update geometry long enough to expose each
@@ -343,11 +385,20 @@
         (if (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2))
           (then
             (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
-            (drop (call $host_erase_background
-              (local.get $hwnd) (i32.const 16))))) ;; COLOR_BTNFACE+1
+            (drop (call $dialog_erase_background (local.get $hwnd)))))
         (call $update_clear_hwnd (local.get $hwnd))
         (call $paint_flag_clear_hwnd (local.get $hwnd))
         (return (i32.const 0))))
+    ;; WM_GETFONT: DefDlgProc answers with the font the dialog manager made
+    ;; from the template's DS_SETFONT typeface -- here the same stock 8pt MS
+    ;; Sans Serif $dlg_load installs on the controls -- and NULL (the system
+    ;; font) for a dialog without one. mIRC's About box derives its underlined
+    ;; link font from it and draws no links when it gets NULL.
+    (if (i32.eq (local.get $msg) (i32.const 0x0031))
+      (then
+        (return (select (i32.const 0x30021) (i32.const 0)
+          (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40))
+            (i32.const 0))))))
     ;; DefDlgProc's DefWindowProc tail owns WM_SETREDRAW's visible bit.
     (if (i32.eq (local.get $msg) (i32.const 0x000B))
       (then
@@ -617,7 +668,7 @@
         (if (i32.and (local.get $flags) (i32.const 2))          ;; WM_ERASEBKGND
           (then
             (call $nc_flags_clear (global.get $modal_dlg_hwnd) (i32.const 2))
-            (drop (call $host_erase_background (global.get $modal_dlg_hwnd) (i32.const 16)))
+            (drop (call $dialog_send_erase (global.get $modal_dlg_hwnd)))
             (global.set $eip (local.get $pump_eip))
             (global.set $steps (i32.const 0))
             (return (i32.const 1))))))

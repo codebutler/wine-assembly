@@ -468,5 +468,5 @@
                 (i32.ne (local.get $dlg_rec) (i32.const 0))
                 (i32.ne (i32.load offset=4 (local.get $dlg_rec)) (i32.const 0)))
               (i32.lt_s (call $wnd_get_class_slot (local.get $arg0)) (i32.const 0)))
-          (then (drop (call $host_erase_background (local.get $arg0) (i32.const 16)))))))
+          (then (drop (call $dialog_send_erase (local.get $arg0)))))))
   )

@@ -805,6 +805,13 @@
     (if (i32.lt_u (local.get $size) (local.get $required)) (then (return (i32.const 0))))
     (memory.fill (local.get $dest) (i32.const 0) (local.get $required))
     (i32.store (local.get $dest) (call $gdi_font_height (local.get $handle)))
+    ;; Win98's DEFAULT_GUI_FONT reads back as lfHeight -11, weight 400,
+    ;; "MS Sans Serif" (measured under v86): a character height, not the
+    ;; cell height the stock strike is drawn from. An app that clones it
+    ;; through CreateFontIndirect (mIRC's About links) otherwise gets a face
+    ;; two pixels shorter than the dialog's own.
+    (if (i32.eq (local.get $handle) (i32.const 0x30021))
+      (then (i32.store (local.get $dest) (i32.const -11))))
     (i32.store offset=4 (local.get $dest) (call $gdi_font_width (local.get $handle)))
     (i32.store offset=16 (local.get $dest) (call $gdi_font_weight (local.get $handle)))
     (i32.store8 offset=20 (local.get $dest) (call $gdi_font_italic (local.get $handle)))
@@ -813,6 +820,8 @@
     (i32.store8 offset=27 (local.get $dest)
       (call $gdi_font_pitch_and_family (local.get $handle)))
     (local.set $face (call $gdi_font_face (local.get $handle)))
+    (if (i32.eq (local.get $handle) (i32.const 0x30021))
+      (then (local.set $face (region.addr $GDI_BITMAP_FONT_STATIC 0xAC)))) ;; MS Sans Serif
     (block $done (loop $copy
       (br_if $done (i32.ge_u (local.get $i) (i32.const 31)))
       (local.set $ch (i32.load8_u (i32.add (local.get $face) (local.get $i))))
