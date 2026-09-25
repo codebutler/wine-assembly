@@ -1679,12 +1679,29 @@
   ;; 73: GetMessageA
   ;; The host input FIFO is shared, but a window's messages belong to its
   ;; creating thread. A loader's GetMessage must not steal keyboard input.
+  ;; Set once the application calls TranslateMessage. The host hands us each
+  ;; typed character as its own WM_CHAR instead of leaving it to be derived
+  ;; from WM_KEYDOWN, which is only right for a program that translates: on
+  ;; Win98 WM_CHAR exists only because TranslateMessage posted it. PuTTY's
+  ;; terminal never translates -- it runs ToAsciiEx on WM_KEYDOWN itself -- and
+  ;; the extra WM_CHAR typed every key twice.
+  (global $thread_translates (mut i32) (i32.const 0))
+
   (func $input_route_to_owner (param $packed i32) (result i32)
-    (local $hwnd i32) (local $owner i32)
+    (local $hwnd i32) (local $owner i32) (local $msg i32)
     (if (i32.eqz (local.get $packed)) (then (return (i32.const 0))))
     (local.set $hwnd (global.get $pending_input_hwnd))
     (if (i32.eqz (local.get $hwnd))
       (then (local.set $hwnd (global.get $main_hwnd))))
+    ;; A dialog's controls keep theirs: IsDialogMessage translates for them.
+    (local.set $msg (i32.and (local.get $packed) (i32.const 0xFFFF)))
+    (if (i32.and
+          (i32.and
+            (i32.or (i32.eq (local.get $msg) (i32.const 0x0102))    ;; WM_CHAR
+                    (i32.eq (local.get $msg) (i32.const 0x0106)))   ;; WM_SYSCHAR
+            (i32.eqz (global.get $thread_translates)))
+          (i32.eqz (call $dialog_ancestor (local.get $hwnd))))
+      (then (return (i32.const 0))))
     (local.set $owner (call $wnd_get_thread (local.get $hwnd)))
     (if (i32.and (i32.ne (local.get $owner) (i32.const 0))
                  (i32.ne (local.get $owner) (global.get $current_thread_id)))
@@ -3137,6 +3154,7 @@
   ;; 77: TranslateMessage(lpMsg) — browser already queues WM_CHAR; preserve MSG and report only virtual-key messages.
   (func $handle_TranslateMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $msg i32)
+    (global.set $thread_translates (i32.const 1))
     (local.set $msg (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))) (i32.store offset=0 (global.get $reg_base) (i32.or (i32.or (i32.eq (local.get $msg) (i32.const 0x0100)) (i32.eq (local.get $msg) (i32.const 0x0101))) (i32.or (i32.eq (local.get $msg) (i32.const 0x0104)) (i32.eq (local.get $msg) (i32.const 0x0105)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )

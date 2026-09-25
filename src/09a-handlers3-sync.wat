@@ -74,42 +74,92 @@
   )
 
   ;; ToAsciiEx(uVirtKey, uScanCode, lpKeyState, lpChar, uFlags, hkl) → int.
-  ;; 6-arg stdcall. Translate vkey + Shift state to up to one ASCII char in
-  ;; *lpChar. Returns 1 on success, 0 if no translation, -1 for dead keys.
-  ;; Minimal: handle letters/digits with Shift, and a handful of punctuation
-  ;; that SDL apps rely on (Space, Enter, Esc, Tab).
+  ;; 6-arg stdcall. The US keyboard layout: the character the key produces
+  ;; under lpKeyState's Shift, Caps Lock and Ctrl, in *lpChar. Returns 1, or 0
+  ;; when the key produces no character. A released key (uScanCode's high bit)
+  ;; produces none: PuTTY runs WM_KEYUP through the same ToAsciiEx call as
+  ;; WM_KEYDOWN and sends whatever comes back. PuTTY never calls
+  ;; TranslateMessage, so this is also where its punctuation and shifted
+  ;; characters come from.
   (func $handle_ToAsciiEx
     (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $vk i32) (local $ks i32) (local $out i32) (local $shift i32) (local $ch i32)
-    (local.set $vk (local.get $arg0))
+    (local $ks i32) (local $ch i32)
     (local.set $ks (call $g2w (local.get $arg2)))
-    (local.set $out (call $g2w (local.get $arg3)))
-    (local.set $shift (i32.and (i32.load8_u (i32.add (local.get $ks) (i32.const 0x10))) (i32.const 0x80)))
-    (local.set $ch (i32.const 0))
-    ;; A-Z (0x41-0x5A): lowercase unless Shift held
-    (if (i32.and (i32.ge_u (local.get $vk) (i32.const 0x41)) (i32.le_u (local.get $vk) (i32.const 0x5A)))
-      (then (local.set $ch
-        (select (local.get $vk) (i32.add (local.get $vk) (i32.const 0x20)) (local.get $shift)))))
-    ;; 0-9 (0x30-0x39): direct ASCII when no Shift; ignored with Shift here.
-    (if (i32.eqz (local.get $ch))
-      (then (if (i32.and (i32.ge_u (local.get $vk) (i32.const 0x30)) (i32.le_u (local.get $vk) (i32.const 0x39)))
-        (then (if (i32.eqz (local.get $shift))
-          (then (local.set $ch (local.get $vk))))))))
-    ;; Space=0x20, Enter=0x0D, Esc=0x1B, Tab=0x09, Back=0x08
-    (if (i32.eqz (local.get $ch))
+    (if (i32.eqz (i32.and (local.get $arg1) (i32.const 0x8000)))
       (then
-        (if (i32.eq (local.get $vk) (i32.const 0x20)) (then (local.set $ch (i32.const 0x20))))
-        (if (i32.eq (local.get $vk) (i32.const 0x0D)) (then (local.set $ch (i32.const 0x0D))))
-        (if (i32.eq (local.get $vk) (i32.const 0x1B)) (then (local.set $ch (i32.const 0x1B))))
-        (if (i32.eq (local.get $vk) (i32.const 0x09)) (then (local.set $ch (i32.const 0x09))))
-        (if (i32.eq (local.get $vk) (i32.const 0x08)) (then (local.set $ch (i32.const 0x08))))))
+        (local.set $ch (call $us_layout_char (local.get $arg0)
+          (i32.ne (i32.and (i32.load8_u (i32.add (local.get $ks) (i32.const 0x10))) (i32.const 0x80)) (i32.const 0))
+          (i32.and (i32.load8_u (i32.add (local.get $ks) (i32.const 0x14))) (i32.const 1))
+          (i32.and
+            (i32.ne (i32.and (i32.load8_u (i32.add (local.get $ks) (i32.const 0x11))) (i32.const 0x80)) (i32.const 0))
+            (i32.eqz (i32.and (i32.load8_u (i32.add (local.get $ks) (i32.const 0x12))) (i32.const 0x80))))))))
     (if (local.get $ch)
-      (then
-        (i32.store16 (local.get $out) (local.get $ch))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
-      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+      (then (i32.store16 (call $g2w (local.get $arg3)) (local.get $ch))))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (local.get $ch) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
+
+  ;; Byte $i of the 16-byte little-endian string $lo..$hi.
+  (func $byte_of_i64_pair (param $lo i64) (param $hi i64) (param $i i32) (result i32)
+    (i32.and
+      (i32.wrap_i64 (i64.shr_u
+        (select (local.get $hi) (local.get $lo) (i32.ge_u (local.get $i) (i32.const 8)))
+        (i64.extend_i32_u (i32.shl (i32.and (local.get $i) (i32.const 7)) (i32.const 3)))))
+      (i32.const 0xFF)))
+
+  ;; The US layout's character for a virtual key, 0 for none.
+  (func $us_layout_char (param $vk i32) (param $shift i32) (param $caps i32) (param $ctrl i32) (result i32)
+    (local $i i32)
+    ;; Letters: Shift and Caps Lock cancel; Ctrl gives the control code.
+    (if (i32.and (i32.ge_u (local.get $vk) (i32.const 0x41)) (i32.le_u (local.get $vk) (i32.const 0x5A)))
+      (then
+        (if (local.get $ctrl) (then (return (i32.sub (local.get $vk) (i32.const 0x40)))))
+        (return (select (local.get $vk) (i32.add (local.get $vk) (i32.const 0x20))
+          (i32.xor (local.get $shift) (local.get $caps))))))
+    (if (local.get $ctrl)
+      (then
+        (if (i32.eq (local.get $vk) (i32.const 0xDB)) (then (return (i32.const 0x1B))))  ;; Ctrl+[
+        (if (i32.eq (local.get $vk) (i32.const 0xDC)) (then (return (i32.const 0x1C))))  ;; Ctrl+\
+        (if (i32.eq (local.get $vk) (i32.const 0xDD)) (then (return (i32.const 0x1D))))  ;; Ctrl+]
+        (if (i32.eq (local.get $vk) (i32.const 0x0D)) (then (return (i32.const 0x0A))))  ;; Ctrl+Enter
+        (if (i32.eq (local.get $vk) (i32.const 0x08)) (then (return (i32.const 0x7F))))  ;; Ctrl+Back
+        (if (i32.eq (local.get $vk) (i32.const 0x20)) (then (return (i32.const 0x20))))
+        (return (i32.const 0))))
+    ;; Top-row digits and their shifted symbols.
+    (if (i32.and (i32.ge_u (local.get $vk) (i32.const 0x30)) (i32.le_u (local.get $vk) (i32.const 0x39)))
+      (then
+        (if (i32.eqz (local.get $shift)) (then (return (local.get $vk))))
+        ;; ) ! @ # $ % ^ & * (
+        (return (call $byte_of_i64_pair
+          (i64.const 0x265E252423402129) (i64.const 0x282A)
+          (i32.sub (local.get $vk) (i32.const 0x30))))))
+    ;; Numeric keypad (Num Lock on).
+    (if (i32.and (i32.ge_u (local.get $vk) (i32.const 0x60)) (i32.le_u (local.get $vk) (i32.const 0x69)))
+      (then (return (i32.sub (local.get $vk) (i32.const 0x30)))))
+    (if (i32.eq (local.get $vk) (i32.const 0x6A)) (then (return (i32.const 0x2A))))  ;; *
+    (if (i32.eq (local.get $vk) (i32.const 0x6B)) (then (return (i32.const 0x2B))))  ;; +
+    (if (i32.eq (local.get $vk) (i32.const 0x6D)) (then (return (i32.const 0x2D))))  ;; -
+    (if (i32.eq (local.get $vk) (i32.const 0x6E)) (then (return (i32.const 0x2E))))  ;; .
+    (if (i32.eq (local.get $vk) (i32.const 0x6F)) (then (return (i32.const 0x2F))))  ;; /
+    ;; VK_OEM_1 ; : .. VK_OEM_3 ` ~ and VK_OEM_4 [ { .. VK_OEM_7 ' "
+    (if (i32.and (i32.ge_u (local.get $vk) (i32.const 0xBA)) (i32.le_u (local.get $vk) (i32.const 0xC0)))
+      (then (local.set $i (i32.sub (local.get $vk) (i32.const 0xBA)))
+        ;; ;:  =+  ,<  -_  .>  /?  `~  as unshifted/shifted pairs
+        (return (call $byte_of_i64_pair
+          (i64.const 0x5F2D3C2C2B3D3A3B) (i64.const 0x7E603F2F3E2E)
+          (i32.add (i32.shl (local.get $i) (i32.const 1)) (local.get $shift))))))
+    (if (i32.and (i32.ge_u (local.get $vk) (i32.const 0xDB)) (i32.le_u (local.get $vk) (i32.const 0xDE)))
+      (then (local.set $i (i32.sub (local.get $vk) (i32.const 0xDB)))
+        ;; [{  \|  ]}  '"
+        (return (call $byte_of_i64_pair
+          (i64.const 0x22277D5D7C5C7B5B) (i64.const 0)
+          (i32.add (i32.shl (local.get $i) (i32.const 1)) (local.get $shift))))))
+    (if (i32.eq (local.get $vk) (i32.const 0x20)) (then (return (i32.const 0x20))))
+    (if (i32.eq (local.get $vk) (i32.const 0x0D)) (then (return (i32.const 0x0D))))
+    (if (i32.eq (local.get $vk) (i32.const 0x1B)) (then (return (i32.const 0x1B))))
+    (if (i32.eq (local.get $vk) (i32.const 0x09)) (then (return (i32.const 0x09))))
+    (if (i32.eq (local.get $vk) (i32.const 0x08)) (then (return (i32.const 0x08))))
+    (i32.const 0))
 
   ;; ToAscii(uVirtKey, uScanCode, lpKeyState, lpChar, uFlags) → int.
   ;; The non-Ex entry point uses the same current keyboard layout and output

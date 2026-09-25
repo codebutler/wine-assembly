@@ -8562,6 +8562,7 @@
   ;; USER.113 TranslateMessage(lpMsg). Key translation happens where the host
   ;; input is decoded, so there is nothing left to do here.
   (func $win16_TranslateMessage
+    (global.set $thread_translates (i32.const 1))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
