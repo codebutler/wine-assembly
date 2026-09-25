@@ -3216,6 +3216,21 @@
   ;; 78: DefWindowProcA
   (func $handle_DefWindowProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $text_wa i32) (local $text_len i32)
+    ;; WM_SETREDRAW: USER implements the redraw flag as WS_VISIBLE itself --
+    ;; FALSE clears the bit, TRUE sets it. The TRUE half is observable: it
+    ;; makes a window that was never shown visible, with no ShowWindow and no
+    ;; activation. PuTTY 0.60 relies on this; its config dialog template has
+    ;; no WS_VISIBLE and nothing else ever shows it (confirmed against real
+    ;; Windows 98 under v86). The FALSE half is not modelled: WAT gates
+    ;; painting and hit-testing on visibility, so clearing the bit here would
+    ;; hide a window that real USER leaves on screen until the matching TRUE.
+    (if (i32.eq (local.get $arg1) (i32.const 0x000B))
+      (then
+        (call $defwndproc_setredraw (local.get $arg0) (local.get $arg2))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (return)))
     ;; Win98 checks the actual iconic state, not HIWORD(wParam). A direct
     ;; default call can reactivate this window through SetFocus.
     (if (i32.eq (local.get $arg1) (i32.const 6))
@@ -3460,6 +3475,27 @@
         (call $wnd_apply_show_state (local.get $hwnd) (i32.const 9))
         (call $post_resize_messages (local.get $hwnd)
           (select (i32.const 2) (i32.const 0) (call $wnd_max_get (local.get $hwnd)))))))
+
+  ;; The visible-bit half of WM_SETREDRAW(TRUE): the window joins the screen
+  ;; exactly as far as its style says, without ShowWindow's activation,
+  ;; WM_SHOWWINDOW, or startup sequence. The app's own InvalidateRect (the
+  ;; documented WM_SETREDRAW pattern) supplies the repaint; the frame and the
+  ;; already-visible children are seeded so they do not wait for it.
+  (func $defwndproc_setredraw (param $hwnd i32) (param $redraw i32)
+    (if (i32.and
+          (i32.ne (local.get $redraw) (i32.const 0))
+          (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
+      (then (call $wnd_setredraw_reveal (local.get $hwnd)))))
+
+  (func $wnd_setredraw_reveal (param $hwnd i32)
+    (drop (call $wnd_set_style (local.get $hwnd)
+      (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
+    (drop (call $host_show_window (local.get $hwnd) (i32.const 8))) ;; SW_SHOWNA
+    ;; A frame drawn while the window was hidden went nowhere; draw it now.
+    (call $defwndproc_do_ncpaint (local.get $hwnd))
+    (call $nc_flags_set (local.get $hwnd) (i32.const 3))
+    (call $paint_flag_set_inv (local.get $hwnd))
+    (drop (call $paint_seed_child_paints (local.get $hwnd))))
 
   ;; DefDlgProcA/W: first offer the message to the DLGPROC stored separately
   ;; from the window procedure. A TRUE DLGPROC return means USER must return

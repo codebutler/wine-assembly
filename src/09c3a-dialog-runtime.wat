@@ -26,6 +26,14 @@
     (call $paint_scratch_reset (local.get $mark))
     (local.get $r))
 
+  ;; One-shot procedure for the next $wnd_send_message_inner, consumed on
+  ;; entry so nothing nested inherits it. DefDlgProc uses it to run the
+  ;; stored DLGPROC through this sender without writing the DLGPROC into the
+  ;; window table: while the DLGPROC runs, the HWND must still answer as a
+  ;; dialog, so a SendMessage the DLGPROC makes to its own window reaches
+  ;; DefDlgProc (and its DefWindowProc tail) rather than the bare DLGPROC.
+  (global $send_proc_override (mut i32) (i32.const 0))
+
   (func $wnd_send_message_inner
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $wp i32) (local $slot i32) (local $ctrl_class i32)
@@ -37,6 +45,10 @@
     (local $edit_len_before i32)
     (local $sync_rounds i32)
     (local.set $wp (call $wnd_table_get (local.get $hwnd)))
+    (if (global.get $send_proc_override)
+      (then
+        (local.set $wp (global.get $send_proc_override))
+        (global.set $send_proc_override (i32.const 0))))
     (if (i32.eqz (local.get $wp)) (then (return (i32.const 0))))
     (local.set $ctrl_class (call $ctrl_table_get_class (local.get $hwnd)))
     (if (call $tab_native_is (local.get $hwnd))
@@ -241,25 +253,23 @@
 
   ;; Minimal DefDlgProc semantics around the stored per-window DLGPROC.
   ;; The DLGPROC returns BOOL; when TRUE, the actual message result comes from
-  ;; DWL_MSGRESULT. Temporarily exposing the guest proc lets the established
-  ;; synchronous sender execute it without duplicating the interpreter-state
-  ;; save/restore machinery. Restore only if the proc did not destroy the HWND.
+  ;; DWL_MSGRESULT. $send_proc_override lets the established synchronous
+  ;; sender execute the guest proc without duplicating the interpreter-state
+  ;; save/restore machinery, and without exposing the DLGPROC as the window's
+  ;; WNDPROC while it runs.
   (func $dialog_default_proc
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
-    (local $installed i32) (local $proc i32) (local $handled i32)
+    (local $proc i32) (local $handled i32)
     (global.set $dialog_last_proc_handled (i32.const 0))
-    (local.set $installed (call $wnd_table_get (local.get $hwnd)))
     (local.set $proc (call $dialog_proc_get (local.get $hwnd)))
     (if (i32.eqz (local.get $proc)) (then (return (i32.const 0))))
-    (call $wnd_table_set (local.get $hwnd) (local.get $proc))
+    (global.set $send_proc_override (local.get $proc))
     (local.set $handled (call $wnd_send_message
       (local.get $hwnd) (local.get $msg)
       (local.get $wParam) (local.get $lParam)))
     ;; Set this after the callback returns so any nested dialog dispatch cannot
     ;; overwrite the outer message's handled state.
     (global.set $dialog_last_proc_handled (i32.ne (local.get $handled) (i32.const 0)))
-    (if (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
-      (then (call $wnd_table_set (local.get $hwnd) (local.get $installed))))
     (if (local.get $handled)
       (then
         ;; USER's DefDlgProc epilog returns the DLGPROC's own BOOL — not
@@ -337,6 +347,11 @@
               (local.get $hwnd) (i32.const 16))))) ;; COLOR_BTNFACE+1
         (call $update_clear_hwnd (local.get $hwnd))
         (call $paint_flag_clear_hwnd (local.get $hwnd))
+        (return (i32.const 0))))
+    ;; DefDlgProc's DefWindowProc tail owns WM_SETREDRAW's visible bit.
+    (if (i32.eq (local.get $msg) (i32.const 0x000B))
+      (then
+        (call $defwndproc_setredraw (local.get $hwnd) (local.get $wParam))
         (return (i32.const 0))))
     (i32.const 0))
 
