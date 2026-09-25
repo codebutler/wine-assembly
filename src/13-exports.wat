@@ -3627,6 +3627,26 @@
     (call $clipboard_store_binary_data (local.get $fmt) (local.get $src_g)))
   (func (export "clipboard_text_len") (result i32)
     (global.get $clipboard_len))
+  ;; Host clipboard bridge. An embedder that shares one clipboard between the
+  ;; guest and the page (or other programs) reads the guest's CF_TEXT here and
+  ;; writes a new one below. Bytes are the guest's ANSI code page; the length
+  ;; is authoritative (no NUL terminator is counted).
+  (func (export "get_clipboard_ptr") (result i32) (global.get $clipboard_ptr))
+  (func (export "get_clipboard_len") (result i32) (global.get $clipboard_len))
+  ;; Install a guest_alloc'd buffer as the clipboard's CF_TEXT, as another
+  ;; program's SetClipboardData would: every other format is dropped and the
+  ;; sequence number advances. The clipboard takes ownership of $ptr (freeing
+  ;; the old buffer, as an in-guest copy does); cap := len so a larger later
+  ;; copy reallocates and a smaller one reuses it.
+  (func (export "set_clipboard") (param $ptr i32) (param $len i32)
+    (call $clipboard_clear_all_data)
+    (if (i32.and (i32.ne (global.get $clipboard_ptr) (i32.const 0))
+                 (i32.ne (global.get $clipboard_ptr) (local.get $ptr)))
+      (then (call $heap_free (global.get $clipboard_ptr))))
+    (global.set $clipboard_ptr (local.get $ptr))
+    (global.set $clipboard_len (local.get $len))
+    (global.set $clipboard_cap (local.get $len))
+    (call $clipboard_sequence_bump))
   (func (export "clipboard_rtf_len") (result i32)
     (global.get $clipboard_rtf_len))
   (func (export "clipboard_rtf_ptr") (result i32)
