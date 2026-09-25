@@ -1569,7 +1569,7 @@
           (then
             (local.set $new_row
               (call $scrollbar_drag_pos
-                (local.get $h) (local.get $y)
+                (i32.sub (local.get $h) (i32.const 4)) (local.get $y)
                 (global.get $tv_drag_anchor_y)
                 (global.get $tv_drag_anchor_row)
                 (i32.const 0) (local.get $max)))
@@ -1601,12 +1601,15 @@
               (i32.gt_s (local.get $max) (i32.const 0))
               (i32.and
                 (i32.gt_s (local.get $w) (i32.const 16))
-                (i32.ge_s (local.get $x) (i32.sub (local.get $w) (i32.const 16)))))
+                ;; Inside the 2px client edge, where WM_PAINT draws the strip.
+                (i32.and
+                  (i32.ge_s (local.get $x) (i32.sub (local.get $w) (i32.const 18)))
+                  (i32.lt_s (local.get $x) (i32.sub (local.get $w) (i32.const 2))))))
           (then
             (local.set $hit (call $scroll_arrow_filter_hit
               (local.get $hwnd) (i32.const 1)
               (call $scrollbar_hit_part
-                (local.get $h) (local.get $y)
+                (i32.sub (local.get $h) (i32.const 4)) (i32.sub (local.get $y) (i32.const 2))
                 (call $tv_view_row) (i32.const 0) (local.get $max))))
             (if (local.get $hit)
               (then
@@ -1970,9 +1973,11 @@
       (br $items)))
     (if (i32.gt_s (local.get $max_scroll) (i32.const 0))
       (then
+        ;; Inside the client edge drawn around the whole window above: the
+        ;; edge is the outermost chrome, the strip is within it.
         (call $paint_vscrollbar_rect (local.get $hdc)
-          (i32.sub (local.get $w) (i32.const 16)) (i32.const 0)
-          (i32.const 16) (local.get $h)
+          (i32.sub (local.get $w) (i32.const 18)) (i32.const 2)
+          (i32.const 16) (i32.sub (local.get $h) (i32.const 4))
           (local.get $first_row) (local.get $max_scroll)
           (select (global.get $sb_pressed_part) (i32.const 0)
                   (i32.eq (global.get $sb_pressed_hwnd) (local.get $hwnd)))

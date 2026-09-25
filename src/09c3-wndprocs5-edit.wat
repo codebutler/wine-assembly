@@ -1585,9 +1585,16 @@
 	            (local.set $line_buf_w (local.get $full_w))
 	            (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00200000))
 	              (then (local.set $line_buf_w (i32.sub (local.get $full_w) (i32.const 16)))))
+	            ;; The strips sit inside the 2px client edge the paint draws
+	            ;; around the whole window, so the strip is 4px shorter than
+	            ;; the band it spans and starts 2px in.
 	            (if (i32.and
-	                  (i32.ge_s (local.get $h) (i32.sub (local.get $full_h) (i32.const 16)))
-	                  (i32.lt_s (local.get $w) (local.get $line_buf_w)))
+	                  (i32.and
+	                    (i32.ge_s (local.get $h) (i32.sub (local.get $full_h) (i32.const 18)))
+	                    (i32.lt_s (local.get $h) (i32.sub (local.get $full_h) (i32.const 2))))
+	                  (i32.and
+	                    (i32.ge_s (local.get $w) (i32.const 2))
+	                    (i32.lt_s (local.get $w) (i32.sub (local.get $line_buf_w) (i32.const 2)))))
 	              (then
 	                (local.set $max_hscroll (call $edit_max_hscroll
 	                  (local.get $state_w) (local.get $hdc) (local.get $line_buf_w)))
@@ -1595,7 +1602,8 @@
 	                (local.set $b (call $scroll_arrow_filter_hit
 	                  (local.get $hwnd) (i32.const 0)
 	                  (call $sb_page_hit_part
-	                    (local.get $line_buf_w) (local.get $w) (local.get $lo)
+	                    (i32.sub (local.get $line_buf_w) (i32.const 4))
+	                    (i32.sub (local.get $w) (i32.const 2)) (local.get $lo)
 	                    (i32.const 0)
 	                    (i32.sub (i32.add (local.get $max_hscroll) (local.get $line_buf_w))
 	                             (i32.const 1))
@@ -1641,13 +1649,17 @@
 	            ;; track is that much shorter when both are present.
 	            (if (call $edit_hscroll_reserved (local.get $hwnd))
 	              (then (local.set $line_y (i32.sub (local.get $line_y) (i32.const 16)))))
+	            ;; And 4px shorter again for the client edge it sits inside.
+	            (local.set $line_y (i32.sub (local.get $line_y) (i32.const 4)))
 	            ;; Inside the vertical strip: classify with the same geometry
 	            ;; $defwndproc_paint_standard_scrollbar painted it with, so a
 	            ;; press on the thumb the user can see starts a drag rather than
 	            ;; a page. This used to be a fourth private copy of the thumb
 	            ;; arithmetic, which sized the thumb at 16px while the painter
 	            ;; sized it by nPage -- so most of the visible thumb paged.
-	            (if (i32.ge_s (local.get $w) (i32.sub (local.get $full_w) (i32.const 16)))
+	            (if (i32.and
+	                  (i32.ge_s (local.get $w) (i32.sub (local.get $full_w) (i32.const 18)))
+	                  (i32.lt_s (local.get $w) (i32.sub (local.get $full_w) (i32.const 2))))
 	              (then
 	                (local.set $a (call $edit_view_metrics (local.get $hwnd) (local.get $state_w)))
 	                (local.set $total_lines (i32.and (local.get $a) (i32.const 0xFFFF)))
@@ -1656,7 +1668,7 @@
 	                (local.set $b (call $scroll_arrow_filter_hit
 	                  (local.get $hwnd) (i32.const 1)
 	                  (call $sb_page_hit_part
-	                    (local.get $line_y) (local.get $h) (local.get $lo)
+	                    (local.get $line_y) (i32.sub (local.get $h) (i32.const 2)) (local.get $lo)
 	                    (i32.const 0) (i32.sub (local.get $total_lines) (i32.const 1))
 	                    (local.get $visible_lines))))
 	                (if (i32.eq (local.get $b) (i32.const 1))
@@ -1750,7 +1762,7 @@
 	              (local.get $state_w) (local.get $hdc) (local.get $line_buf_w)))
 	            (drop (call $edit_hscroll_to (local.get $state_w)
 	              (call $sb_page_drag_pos
-	                (local.get $line_buf_w) (local.get $w)
+	                (i32.sub (local.get $line_buf_w) (i32.const 4)) (local.get $w)
 	                (global.get $edit_sb_drag_anchor_y) (global.get $edit_sb_drag_anchor_top)
 	                (i32.const 0)
 	                (i32.sub (i32.add (local.get $max_hscroll) (local.get $line_buf_w))
@@ -1774,6 +1786,11 @@
 	            ;; assume while the painter drew one sized by nPage.
 	            (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
 	            (local.set $line_y (i32.shr_u (local.get $sz) (i32.const 16)))
+	            ;; The strip's own length, as painted: above any horizontal
+	            ;; strip and inside the client edge.
+	            (if (call $edit_hscroll_reserved (local.get $hwnd))
+	              (then (local.set $line_y (i32.sub (local.get $line_y) (i32.const 16)))))
+	            (local.set $line_y (i32.sub (local.get $line_y) (i32.const 4)))
 	            (local.set $h (i32.shr_s (local.get $lParam) (i32.const 16)))
 	            (local.set $a (call $edit_view_metrics (local.get $hwnd) (local.get $state_w)))
 	            (local.set $total_lines (i32.and (local.get $a) (i32.const 0xFFFF)))
@@ -1901,11 +1918,13 @@
         (drop (call $host_gdi_fill_rect (local.get $hdc)
                 (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
                 (i32.const 0x30010)))
-        ;; 2) Sunken edge: BDR_SUNKENOUTER(0x02)|BDR_SUNKENINNER(0x08) = 0x0A; BF_RECT = 0x0F
+        ;; 2) Sunken edge: BDR_SUNKENOUTER(0x02)|BDR_SUNKENINNER(0x08) = 0x0A;
+        ;; BF_RECT = 0x0F. Around the whole window: the client edge is the
+        ;; outermost chrome and the scrollbar strips (5, 6) sit inside it.
         (if (i32.eqz (local.get $wParam))
           (then
             (drop (call $host_gdi_draw_edge (local.get $hdc)
-                    (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
+                    (i32.const 0) (i32.const 0) (local.get $full_w) (local.get $full_h)
                     (i32.const 0x0A) (i32.const 0x0F)))))
         ;; 3) Text — draw line by line, splitting on \n. Each line is split
         ;; into up to three segments (pre-sel / sel / post-sel) so selected
@@ -2040,8 +2059,8 @@
             (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00200000))
               (then
                 (call $defwndproc_paint_standard_scrollbar (local.get $hdc)
-                  (i32.sub (local.get $full_w) (i32.const 16)) (i32.const 0)
-                  (i32.const 16) (local.get $h) (i32.const 1)
+                  (i32.sub (local.get $full_w) (i32.const 18)) (i32.const 2)
+                  (i32.const 16) (i32.sub (local.get $h) (i32.const 4)) (i32.const 1)
                   (load.field.memarg EditState scroll_top (local.get $state_w))
                   (i32.const 0) (i32.sub (local.get $total_lines) (i32.const 1))
                   (local.get $visible_lines)
@@ -2192,8 +2211,8 @@
             ;; the thumb differently from the geometry the drag code assumed,
             ;; so dragging the thumb moved the text further than the pointer.
             (call $defwndproc_paint_standard_scrollbar (local.get $hdc)
-              (i32.sub (local.get $full_w) (i32.const 16)) (i32.const 0)
-              (i32.const 16) (local.get $h) (i32.const 1)
+              (i32.sub (local.get $full_w) (i32.const 18)) (i32.const 2)
+              (i32.const 16) (i32.sub (local.get $h) (i32.const 4)) (i32.const 1)
               (load.field.memarg EditState scroll_top (local.get $state_w))
               (i32.const 0) (i32.sub (local.get $total_lines) (i32.const 1))
               (local.get $visible_lines)
@@ -2216,8 +2235,8 @@
             ;; the document is max_hscroll + one visible width wide, and the
             ;; page is that visible width.
             (call $defwndproc_paint_standard_scrollbar (local.get $hdc)
-              (i32.const 0) (i32.sub (local.get $full_h) (i32.const 16))
-              (local.get $w) (i32.const 16) (i32.const 0)
+              (i32.const 2) (i32.sub (local.get $full_h) (i32.const 18))
+              (i32.sub (local.get $w) (i32.const 4)) (i32.const 16) (i32.const 0)
               (load.field.memarg EditState scroll_x (local.get $state_w))
               (i32.const 0)
               (i32.sub (i32.add (local.get $max_hscroll) (local.get $w)) (i32.const 1))
@@ -2229,9 +2248,10 @@
             ;; not white: it belongs to neither track.
             (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00200000))
               (then (drop (call $host_gdi_fill_rect (local.get $hdc)
-                (i32.sub (local.get $full_w) (i32.const 16))
-                (i32.sub (local.get $full_h) (i32.const 16))
-                (local.get $full_w) (local.get $full_h)
+                (i32.sub (local.get $full_w) (i32.const 18))
+                (i32.sub (local.get $full_h) (i32.const 18))
+                (i32.sub (local.get $full_w) (i32.const 2))
+                (i32.sub (local.get $full_h) (i32.const 2))
                 (i32.const 0x30011)))))))
         (if (i32.and
               (i32.eqz (local.get $wParam))

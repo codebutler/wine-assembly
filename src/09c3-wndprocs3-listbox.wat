@@ -491,10 +491,16 @@
             (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
             (local.set $row (i32.shr_s (i32.shl (local.get $lParam) (i32.const 16)) (i32.const 16)))
             (local.set $row_y (i32.shr_s (local.get $lParam) (i32.const 16)))
-            (if (i32.ge_s (local.get $row) (i32.sub (local.get $w) (i32.const 16)))
+            ;; The strip sits inside the 2px client edge, as WM_PAINT draws it.
+            (if (i32.and
+                  (i32.ge_s (local.get $row) (i32.sub (local.get $w) (i32.const 18)))
+                  (i32.lt_s (local.get $row) (i32.sub (local.get $w) (i32.const 2))))
               (then
                 ;; visible rows based on strip-reduced client
                 (local.set $visible (i32.div_u (i32.sub (local.get $h) (i32.const 4)) (call $lb_row_height (local.get $sw))))
+                ;; From here on, coordinates are the strip's own.
+                (local.set $h (i32.sub (local.get $h) (i32.const 4)))
+                (local.set $row_y (i32.sub (local.get $row_y) (i32.const 2)))
                 (local.set $top (call $lb_top_index (local.get $sw)))
                 (local.set $max (i32.sub (local.get $count) (local.get $visible)))
                 (if (i32.lt_s (local.get $max) (i32.const 0))
@@ -646,7 +652,8 @@
             (if (i32.gt_s (local.get $max) (i32.const 0))
               (then
                 (call $listbox_drag_to (local.get $hwnd) (local.get $sw)
-                  (local.get $row_y) (local.get $h) (local.get $max))
+                  (i32.sub (local.get $row_y) (i32.const 2))
+                  (i32.sub (local.get $h) (i32.const 4)) (local.get $max))
                 (call $invalidate_hwnd (local.get $hwnd))))))
         (return (i32.const 0))))
 
@@ -1022,16 +1029,19 @@
         (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
         (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
         (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 1)))
-        ;; Reserve the right strip only while USER would make it visible.
-        (if (call $listbox_vscroll_visible (local.get $hwnd) (local.get $sw))
-          (then (local.set $w (i32.sub (local.get $w) (i32.const 16)))))
-        ;; White interior + sunken edge (content rect only).
+        ;; White interior, and the sunken edge around the WHOLE window: the
+        ;; client edge is the outermost chrome and the scrollbar strip sits
+        ;; inside it, as USER lays a WS_EX_CLIENTEDGE window out. Drawing the
+        ;; edge around the content alone put the strip outside the frame.
         (drop (call $host_gdi_fill_rect (local.get $hdc)
                 (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
                 (i32.const 0x30010)))
         (drop (call $host_gdi_draw_edge (local.get $hdc)
                 (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
                 (i32.const 0x0A) (i32.const 0x0F)))
+        ;; Reserve the right strip only while USER would make it visible.
+        (if (call $listbox_vscroll_visible (local.get $hwnd) (local.get $sw))
+          (then (local.set $w (i32.sub (local.get $w) (i32.const 16)))))
         (local.set $count (call $lb_count (local.get $sw)))
         (local.set $sel   (call $lb_cur_sel (local.get $sw)))
         (local.set $top   (call $lb_top_index (local.get $sw)))
@@ -1110,11 +1120,16 @@
             (if (i32.lt_s (local.get $max) (i32.const 0))
               (then (local.set $max (i32.const 0))))
             (call $paint_vscrollbar_rect (local.get $hdc)
-              (local.get $w) (i32.const 0) (i32.const 16) (local.get $h)
+              (i32.sub (local.get $w) (i32.const 2)) (i32.const 2)
+              (i32.const 16) (i32.sub (local.get $h) (i32.const 4))
               (call $lb_top_index (local.get $sw)) (local.get $max)
               (select (global.get $sb_pressed_part) (i32.const 0)
                       (i32.eq (global.get $sb_pressed_hwnd) (local.get $hwnd)))
-              (call $scroll_arrow_mask (local.get $hwnd) (i32.const 1)))))
+              ;; With nothing to scroll the strip is only there because of
+              ;; LBS_DISABLENOSCROLL, and both arrows are disabled.
+              (select (i32.const 3)
+                (call $scroll_arrow_mask (local.get $hwnd) (i32.const 1))
+                (i32.eqz (local.get $max))))))
         (return (i32.const 0))))
 
     ;; Default

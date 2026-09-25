@@ -516,11 +516,10 @@
     (call $host_ctrl_sb_trace (local.get $hdc)
       (local.get $x) (local.get $y) (local.get $w) (local.get $h) (local.get $vert)
       (local.get $pos) (local.get $smin) (local.get $smax) (local.get $page))
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (call $paint_sb_track (local.get $hdc)
       (local.get $x) (local.get $y)
       (i32.add (local.get $x) (local.get $w))
-      (i32.add (local.get $y) (local.get $h))
-      (i32.const 0x30011)))
+      (i32.add (local.get $y) (local.get $h)))
     (local.set $arrow (call $scrollbar_arrow_size (local.get $long)))
     (if (local.get $arrow)
       (then
@@ -548,6 +547,10 @@
     ;; Geometry lives in $sb_page_* so that whoever hit-tests this scrollbar
     ;; computes the same thumb this draws. It used to be inline here, which is
     ;; why the EDIT could not tell a click on its thumb from a click on text.
+    ;; A scrollbar disabled at both ends (EnableScrollBar ESB_DISABLE_BOTH,
+    ;; or a disabled SCROLLBAR window) shows no thumb.
+    (if (i32.eq (i32.and (local.get $disabled) (i32.const 3)) (i32.const 3))
+      (then (return)))
     (local.set $track (call $sb_track_len (local.get $long)))
     (local.set $total (i32.add (i32.sub (local.get $smax) (local.get $smin)) (i32.const 1)))
     (if (i32.or (i32.le_s (local.get $track) (i32.const 0))

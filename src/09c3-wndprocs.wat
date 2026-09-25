@@ -139,6 +139,13 @@
       (then (local.set $max (i32.const 0))))
     (local.get $max))
 
+  ;; The width of the client edge a WS_EX_CLIENTEDGE list view draws around
+  ;; its whole window. Its scrollbar strip sits inside that edge.
+  (func $lv_frame_inset (param $hwnd i32) (result i32)
+    (select (i32.const 2) (i32.const 0)
+      (i32.ne (i32.and (call $ctrl_get_ex_style (local.get $hwnd)) (i32.const 0x200))
+        (i32.const 0))))
+
   (func $lv_content_right_for_size (param $sw i32) (param $w i32) (param $h i32) (result i32)
     (if (i32.and
           (i32.gt_s (call $lv_max_scroll_for_h (local.get $sw) (local.get $h)) (i32.const 0))
@@ -2096,7 +2103,9 @@
                 (local.set $y (i32.shr_s (local.get $lParam) (i32.const 16)))
                 (local.set $new_top
                   (call $scrollbar_drag_pos
-                    (local.get $h) (local.get $y)
+                    (i32.sub (local.get $h)
+                      (i32.shl (call $lv_frame_inset (local.get $hwnd)) (i32.const 1)))
+                    (local.get $y)
                     (call $lv_drag_anchor_y (local.get $sw))
                     (call $lv_drag_anchor_top (local.get $sw))
                     (i32.const 0) (local.get $max)))
@@ -2119,12 +2128,18 @@
         (if (i32.and
               (i32.gt_s (local.get $max) (i32.const 0))
               (i32.and (i32.gt_s (local.get $w) (i32.const 16))
-                       (i32.ge_s (local.get $x) (i32.sub (local.get $w) (i32.const 16)))))
+                (i32.and
+                  (i32.ge_s (local.get $x) (i32.sub (i32.sub (local.get $w) (i32.const 16))
+                    (call $lv_frame_inset (local.get $hwnd))))
+                  (i32.lt_s (local.get $x) (i32.sub (local.get $w)
+                    (call $lv_frame_inset (local.get $hwnd)))))))
           (then
             (local.set $hit (call $scroll_arrow_filter_hit
               (local.get $hwnd) (i32.const 1)
               (call $scrollbar_hit_part
-                (local.get $h) (local.get $y)
+                (i32.sub (local.get $h)
+                  (i32.shl (call $lv_frame_inset (local.get $hwnd)) (i32.const 1)))
+                (i32.sub (local.get $y) (call $lv_frame_inset (local.get $hwnd)))
                 (call $lv_top_index (local.get $sw)) (i32.const 0) (local.get $max))))
             (if (local.get $hit)
               (then
@@ -2233,7 +2248,8 @@
         (local.set $header_h (call $lv_header_h (local.get $sw)))
         (local.set $content_right (local.get $w))
         (if (i32.gt_s (local.get $max) (i32.const 0))
-          (then (local.set $content_right (i32.sub (local.get $w) (i32.const 16)))))
+          (then (local.set $content_right (i32.sub (i32.sub (local.get $w) (i32.const 16))
+            (call $lv_frame_inset (local.get $hwnd))))))
         (local.set $bk_brush (i32.const 0))
         (if (i32.ne (call $lv_bk_color (local.get $sw)) (i32.const -1))
           (then
@@ -2486,9 +2502,15 @@
             (local.set $pressed_part
               (select (global.get $sb_pressed_part) (i32.const 0)
                       (i32.eq (global.get $sb_pressed_hwnd) (local.get $hwnd))))
+            ;; Inside the client edge drawn below: the edge is the outermost
+            ;; chrome and the strip sits within it.
             (call $paint_vscrollbar_rect (local.get $hdc)
-              (i32.sub (local.get $w) (i32.const 16)) (i32.const 0)
-              (i32.const 16) (local.get $h)
+              (i32.sub (i32.sub (local.get $w) (i32.const 16))
+                (call $lv_frame_inset (local.get $hwnd)))
+              (call $lv_frame_inset (local.get $hwnd))
+              (i32.const 16)
+              (i32.sub (local.get $h)
+                (i32.shl (call $lv_frame_inset (local.get $hwnd)) (i32.const 1)))
               (local.get $top) (local.get $max) (local.get $pressed_part)
               (call $scroll_arrow_mask (local.get $hwnd) (i32.const 1)))))
         (if (i32.and (call $ctrl_get_ex_style (local.get $hwnd)) (i32.const 0x200))

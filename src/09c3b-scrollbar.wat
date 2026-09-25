@@ -83,6 +83,51 @@
   ;; 2px on the cross axis while the strip painter drew it full width, which is
   ;; visible whenever both appear on screen. Win98 draws the thumb the full
   ;; width of the strip.
+  ;; Scrollbar tracks are a halftone of COLOR_3DHILIGHT over COLOR_SCROLLBAR,
+  ;; not a solid fill: Win98 draws them with a checkerboard brush whenever the
+  ;; scrollbar colour is the 3D face colour, as it is in the standard scheme.
+  ;; One 8x8 pattern brush, built on first use and kept.
+  (global $sb_track_brush_handle (mut i32) (i32.const 0))
+
+  (func $sb_track_brush (result i32)
+    (local $bmp i32) (local $dc i32) (local $old i32) (local $x i32) (local $y i32)
+    (local $brush i32)
+    (if (global.get $sb_track_brush_handle)
+      (then (return (global.get $sb_track_brush_handle))))
+    (local.set $bmp (call $host_gdi_create_compat_bitmap
+      (i32.const 0) (i32.const 8) (i32.const 8) (i32.const 0)))
+    (local.set $dc (call $host_gdi_create_compat_dc (i32.const 0)))
+    (if (i32.or (i32.eqz (local.get $bmp)) (i32.eqz (local.get $dc)))
+      (then
+        (if (local.get $dc) (then (drop (call $host_gdi_delete_dc (local.get $dc)))))
+        (if (local.get $bmp) (then (drop (call $gdi_object_delete_full (local.get $bmp)))))
+        (return (i32.const 0x30011))))  ;; LTGRAY_BRUSH
+    (local.set $old (call $host_gdi_select_object (local.get $dc) (local.get $bmp)))
+    (drop (call $host_gdi_fill_rect (local.get $dc)
+      (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 8) (i32.const 0x30011)))
+    (block $rows_done (loop $rows
+      (br_if $rows_done (i32.ge_u (local.get $y) (i32.const 8)))
+      (local.set $x (i32.and (local.get $y) (i32.const 1)))
+      (block $cols_done (loop $cols
+        (br_if $cols_done (i32.ge_u (local.get $x) (i32.const 8)))
+        (drop (call $host_gdi_set_pixel (local.get $dc)
+          (local.get $x) (local.get $y) (i32.const 0x00FFFFFF)))
+        (local.set $x (i32.add (local.get $x) (i32.const 2)))
+        (br $cols)))
+      (local.set $y (i32.add (local.get $y) (i32.const 1)))
+      (br $rows)))
+    (drop (call $host_gdi_select_object (local.get $dc) (local.get $old)))
+    (drop (call $host_gdi_delete_dc (local.get $dc)))
+    (local.set $brush (call $gdi_bitmap_wrap_pattern_brush (local.get $bmp) (i32.const 3)))
+    (if (i32.eqz (local.get $brush)) (then (return (i32.const 0x30011))))
+    (global.set $sb_track_brush_handle (local.get $brush))
+    (local.get $brush))
+
+  (func $paint_sb_track (param $hdc i32) (param $l i32) (param $t i32) (param $r i32) (param $b i32)
+    (drop (call $host_gdi_fill_rect (local.get $hdc)
+      (local.get $l) (local.get $t) (local.get $r) (local.get $b)
+      (call $sb_track_brush))))
+
   (func $paint_sb_thumb (param $hdc i32) (param $l i32) (param $t i32) (param $r i32) (param $b i32)
     (drop (call $host_gdi_fill_rect (local.get $hdc)
             (local.get $l) (local.get $t) (local.get $r) (local.get $b)
@@ -98,12 +143,10 @@
         (param $disabled i32)
     (local $arrow i32) (local $track_y i32) (local $track_h i32)
     (local $thumb_size i32) (local $thumb_pos i32)
-    ;; Track background + sunken edge.
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
-            (local.get $bx) (local.get $by)
-            (i32.add (local.get $bx) (local.get $bw))
-            (i32.add (local.get $by) (local.get $bh))
-            (i32.const 0x30011))) ;; LTGRAY_BRUSH
+    (call $paint_sb_track (local.get $hdc)
+      (local.get $bx) (local.get $by)
+      (i32.add (local.get $bx) (local.get $bw))
+      (i32.add (local.get $by) (local.get $bh)))
     ;; Arrows: 16px at each end, suppressed if strip too short.
     (local.set $arrow (call $scrollbar_arrow_size (local.get $bh)))
     (if (local.get $arrow)
@@ -415,7 +458,7 @@
     (local $mx i32) (local $my i32) (local $part i32) (local $parent i32)
     (local $sb_msg i32) (local $sb_code i32)
     (local $is_pressed i32) (local $coord i32) (local $new_pos i32)
-    (local $disabled i32) (local $changed i32)
+    (local $disabled i32) (local $changed i32) (local $page i32)
 
     ;; SBM_ENABLE_ARROWS (0x00E4): the message form reports success for every
     ;; valid ESB_* request, while EnableScrollBar itself reports only a state
@@ -459,12 +502,18 @@
             (local.set $base (call $scroll_bar_addr (local.get $slot) (local.get $is_vert)))
             (local.set $pos (i32.load (local.get $base)))
             (local.set $smin (i32.load offset=4 (local.get $base)))
-            (local.set $smax (i32.load offset=8 (local.get $base)))))
-        (local.set $part (call $scroll_arrow_filter_hit
-          (local.get $hwnd) (local.get $is_vert)
-          (call $scrollbar_hit_part
-            (local.get $long_dim) (local.get $coord)
-            (local.get $pos) (local.get $smin) (local.get $smax))))
+            (local.set $smax (i32.load offset=8 (local.get $base)))
+            (local.set $page (i32.load
+              (call $scroll_aux_bar_addr (local.get $slot) (local.get $is_vert))))))
+        ;; The same page geometry WM_PAINT draws with. A disabled window
+        ;; takes no input at all.
+        (local.set $part (if (result i32) (call $ctrl_style_disabled (local.get $style))
+          (then (i32.const 0))
+          (else (call $scroll_arrow_filter_hit
+            (local.get $hwnd) (local.get $is_vert)
+            (call $sb_page_hit_part
+              (local.get $long_dim) (local.get $coord)
+              (local.get $pos) (local.get $smin) (local.get $smax) (local.get $page))))))
         (if (local.get $part)
           (then
             (global.set $sb_pressed_hwnd (local.get $hwnd))
@@ -520,11 +569,13 @@
                   (then (local.set $base (i32.add (local.get $base) (i32.const 12)))))
                 (local.set $smin (i32.load offset=4 (local.get $base)))
                 (local.set $smax (i32.load offset=8 (local.get $base)))
-                (local.set $new_pos (call $scrollbar_drag_pos
+                (local.set $page (i32.load
+                  (call $scroll_aux_bar_addr (local.get $slot) (local.get $is_vert))))
+                (local.set $new_pos (call $sb_page_drag_pos
                   (local.get $long_dim) (local.get $coord)
                   (global.get $sb_drag_anchor_coord)
                   (global.get $sb_drag_anchor_pos)
-                  (local.get $smin) (local.get $smax)))
+                  (local.get $smin) (local.get $smax) (local.get $page)))
                 (i32.store (local.get $base) (local.get $new_pos))
                 (call $invalidate_hwnd (local.get $hwnd))
                 (local.set $sb_msg (select (i32.const 0x115) (i32.const 0x114) (local.get $is_vert)))
@@ -576,6 +627,11 @@
         (local.set $is_vert (i32.and (local.get $style) (i32.const 1)))
         (local.set $disabled (call $scroll_arrow_mask
           (local.get $hwnd) (local.get $is_vert)))
+        ;; A WS_DISABLED scrollbar draws both arrows disabled and no thumb.
+        ;; mIRC creates its chat windows' scrollbars disabled until there is
+        ;; something to scroll.
+        (if (call $ctrl_style_disabled (local.get $style))
+          (then (local.set $disabled (i32.const 3))))
 
         ;; Arrow button size: 16px (Win98 SM_CXVSCROLL). Skip arrows if the
         ;; scrollbar's long axis is too short to fit two arrows + any thumb.
@@ -585,83 +641,29 @@
         (local.set $is_pressed
           (i32.eq (global.get $sb_pressed_hwnd) (local.get $hwnd)))
 
-        ;; Fill track with scrollbar background (COLOR_SCROLLBAR = light gray)
-        (drop (call $host_gdi_fill_rect (local.get $hdc)
-                (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
-                (i32.const 0x30011))) ;; LTGRAY_BRUSH
-        ;; Sunken edge around track
-        (drop (call $host_gdi_draw_edge (local.get $hdc)
-                (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
-                (i32.const 0x0A) (i32.const 0x0F))) ;; BDR_SUNKEN, BF_RECT
-
-        ;; Arrow buttons at each end of the long axis.
-        ;; $sb_pressed_part: 1=up, 2=down, 3=left, 4=right.
-        (if (local.get $arrow)
-          (then
-            (if (local.get $is_vert)
-              (then
-                (call $draw_sb_arrow (local.get $hdc)
-                  (i32.const 0) (i32.const 0) (local.get $w) (local.get $arrow)
-                  (i32.const 0) ;; up
-                  (i32.and (local.get $is_pressed)
-                           (i32.eq (global.get $sb_pressed_part) (i32.const 1)))
-                  (i32.and (local.get $disabled) (i32.const 1)))
-                (call $draw_sb_arrow (local.get $hdc)
-                  (i32.const 0) (i32.sub (local.get $h) (local.get $arrow))
-                  (local.get $w) (local.get $arrow)
-                  (i32.const 1) ;; down
-                  (i32.and (local.get $is_pressed)
-                           (i32.eq (global.get $sb_pressed_part) (i32.const 2)))
-                  (i32.and (local.get $disabled) (i32.const 2))))
-              (else
-                (call $draw_sb_arrow (local.get $hdc)
-                  (i32.const 0) (i32.const 0) (local.get $arrow) (local.get $h)
-                  (i32.const 2) ;; left
-                  (i32.and (local.get $is_pressed)
-                           (i32.or
-                             (i32.eq (global.get $sb_pressed_part) (i32.const 1))
-                             (i32.eq (global.get $sb_pressed_part) (i32.const 3))))
-                  (i32.and (local.get $disabled) (i32.const 1)))
-                (call $draw_sb_arrow (local.get $hdc)
-                  (i32.sub (local.get $w) (local.get $arrow)) (i32.const 0)
-                  (local.get $arrow) (local.get $h)
-                  (i32.const 3) ;; right
-                  (i32.and (local.get $is_pressed)
-                           (i32.or
-                             (i32.eq (global.get $sb_pressed_part) (i32.const 2))
-                             (i32.eq (global.get $sb_pressed_part) (i32.const 4))))
-                  (i32.and (local.get $disabled) (i32.const 2)))))))
-
-        ;; Read scroll state
+        ;; The whole control is the scrollbar: a SCROLLBAR control has no
+        ;; border of its own. (A sunken edge here drew a black rule down the
+        ;; side of every one, e.g. between mIRC's chat text and its bar.) It
+        ;; paints through the same SCROLLINFO painter as window scrollbars, so
+        ;; the thumb is sized by nPage -- SetScrollInfo's page is what apps
+        ;; set -- and matches what the hit-test and drag below compute.
         (local.set $slot (call $wnd_table_find (local.get $hwnd)))
         (if (i32.ge_s (local.get $slot) (i32.const 0))
           (then
-            (local.set $base (call $scroll_record_addr (local.get $slot)))
-            ;; Vertical scrollbar: use offset +12
-            (if (local.get $is_vert)
-              (then (local.set $base (i32.add (local.get $base) (i32.const 12)))))
+            (local.set $base (call $scroll_bar_addr (local.get $slot) (local.get $is_vert)))
             (local.set $pos (i32.load (local.get $base)))
             (local.set $smin (i32.load offset=4 (local.get $base)))
             (local.set $smax (i32.load offset=8 (local.get $base)))
-            (local.set $range (i32.sub (local.get $smax) (local.get $smin)))
-            (if (i32.gt_s (local.get $range) (i32.const 0))
-              (then
-                (local.set $thumb_size (call $scrollbar_thumb_size (local.get $long_dim) (local.get $range)))
-                (local.set $thumb_pos (call $scrollbar_thumb_pos
-                  (local.get $long_dim) (local.get $pos) (local.get $smin) (local.get $smax)))
-                ;; Draw thumb
-                (if (local.get $is_vert)
-                  (then
-                    ;; Vertical: thumb fills the strip width, moves in Y
-                    (call $paint_sb_thumb (local.get $hdc)
-                      (i32.const 0) (local.get $thumb_pos)
-                      (local.get $w)
-                      (i32.add (local.get $thumb_pos) (local.get $thumb_size))))
-                  (else
-                    ;; Horizontal: thumb fills the strip height, moves in X
-                    (call $paint_sb_thumb (local.get $hdc)
-                      (local.get $thumb_pos) (i32.const 0)
-                      (i32.add (local.get $thumb_pos) (local.get $thumb_size))
-                      (local.get $h))))))))
+            (local.set $page (i32.load
+              (call $scroll_aux_bar_addr (local.get $slot) (local.get $is_vert))))))
+        ;; The painter numbers the horizontal arrows 3/4.
+        (local.set $part (select (global.get $sb_pressed_part) (i32.const 0) (local.get $is_pressed)))
+        (if (i32.and (i32.eqz (local.get $is_vert))
+              (i32.or (i32.eq (local.get $part) (i32.const 1)) (i32.eq (local.get $part) (i32.const 2))))
+          (then (local.set $part (i32.add (local.get $part) (i32.const 2)))))
+        (call $defwndproc_paint_standard_scrollbar (local.get $hdc)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (local.get $is_vert)
+          (local.get $pos) (local.get $smin) (local.get $smax) (local.get $page)
+          (local.get $part) (local.get $disabled))
         (return (i32.const 0))))
     (i32.const 0))
