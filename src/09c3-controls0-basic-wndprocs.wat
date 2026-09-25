@@ -2159,11 +2159,111 @@
               (local.get $sw) (i32.ne (local.get $wParam) (i32.const 0)))
             (call $statusbar_state_publish (local.get $hwnd) (local.get $sw))))
         (return (i32.const 1))))
-    ;; SB_SETPARTS: retain API success. The current painter presents one pane.
+    ;; SB_SETPARTS records the pane layout so SB_GETPARTS reads it back. The
+    ;; painter still presents one pane (part zero's text).
     (if (i32.eq (local.get $msg) (i32.const 0x0404))
       (then
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (if (i32.and (i32.ne (local.get $state) (i32.const 0))
+                     (i32.ne (local.get $lParam) (i32.const 0)))
+          (then
+            (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+            (local.set $slot (local.get $wParam))
+            (if (i32.gt_u (local.get $slot) (global.get $STATUSBAR_MAX_PARTS))
+              (then (local.set $slot (global.get $STATUSBAR_MAX_PARTS))))
+            (store.field.memarg StatusBarState part_count (local.get $sw) (local.get $slot))
+            (memory.copy
+              (i32.add (local.get $sw) (global.get $STATUSBAR_PART_EDGES))
+              (call $g2w (local.get $lParam))
+              (i32.shl (local.get $slot) (i32.const 2)))))
         (call $invalidate_hwnd (local.get $hwnd))
         (return (i32.const 1))))
+    ;; SB_GETPARTS: the pane count, and up to wParam right edges into lParam.
+    ;; A bar nobody partitioned is one pane extending to the right edge (-1).
+    (if (i32.eq (local.get $msg) (i32.const 0x0406))
+      (then
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+        (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+        (local.set $slot (load.field.memarg StatusBarState part_count (local.get $sw)))
+        (if (i32.eqz (local.get $slot))
+          (then
+            (if (i32.and (i32.ne (local.get $lParam) (i32.const 0))
+                         (i32.ne (local.get $wParam) (i32.const 0)))
+              (then (call $gs32 (local.get $lParam) (i32.const -1))))
+            (return (i32.const 1))))
+        (if (local.get $lParam)
+          (then
+            (memory.copy
+              (call $g2w (local.get $lParam))
+              (i32.add (local.get $sw) (global.get $STATUSBAR_PART_EDGES))
+              (i32.shl
+                (select (local.get $wParam) (local.get $slot)
+                  (i32.lt_u (local.get $wParam) (local.get $slot)))
+                (i32.const 2)))))
+        (return (local.get $slot))))
+    ;; SB_GETBORDERS: {horizontal, vertical, between-panes} = Win98's {0, 2, 2}.
+    ;; MFC's CStatusBar asserts on FALSE (barstat.cpp:233).
+    (if (i32.eq (local.get $msg) (i32.const 0x0407))
+      (then
+        (if (local.get $lParam)
+          (then
+            (call $gs32 (local.get $lParam) (i32.const 0))
+            (call $gs32 (i32.add (local.get $lParam) (i32.const 4)) (i32.const 2))
+            (call $gs32 (i32.add (local.get $lParam) (i32.const 8)) (i32.const 2))))
+        (return (i32.const 1))))
+    ;; SB_SETMINHEIGHT: recorded; the bar keeps its created height.
+    (if (i32.eq (local.get $msg) (i32.const 0x0408))
+      (then
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (if (local.get $state)
+          (then
+            (store.field.memarg StatusBarState min_height
+              (cast ptr<StatusBarState> (call $g2w (local.get $state)))
+              (local.get $wParam))))
+        (return (i32.const 0))))
+    ;; SB_ISSIMPLE
+    (if (i32.eq (local.get $msg) (i32.const 0x040E))
+      (then
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+        (return (call $statusbar_simple_mode
+          (cast ptr<StatusBarState> (call $g2w (local.get $state)))))))
+    ;; SB_GETTEXTA / SB_GETTEXTLENGTHA: LOWORD = length, HIWORD = drawing
+    ;; type (0). Part zero reads the ordinary pane, part 0xFF (or simple
+    ;; mode) the simple pane; other parts hold no text.
+    (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0402))
+                (i32.eq (local.get $msg) (i32.const 0x0403)))
+      (then
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (local.set $text_g (i32.const 0))
+        (local.set $text_len (i32.const 0))
+        (if (local.get $state)
+          (then
+            (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+            (local.set $simple
+              (i32.or (call $statusbar_simple_mode (local.get $sw))
+                      (i32.eq (i32.and (local.get $wParam) (i32.const 0xFF)) (i32.const 0xFF))))
+            (if (local.get $simple)
+              (then
+                (local.set $text_g (call $statusbar_simple_ptr (local.get $sw)))
+                (local.set $text_len (call $statusbar_simple_len (local.get $sw))))
+              (else
+                (if (i32.eqz (i32.and (local.get $wParam) (i32.const 0xFF)))
+                  (then
+                    (local.set $text_g (call $statusbar_normal_ptr (local.get $sw)))
+                    (local.set $text_len (call $statusbar_normal_len (local.get $sw)))))))))
+        (if (i32.eqz (local.get $text_g)) (then (local.set $text_len (i32.const 0))))
+        (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0402))
+                     (i32.ne (local.get $lParam) (i32.const 0)))
+          (then
+            (if (local.get $text_len)
+              (then (memory.copy (call $g2w (local.get $lParam))
+                                 (call $g2w (local.get $text_g))
+                                 (local.get $text_len))))
+            (i32.store8 (i32.add (call $g2w (local.get $lParam)) (local.get $text_len))
+                        (i32.const 0))))
+        (return (i32.and (local.get $text_len) (i32.const 0xFFFF)))))
     ;; WM_PAINT
     (if (i32.eq (local.get $msg) (i32.const 0x000F))
       (then

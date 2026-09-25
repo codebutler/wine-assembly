@@ -741,13 +741,12 @@
     (if (i32.eq (local.get $arg1) (i32.const -4))   ;; GWL_WNDPROC — subclass
       (then
         (i32.store offset=0 (global.get $reg_base) (call $wnd_table_get (local.get $arg0)))  ;; return old wndproc
-        ;; Top-level placeholders have no previous guest proc. Native controls,
-        ;; however, must return the built-in sentinel so subclasses can chain
-        ;; stateful messages through CallWindowProc.
-        (if (i32.and
-              (i32.eq (i32.load offset=0 (global.get $reg_base)) (global.get $WNDPROC_BUILTIN))
-              (i32.eqz (call $ctrl_table_get_class (local.get $arg0))))
-          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+        ;; A live window's wndproc is never NULL: return the built-in sentinel
+        ;; for placeholder top-levels as well as native controls. MFC's
+        ;; CWnd::SubclassWindow asserts on a NULL previous proc
+        ;; (wincore.cpp:507, Comic Chat); CallWindowProcA routes the
+        ;; sentinel to the control proc, or to DefWindowProc for a window
+        ;; that is not a control.
         ;; If old wndproc is 0 (not in table), fall back to global wndproc for main window
         (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base)))
                      (i32.eq (local.get $arg0) (global.get $main_hwnd)))

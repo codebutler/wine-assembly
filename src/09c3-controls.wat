@@ -326,7 +326,14 @@
     (field normal_text_len i32)    ;; +4
     (field simple_text_ptr i32)    ;; +8  guest heap ptr, ANSI
     (field simple_text_len i32)    ;; +12
-    (field simple_mode     i32))   ;; +16 BOOL; ends at +20
+    (field simple_mode     i32)    ;; +16 BOOL
+    (field min_height      i32)    ;; +20 SB_SETMINHEIGHT
+    (field part_count      i32)    ;; +24 SB_SETPARTS count, 0 = never set (one pane)
+    (field part_edges      i32 32)) ;; +28 SB_SETPARTS right edges; ends at +156
+  ;; Byte offset of part_edges and the record size, for the indexed accessors.
+  (global $STATUSBAR_PART_EDGES i32 (i32.const 28))
+  (global $STATUSBAR_STATE_SIZE i32 (i32.const 156))
+  (global $STATUSBAR_MAX_PARTS  i32 (i32.const 32))
 
   ;; ---- ButtonState accessors ----
   ;;
@@ -904,10 +911,10 @@
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (local.get $state) (then (return (local.get $state))))
     (if (i32.eqz (local.get $create)) (then (return (i32.const 0))))
-    (local.set $state (call $heap_alloc (i32.const 20)))
+    (local.set $state (call $heap_alloc (global.get $STATUSBAR_STATE_SIZE)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
     (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
-    (memory.fill (local.get $sw) (i32.const 0) (i32.const 20))
+    (memory.fill (local.get $sw) (i32.const 0) (global.get $STATUSBAR_STATE_SIZE))
     (call $wnd_set_state_ptr (local.get $hwnd) (local.get $state))
     (local.set $title_wa (call $title_table_get_ptr (local.get $hwnd)))
     (local.set $title_len (call $title_table_get_len (local.get $hwnd)))

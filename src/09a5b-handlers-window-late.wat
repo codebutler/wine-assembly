@@ -284,7 +284,33 @@
             (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
               (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4))))
           (else
-            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+            ;; A status bar with no guest comctl32 class proc: the WAT status
+            ;; bar owns SB_* and its text/paint/lifetime messages (MFC's
+            ;; CStatusBar chains SB_GETBORDERS here); everything else,
+            ;; WM_NCCREATE included, is DefWindowProc's below.
+            (if (i32.and
+                  (call $statusbar_native_is (local.get $arg1))
+                  (i32.or
+                    (i32.eq (i32.and (local.get $arg2) (i32.const 0xFF00)) (i32.const 0x0400))
+                    (i32.or
+                      (i32.or (i32.eq (local.get $arg2) (i32.const 0x0001))
+                              (i32.eq (local.get $arg2) (i32.const 0x0002)))
+                      (i32.or (i32.eq (local.get $arg2) (i32.const 0x000C))
+                              (i32.eq (local.get $arg2) (i32.const 0x000F))))))
+              (then
+                (i32.store offset=0 (global.get $reg_base) (call $statusbar_wndproc
+                  (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)))
+                (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+                (return)))
+            ;; Not a control: the placeholder's class proc is DefWindowProc.
+            ;; Drop CallWindowProc's lpPrevWndFunc slot (move the return
+            ;; address over it) so the stack is DefWindowProcA's own frame.
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))
+              (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $handle_DefWindowProcA (local.get $arg1) (local.get $arg2)
+              (local.get $arg3) (local.get $arg4) (i32.const 0) (local.get $name_ptr))
+            (return)))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; DefDlgProc marker returned by GWL_WNDPROC before a dialog is
