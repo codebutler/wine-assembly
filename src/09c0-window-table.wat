@@ -673,6 +673,10 @@
     (i32.store (local.get $p) (local.get $proc))
     (local.get $old))
 
+  ;; sizeof(DLGWINDOWEXTRA): the bytes USER reserves ahead of a dialog
+  ;; class's own cbWndExtra (DWL_MSGRESULT, DWL_DLGPROC, DWL_USER + private).
+  (global $DLGWINDOWEXTRA i32 (i32.const 30))
+
   (func $dialog_extra_get (param $hwnd i32) (param $index i32) (result i32)
     (local $slot i32) (local $p i32)
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
@@ -685,6 +689,14 @@
       (then (return (i32.load (local.get $p)))))
     (if (i32.eq (local.get $index) (i32.const 8))
       (then (return (i32.load offset=12 (local.get $p)))))
+    ;; A dialog class's own cbWndExtra bytes start at DLGWINDOWEXTRA (30).
+    ;; Dialogs keep DWL_* in the dialog state above, so their ordinary
+    ;; window-extra slot is free to hold the class's bytes past it.
+    ;; PuTTY's config box keeps its end-dialog flags at DLGWINDOWEXTRA+0/+4;
+    ;; dropping them left Open and Cancel inert.
+    (if (i32.ge_u (local.get $index) (global.get $DLGWINDOWEXTRA))
+      (then (return (call $wnd_extra_get (local.get $hwnd)
+        (i32.sub (local.get $index) (global.get $DLGWINDOWEXTRA))))))
     (i32.const 0))
 
   (func $dialog_extra_set (param $hwnd i32) (param $index i32) (param $value i32) (result i32)
@@ -705,6 +717,10 @@
         (local.set $old (i32.load offset=12 (local.get $p)))
         (i32.store offset=12 (local.get $p) (local.get $value))
         (return (local.get $old))))
+    (if (i32.ge_u (local.get $index) (global.get $DLGWINDOWEXTRA))
+      (then (return (call $wnd_extra_set (local.get $hwnd)
+        (i32.sub (local.get $index) (global.get $DLGWINDOWEXTRA))
+        (local.get $value)))))
     (i32.const 0))
 
   (func $wnd_unicode_reset_slot (param $slot i32)
