@@ -6,6 +6,10 @@
   ;; 5 args stdcall = 24 bytes. Returns WAIT_OBJECT_0+i for signaled handle, or nCount for messages.
   (func $handle_MsgWaitForMultipleObjects (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $result i32) (local $packed i32)
+    ;; An idle wait is where a WSAAsyncSelect client spends its time, so it
+    ;; moves the virtual LAN wire exactly as GetMessage does: the FD_CONNECT
+    ;; or FD_READ it is waiting for is posted from what arrives there.
+    (call $vsock_pump)
     ;; Check if messages are pending first (post queue, paint, timers, host input).
     ;; host_check_input is destructive, so cache the event for the next
     ;; GetMessage/PeekMessage call instead of using it as a throwaway probe.
@@ -1452,6 +1456,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; 645: WaitMessage() — block until USER has queue work. The message remains
   ;; queued; unlike GetMessage/PeekMessage, WaitMessage only waits for it.
   (func $handle_WaitMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $vsock_pump)  ;; see $handle_MsgWaitForMultipleObjects
     (if (call $has_pending_message)
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))

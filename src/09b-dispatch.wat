@@ -844,6 +844,10 @@
         ;; nested CreateDialogParamA calls inside WM_INITDIALOG) never
         ;; render while the dialog is modal — the outer frame draws via
         ;; synchronous NC paint but the client area stays blank.
+        ;; A modal dialog does not stop the thread's sockets: drain the virtual
+        ;; LAN wire so their WSAAsyncSelect notifications keep arriving (mIRC
+        ;; connects while its About box is up).
+        (call $vsock_pump)
         ;; Frame repaints of the thread's other top-level windows come first:
         ;; a real modal loop dispatches the owner's WM_NCPAINT like any other
         ;; message, which is how it redraws the caption it lost to the dialog.
@@ -1461,6 +1465,7 @@
     ;; slice yields, just like the hot PeekMessage paths above.
     (if (i32.eq (local.get $api_id) (global.get $API_ID_MsgWaitForMultipleObjects))
       (then
+        (call $vsock_pump)  ;; see $handle_MsgWaitForMultipleObjects
         (local.set $arg4 (i32.const 0xFFFF))
         (if (local.get $arg0)
           (then

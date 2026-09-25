@@ -2315,6 +2315,11 @@
     (global.set $yield_flag (i32.const 0))
     (global.set $handler_set_eip (i32.const 0)))
   (func $has_pending_message (export "has_pending_message") (result i32)
+    ;; Frames on the virtual LAN wire become messages (a WSAAsyncSelect
+    ;; FD_CONNECT/FD_READ) only when drained, so drain it before answering. A
+    ;; client parked in GetMessage with no timer of its own -- mIRC after its
+    ;; non-blocking connect -- otherwise never saw its connection complete.
+    (call $vsock_pump)
     (if (global.get $quit_flag) (then (return (i32.const 1))))
     (if (global.get $pending_child_create) (then (return (i32.const 1))))
     (if (global.get $pending_child_size) (then (return (i32.const 1))))
