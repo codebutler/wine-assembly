@@ -1863,10 +1863,13 @@
                     (local.get $x) (i32.add (local.get $y) (i32.const 3))
                     (i32.add (local.get $x) (i32.const 9)) (i32.add (local.get $y) (i32.const 12))
                     (i32.const 0x30010)))
-                  (drop (call $host_gdi_draw_edge (local.get $hdc)
+                  ;; comctl32 frames the button flat in the shadow colour. A
+                  ;; sunken edge on a white box shows only its dark top-left
+                  ;; strokes, which with the minus bar reads as an "F".
+                  (drop (call $host_gdi_frame_rect (local.get $hdc)
                     (local.get $x) (i32.add (local.get $y) (i32.const 3))
                     (i32.add (local.get $x) (i32.const 9)) (i32.add (local.get $y) (i32.const 12))
-                    (i32.const 0x0A) (i32.const 0x0F)))
+                    (i32.const 0x30012) (local.get $hwnd)))
                   (drop (call $host_gdi_fill_rect (local.get $hdc)
                     (i32.add (local.get $x) (i32.const 2)) (i32.add (local.get $y) (i32.const 7))
                     (i32.add (local.get $x) (i32.const 7)) (i32.add (local.get $y) (i32.const 8))
