@@ -744,21 +744,32 @@
         (return (i32.const 1))))
 
     ;; ---------- CB_GETDROPPEDCONTROLRECT (0x0152) ----------
-    ;; lParam = guest RECT* (filled with screen coords of dropped popup area).
-    ;; Our dropdown is in-rect: report the listbox's rect translated to screen coords.
-    ;; For simplicity, compute (0, FIELD_H, w, full_h) in window-local coords; caller
-    ;; can translate via ClientToScreen. (Real Win32 returns screen coords; many apps
-    ;; only check w/h though.)
+    ;; lParam = guest RECT*, filled in SCREEN coordinates with the combo as it
+    ;; looks dropped: the field's top-left, its width, and the bottom of the
+    ;; list below it. mIRC's Options pages copy each combobox onto the dialog
+    ;; from this rect. The old window-local (0, FIELD_H, w, h) answer put the
+    ;; copy at the dialog's corner with no height, and since mIRC centres a
+    ;; page on the bounding box of its controls, the whole Sounds page moved.
     (if (i32.eq (local.get $msg) (i32.const 0x0152))
       (then
         (if (i32.eqz (local.get $lParam)) (then (return (i32.const 0))))
         (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
         (local.set $w (i32.and (local.get $sz) (i32.const 0xFFFF)))
         (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
-        (i32.store          (call $g2w (local.get $lParam)) (i32.const 0))
-        (i32.store offset=4 (call $g2w (local.get $lParam)) (local.get $field_h))
-        (i32.store offset=8 (call $g2w (local.get $lParam)) (local.get $w))
-        (i32.store offset=12 (call $g2w (local.get $lParam)) (local.get $h))
+        ;; The dropped height is the field plus the inner list, whichever is
+        ;; taller than the window itself (a CBS_SIMPLE window already is).
+        (if (call $cb_lb_hwnd (local.get $state_w))
+          (then
+            (local.set $cy (i32.add (local.get $field_h)
+              (i32.shr_u (call $ctrl_get_wh_packed (call $cb_lb_hwnd (local.get $state_w)))
+                (i32.const 16))))
+            (if (i32.gt_s (local.get $cy) (local.get $h))
+              (then (local.set $h (local.get $cy))))))
+        (call $host_get_window_rect (local.get $hwnd) (call $g2w (local.get $lParam)))
+        (i32.store offset=8 (call $g2w (local.get $lParam))
+          (i32.add (i32.load (call $g2w (local.get $lParam))) (local.get $w)))
+        (i32.store offset=12 (call $g2w (local.get $lParam))
+          (i32.add (i32.load offset=4 (call $g2w (local.get $lParam))) (local.get $h)))
         (return (i32.const 1))))
 
     ;; ---------- CB_LIMITTEXT (0x0141) → EM_SETLIMITTEXT (0x00C5) ----------
