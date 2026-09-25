@@ -2493,10 +2493,13 @@
   ;; survive the round trip from LoadIcon/LoadImage to DrawIconEx, which may
   ;; happen long afterwards and from a different module, so each entry keeps
   ;; the pair needed to find the pixels again: {hInstance, resource id}.
-  ;; 32 entries x 8 bytes. Handles are $ICON_HANDLE_TAG | slot.
+  ;; 512 entries x 8 bytes. Handles are $ICON_HANDLE_TAG | slot. Windows has
+  ;; no per-process icon limit to speak of; 32 was exhausted by mIRC 6.35,
+  ;; which loads 51 distinct icons at startup, and its toolbar image list
+  ;; then got the placeholder handle, rejected it, and the app exited.
   (global $ICON_TABLE i32 (region.addr $ICON_TABLE 0))
   (global $ICON_TABLE_SIZE i32 (region.size $ICON_TABLE))
-  (global $MAX_ICONS i32 (i32.const 32))
+  (global $MAX_ICONS i32 (i32.const 512))
   (global $ICON_HANDLE_TAG i32 (i32.const 0x00650000))
   ;; CURSOR_TABLE: an icon or cursor BUILT from bitmaps, which ICON_TABLE
   ;; cannot describe — there is no {module, resource} to remember, only the

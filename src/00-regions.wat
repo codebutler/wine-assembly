@@ -462,7 +462,7 @@
     (owner "10-helpers.wat:$window_update_lock_covers"))
   (region.declare $TAB_NATIVE_STATE_TABLE (size 0x00000100) (align 0x00000100)
     (owner "09c3-controls.wat:$tab_native_state_get"))
-  (region.declare $ICON_TABLE (size 0x00000100) (align 0x00000100)
+  (region.declare $ICON_TABLE (size 0x00001000) (align 0x00000100)
     (owner "09a4b-handlers-cursor-icon.wat:$icon_intern"))
   (region.declare $CURSOR_TABLE (size 0x00000300) (align 0x00000100)
     (stride $CURSOR_TABLE_STRIDE (count 32))
