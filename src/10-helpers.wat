@@ -6378,17 +6378,35 @@
     (local.set $sz (call $host_get_window_client_size (local.get $hwnd)))
     (i32.shr_u (local.get $sz) (i32.const 16)))
 
+  ;; Clip a DC to every ancestor's client area, as USER's visible region is.
+  ;; $origin_x/$origin_y say where the DC's origin is inside $hwnd's WINDOW:
+  ;; its client offset for a client DC, (0,0) for a window DC.
+  ;;
+  ;; A window's position is measured from its parent's CLIENT origin, and a
+  ;; framed parent's client origin is not its window origin: so each step up
+  ;; has to add the parent's own client offset (caption and border) before
+  ;; the next position is applied. This used to add positions alone, which is
+  ;; right only while every ancestor has no frame. A control inside an MDI
+  ;; child was then clipped to the MDI client placed one caption too low --
+  ;; harmless while the child sat at (0,0), because the error pushed the clip
+  ;; past the bottom; a maximized child sits at (-4,-24), and the top 22 rows
+  ;; of mIRC's Status text were clipped away and never repainted.
   (func $dc_clip_to_parent_client (param $hdc i32) (param $hwnd i32)
+      (param $origin_x i32) (param $origin_y i32)
     (local $current i32) (local $parent i32) (local $x i32) (local $y i32)
     (local $pw i32) (local $ph i32)
+    ;; $x/$y: where $current's WINDOW origin lies in DC coordinates.
+    (local.set $x (i32.sub (i32.const 0) (local.get $origin_x)))
+    (local.set $y (i32.sub (i32.const 0) (local.get $origin_y)))
     (local.set $current (local.get $hwnd))
     (block $done (loop $ancestors
       (br_if $done (i32.eqz (i32.and
         (call $wnd_get_style (local.get $current)) (i32.const 0x40000000)))) ;; WS_CHILD
       (local.set $parent (call $wnd_get_parent (local.get $current)))
       (br_if $done (i32.eqz (local.get $parent)))
-      (local.set $x (i32.add (local.get $x) (call $ctrl_get_x_s (local.get $current))))
-      (local.set $y (i32.add (local.get $y) (call $ctrl_get_y_s (local.get $current))))
+      ;; The parent's client origin, in DC coordinates.
+      (local.set $x (i32.sub (local.get $x) (call $ctrl_get_x_s (local.get $current))))
+      (local.set $y (i32.sub (local.get $y) (call $ctrl_get_y_s (local.get $current))))
       (local.set $pw (call $wnd_client_w_for_clip (local.get $parent)))
       (local.set $ph (call $wnd_client_h_for_clip (local.get $parent)))
       (if (i32.and (i32.gt_s (local.get $pw) (i32.const 0))
@@ -6396,10 +6414,12 @@
         (then
           (drop (call $gdi_dc_system_clip_rect
             (local.get $hdc)
-            (i32.sub (i32.const 0) (local.get $x))
-            (i32.sub (i32.const 0) (local.get $y))
-            (i32.sub (local.get $pw) (local.get $x))
-            (i32.sub (local.get $ph) (local.get $y)) (i32.const 1)))))
+            (local.get $x) (local.get $y)
+            (i32.add (local.get $x) (local.get $pw))
+            (i32.add (local.get $y) (local.get $ph)) (i32.const 1)))))
+      ;; Up one: the parent's window origin is its client origin less its frame.
+      (local.set $x (i32.sub (local.get $x) (call $client_rect_get_l (local.get $parent))))
+      (local.set $y (i32.sub (local.get $y) (call $client_rect_get_t (local.get $parent))))
       (local.set $current (local.get $parent))
       (br $ancestors))))
 
@@ -6753,7 +6773,8 @@
         (drop (call $gdi_dc_system_clip_rect
           (local.get $hdc) (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
           (i32.const 1)))))
-    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd))
+    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd)
+      (call $client_rect_get_l (local.get $hwnd)) (call $client_rect_get_t (local.get $hwnd)))
     ;; Win16/VBRUN can present AutoRedraw content from a parent legacy client
     ;; DC into areas occupied by child picture controls. Keep that exception
     ;; narrow: non-VB Win16 games still rely on WS_CLIPCHILDREN to stop parent
@@ -6794,7 +6815,8 @@
         (drop (call $gdi_dc_system_clip_rect
           (local.get $hdc) (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
           (i32.const 1)))))
-    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd))
+    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd)
+      (call $client_rect_get_l (local.get $hwnd)) (call $client_rect_get_t (local.get $hwnd)))
     (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x02000000)) ;; WS_CLIPCHILDREN
       (then (call $dc_exclude_visible_children_for_erase
         (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))))
@@ -6820,7 +6842,7 @@
               (local.get $hdc) (i32.const 0) (i32.const 0)
               (i32.and (local.get $wh) (i32.const 0xFFFF))
               (i32.shr_u (local.get $wh) (i32.const 16)) (i32.const 1)))))))
-    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd))
+    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))
     (call $dc_exclude_children_for_clip
       (local.get $hdc) (local.get $hwnd)
       (call $client_rect_get_l (local.get $hwnd))
@@ -6888,7 +6910,7 @@
     ;; visible region: inside the parent's client area and not under a
     ;; sibling above it. mIRC parks a minimized MDI child at (-100,-100) in the
     ;; MDI client; without this its title bar painted over the frame's caption.
-    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd))
+    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))
     (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
 
   ;; Every WASM instance owns its count and its corresponding thread partition.
