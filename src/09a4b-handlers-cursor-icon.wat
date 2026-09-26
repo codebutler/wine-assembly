@@ -31,6 +31,114 @@
   ;; A Win16 NE module id, stored in ICON_TABLE's hInstance word. The low 24
   ;; bits are the $win16_res_module selector (task=1, DLL=0x10000|id).
   (global $ICON_FROM_WIN16 i32 (i32.const 0x16000000))
+  ;; A stock icon: LoadIcon(NULL, IDI_*) / LoadImage(NULL, OIC_*). The slot's
+  ;; "resource" is the IDI id. They are shared, so DestroyIcon leaves them.
+  (global $ICON_FROM_STOCK i32 (i32.const 0x0057C0))
+
+  ;; The six stock icons Win98 has (IDI_APPLICATION .. IDI_WINLOGO).
+  (func $stock_icon_id_ok (param $id i32) (result i32)
+    (i32.and (i32.ge_u (local.get $id) (i32.const 32512))
+             (i32.le_u (local.get $id) (i32.const 32517))))
+
+  ;; Where the hosts mount each one (STOCK_ICON_FILES in lib/process-boot.js):
+  ;; Wine's own icons, icons/system/UPSTREAM.md.
+  (func $stock_icon_path (param $id i32) (result i32)
+    (if (i32.eq (local.get $id) (i32.const 32512)) (then (return "C:\\WINDOWS\\SYSTEM\\OIC_SAMPLE.ICO")))
+    (if (i32.eq (local.get $id) (i32.const 32513)) (then (return "C:\\WINDOWS\\SYSTEM\\OIC_HAND.ICO")))
+    (if (i32.eq (local.get $id) (i32.const 32514)) (then (return "C:\\WINDOWS\\SYSTEM\\OIC_QUES.ICO")))
+    (if (i32.eq (local.get $id) (i32.const 32515)) (then (return "C:\\WINDOWS\\SYSTEM\\OIC_BANG.ICO")))
+    (if (i32.eq (local.get $id) (i32.const 32516)) (then (return "C:\\WINDOWS\\SYSTEM\\OIC_NOTE.ICO")))
+    (if (i32.eq (local.get $id) (i32.const 32517)) (then (return "C:\\WINDOWS\\SYSTEM\\OIC_WINLOGO.ICO")))
+    (i32.const 0))
+
+  ;; The decoded image of a stock icon at 16 or 32px: an owned ICONINFO
+  ;; record (CURSOR_TABLE), decoded from the .ico the first time it is drawn
+  ;; and kept; -1 in the cache remembers a file that is missing or unusable.
+  (func $stock_icon_record (param $id i32) (param $px i32) (result i32)
+    (local $cell i32) (local $rec i32)
+    (if (i32.eqz (call $stock_icon_id_ok (local.get $id))) (then (return (i32.const 0))))
+    (local.set $cell (i32.add (global.get $STOCK_ICON_CACHE)
+      (i32.shl (i32.add (i32.shl (i32.sub (local.get $id) (i32.const 32512)) (i32.const 1))
+                        (i32.gt_u (local.get $px) (i32.const 16)))
+               (i32.const 2))))
+    (local.set $rec (i32.load (local.get $cell)))
+    (if (i32.eq (local.get $rec) (i32.const -1)) (then (return (i32.const 0))))
+    (if (local.get $rec) (then (return (local.get $rec))))
+    (local.set $rec (call $stock_icon_decode (local.get $id)
+      (select (i32.const 32) (i32.const 16) (i32.gt_u (local.get $px) (i32.const 16)))))
+    (i32.store (local.get $cell) (select (local.get $rec) (i32.const -1) (local.get $rec)))
+    (local.get $rec))
+
+  ;; Read the .ico and decode the px x px image with the deepest colour depth
+  ;; up to 8 bits per pixel -- what a Windows 98 display of the time picked.
+  ;; An ICONDIR entry is 16 bytes and points at a DIB laid out exactly like an
+  ;; RT_ICON resource, so the resource decoder takes it as it is.
+  (func $stock_icon_decode (param $id i32) (param $px i32) (result i32)
+    (local $path i32) (local $handle i32) (local $size i32) (local $buf i32)
+    (local $data i32) (local $io i32) (local $count i32) (local $i i32)
+    (local $e i32) (local $off i32) (local $len i32) (local $bpp i32)
+    (local $best_off i32) (local $best_len i32) (local $best_bpp i32) (local $rec i32)
+    (local.set $path (call $stock_icon_path (local.get $id)))
+    (if (i32.eqz (local.get $path)) (then (return (i32.const 0))))
+    (local.set $handle (call $host_fs_create_file (local.get $path)
+      (i32.const 0x80000000) (i32.const 3) (i32.const 0x80) (i32.const 0)))
+    (if (i32.eq (local.get $handle) (i32.const -1)) (then (return (i32.const 0))))
+    (local.set $size (call $host_fs_get_file_size (local.get $handle)))
+    (if (i32.or (i32.lt_s (local.get $size) (i32.const 22))
+                (i32.gt_u (local.get $size) (i32.const 0x00040000)))
+      (then (drop (call $host_fs_close_handle (local.get $handle))) (return (i32.const 0))))
+    (local.set $buf (call $heap_alloc (i32.add (local.get $size) (i32.const 4))))
+    (if (i32.eqz (local.get $buf))
+      (then (drop (call $host_fs_close_handle (local.get $handle))) (return (i32.const 0))))
+    ;; bytes-read lands in the word after the file
+    (local.set $io (i32.add (local.get $buf) (local.get $size)))
+    (local.set $data (call $g2w (local.get $buf)))
+    (local.set $rec (i32.const 0))
+    (if (call $host_fs_read_file (local.get $handle) (local.get $buf) (local.get $size) (local.get $io))
+      (then
+        (if (i32.and
+              (i32.eq (call $gl32 (local.get $io)) (local.get $size))
+              (i32.eq (i32.load (local.get $data)) (i32.const 0x00010000))) ;; reserved 0, type 1
+          (then
+            (local.set $count (i32.load16_u offset=4 (local.get $data)))
+            (block $done (loop $scan
+              (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+              (local.set $e (i32.add (local.get $data)
+                (i32.add (i32.const 6) (i32.shl (local.get $i) (i32.const 4)))))
+              (br_if $done (i32.gt_u (i32.add (i32.sub (local.get $e) (local.get $data)) (i32.const 16))
+                                     (local.get $size)))
+              (local.set $len (i32.load offset=8 (local.get $e)))
+              (local.set $off (i32.load offset=12 (local.get $e)))
+              ;; px x px, a whole DIB (a BITMAPINFOHEADER, not a PNG) inside the file
+              (if (i32.and
+                    (i32.and (i32.eq (i32.load8_u (local.get $e)) (local.get $px))
+                             (i32.eq (i32.load8_u offset=1 (local.get $e)) (local.get $px)))
+                    (i32.and
+                      (i32.le_u (i32.add (local.get $off) (local.get $len)) (local.get $size))
+                      (i32.ge_u (local.get $len) (i32.const 40))))
+                (then
+                  (if (i32.eq (i32.load (i32.add (local.get $data) (local.get $off))) (i32.const 40))
+                    (then
+                      (local.set $bpp (i32.load16_u offset=14
+                        (i32.add (local.get $data) (local.get $off))))
+                      (if (i32.and (i32.le_u (local.get $bpp) (i32.const 8))
+                                   (i32.gt_u (local.get $bpp) (local.get $best_bpp)))
+                        (then
+                          (local.set $best_bpp (local.get $bpp))
+                          (local.set $best_off (local.get $off))
+                          (local.set $best_len (local.get $len))))))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $scan)))
+            (if (local.get $best_bpp)
+              (then (local.set $rec (call $cursor_create_from_resource
+                (i32.add (local.get $buf) (local.get $best_off)) (local.get $best_len)
+                (i32.const 1) (i32.const 0x00030000)
+                (local.get $px) (local.get $px) (i32.const 0)))))))))
+    (drop (call $host_fs_close_handle (local.get $handle)))
+    (call $heap_free (local.get $buf))
+    (call $utrace (i32.const 4) "stock icon decoded (id, px, record)"
+      (local.get $id) (local.get $px) (local.get $rec))
+    (local.get $rec))
 
   (func $icon_slot_size_set (param $slot i32) (param $size i32)
     (i32.store (i32.add (global.get $ICON_SIZE_TABLE)
@@ -175,6 +283,11 @@
     (if (i32.eqz (i32.load offset=4 (local.get $p))) (then (return (i32.const 0))))
     (if (i32.eq (i32.load (local.get $p)) (global.get $ICON_FROM_OPAQUE))
       (then (return (i32.const 0))))
+    ;; A stock icon is SM_CXICON unless LoadImage asked for a size.
+    (if (i32.eq (i32.load (local.get $p)) (global.get $ICON_FROM_STOCK))
+      (then
+        (local.set $asked (call $icon_slot_size (local.get $slot)))
+        (return (select (local.get $asked) (i32.const 0x00200020) (local.get $asked)))))
     (if (i32.eq (i32.load (local.get $p)) (global.get $ICON_FROM_BITMAP))
       (then
         (local.set $bmp (i32.and (i32.load offset=4 (local.get $p)) (i32.const 0x7FFFFFFF)))
@@ -380,6 +493,19 @@
                 (i32.const 0) (i32.const 0) (i32.const 0x00CC0020)))
         (drop (call $gdi_dc_delete (local.get $ok)))
         (return (i32.const 1))))
+    ;; A stock icon draws its decoded 16 or 32px image: stretched to cx x cy
+    ;; for DrawIconEx, at 32px from the top left for a static's placement.
+    (if (i32.eq (i32.load (local.get $p)) (global.get $ICON_FROM_STOCK))
+      (then
+        (if (i32.eqz (local.get $stretch))
+          (then (local.set $cx (i32.const 32)) (local.set $cy (i32.const 32))))
+        (local.set $ok (call $stock_icon_record
+          (i32.and (i32.load offset=4 (local.get $p)) (i32.const 0x7FFFFFFF))
+          (select (local.get $cx) (local.get $cy) (i32.gt_u (local.get $cx) (local.get $cy)))))
+        (if (i32.eqz (local.get $ok)) (then (return (i32.const 0))))
+        (return (call $cursor_draw_handle (local.get $ok) (local.get $hdc)
+          (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
+          (local.get $di_flags)))))
     ;; Opaque system/named handles had no drawable pixels before being copied;
     ;; their independent copy remains intentionally opaque too.
     (if (i32.eq (i32.load (local.get $p)) (global.get $ICON_FROM_OPAQUE))
@@ -919,6 +1045,14 @@
                  (i32.le_u (local.get $arg1) (i32.const 0xFFFF)))
       (then
         (i32.store offset=0 (global.get $reg_base) (call $icon_intern (local.get $arg0) (local.get $arg1)))
+        (if (i32.load offset=0 (global.get $reg_base))
+          (then (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+                (return)))))
+    ;; LoadIcon(NULL, IDI_*): the system's own icons.
+    (if (i32.and (i32.eqz (local.get $arg0)) (call $stock_icon_id_ok (local.get $arg1)))
+      (then
+        (i32.store offset=0 (global.get $reg_base)
+          (call $icon_intern (global.get $ICON_FROM_STOCK) (local.get $arg1)))
         (if (i32.load offset=0 (global.get $reg_base))
           (then (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
                 (return)))))

@@ -124,6 +124,10 @@
   (region.declare $PAINT_SCRATCH (size 0x00000100) (align 0x00000100)
     (stride 0x10 (count $PAINT_SCRATCH_SLOTS))
     (owner "10-helpers.wat:$paint_scratch_take"))
+  ;; Decoded stock icons: 6 ids x (16px, 32px) owned icon records, 0 until
+  ;; first drawn, -1 when the .ico is missing.
+  (region.declare $STOCK_ICON_CACHE (size 0x00000030) (align 0x00000010)
+    (owner "09a4b-handlers-cursor-icon.wat:$stock_icon_record"))
   ;; The MSG the modal dialog pump reads a due timer into (28 bytes).
   (region.declare $MODAL_PUMP_MSG (size 0x00000020) (align 0x00000010)
     (owner "09b-dispatch.wat:$win32_dispatch"))

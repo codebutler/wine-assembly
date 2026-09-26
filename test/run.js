@@ -4,7 +4,7 @@ const { execSync } = require('child_process');
 const { createHostImports } = require('../lib/host-imports');
 const { loadDlls, callDllMain, detectRequiredDlls, shouldReportNtForDlls, loadWin16Dlls } = require('../lib/dll-loader');
 const { inputEventHwnd } = require('../lib/host-window');
-const { SYSTEM_DATA_FILES, resolveDllGraph, mountLoadedDllFiles, mountSystemDataFiles,
+const { SYSTEM_DATA_FILES, STOCK_ICON_FILES, resolveDllGraph, mountLoadedDllFiles, mountSystemDataFiles,
   stageAndLoadPe, setExeName, setExeDrive, setExtraCmdline,
   setEnvironmentVariable, handleLoadLibraryYield, handleComDllYield } = require('../lib/process-boot');
 const {
@@ -2308,7 +2308,7 @@ async function main() {
     ctx.vfs.dirs.add('c:\\windows');
     ctx.vfs.dirs.add('c:\\windows\\system');
     ctx.vfs.dirs.add('c:\\windows\\fonts');
-    mountSystemDataFiles(ctx.vfs, SYSTEM_DATA_FILES.map(file => ({
+    mountSystemDataFiles(ctx.vfs, [...SYSTEM_DATA_FILES, ...STOCK_ICON_FILES].map(file => ({
       ...file,
       bytes: new Uint8Array(fs.readFileSync(path.join(ROOT, file.url))),
     })));

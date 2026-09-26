@@ -67,9 +67,28 @@
     (if (i32.and (call $ctrl_get_ex_style (local.get $hwnd)) (i32.const 0x80)) ;; WS_EX_TOOLWINDOW
       (then (return (i32.const 0))))
     (local.set $icon (call $wnd_small_icon (local.get $hwnd)))
+    ;; No icon of its own and none from its class: USER draws the stock
+    ;; application icon, except on a modal dialog frame (Wine's
+    ;; NC_IconForWindow says the same).
+    (if (i32.and (i32.eqz (local.get $icon))
+                 (i32.eqz (call $wnd_modal_frame (local.get $hwnd))))
+      (then (return (call $stock_icon_default))))
     (if (i32.ne (i32.and (local.get $icon) (i32.const 0xFFFF0000)) (global.get $ICON_HANDLE_TAG))
       (then (return (i32.const 0))))
     (local.get $icon))
+
+  ;; WS_EX_DLGMODALFRAME, or a dialog made from a DS_MODALFRAME template --
+  ;; which is where CreateDialog puts WS_EX_DLGMODALFRAME on Windows.
+  (func $wnd_modal_frame (param $hwnd i32) (result i32)
+    (if (i32.and (call $ctrl_get_ex_style (local.get $hwnd)) (i32.const 0x1))
+      (then (return (i32.const 1))))
+    (i32.and
+      (i32.ne (call $dialog_proc_get (local.get $hwnd)) (i32.const 0))
+      (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x80)) (i32.const 0))))
+
+  ;; IDI_APPLICATION, the icon a window without one wears.
+  (func $stock_icon_default (result i32)
+    (call $icon_intern (global.get $ICON_FROM_STOCK) (i32.const 32512)))
 
 ;; DefWindowProc's WM_SETICON (0x80) and WM_GETICON (0x7F): keep the
   ;; window's own icons (wParam ICON_SMALL 0, ICON_BIG 1), returning the one

@@ -4176,6 +4176,8 @@
   (global $DX_VERSION_INFO_SIZE i32 (region.size $DX_VERSION_INFO))
   (global $MODAL_PUMP_MSG i32 (region.addr $MODAL_PUMP_MSG 0))
   (global $MODAL_PUMP_MSG_SIZE i32 (region.size $MODAL_PUMP_MSG))
+  (global $STOCK_ICON_CACHE i32 (region.addr $STOCK_ICON_CACHE 0))
+  (global $STOCK_ICON_CACHE_SIZE i32 (region.size $STOCK_ICON_CACHE))
   (global $WIN16_NAME_KERNEL   i32 (region.addr $RESERVED_PAGE_STRINGS 0x000000F0))
   (global $WIN16_NAME_USER     i32 (region.addr $RESERVED_PAGE_STRINGS 0x000000F7))
   (global $WIN16_NAME_GDI      i32 (region.addr $RESERVED_PAGE_STRINGS 0x000000FC))

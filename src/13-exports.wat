@@ -2616,6 +2616,8 @@
   (func (export "window_shell_icon") (param $hwnd i32) (result i32)
     (local $icon i32)
     (local.set $icon (call $wnd_small_icon (local.get $hwnd)))
+    ;; Win98's taskbar gives a window without one the stock application icon.
+    (if (i32.eqz (local.get $icon)) (then (return (call $stock_icon_default))))
     (if (result i32) (i32.eq (i32.and (local.get $icon) (i32.const 0xFFFF0000)) (global.get $ICON_HANDLE_TAG))
       (then (local.get $icon)) (else (i32.const 0))))
 

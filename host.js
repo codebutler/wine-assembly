@@ -1900,6 +1900,11 @@ class WineAssembly {
       },
     ], { required: true });
 
+    // The stock icons (IDI_*), read by WAT the first time one is drawn.
+    if (ProcessBoot && ProcessBoot.STOCK_ICON_FILES) {
+      await this.loadFiles(ProcessBoot.STOCK_ICON_FILES, { required: false });
+    }
+
     // Scalable faces mount under the filenames a real C:\WINDOWS\FONTS had, so
     // WAT opens ARIAL.TTF the way Win98 GDI did and never learns that
     // Liberation Sans is what answers. Without these the WAT TrueType

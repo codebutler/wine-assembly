@@ -192,6 +192,12 @@
             (i32.or (i32.and (local.get $arg3) (i32.const 0xFFFF))
               (i32.shl (i32.and (local.get $arg4) (i32.const 0xFFFF)) (i32.const 16))))))
           (else (local.set $tmp (i32.const 0))))
+        ;; LoadImage(NULL, OIC_*): the system's stock icons (OIC_SAMPLE..
+        ;; OIC_WINLOGO share IDI_APPLICATION..IDI_WINLOGO's numbers).
+        (if (i32.and (i32.eqz (local.get $arg0)) (call $stock_icon_id_ok (local.get $arg1)))
+          (then (local.set $tmp (call $icon_intern_sized (global.get $ICON_FROM_STOCK) (local.get $arg1)
+            (i32.or (i32.and (local.get $arg3) (i32.const 0xFFFF))
+              (i32.shl (i32.and (local.get $arg4) (i32.const 0xFFFF)) (i32.const 16)))))))
         (if (i32.eqz (local.get $tmp)) (then (local.set $tmp (i32.const 0x60001))))
         (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))) (return)))

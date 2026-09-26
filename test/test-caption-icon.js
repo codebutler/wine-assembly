@@ -8,8 +8,8 @@
 // Captions drew no icon at all, so nothing but a maximized MDI child's frame
 // bar could open a system menu. What this pins, on Win98's rules:
 //   - the icon is the window's own (WM_SETICON small, then big) or its Win32
-//     class's hIcon, read live; a tool window, or one without WS_SYSMENU, has
-//     none;
+//     class's hIcon, read live, else the stock application icon; a tool
+//     window, or one without WS_SYSMENU, has none;
 //   - DefWindowProc and the built-in dialog procedure both keep WM_SETICON
 //     and answer WM_GETICON (PuTTY sets its dialog's icon this way);
 //   - the icon hit-tests as HTSYSMENU, the caption beside it as HTCAPTION;
@@ -59,6 +59,7 @@ const extraWat = String.raw`
   (func (export "tci_intern_icon") (param $resid i32) (result i32)
     (call $icon_intern (global.get $image_base) (local.get $resid)))
   (func (export "tci_caption_icon") (param $h i32) (result i32) (call $caption_icon (local.get $h)))
+  (func (export "tci_stock_default") (result i32) (call $stock_icon_default))
   (func (export "tci_defwndproc") (param $h i32) (param $msg i32) (param $wp i32) (param $lp i32) (result i32)
     (local $esp i32)
     (local.set $esp (i32.load offset=16 (global.get $reg_base)))
@@ -111,7 +112,10 @@ const extraWat = String.raw`
 
   // WM_SETICON / WM_GETICON through DefWindowProc.
   const win = e.tci_make(WS_OVERLAPPEDWINDOW, 0) >>> 0;
-  assert.strictEqual(e.tci_caption_icon(win), 0, 'no icon of its own or its class yet');
+  const stock = e.tci_stock_default() >>> 0;
+  assert.strictEqual(stock >>> 16, 0x65, 'the stock application icon is a drawable HICON');
+  assert.strictEqual(e.tci_caption_icon(win) >>> 0, stock,
+    'no icon of its own or its class: the stock application icon');
   assert.strictEqual(e.tci_defwndproc(win, 0x80, 1, icon), 0, 'WM_SETICON big returns the previous (none)');
   assert.strictEqual(e.tci_caption_icon(win) >>> 0, icon, 'a big icon alone is drawn');
   assert.strictEqual(e.tci_defwndproc(win, 0x7F, 1, 0) >>> 0, icon, 'WM_GETICON big');
@@ -129,7 +133,8 @@ const extraWat = String.raw`
   assert.strictEqual(e.window_shell_icon(win) >>> 0, icon, 'the shell icon is the window icon');
   assert.strictEqual(e.window_shell_icon(tool) >>> 0, icon, 'a tool window still has a shell icon');
   assert.strictEqual(e.window_shell_icon(bare) >>> 0, icon, 'so does one without WS_SYSMENU');
-  assert.strictEqual(e.window_shell_icon(e.tci_make(WS_OVERLAPPEDWINDOW, 0) >>> 0), 0, 'none of its own: 0');
+  assert.strictEqual(e.window_shell_icon(e.tci_make(WS_OVERLAPPEDWINDOW, 0) >>> 0) >>> 0, stock,
+    'none of its own: the stock application icon, as on Win98\'s taskbar');
 
   // The icon is HTSYSMENU; the caption beside it HTCAPTION.
   const x0 = e.wnd_window_screen_x(win) | 0;
