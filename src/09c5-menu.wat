@@ -4997,7 +4997,49 @@
             (call $menu_open (local.get $hwnd) (local.get $idx))
             (return (i32.const 1))))))
 
+    ;; A press on the caption icon of the window whose system menu is open
+    ;; ends the menu, as any press outside it does. Within the double-click
+    ;; time of the press that opened it, it is the icon's double-click:
+    ;; USER's menu loop lets that through as WM_NCLBUTTONDBLCLK(HTSYSMENU),
+    ;; which DefWindowProc turns into SC_CLOSE.
+    (if (i32.and
+          (i32.ne (global.get $menu_open_dynamic_hmenu) (i32.const 0))
+          (i32.eq (call $system_menu_owner (global.get $menu_open_dynamic_hmenu))
+                  (local.get $hwnd)))
+      (then
+        (if (i32.eq (call $defwndproc_do_nchittest (local.get $hwnd)
+                      (local.get $sx) (local.get $sy))
+                    (i32.const 3))
+          (then
+            (call $menu_close)
+            (call $utrace (i32.const 2) "system menu icon press (hwnd, ms since open)"
+              (local.get $hwnd)
+              (i32.sub (call $host_get_ticks) (global.get $system_menu_opened_at))
+              (i32.const 0))
+            (if (i32.le_u (i32.sub (call $host_get_ticks) (global.get $system_menu_opened_at))
+                          (i32.const 500))  ;; GetDoubleClickTime
+              (then (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x00A3)
+                (i32.const 3)
+                (i32.or (i32.and (local.get $sx) (i32.const 0xFFFF))
+                        (i32.shl (local.get $sy) (i32.const 16)))))))
+            (return (i32.const 1))))))
+
     (call $menu_close)
+    (i32.const 1))
+
+  ;; Alt+Space: the system menu of the focused window's top-level window
+  ;; (in an MDI program, the frame's -- Alt+Minus is the child's). Posted as
+  ;; WM_SYSCOMMAND(SC_KEYMENU, ' '), which is what DefWindowProc makes of
+  ;; WM_SYSCHAR ' ', so a program can intercept it. Returns TRUE when posted.
+  (func (export "system_menu_key") (result i32)
+    (local $hwnd i32)
+    (if (i32.eqz (global.get $focus_hwnd)) (then (return (i32.const 0))))
+    (local.set $hwnd (call $wnd_top_level (global.get $focus_hwnd)))
+    (if (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00080000)))
+      (then (return (i32.const 0))))  ;; no WS_SYSMENU
+    (call $utrace (i32.const 2) "Alt+Space (hwnd)" (local.get $hwnd) (i32.const 0) (i32.const 0))
+    (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x0112)
+      (i32.const 0xF100) (i32.const 0x20)))
     (i32.const 1))
 
   ;; Hover update for an open dropdown. Returns the resulting hover index
@@ -5532,11 +5574,13 @@
 ;; Open the window's system menu under its caption icon, as a click on the
   ;; icon (SC_MOUSEMENU) or Alt+Space does. Its picks reach the window as
   ;; WM_SYSCOMMAND ($menu_pick_message). Returns TRUE when a menu opened.
+  (global $system_menu_opened_at (mut i32) (i32.const 0))
   (func $system_menu_track (param $hwnd i32) (result i32)
     (local $sys i32) (local $rect i32) (local $frame i32)
     (local.set $sys (call $system_menu_get (local.get $hwnd)))
     (call $utrace (i32.const 2) "system menu track (hwnd, menu)" (local.get $hwnd) (local.get $sys) (i32.const 0))
     (if (i32.eqz (local.get $sys)) (then (return (i32.const 0))))
+    (global.set $system_menu_opened_at (call $host_get_ticks))
     (local.set $rect (call $paint_scratch_take))
     (call $host_get_window_rect (local.get $hwnd) (local.get $rect))
     (local.set $frame (call $defwndproc_frame_width (local.get $hwnd)))

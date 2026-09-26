@@ -405,6 +405,10 @@
       (then
         (call $defwndproc_nclbuttondown (local.get $hwnd) (local.get $wParam) (local.get $lParam))
         (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x00A3)) ;; WM_NCLBUTTONDBLCLK
+      (then
+        (call $defwndproc_nclbuttondblclk (local.get $hwnd) (local.get $wParam) (local.get $lParam))
+        (return (i32.const 0))))
     (if (i32.eq (local.get $msg) (i32.const 0x0112)) ;; WM_SYSCOMMAND
       (then
         (call $defwndproc_syscommand (local.get $hwnd) (local.get $wParam) (local.get $lParam))

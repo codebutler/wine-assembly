@@ -3456,6 +3456,11 @@
       (call $defwndproc_nclbuttondown (local.get $arg0) (local.get $arg2) (local.get $arg3))
       (i32.store offset=0 (global.get $reg_base) (i32.const 0))
       (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
+    (if (i32.eq (local.get $arg1) (i32.const 0x00A3))  ;; WM_NCLBUTTONDBLCLK
+    (then
+      (call $defwndproc_nclbuttondblclk (local.get $arg0) (local.get $arg2) (local.get $arg3))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_SETCURSOR (0x0020): wParam=hwnd under cursor, LOWORD(lParam)=hit code.
     ;; Delegate to shared helper (applies IDC_* via $set_cursor_internal).
     (if (i32.eq (local.get $arg1) (i32.const 0x0020))
@@ -3503,6 +3508,18 @@
               (select (i32.const 0xF120) (i32.const 0xF030)
                       (call $wnd_max_get (local.get $hwnd)))
               (i32.const 0))))))
+
+  ;; DefWindowProc's WM_NCLBUTTONDBLCLK: a double-click on the caption icon
+  ;; closes the window (SC_CLOSE), unless its class has CS_NOCLOSE, which is
+  ;; what grays Close in its system menu.
+  (func $defwndproc_nclbuttondblclk (param $hwnd i32) (param $hit i32) (param $lp i32)
+    (call $utrace (i32.const 1) "WM_NCLBUTTONDBLCLK default (hwnd, hit, point)"
+      (local.get $hwnd) (local.get $hit) (local.get $lp))
+    (if (i32.and (i32.eq (local.get $hit) (i32.const 3))
+                 (i32.eqz (i32.and (call $class_long_get (local.get $hwnd) (i32.const -26))
+                                   (i32.const 0x0200))))  ;; CS_NOCLOSE
+      (then (drop (call $post_queue_push (local.get $hwnd)
+              (i32.const 0x0112) (i32.const 0xF060) (local.get $lp))))))
 
   ;; DefWindowProc's WM_SYSCOMMAND: SC_CLOSE posts WM_CLOSE; minimize,
   ;; maximize and restore change the window's state (the host owns its

@@ -18,6 +18,9 @@
 //     from it is WM_SYSCOMMAND -- for a built-in dialog as for a window;
 //   - window_shell_icon hands a host the same icon for its taskbar button,
 //     whatever the window's styles;
+//   - a second press on the icon ends its system menu, and within the
+//     double-click time is WM_NCLBUTTONDBLCLK(HTSYSMENU), which closes;
+//   - Alt+Space opens the focused top-level window's system menu;
 //   - WM_CLOSE on a built-in dialog presses Cancel, which is what Close in
 //     its system menu does.
 // The icon's placement (2px in; the title's first pixels at 21, as on a
@@ -68,6 +71,9 @@ const extraWat = String.raw`
     (call $defwndproc_do_nchittest (local.get $h) (local.get $x) (local.get $y)))
   (func (export "tci_frame") (param $h i32) (result i32) (call $defwndproc_frame_width (local.get $h)))
   (func (export "tci_open_popup") (result i32) (global.get $menu_open_dynamic_hmenu))
+  (func (export "tci_set_focus") (param $h i32) (global.set $focus_hwnd (local.get $h)))
+  (func (export "tci_age_system_menu") (param $ms i32)
+    (global.set $system_menu_opened_at (i32.sub (global.get $system_menu_opened_at) (local.get $ms))))
   (func (export "tci_pick_message") (result i32) (call $menu_pick_message))
   (func (export "tci_system_menu") (param $h i32) (result i32) (call $system_menu_get (local.get $h)))
   (func (export "tci_queue_find") (param $h i32) (param $msg i32) (param $wp i32) (result i32)
@@ -148,6 +154,37 @@ const extraWat = String.raw`
   e.menu_close();
   assert.strictEqual(e.tci_pick_message(), 0x111, 'other menus pick with WM_COMMAND');
 
+  // A second press on the icon ends the menu; soon enough, it is the icon's
+  // double-click, which DefWindowProc turns into SC_CLOSE.
+  const iconX = x0 + f + 8, iconY = y0 + f + 8;
+  const iconLp = ((iconX & 0xFFFF) | (iconY << 16)) >>> 0;
+  e.tci_queue_find(0, 0, 0);
+  e.tci_defwndproc(win, 0x112, 0xF090, 0);
+  assert.strictEqual(e.menu_handle_mouse_open(iconX, iconY), 1);
+  assert.strictEqual(e.tci_open_popup(), 0, 'a press on the icon ends its system menu');
+  assert.strictEqual(e.tci_queue_find(win, 0xA3, 3), 1, 'within the double-click time: WM_NCLBUTTONDBLCLK(HTSYSMENU)');
+  e.tci_defwndproc(win, 0x112, 0xF090, 0);
+  e.tci_age_system_menu(600);
+  e.menu_handle_mouse_open(iconX, iconY);
+  assert.strictEqual(e.tci_open_popup(), 0, 'a slow second press ends the menu too');
+  assert.strictEqual(e.tci_queue_find(win, 0xA3, 3), 0, 'but is no double-click');
+  e.tci_defwndproc(win, 0xA3, 3, iconLp);
+  assert.strictEqual(e.tci_queue_find(win, 0x112, 0xF060), 1, 'DefWindowProc: double-clicking the icon is SC_CLOSE');
+  e.tci_defwndproc(win, 0xA3, 2, iconLp);
+  assert.strictEqual(e.tci_queue_find(win, 0x112, 0xF060), 0, 'a caption double-click is not');
+
+  // Alt+Space posts SC_KEYMENU ' ' to the focused top-level window, which
+  // opens its system menu; a window without WS_SYSMENU has none to open.
+  e.tci_set_focus(win);
+  assert.strictEqual(e.system_menu_key(), 1, 'Alt+Space is taken');
+  assert.strictEqual(e.tci_queue_find(win, 0x112, 0xF100), 1, 'as WM_SYSCOMMAND SC_KEYMENU');
+  e.tci_defwndproc(win, 0x112, 0xF100, 0x20);
+  assert.strictEqual(e.tci_open_popup() >>> 0, sys, 'which opens the system menu');
+  e.menu_close();
+  e.tci_set_focus(bare);
+  assert.strictEqual(e.system_menu_key(), 0, 'no WS_SYSMENU: Alt+Space is left alone');
+  e.tci_set_focus(0);
+
   // The built-in dialog procedure does the same, and closes with Cancel.
   const dlg = e.tci_make_dialog(0x10C80000 | 0x80) >>> 0; // caption, system menu, DS_MODALFRAME
   assert.strictEqual(e.tci_dialog_default(dlg, 0x80, 0, icon), 0, 'WM_SETICON on a dialog');
@@ -162,6 +199,8 @@ const extraWat = String.raw`
   e.tci_queue_find(0, 0, 0);
   e.tci_dialog_default(dlg, 0x10, 0, 0);
   assert.strictEqual(e.tci_queue_find(dlg, 0x111, 2), 1, 'WM_CLOSE on a dialog presses Cancel');
+  e.tci_dialog_default(dlg, 0xA3, 3, 0);
+  assert.strictEqual(e.tci_queue_find(dlg, 0x112, 0xF060), 1, 'a dialog\'s icon double-click closes it too');
 
   console.log('PASS  caption icon: drawn from WM_SETICON or the class, HTSYSMENU opens the system menu');
 })().catch((err) => {
