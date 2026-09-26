@@ -145,6 +145,11 @@
   (region.declare $ACCEL_TABLES (size 0x00000400) (align 0x00000100)
     (stride $ACCEL_TABLE_STRIDE (count $ACCEL_TABLE_COUNT))
     (owner "09a5-handlers-window.wat:$accel_table_record_locked"))
+  ;; A window's menu-bar ARRANGEMENT, when its bar has been edited (see
+  ;; 09c5-menu.wat, "The bar arrangement"): a heap pointer per slot, 0 while
+  ;; the bar is exactly its menu resource.
+  (region.declare $MENU_BAR_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000010)
+    (owner "09c5-menu.wat:$menu_bar_list_cell"))
   (region.declare $MENU_DATA_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000010)
     (owner "09c0-window-table.wat:$menu_data_reset_slot"))
   (region.declare $WND_DLG_RECORDS (stride 0x20 (count $MAX_WINDOWS)) (align 0x00000010)

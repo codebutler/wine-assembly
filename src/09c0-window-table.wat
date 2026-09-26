@@ -264,10 +264,13 @@
     (local.set $addr
       (i32.add (global.get $MENU_DATA_TABLE) (i32.mul (local.get $slot) (i32.const 4))))
     (local.set $old (i32.load (local.get $addr)))
-    ;; Persistent menu table entries point four bytes past their allocation;
-    ;; the private prefix stores the blob length for safe offset traversal.
+    ;; A persistent menu table entry points EIGHT bytes past its allocation:
+    ;; the private prefix holds the resource key (-8) and the blob length
+    ;; (-4), as $menu_set lays it out and menu_clear frees it. This freed
+    ;; old-4, a pointer heap_alloc never returned, whenever a window that
+    ;; still had a menu gave up its slot.
     (if (local.get $old)
-      (then (call $heap_free (i32.sub (local.get $old) (i32.const 4)))))
+      (then (call $heap_free (i32.sub (local.get $old) (i32.const 8)))))
     (i32.store (local.get $addr) (i32.const 0)))
 
   (func $wnd_hinstance_reset_slot (param $slot i32)
@@ -331,6 +334,7 @@
     (call $wnd_thread_reset_slot (local.get $slot))
     (call $wnd_hinstance_reset_slot (local.get $slot))
     (call $menu_data_reset_slot (local.get $slot))
+    (call $menu_bar_list_reset_slot (local.get $slot))
     (call $dialog_state_reset_slot (local.get $slot))
     (call $wnd_unicode_reset_slot (local.get $slot))
     (call $wnd_extra_reset_slot (local.get $slot))

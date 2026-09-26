@@ -1907,6 +1907,8 @@
   (global $MAX_WINDOWS   i32 (i32.const 4096))
   (global $WND_SLOT_END i32 (region.addr $WND_SLOT_END 0))
   (global $WND_NORMAL_RECT i32 (region.addr $WND_NORMAL_RECT 0))
+  (global $MENU_BAR_TABLE i32 (region.addr $MENU_BAR_TABLE 0))
+  (global $MENU_BAR_TABLE_SIZE i32 (region.size $MENU_BAR_TABLE))
   (global $WND_NORMAL_RECT_SIZE i32 (region.size $WND_NORMAL_RECT))
   (global $WND_SLOT_END_SIZE i32 (region.size $WND_SLOT_END))
   ;; CLASS_NAME_STRINGS: the built-in control class names dialog templates and
@@ -4309,6 +4311,11 @@
   ;; can be open at a time across all windows.
   (global $menu_open_hwnd  (mut i32) (i32.const 0))
   (global $menu_open_top   (mut i32) (i32.const -1))
+  ;; The bar POSITION the open dropdown hangs from (highlighted on the bar and
+  ;; anchoring the dropdown), or -1 for a TrackPopupMenu popup. $menu_open_top
+  ;; names the dropdown's CONTENT: a blob top, or 0 of the popup blob built
+  ;; from an HMENU. They differ once a bar has an arrangement.
+  (global $menu_open_bar_pos (mut i32) (i32.const -1))
   (global $menu_open_hover (mut i32) (i32.const -1))
   (global $menu_open_sub_hover (mut i32) (i32.const -1))
   (global $menu_open_x     (mut i32) (i32.const -1))
