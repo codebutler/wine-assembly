@@ -1890,10 +1890,25 @@
   ;;   +12  userdata    (GWL_USERDATA)
   ;;   +16  style
   ;;   +20  state_ptr   (heap ptr to per-class WndState; 0 if none)
-  ;; 256 entries × 24 bytes = 0x1800 (0x7000..0x8800)
+  ;;
+  ;; $MAX_WINDOWS is the window capacity, and the ONLY statement of it: every
+  ;; per-slot table in src/00-regions.wat derives its extent from it with
+  ;; (stride N (count $MAX_WINDOWS)) or (bitmap (count $MAX_WINDOWS)), so
+  ;; changing this line resizes all of them and nothing can be left behind.
+  ;; Windows has a fixed USER handle table too (NT: 65536 entries, 10000 per
+  ;; process by default); 256 was far below what real programs create — mIRC's
+  ;; Options dialog alone keeps every page's controls alive, well over 256.
+  ;; It stays fixed rather than growable because every guest thread's instance
+  ;; reads these tables lock-free over shared memory, which needs them not to
+  ;; move. $gdi_rgn_window_owner_set packs slot + 1 into 16 bits, so this must
+  ;; stay below 0xFFFF.
   (global $WND_RECORDS   i32 (region.addr $WND_RECORDS 0))
   (global $WND_RECORDS_SIZE i32 (region.size $WND_RECORDS))
-  (global $MAX_WINDOWS   i32 (i32.const 256))
+  (global $MAX_WINDOWS   i32 (i32.const 4096))
+  (global $WND_SLOT_END i32 (region.addr $WND_SLOT_END 0))
+  (global $WND_NORMAL_RECT i32 (region.addr $WND_NORMAL_RECT 0))
+  (global $WND_NORMAL_RECT_SIZE i32 (region.size $WND_NORMAL_RECT))
+  (global $WND_SLOT_END_SIZE i32 (region.size $WND_SLOT_END))
   ;; CLASS_NAME_STRINGS: the built-in control class names dialog templates and
   ;; GetClassNameA answer with, plus the DirectAnimation coclass/behaviour
   ;; names $handle_CLSIDFromProgID matches. It was declared 0x80 bytes, which
@@ -2181,7 +2196,8 @@
   (global $GDI_WINDOW_SURFACE_HWM_SIZE i32 (region.size $GDI_WINDOW_SURFACE_HWM))
   (global $GDI_WINDOW_SURFACE_TABLE i32 (region.addr $GDI_WINDOW_SURFACE_TABLE 0))
   (global $GDI_WINDOW_SURFACE_TABLE_SIZE i32 (region.size $GDI_WINDOW_SURFACE_TABLE))
-  (global $GDI_WINDOW_SURFACE_COUNT i32 (i32.const 256))
+  ;; One record per window that owns a surface, so the table's capacity is the
+  ;; window table's: $MAX_WINDOWS, with no second copy of the number here.
   (global $GDI_WINDOW_SURFACE_STRIDE i32 (i32.const 32))
   (global $GDI_DC_AUX_TABLE i32 (region.addr $GDI_DC_AUX_TABLE 0))
   (global $GDI_DC_AUX_TABLE_SIZE i32 (region.size $GDI_DC_AUX_TABLE))

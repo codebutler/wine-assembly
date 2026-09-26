@@ -2366,7 +2366,7 @@
     (local $best i32) (local $best_rank i32)
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (call $wnd_slot_hwnd (local.get $i)))
       (if (i32.and
             (i32.ne (local.get $hwnd) (i32.const 0))
@@ -2391,7 +2391,7 @@
     (local.set $after_rank (call $wnd_z_get (local.get $after)))
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (call $wnd_slot_hwnd (local.get $i)))
       (if (i32.and
             (i32.ne (local.get $hwnd) (i32.const 0))

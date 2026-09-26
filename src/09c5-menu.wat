@@ -2109,7 +2109,7 @@
     (local.set $tidx (i32.sub (i32.shr_u (local.get $hmenu) (i32.const 16)) (i32.const 1)))
     (if (i32.lt_s (local.get $tidx) (i32.const 0)) (then (return (local.get $prev))))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
       (if (local.get $hwnd)
         (then
@@ -2140,7 +2140,7 @@
     (local.set $tidx (i32.sub (i32.shr_u (local.get $hmenu) (i32.const 16)) (i32.const 1)))
     (if (i32.lt_s (local.get $tidx) (i32.const 0)) (then (return (local.get $prev))))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
       (if (local.get $hwnd)
         (then
@@ -2204,7 +2204,7 @@
     (local.set $disabled (i32.and (local.get $flags) (i32.const 3)))
     (block $done
       (loop $wins
-        (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+        (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
         (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
         (if (local.get $hwnd)
           (then
@@ -2352,7 +2352,7 @@
     (local.set $tidx (i32.sub (i32.shr_u (local.get $hmenu) (i32.const 16)) (i32.const 1)))
     (local.set $i (i32.const 0))
     (block $done (loop $loop
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
       (if (local.get $hwnd)
         (then
@@ -2387,7 +2387,7 @@
     (local.set $prev (i32.const -1))
     (local.set $i (i32.const 0))
     (block $done (loop $loop
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
       (if (local.get $hwnd)
         (then
@@ -3793,7 +3793,7 @@
     (if (i32.eqz (local.get $hmenu)) (then (return (i32.const 0))))
     (block $done
       (loop $wins
-        (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+        (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
         (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
         (if (local.get $hwnd)
           (then
@@ -4657,7 +4657,8 @@
               (then (return (i32.const 1))))
             (call $menu_open (local.get $hwnd) (local.get $idx))
             (return (i32.const 1))))))
-    (local.set $slot (i32.sub (global.get $MAX_WINDOWS) (i32.const 1)))
+    (local.set $slot (i32.sub (call $wnd_slot_end) (i32.const 1)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return (i32.const 0))))
     (block $done (loop $scan
       (local.set $rec (call $wnd_record_addr (local.get $slot)))
       (local.set $hwnd (load.field WndRecord hwnd (local.get $rec)))

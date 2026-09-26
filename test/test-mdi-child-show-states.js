@@ -175,6 +175,21 @@ const extraWat = String.raw`
   assert.strictEqual(e.tmss_iconic(child), 0);
   assert.deepStrictEqual(rect(child), NORMAL, 'SW_RESTORE returns to rcNormalPosition');
 
+  // Every child keeps its own restore rectangle, however many are iconic at
+  // once. The rectangles used to live in an eight-entry list in the MDI
+  // client's state, so a ninth minimized child came back to nothing.
+  const many = [];
+  for (let i = 0; i < 12; i++) {
+    const r = { x: 5 + i, y: 7 + i * 2, w: 100 + i, h: 60 + i };
+    many.push({ hwnd: e.tmss_make_child(client, r.x, r.y, r.w, r.h) >>> 0, r });
+  }
+  for (const { hwnd } of many) assert.strictEqual(e.tmss_syscommand(hwnd, 0xF020), 1);
+  for (const { hwnd } of many) assert.strictEqual(e.tmss_iconic(hwnd), 1);
+  for (const { hwnd, r } of many) {
+    assert.strictEqual(e.tmss_syscommand(hwnd, 0xF120), 1);
+    assert.deepStrictEqual(rect(hwnd), r, 'each of twelve iconic children restores to its own rectangle');
+  }
+
   console.log('PASS  MDI child minimize, maximize and restore keep the normal rectangle');
 })().catch((err) => {
   console.error(err);

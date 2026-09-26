@@ -1298,7 +1298,7 @@
             (i32.eq (i32.load (local.get $p)) (local.get $owner))))
       (then (return (local.get $p))))
     (local.set $p (i32.const 0))
-    ;; Bounded by the high-water mark, not by GDI_WINDOW_SURFACE_COUNT. The
+    ;; Bounded by the high-water mark, not by the table capacity. The
     ;; one-entry hint above only caches a HIT, so a lookup for an hwnd with no
     ;; record walked all 256 slots and cached nothing, then did it again on the
     ;; next call. A handful of windows are ever live, so bounding the walk to
@@ -1332,7 +1332,7 @@
     (if (i32.and (i32.ne (local.get $create) (i32.const 0))
           (i32.and (i32.eqz (local.get $empty))
             (i32.lt_u (i32.load (global.get $GDI_WINDOW_SURFACE_HWM))
-              (global.get $GDI_WINDOW_SURFACE_COUNT))))
+              (global.get $MAX_WINDOWS))))
       (then
         (local.set $empty (i32.add (global.get $GDI_WINDOW_SURFACE_TABLE)
           (i32.mul (i32.load (global.get $GDI_WINDOW_SURFACE_HWM))
@@ -2019,7 +2019,7 @@
                 (i32.le_s (local.get $h) (i32.const 1)))
       (then (return (i32.const 0))))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (call $wnd_slot_hwnd (local.get $i)))
       (if (i32.and
             (i32.and

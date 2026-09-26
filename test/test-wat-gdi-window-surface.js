@@ -247,7 +247,7 @@ async function main() {
   wat.wnd_set_style_export(CHILD, 0x54000000);
   wat.wnd_set_style_export(SECOND_CHILD, 0x54000000);
   const wndSlot = hwnd => {
-    for (let slot = 0; slot < 256; slot++) {
+    for (let slot = 0; slot < RegionMap.SIZE.WND_RECORDS / 24; slot++) {
       if (dv.getUint32(RegionMap.BASE.WND_RECORDS + slot * 24, true) === hwnd) return slot;
     }
     return -1;

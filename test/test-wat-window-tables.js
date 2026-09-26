@@ -31,9 +31,11 @@ const IMAGE_BASE = 0x400000;
 const BARRIER = RegionMap.BASE.TEST_SCRATCH + 4;      // same cell test-wat-locks.js uses
 const ROUND_CELL = RegionMap.BASE.TEST_SCRATCH + 8;   // round number the main thread is handing out
 const DONE_CELL = RegionMap.BASE.TEST_SCRATCH + 12;   // workers that have finished the current round
-const WND_RECORDS = RegionMap.BASE.WND_RECORDS;  // 256 entries x 24 bytes
+const WND_RECORDS = RegionMap.BASE.WND_RECORDS;  // $MAX_WINDOWS entries x 24 bytes
 const WND_RECORD_SIZE = 24;
-const MAX_WINDOWS = 256;
+// The capacity is $MAX_WINDOWS, and the region is (stride 24 (count $MAX_WINDOWS)),
+// so read it back from the map rather than keeping a copy of the number here.
+const MAX_WINDOWS = RegionMap.SIZE.WND_RECORDS / WND_RECORD_SIZE;
 const CLASS_RECORDS = RegionMap.BASE.CLASS_RECORDS; // 64 entries x 48 bytes
 const CLASS_RECORD_SIZE = 48;
 const MAX_CLASSES = 64;
@@ -44,7 +46,7 @@ const MAX_CLASSES = 64;
 // memory is free space.
 const NAME_SCRATCH = 0x00020000;
 
-// Each thread claims 100 windows: 200 of 256 slots, enough that a lost update
+// Each thread claims 100 windows: 200 slots, enough that a lost update
 // is unambiguous and not so many that the table legitimately fills.
 const WINDOWS_PER_THREAD = 100;
 const ROUNDS = 40;

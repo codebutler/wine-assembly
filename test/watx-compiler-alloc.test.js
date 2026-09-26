@@ -210,6 +210,51 @@ mustFail('a mask over a non-power-of-two count cannot be well formed',
   ck('constraints apply to region.declare-fixed as well', r.success === true, r.error);
 }
 
+{
+  // A table of records may let its law BE its extent, so the capacity global is
+  // the only copy of the number: growing $CAP grows the region, and no written
+  // size can be left behind at the old value.
+  const r = build(`(global $CAP i32 (i32.const 12))
+   (region.floor 0x1000)
+   (region.declare $RECS (stride 0x18 (count $CAP)) (align 0x10))
+   (region.declare $AFTER (size 0x10) (align 0x10))`);
+  ck('(stride N (count $G)) alone derives the size', r.success === true, r.error);
+  if (r.success) {
+    const recs = r.regions.regions.find((x) => x.name === '$RECS');
+    const after = r.regions.regions.find((x) => x.name === '$AFTER');
+    ck('the derived size is stride x count', recs && recs.size === 0x18 * 12, recs && recs.size);
+    ck('and the allocator places the next region past it',
+      recs && after && after.base >= recs.base + recs.size, after && after.base);
+  }
+}
+{
+  // One bit per record, rounded up to whole bytes.
+  const r = build(`(global $CAP i32 (i32.const 20))
+   (region.floor 0x1000)
+   (region.declare $BITS (bitmap (count $CAP)) (align 0x10))`);
+  ck('(bitmap (count $G)) alone derives the size', r.success === true, r.error);
+  if (r.success) {
+    const bits = r.regions.regions.find((x) => x.name === '$BITS');
+    ck('a bitmap of 20 records is 3 bytes', bits && bits.size === 3, bits && bits.size);
+  }
+}
+{
+  const r = build(`(region.floor 0x1000) (region.declare $BITS (size 0x20) (bitmap (count 256)))`);
+  ck('a written size that agrees with a bitmap law compiles', r.success === true, r.error);
+}
+mustFail('a written size that disagrees with a bitmap law',
+  `(region.floor 0x1000) (region.declare $BITS (size 0x20) (bitmap (count 512)))`,
+  'is not (bitmap (count 512))');
+mustFail('a region cannot be records and bits at once',
+  `(region.floor 0x1000) (region.declare $A (stride 4 (count 8)) (bitmap (count 8)))`,
+  'a region is records or bits, not both');
+mustFail('a region with no extent and no law',
+  `(region.floor 0x1000) (region.declare $A (align 0x10))`,
+  'needs exactly one of (size N) or (end N)');
+mustFail('a bitmap is spelled with a count',
+  `(region.floor 0x1000) (region.declare $A (bitmap 8))`,
+  '(bitmap ...) is spelled (bitmap (count N))');
+
 console.log('── (4) DERIVED BASES (§4.3) ──');
 {
   // g2w(VA) = $GUEST_BASE + (VA - image base). The GUEST address is the written

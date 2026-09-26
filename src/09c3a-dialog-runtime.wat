@@ -578,7 +578,7 @@
       (loop $rescan
         (local.set $i (i32.const 0))
         (loop $scan
-          (br_if $outer (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+          (br_if $outer (i32.ge_u (local.get $i) (call $wnd_slot_end)))
           (local.set $addr (call $wnd_record_addr (local.get $i)))
           (local.set $child (load.field WndRecord hwnd (local.get $addr)))
           (if (i32.and (i32.ne (local.get $child) (i32.const 0))

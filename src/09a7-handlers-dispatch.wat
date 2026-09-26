@@ -5584,7 +5584,7 @@
     (local.set $i (i32.const 0))
     (local.set $used (i32.const 0))
     (block $done2 (loop $scan2
-      (br_if $done2 (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done2 (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (call $wnd_slot_hwnd (local.get $i))
         (then (local.set $used (i32.add (local.get $used) (i32.const 1)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))

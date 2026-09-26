@@ -1764,7 +1764,7 @@ function* generateWasmSteps(forms, loweredForms, checkResult, options = {}) {
       ['region.declare', 'alloc'],
     ]);
     const REGION_CLAUSES = new Set(['base', 'size', 'end', 'align', 'owner', 'within',
-      'stride', 'mask', 'size-is-power-of-2']);
+      'stride', 'bitmap', 'mask', 'size-is-power-of-2']);
     // §5.1: a SPAN is an address-range LIMIT, not storage. `$g2w`'s direct
     // guest window is the motivating case — its upper bound is the bare literal
     // `0x8000000` in three places, which is a union of regions with no name.
@@ -1887,7 +1887,7 @@ function* generateWasmSteps(forms, loweredForms, checkResult, options = {}) {
         if (!Array.isArray(part)) {
           throw located(form, `${head} ${name}: unexpected bare operand '${V(part)}'; ` +
             `clauses are (base N) (size N) (end N) (align N) (owner "text") (within $R) ` +
-            `(stride N (count N)) (mask $G) (size-is-power-of-2)`);
+            `(stride N (count N)) (bitmap (count N)) (mask $G) (size-is-power-of-2)`);
         }
         const key = V(part[1]);
         // Checked ahead of REGION_CLAUSES so a span's diagnostic lists a span's
@@ -1901,7 +1901,7 @@ function* generateWasmSteps(forms, loweredForms, checkResult, options = {}) {
         }
         if (!REGION_CLAUSES.has(key)) {
           throw located(form, `${head} ${name}: unknown clause (${key} ...); ` +
-            `expected base, size, end, align, owner, within, stride, mask, size-is-power-of-2`);
+            `expected base, size, end, align, owner, within, stride, bitmap, mask, size-is-power-of-2`);
         }
         if (clause.has(key)) {
           throw located(form, `${head} ${name}: duplicate (${key} ...) clause`);
@@ -1912,6 +1912,11 @@ function* generateWasmSteps(forms, loweredForms, checkResult, options = {}) {
           if (part.length !== 4 || !Array.isArray(part[3]) || V(part[3][1]) !== 'count' || part[3].length !== 3) {
             throw located(form, `${head} ${name}: (stride ...) is spelled (stride N (count N)); ` +
               `either operand may be a $-named i32 constant global`);
+          }
+        } else if (key === 'bitmap') {
+          if (part.length !== 3 || !Array.isArray(part[2]) || V(part[2][1]) !== 'count' || part[2].length !== 3) {
+            throw located(form, `${head} ${name}: (bitmap ...) is spelled (bitmap (count N)); ` +
+              `the operand may be a $-named i32 constant global`);
           }
         } else if (part.length !== 3) {
           throw located(form, `${head} ${name}: (${key} ...) takes exactly one operand`);
@@ -1933,11 +1938,23 @@ function* generateWasmSteps(forms, loweredForms, checkResult, options = {}) {
         return value;
       };
 
-      // Extent. `end` is exclusive, and exactly one of the two is required —
-      // "no extent" and "two extents" are both a map that does not say where a
-      // region stops.
-      if (clause.has('size') === clause.has('end')) {
-        throw located(form, `${head} ${name} needs exactly one of (size N) or (end N)`);
+      // Extent. `end` is exclusive, and exactly one extent is required — "no
+      // extent" and "two extents" are both a map that does not say where a
+      // region stops. A table of N records may instead let its law BE its
+      // extent: `(stride S (count $CAP))` alone is S*CAP bytes and
+      // `(bitmap (count $CAP))` alone is one bit per record, rounded up to a
+      // byte. That is what makes the capacity one statement — a written size
+      // beside it is a second copy of the same number that has to be edited in
+      // step, and the law would only catch the edit that forgot to.
+      if (clause.has('stride') && clause.has('bitmap')) {
+        throw located(form, `${head} ${name}: (stride ...) and (bitmap ...) are two laws for one ` +
+          `extent; a region is records or bits, not both`);
+      }
+      const derivesExtent = clause.has('stride') || clause.has('bitmap');
+      const extents = (clause.has('size') ? 1 : 0) + (clause.has('end') ? 1 : 0);
+      if (extents > 1 || (extents === 0 && !derivesExtent)) {
+        throw located(form, `${head} ${name} needs exactly one of (size N) or (end N), ` +
+          `or a (stride N (count N)) / (bitmap (count N)) law to derive its size from`);
       }
       let base = null, guestVa = null, size;
 
@@ -1960,6 +1977,14 @@ function* generateWasmSteps(forms, loweredForms, checkResult, options = {}) {
 
       if (clause.has('size')) {
         size = intClause('size');
+      } else if (!clause.has('end')) {
+        if (clause.has('stride')) {
+          const part = clause.get('stride');
+          size = amount(form, part[2], `${head} ${name} (stride ...)`) *
+            amount(form, part[3][2], `${head} ${name} (count ...)`);
+        } else {
+          size = Math.ceil(amount(form, clause.get('bitmap')[2][2], `${head} ${name} (bitmap (count ...))`) / 8);
+        }
       } else {
         if (kind !== 'fixed' && kind !== 'span') {
           throw located(form, `${head} ${name}: (end N) states an absolute address, ` +
@@ -2175,6 +2200,17 @@ function* generateWasmSteps(forms, loweredForms, checkResult, options = {}) {
             `(stride ${hx(stride)}) x (count ${count})`);
         }
         r.stride = stride; r.count = count;
+      }
+      if (r.clause.has('bitmap')) {
+        const count = amount(r.form, r.clause.get('bitmap')[2][2], `${r.head} ${r.name} (bitmap (count ...))`);
+        if (count < 1) {
+          throw located(r.form, `${r.head} ${r.name}: (bitmap (count ${count})) must be positive`);
+        }
+        if (Math.ceil(count / 8) !== r.size) {
+          throw located(r.form, `${r.head} ${r.name} (size ${hx(r.size)}) is not ` +
+            `(bitmap (count ${count})), which needs ${hx(Math.ceil(count / 8))} bytes`);
+        }
+        r.bits = count;
       }
       if (r.clause.has('mask')) {
         const gname = V(r.clause.get('mask')[2]);

@@ -5541,7 +5541,7 @@
     (if (i32.eqz (local.get $target)) (then (return)))
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (call $wnd_slot_hwnd (local.get $i)))
       ;; Nested, not one flat i32.and. WAT's i32.and is a bitwise operator and
       ;; does not short-circuit, so the flat form called BOTH $wnd_top_level and

@@ -114,7 +114,7 @@
           (i32.add (local.get $x) (call $wnd_screen_w (local.get $arg0))))
         (i32.store offset=40 (local.get $wa)
           (i32.add (local.get $y) (call $wnd_screen_h (local.get $arg0))))
-        (drop (call $mdi_normal_rect_out (local.get $arg0)
+        (drop (call $wnd_normal_rect_out (local.get $arg0)
           (i32.add (local.get $wa) (i32.const 28)))))
       (else
         (call $host_get_window_rect (local.get $arg0)
@@ -1644,7 +1644,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
   (func $mdi_client_size_children (param $client i32)
     (local $child i32) (local $next i32) (local $guard i32)
     (local.set $child (call $wnd_find_first_child (local.get $client)))
-    (local.set $guard (i32.const 256)) ;; one WND_RECORDS' worth of siblings
+    (local.set $guard (global.get $MAX_WINDOWS)) ;; one WND_RECORDS' worth of siblings
     (block $done
       (loop $walk
         (br_if $done (i32.eqz (local.get $child)))
@@ -1662,11 +1662,10 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local $frame i32) (local $old_menu i32) (local $new_menu i32)
     (if (i32.eq (local.get $msg) (i32.const 0x0001)) ;; WM_CREATE
       (then
-        ;; +0 hWindowMenu, +4 idFirstChild, +8 active child, +12 next child
-        ;; id, +16 the normal-rect table (see $mdi_normal_slot).
-        (local.set $state (call $heap_alloc (i32.const 176)))
+        ;; +0 hWindowMenu, +4 idFirstChild, +8 active child, +12 next child id.
+        (local.set $state (call $heap_alloc (i32.const 16)))
         (if (i32.eqz (local.get $state)) (then (return (i32.const -1))))
-        (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 176))
+        (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 16))
         (local.set $ccs (call $gl32 (local.get $lParam))) ;; CREATESTRUCT.lpCreateParams
         (if (local.get $ccs)
           (then
@@ -1827,7 +1826,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then (return (i32.const 0))))
     ;; Remember where the child was, once, so SC_RESTORE can put it back.
     ;; A re-maximize to follow the client's size must not overwrite it.
-    (call $mdi_normal_save (local.get $state) (local.get $child))
+    (call $wnd_normal_save (local.get $child))
     (local.set $w (i32.sub (call $client_rect_get_r (local.get $client))
                            (call $client_rect_get_l (local.get $client))))
     (local.set $h (i32.sub (call $client_rect_get_b (local.get $client))
@@ -1856,63 +1855,65 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (call $post_resize_messages (local.get $child) (i32.const 2))
     (i32.const 1))
 
-  ;; Normal rectangles of MDI children that are maximized or iconic: eight
-  ;; entries of { hwnd, x, y, w, h } (client coordinates) at state+16. A
-  ;; child's entry is written the first time it leaves its normal state and
-  ;; consumed when it returns to it, so a re-maximize that follows the
-  ;; client's size, or a minimize of a maximized child, keeps the original.
-  (func $mdi_normal_slot (param $state i32) (param $child i32) (result i32)
-    (local $i i32) (local $p i32)
-    (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (i32.const 8)))
-      (local.set $p (i32.add (local.get $state) (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 20)))))
-      (if (i32.eq (call $gl32 (local.get $p)) (local.get $child)) (then (return (local.get $p))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $scan)))
-    (i32.const 0))
+  ;; A window's normal rectangle while it is maximized or iconic (Win32's
+  ;; rcNormalPosition), one record per WND_RECORDS slot in $WND_NORMAL_RECT:
+  ;; +0 saved (0/1), then x, y, w, h in the parent's client coordinates. It is
+  ;; written the first time the window leaves its normal state and consumed
+  ;; when it returns, so a re-maximize that follows the client's size, or a
+  ;; minimize of a maximized child, keeps the original. It used to be an
+  ;; eight-entry list inside the MDI client's state, which silently dropped
+  ;; the restore position of a ninth maximized or iconic child.
+  (func $wnd_normal_addr (param $child i32) (result i32)
+    (local $slot i32)
+    (local.set $slot (call $wnd_table_find (local.get $child)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return (i32.const 0))))
+    (i32.add (global.get $WND_NORMAL_RECT) (i32.mul (local.get $slot) (i32.const 20))))
 
-  (func $mdi_normal_save (param $state i32) (param $child i32)
-    (local $p i32) (local $wh i32)
-    (if (call $mdi_normal_slot (local.get $state) (local.get $child)) (then (return)))
-    (local.set $p (call $mdi_normal_slot (local.get $state) (i32.const 0)))
-    (if (i32.eqz (local.get $p)) (then (return)))
+  (func $wnd_normal_reset_slot (param $slot i32)
+    (i32.store (i32.add (global.get $WND_NORMAL_RECT) (i32.mul (local.get $slot) (i32.const 20)))
+      (i32.const 0)))
+
+  ;; The saved record, or 0 when $child has none.
+  (func $wnd_normal_saved (param $child i32) (result i32)
+    (local $p i32)
+    (local.set $p (call $wnd_normal_addr (local.get $child)))
+    (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
+    (select (local.get $p) (i32.const 0) (i32.load (local.get $p))))
+
+  (func $wnd_normal_save (param $child i32)
+    (local $wh i32)
+    (if (call $wnd_normal_saved (local.get $child)) (then (return)))
     (local.set $wh (call $ctrl_get_wh_packed (local.get $child)))
-    (call $gs32 (local.get $p) (local.get $child))
-    (call $gs32 (i32.add (local.get $p) (i32.const 4)) (call $ctrl_get_x_s (local.get $child)))
-    (call $gs32 (i32.add (local.get $p) (i32.const 8)) (call $ctrl_get_y_s (local.get $child)))
-    (call $gs32 (i32.add (local.get $p) (i32.const 12)) (i32.and (local.get $wh) (i32.const 0xFFFF)))
-    (call $gs32 (i32.add (local.get $p) (i32.const 16)) (i32.shr_u (local.get $wh) (i32.const 16))))
+    (call $wnd_normal_set (local.get $child)
+      (call $ctrl_get_x_s (local.get $child)) (call $ctrl_get_y_s (local.get $child))
+      (i32.and (local.get $wh) (i32.const 0xFFFF)) (i32.shr_u (local.get $wh) (i32.const 16))))
 
-  (func $mdi_normal_set (param $state i32) (param $child i32)
+  (func $wnd_normal_set (param $child i32)
       (param $x i32) (param $y i32) (param $w i32) (param $h i32)
     (local $p i32)
-    (local.set $p (call $mdi_normal_slot (local.get $state) (local.get $child)))
-    (if (i32.eqz (local.get $p))
-      (then (local.set $p (call $mdi_normal_slot (local.get $state) (i32.const 0)))))
+    (local.set $p (call $wnd_normal_addr (local.get $child)))
     (if (i32.eqz (local.get $p)) (then (return)))
-    (call $gs32 (local.get $p) (local.get $child))
-    (call $gs32 (i32.add (local.get $p) (i32.const 4)) (local.get $x))
-    (call $gs32 (i32.add (local.get $p) (i32.const 8)) (local.get $y))
-    (call $gs32 (i32.add (local.get $p) (i32.const 12)) (local.get $w))
-    (call $gs32 (i32.add (local.get $p) (i32.const 16)) (local.get $h)))
+    (i32.store offset=4 (local.get $p) (local.get $x))
+    (i32.store offset=8 (local.get $p) (local.get $y))
+    (i32.store offset=12 (local.get $p) (local.get $w))
+    (i32.store offset=16 (local.get $p) (local.get $h))
+    (i32.store (local.get $p) (i32.const 1)))
 
   ;; GetWindowPlacement's rcNormalPosition for an iconic or maximized MDI
   ;; child: the rectangle it will come back to, not the one it has now.
   ;; Writes left/top/right/bottom at $out and returns 1 when one is saved.
-  (func $mdi_normal_rect_out (param $child i32) (param $out i32) (result i32)
-    (local $state i32) (local $p i32) (local $x i32) (local $y i32)
-    (local.set $state (call $mdi_client_state (call $wnd_get_parent (local.get $child))))
-    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (local.set $p (call $mdi_normal_slot (local.get $state) (local.get $child)))
+  (func $wnd_normal_rect_out (param $child i32) (param $out i32) (result i32)
+    (local $p i32) (local $x i32) (local $y i32)
+    (local.set $p (call $wnd_normal_saved (local.get $child)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
-    (local.set $x (call $gl32 (i32.add (local.get $p) (i32.const 4))))
-    (local.set $y (call $gl32 (i32.add (local.get $p) (i32.const 8))))
+    (local.set $x (i32.load offset=4 (local.get $p)))
+    (local.set $y (i32.load offset=8 (local.get $p)))
     (i32.store (local.get $out) (local.get $x))
     (i32.store offset=4 (local.get $out) (local.get $y))
     (i32.store offset=8 (local.get $out)
-      (i32.add (local.get $x) (call $gl32 (i32.add (local.get $p) (i32.const 12)))))
+      (i32.add (local.get $x) (i32.load offset=12 (local.get $p))))
     (i32.store offset=12 (local.get $out)
-      (i32.add (local.get $y) (call $gl32 (i32.add (local.get $p) (i32.const 16)))))
+      (i32.add (local.get $y) (i32.load offset=16 (local.get $p))))
     (i32.const 1))
 
   (func $mdi_icon_height (param $child i32) (result i32)
@@ -1946,7 +1947,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
           (i32.or (i32.eq (local.get $show) (i32.const 6))
                   (i32.eq (local.get $show) (i32.const 7))))
       (then
-        (call $mdi_normal_set (local.get $state) (local.get $child)
+        (call $wnd_normal_set (local.get $child)
           (local.get $x) (local.get $y) (local.get $w) (local.get $h))
         (call $wnd_apply_show_state (local.get $child) (local.get $show))
         (if (i32.and (i32.load offset=4 (local.get $wa)) (i32.const 1)) ;; WPF_SETMINPOSITION
@@ -1959,7 +1960,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (return (i32.const 1))))
     (if (i32.eq (local.get $show) (i32.const 3))
       (then
-        (call $mdi_normal_set (local.get $state) (local.get $child)
+        (call $wnd_normal_set (local.get $child)
           (local.get $x) (local.get $y) (local.get $w) (local.get $h))
         (call $wnd_apply_show_state (local.get $child) (i32.const 3))
         (drop (call $mdi_child_maximize (local.get $child)))
@@ -1971,11 +1972,11 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (select (i32.const 9) (i32.const 1) (i32.eq (local.get $show) (i32.const 9))))))
     (if (i32.or (call $wnd_min_get (local.get $child)) (call $wnd_max_get (local.get $child)))
       (then
-        (call $mdi_normal_set (local.get $state) (local.get $child)
+        (call $wnd_normal_set (local.get $child)
           (local.get $x) (local.get $y) (local.get $w) (local.get $h))
         (drop (call $mdi_child_restore (local.get $child)))
         (return (i32.const 1))))
-    (call $mdi_normal_set (local.get $state) (local.get $child)
+    (call $wnd_normal_set (local.get $child)
       (local.get $x) (local.get $y) (local.get $w) (local.get $h))
     (drop (call $mdi_child_restore (local.get $child)))
     (i32.const 1))
@@ -2015,7 +2016,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local.set $client (call $wnd_get_parent (local.get $child)))
     (local.set $state (call $mdi_client_state (local.get $client)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $mdi_normal_save (local.get $state) (local.get $child))
+    (call $wnd_normal_save (local.get $child))
     (block $done (loop $scan
       (local.set $slot (call $wnd_next_child_slot (local.get $client) (local.get $slot)))
       (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
@@ -2042,17 +2043,17 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local $state i32) (local $p i32)
     (local.set $state (call $mdi_client_state (call $wnd_get_parent (local.get $child))))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (local.set $p (call $mdi_normal_slot (local.get $state) (local.get $child)))
+    (local.set $p (call $wnd_normal_saved (local.get $child)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
     (if (call $wnd_min_get (local.get $child)) (then (return (i32.const 0))))
     (if (call $wnd_max_get (local.get $child))
       (then (return (call $mdi_child_maximize (local.get $child)))))
-    (call $gs32 (local.get $p) (i32.const 0))
+    (i32.store (local.get $p) (i32.const 0))
     (call $mdi_child_place (local.get $child)
-      (call $gl32 (i32.add (local.get $p) (i32.const 4)))
-      (call $gl32 (i32.add (local.get $p) (i32.const 8)))
-      (call $gl32 (i32.add (local.get $p) (i32.const 12)))
-      (call $gl32 (i32.add (local.get $p) (i32.const 16)))
+      (i32.load offset=4 (local.get $p))
+      (i32.load offset=8 (local.get $p))
+      (i32.load offset=12 (local.get $p))
+      (i32.load offset=16 (local.get $p))
       (i32.const 0)) ;; SIZE_RESTORED
     (i32.const 1))
 
@@ -2795,7 +2796,7 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (if (i32.lt_s (call $wnd_table_find (local.get $owner)) (i32.const 0))
       (then (return (i32.const 0))))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $rec (call $wnd_record_addr (local.get $i)))
       (local.set $hwnd (i32.atomic.load (local.get $rec)))
       (if (i32.and

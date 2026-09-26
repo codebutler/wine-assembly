@@ -3978,7 +3978,7 @@
   (func $paint_flag_first (result i32)
     (local $i i32)
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $i)))
         (then (return (i32.load (call $wnd_record_addr (local.get $i))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -3989,7 +3989,7 @@
   (func $paint_flag_take (result i32)
     (local $i i32) (local $hwnd i32)
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $i)))
         (then
           (i32.store8 (i32.add (global.get $PAINT_FLAGS) (local.get $i)) (i32.const 0))
@@ -4003,7 +4003,7 @@
   (func $paint_flag_any (result i32)
     (local $i i32)
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $i)))
         (then (return (i32.const 1))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -4024,7 +4024,7 @@
           (i32.ne (global.get $main_hwnd) (i32.const 0)))
       (then (call $paint_flag_set (global.get $main_hwnd))))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $i)))
         (then
           (local.set $hwnd (i32.load (call $wnd_record_addr (local.get $i))))
@@ -4141,7 +4141,7 @@
       (local.set $progress (i32.const 0))
       (local.set $i (i32.const 0))
       (block $found (loop $scan
-        (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+        (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
         (if (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $i)))
           (then
             (local.set $hwnd (i32.load (call $wnd_record_addr (local.get $i))))
@@ -4659,7 +4659,7 @@
     (local $i i32) (local $hwnd i32)
     (if (i32.eqz (global.get $nc_flags_count)) (then (return (i32.const 0))))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (i32.and (i32.load (i32.add (global.get $NC_FLAGS) (i32.mul (local.get $i) (i32.const 4))))
                    (i32.const 1))
         (then
@@ -4682,7 +4682,7 @@
     (if (i32.eqz (global.get $nc_flags_count)) (then (return (i32.const 0))))
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (i32.add (global.get $NC_FLAGS) (i32.mul (local.get $i) (i32.const 4))))
       (local.set $flags (i32.load (local.get $ptr)))
       (if (i32.and (local.get $flags) (local.get $mask))
@@ -5410,7 +5410,7 @@
   (func $wnd_first_visible_control_class (param $cls i32) (result i32)
     (local $i i32) (local $hwnd i32)
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $hwnd (i32.load (call $wnd_record_addr (local.get $i))))
       (if (i32.and
             (i32.and
@@ -6482,7 +6482,7 @@
       (i32.eqz (i32.and (local.get $style) (i32.const 0x04000000)))))
     (local.set $slot (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $slot) (call $wnd_slot_end)))
       (local.set $sib (call $wnd_slot_hwnd (local.get $slot)))
       (local.set $clip_sibling (call $wnd_z_is_above_sibling (local.get $hwnd) (local.get $sib)))
       (if (local.get $win16_frame)

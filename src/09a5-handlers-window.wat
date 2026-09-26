@@ -32,6 +32,22 @@
     ;; treating the caller's stack frame as the source of truth.
     (local.set $class_wa (call $g2w (local.get $arg1)))
     (if (local.get $arg2) (then (local.set $title_wa (call $g2w (local.get $arg2)))))
+    ;; No free WND_RECORDS slot means USER is out of window handles, and the
+    ;; call fails the way USER's does: NULL, ERROR_NO_MORE_USER_HANDLES, and
+    ;; nothing created. Issuing the HWND anyway gave the program a handle with
+    ;; no record behind it — GetDlgItem, SetWindowText and every other lookup
+    ;; then failed on it one at a time, far from here, with nothing reported
+    ;; (mIRC's Options dialog stopped walking its Mouse page at the first
+    ;; control it could not find). $wnd_table_find(0) is the first empty slot.
+    (if (i32.lt_s (call $wnd_table_find (i32.const 0)) (i32.const 0))
+      (then
+        (call $host_log "CreateWindowEx: the window table is full ($MAX_WINDOWS)"
+          (call $strlen "CreateWindowEx: the window table is full ($MAX_WINDOWS)"))
+        (global.set $last_error (i32.const 1158)) ;; ERROR_NO_MORE_USER_HANDLES
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 52)))
+        (return)))
     (local.set $hwnd (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (local.get $hwnd) (i32.const 1)))
     (i32.store offset=0 (global.get $reg_base) (local.get $hwnd))
@@ -3694,7 +3710,7 @@
     (if (i32.eq (local.get $arg0) (i32.const 0xFFFF)) ;; HWND_BROADCAST
       (then
         (block $done (loop $scan
-          (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+          (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
           (local.set $rec (call $wnd_record_addr (local.get $i)))
           (local.set $hwnd (i32.load (local.get $rec)))
           (if (i32.and (i32.ne (local.get $hwnd) (i32.const 0))

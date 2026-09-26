@@ -37,6 +37,24 @@
   (func $wnd_record_addr (param $slot i32) (result i32)
     (i32.add (global.get $WND_RECORDS) (i32.mul (local.get $slot) (size-of WndRecord))))
 
+  ;; Every scan of the per-slot tables stops at $wnd_slot_end: one past the
+  ;; highest slot $wnd_table_set has ever claimed. The capacity ($MAX_WINDOWS)
+  ;; is sized for the most windows any program keeps, which is far more than
+  ;; most ever create; before this mark, raising it from 256 to 4096 made every
+  ;; lookup walk 4096 records and nearly tripled mIRC's Options dialog
+  ;; (6.6s -> 18.2s). With it, a scan costs what the program's own window
+  ;; count costs.
+  ;;
+  ;; The mark lives in shared memory because every guest thread's instance
+  ;; claims slots in the same table. It only ever grows, and only under
+  ;; $LOCK_WND, where the slot is claimed; readers load it atomically, and
+  ;; a record it covers is published by its hwnd word exactly as before, so a
+  ;; reader that sees the new mark before the record simply sees an empty slot.
+  ;; It never shrinks, because slots are reused lowest-first and a scan over a
+  ;; few empty records is cheaper than tracking the top.
+  (func $wnd_slot_end (result i32)
+    (i32.atomic.load (global.get $WND_SLOT_END)))
+
   (func $wnd_thread_addr (param $slot i32) (result i32)
     (i32.add (global.get $WND_THREAD_TABLE) (i32.mul (local.get $slot) (i32.const 4))))
 
@@ -73,7 +91,7 @@
     (local $i i32) (local $rank i32) (local $max i32)
     (call $lock_wnd_acquire)
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $rank (i32.load (call $wnd_z_addr_for_slot (local.get $i))))
       (if (i32.gt_s (local.get $rank) (local.get $max))
         (then (local.set $max (local.get $rank))))
@@ -127,7 +145,7 @@
         (if (i32.gt_s (local.get $rank) (local.get $ceiling))
           (then (local.set $ceiling (local.get $rank))))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br_if $maximum (i32.lt_u (local.get $i) (global.get $MAX_WINDOWS))))
+        (br_if $maximum (i32.lt_u (local.get $i) (call $wnd_slot_end))))
       (call $wnd_z_raise (local.get $root))
       (local.set $level (call $wnd_z_get (local.get $root)))
       (loop $levels
@@ -155,7 +173,7 @@
                       (then (local.set $best (local.get $h))
                             (local.set $best_rank (local.get $rank))))))))
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
-            (br_if $scan (i32.lt_u (local.get $i) (global.get $MAX_WINDOWS))))
+            (br_if $scan (i32.lt_u (local.get $i) (call $wnd_slot_end))))
           (br_if $level_done (i32.eqz (local.get $best)))
           (call $wnd_z_raise (local.get $best))
           (local.set $next_level (call $wnd_z_get (local.get $best)))
@@ -197,7 +215,7 @@
         (local.set $min_rank (call $wnd_z_get (local.get $hwnd)))
         (local.set $i (i32.const 0))
         (block $bottom_done (loop $bottom_scan
-          (br_if $bottom_done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+          (br_if $bottom_done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
           (local.set $sib (call $wnd_slot_hwnd (local.get $i)))
           (if (i32.and
                 (i32.and (i32.ne (local.get $sib) (i32.const 0))
@@ -220,7 +238,7 @@
     ;; sibling down one leaves after_rank-1 free without an auxiliary sort.
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $sib (call $wnd_slot_hwnd (local.get $i)))
       (if (i32.and
             (i32.and (i32.ne (local.get $sib) (i32.const 0))
@@ -318,6 +336,7 @@
     (call $wnd_extra_reset_slot (local.get $slot))
     ;; Added with this registry — see the note above.
     (call $scroll_reset_slot (local.get $slot))
+    (call $wnd_normal_reset_slot (local.get $slot))
     (i32.store8 (i32.add (global.get $FLASH_TABLE) (local.get $slot)) (i32.const 0))
     (i32.store8 (i32.add (global.get $SHOW_STATE_TABLE) (local.get $slot)) (i32.const 0))
     (call $zero_memory (call $update_rect_addr_for_slot (local.get $slot)) (i32.const 16))
@@ -364,6 +383,9 @@
         (store.field.memarg WndRecord style (local.get $ptr) (i32.const 0))
         (store.field.memarg WndRecord state_ptr (local.get $ptr) (i32.const 0))
         (call $wnd_slot_reset (local.get $empty))
+        (if (i32.ge_u (local.get $empty) (call $wnd_slot_end))
+          (then (i32.atomic.store (global.get $WND_SLOT_END)
+                  (i32.add (local.get $empty) (i32.const 1)))))
         (call $wnd_z_init_slot (local.get $empty))
         (i32.store (call $wnd_thread_addr (local.get $empty))
           (global.get $current_thread_id))
@@ -389,7 +411,7 @@
     (local $i i32) (local $ptr i32)
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
         (then (return (load.field.memarg WndRecord wndproc (local.get $ptr)))))
@@ -402,7 +424,7 @@
   (func $wnd_get_thread (param $hwnd i32) (result i32)
     (local $i i32) (local $ptr i32)
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
         (then (return (i32.load (call $wnd_thread_addr (local.get $i))))))
@@ -423,7 +445,7 @@
     (local $i i32) (local $ptr i32) (local $state i32)
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
         (then
@@ -483,7 +505,7 @@
     ;; First, find all children and destroy them
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       (local.set $other (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $other) (i32.const 0))
@@ -542,7 +564,7 @@
 
   ;; Find window table slot index for hwnd; returns -1 if not found
   (func $wnd_table_find (param $hwnd i32) (result i32)
-    (local $i i32) (local $ptr i32) (local $hint i32)
+    (local $i i32) (local $ptr i32) (local $hint i32) (local $end i32)
     ;; hwnd 0 keeps the original exhaustive semantics. A caller passing it is
     ;; asking for the first *empty* slot, which is a position in the table and
     ;; not a window, so it must never be answered from a hint.
@@ -561,8 +583,11 @@
             (global.set $wnd_find_hint0 (local.get $hint))
             (return (local.get $hint))))))))
     (local.set $i (i32.const 0))
+    ;; A window is below the mark. Asking for hwnd 0 asks for the first EMPTY
+    ;; slot, which may be the mark itself, so that scan covers the capacity.
+    (local.set $end (select (call $wnd_slot_end) (global.get $MAX_WINDOWS) (local.get $hwnd)))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       ;; Atomic load (threads branch) + main's find-hint cache. The load stays
       ;; atomic because another instance can be publishing this slot's hwnd
@@ -996,7 +1021,7 @@
           (else (return)))))))
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (i32.and
             (i32.ne (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))) (i32.const 0))
             (i32.eq (i32.load8_u (i32.add (global.get $WND_CLASS_SLOT_TABLE) (local.get $i)))
@@ -1113,7 +1138,7 @@
     (if (i32.le_s (local.get $hdc) (i32.const 0))
       (then (return (i32.const 0))))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (if (i32.eq (i32.load (call $wnd_own_dc_addr_for_slot (local.get $i)))
                   (local.get $hdc))
         (then (return (i32.const 1))))
@@ -1216,7 +1241,7 @@
     (local $i i32) (local $ptr i32) (local $h i32)
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       (local.set $h (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $h) (i32.const 0))
@@ -1233,7 +1258,7 @@
     (local.set $last (i32.const 0))
     (local.set $i (i32.const 0))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       (local.set $h (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $h) (i32.const 0))
@@ -1252,7 +1277,7 @@
     (local.set $parent (load.field.memarg WndRecord parent (call $wnd_record_addr (local.get $idx))))
     (local.set $i (i32.add (local.get $idx) (i32.const 1)))
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
       (local.set $h (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $h) (i32.const 0))
@@ -1718,7 +1743,7 @@
         (return (i32.const 1411)))) ;; ERROR_CLASS_DOES_NOT_EXIST
     (local.set $i (i32.const 0))
     (block $window_done (loop $window_scan
-      (br_if $window_done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (br_if $window_done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $wnd_ptr (call $wnd_record_addr (local.get $i)))
       (if (i32.and
             (i32.ne (i32.atomic.load (local.get $wnd_ptr)) (i32.const 0))

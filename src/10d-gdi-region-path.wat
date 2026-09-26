@@ -36,10 +36,12 @@
   ;; Once SetWindowRgn succeeds, USER owns the supplied HRGN until that
   ;; window's region is replaced, cleared, or the window is destroyed. Keep
   ;; that association on the canonical region record instead of maintaining a
-  ;; second handle table. Bits 16..24 of the generation word encode window
+  ;; second handle table. Bits 16..31 of the generation word encode window
   ;; slot + 1; the low byte remains the handle generation and bit 8 remains
-  ;; the lazy JS-mirror flag.
-  (global $GDI_RGN_WINDOW_OWNER_MASK i32 (i32.const 0x01FF0000))
+  ;; the lazy JS-mirror flag. The field was nine bits (0x01FF0000), which held
+  ;; only 511 slots: it has to cover $MAX_WINDOWS, so it takes the whole high
+  ;; half of the word.
+  (global $GDI_RGN_WINDOW_OWNER_MASK i32 (i32.const 0xFFFF0000))
 
   (func $gdi_rgn_window_owner_set (param $hrgn i32) (param $slot i32) (result i32)
     (local $record i32) (local $owner i32)

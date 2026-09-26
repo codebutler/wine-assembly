@@ -1303,7 +1303,7 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (local $x i32) (local $y i32) (local $w i32) (local $h i32)
     (local $deep i32)
     (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS)))
+      (br_if $done (i32.ge_u (local.get $slot) (call $wnd_slot_end)))
       (local.set $hwnd (call $wnd_slot_hwnd (local.get $slot)))
       (if (i32.and
             (i32.and (i32.ne (local.get $hwnd) (i32.const 0))

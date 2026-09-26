@@ -82,7 +82,7 @@ at the bottom of this file, not left to whoever is editing.
 d04ed1d5ca74fc1b6f10357576a38e726d58f0ad908ccf34a29de35052aa1a33  tools/watx.js
 ea4a14dd488cddf51ca135a2aeddc93cc60c3f8daf132044eb7c5d73e8803f8b  tools/watx-src/compiler-parser.js
 b2d79b473ac8d3083c33d9d6e635f04aeae2c33c35a2907767f503f38ecb0a03  tools/watx-src/compiler-stages.js
-84744dbdef3897f589f1c1465cc6d3025448250df09b1254369fdb16f73fa94d  tools/watx-src/compiler-codegen.js
+95cf3b1942ade4a9b567bc14691431dbd56f1c79ed170fb50a4a971d28f75b05  tools/watx-src/compiler-codegen.js
 0633b916abfcab30ba5f2698b27da2454ae387afd3c781e1c35d21c8506f5175  tools/watx-src/compiler.js
 293c1a233359bf142bf5badceb3399c92b79a653a86085681142b2037d80fce4  test/watx-compiler-wine-parity.test.js
 282b11b841b8e676c7d514280cf9794795c1c367a28a5e3a2742733b3b27caf8  test/watx-compiler-production.test.js
@@ -101,7 +101,7 @@ a1b425dc42f4fd3458cf983710c00c028c11f99afab51bd9b5c90046df0ae15b  test/watx-comp
 1bf02a515c0b1d3dc50737f177868f505aaa2c0c02b9562fc3925b0adf7af609  test/watx-compiler-literals.test.js
 4bcc836d2a63143457c4f8edb5678920bf204db13201d58580fbe64499aed21b  test/watx-compiler-type-index.test.js
 3c3fe13c63933d12446b22aad6334fe62e57b21c9968336ef9db11d5848f7ccb  test/watx-compiler-regions.test.js
-07596a8750d10d747487c59aae5ae57cf664f42cfb32de4e43143a4bf635dadc  test/watx-compiler-alloc.test.js
+f1df015cea74adb534188af552a3337fb72e19ee2d618f7b894f9af36fcd63f7  test/watx-compiler-alloc.test.js
 ```
 
 Every hash above matches the android-emu working tree byte for byte except
@@ -146,6 +146,6 @@ without re-sealing. Both lines are rewritten together by
 CHANGELOG already names the new digest.
 
 ```seal
-manifest-sha256   665ecfd1111c360f5e04ec1ef94ee29a43035c630f4e0204c0f15abf722790c4
-changelog-sha256  2090a14b77b2ba7361142308b9f3ae79ae555a3b5afa016572a94c0b027b4c18
+manifest-sha256   09108db0fc69963719325092ecd4c2bb05d78ff2f29c09cb3472dde611beaa5b
+changelog-sha256  1db48f9d8cf422d2589660e287fdfba789ad8abd6d4be7bd162272ed14116569
 ```

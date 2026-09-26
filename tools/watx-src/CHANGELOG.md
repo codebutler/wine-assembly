@@ -1994,3 +1994,33 @@ Manifest digest: `8033b7d1ed16150b1d488ddeeec81e8fdf116e3657386c9e3e872913033081
   46215810 source-transform build exactly (1435041 bytes).
 
 Manifest digest: `665ecfd1111c360f5e04ec1ef94ee29a43035c630f4e0204c0f15abf722790c4`
+
+## 2026-09-26 — A table's law may be its extent; bitmaps get a law of their own
+
+- `compiler-codegen.js`: a `region.declare` may now omit `(size N)` when it
+  carries `(stride S (count C))`: the extent is `S x C`. Before this, every
+  table of N records wrote its size twice — once as the literal and once as the
+  law — and the law only caught an edit that changed one copy and not the
+  other. The window table's capacity (`$MAX_WINDOWS`) was written as a literal
+  in 33 declarations, and only 2 of them carried the law at all; raising it
+  meant editing each one by hand. With the law as the extent, `$MAX_WINDOWS`
+  is the only statement of the number and every table follows it.
+- New clause `(bitmap (count C))`: one bit per record, rounded up to whole
+  bytes. Three per-window tables are bitmaps (region bits, native status bar,
+  native tab), and a byte stride cannot state them, so they had no law and a
+  hard-coded 32-byte size. Given alongside a written size it is checked like a
+  stride law; `(stride ...)` and `(bitmap ...)` together are refused (a region
+  is records or bits, not both).
+- A declaration with neither an extent nor a law still fails, with the message
+  now naming the law as an alternative.
+- `test/watx-compiler-alloc.test.js`: the derived stride size and where the
+  allocator places the next region after it; a bitmap of 20 records is 3
+  bytes; a written size agreeing and disagreeing with a bitmap law; the
+  records-and-bits refusal; a region with no extent; a bitmap spelled without
+  its count. 90 passed, 0 failed.
+- Canonical bytes did not move for the rewrite alone: with every per-slot
+  table converted and `$MAX_WINDOWS` still 256, `build/wine-assembly.wasm`
+  was `603ea816187392eb71adeaeeaba6cebb4a24df0aa97058746170a73ce8c56169`
+  before and after.
+
+Manifest digest: `09108db0fc69963719325092ecd4c2bb05d78ff2f29c09cb3472dde611beaa5b`

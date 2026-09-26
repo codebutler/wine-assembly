@@ -167,6 +167,15 @@ function collectDeclarations(overrideFile, shake) {
     } else if (/\(stride\b/.test(afterHead)) {
       d.parseErrors.push(`(stride ...) is spelled (stride N (count N))`);
     }
+    // `(bitmap (count N))` is the same kind of nested law for a table of one
+    // bit per record; accepted and skipped for the same reason.
+    const bitmapLaw = /\(bitmap\s+\(count\s+([^()\s]+)\s*\)\s*\)/.exec(afterHead);
+    if (bitmapLaw) {
+      afterHead = afterHead.replace(bitmapLaw[0], '');
+      d.bitmapLaw = { count: bitmapLaw[1] };
+    } else if (/\(bitmap\b/.test(afterHead)) {
+      d.parseErrors.push(`(bitmap ...) is spelled (bitmap (count N))`);
+    }
     const seenClauses = new Set();
     const values = new Map();
     let m;
