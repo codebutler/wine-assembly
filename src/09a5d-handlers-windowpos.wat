@@ -429,6 +429,11 @@
     ;; gives the client its new CLIENT_RECT -- the child is sized from that.
     ;; The helper is a no-op for a window with no maximized MDI children.
     (call $mdi_client_size_children (local.get $arg0))
+    (if (i32.and
+          (i32.ne (i32.and (local.get $uFlags) (i32.const 0x0003)) (i32.const 0x0003))
+          (i32.eqz (i32.and (local.get $uFlags) (i32.const 0x0008)))) ;; !SWP_NOREDRAW
+      (then (call $windowpos_child_expose
+        (local.get $arg0) (local.get $old_xy) (local.get $old_wh))))
     (call $windowpos_message_update
       (local.get $windowpos) (local.get $arg0) (local.get $insert_after)
       (local.get $x) (local.get $y) (local.get $cx) (local.get $cy)
@@ -438,6 +443,37 @@
         (call $windowpos_message_end (local.get $windowpos) (local.get $arg0))
         (call $windowpos_finish_paint (local.get $arg0) (local.get $uFlags))))
     (i32.const 1))
+
+  ;; A child that moved or changed size uncovers part of its parent and must
+  ;; itself be drawn again where it now is: USER invalidates the old rectangle
+  ;; in the parent (with erase) and the window's new area. The parent's paint
+  ;; re-seeds whatever children lie under its update rectangle -- siblings the
+  ;; window used to cover, and the window itself if the rectangles overlap.
+  ;; Without it a dragged MDI document left copies of itself behind and its
+  ;; contents stayed where they were.
+  (func $windowpos_child_expose (param $hwnd i32) (param $old_xy i32) (param $old_wh i32)
+    (local $parent i32) (local $x i32) (local $y i32)
+    (if (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)))
+      (then (return)))
+    (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    (if (i32.eqz (local.get $parent)) (then (return)))
+    (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd))) (then (return)))
+    (local.set $x (i32.shr_s (i32.shl (local.get $old_xy) (i32.const 16)) (i32.const 16)))
+    (local.set $y (i32.shr_s (local.get $old_xy) (i32.const 16)))
+    (call $update_invalidate_rect (local.get $parent)
+      (local.get $x) (local.get $y)
+      (i32.add (local.get $x) (i32.and (local.get $old_wh) (i32.const 0xFFFF)))
+      (i32.add (local.get $y) (i32.shr_u (local.get $old_wh) (i32.const 16))))
+    (call $nc_flags_set (local.get $parent) (i32.const 2)) ;; erase
+    (if (i32.eq (local.get $parent) (global.get $main_hwnd))
+      (then (global.set $paint_pending (i32.const 1)))
+      (else (call $paint_flag_set (local.get $parent))))
+    (call $host_invalidate (local.get $parent))
+    (call $update_invalidate_full (local.get $hwnd))
+    (call $nc_flags_set (local.get $hwnd) (i32.const 2))
+    (call $paint_flag_set (local.get $hwnd))
+    (call $host_invalidate (local.get $hwnd))
+    (drop (call $paint_seed_child_paints (local.get $hwnd))))
 
   ;; Run after CHANGED returns, whether it used Win32 synchronous dispatch or
   ;; the Win16 far continuation. Never paint ahead of the guest notification.

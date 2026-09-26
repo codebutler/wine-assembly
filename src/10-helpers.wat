@@ -6883,7 +6883,13 @@
         (drop (call $gdi_dc_system_clip_rect
           (local.get $hdc)
           (local.get $cr_l) (local.get $cr_t)
-          (local.get $cr_r) (local.get $cr_b) (i32.const 4))))))
+          (local.get $cr_r) (local.get $cr_b) (i32.const 4)))))
+    ;; A child's frame is part of its window, so it has the window DC's
+    ;; visible region: inside the parent's client area and not under a
+    ;; sibling above it. mIRC parks a minimized MDI child at (-100,-100) in the
+    ;; MDI client; without this its title bar painted over the frame's caption.
+    (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd))
+    (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
 
   ;; Every WASM instance owns its count and its corresponding thread partition.
   (func $post_queue_base (result i32)

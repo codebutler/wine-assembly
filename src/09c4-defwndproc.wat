@@ -1248,3 +1248,141 @@
         (drop (call $post_queue_push
           (local.get $hwnd) (i32.const 0x00A1) (local.get $down_hit) (local.get $lp)))))
     (i32.const 1))
+
+  ;; ---- Child-window move/size tracking --------------------------------
+  ;; DefWindowProc answers WM_NCLBUTTONDOWN on a caption or sizing border with
+  ;; USER's move/size loop, which repositions the window on the app's own
+  ;; thread as the mouse moves. A top-level frame is moved by the host, which
+  ;; owns desktop geometry; a framed CHILD (an MDI document) lives in its
+  ;; parent's client area, so its geometry is USER's. The host reports the
+  ;; pointer here, and the next GetMessage/PeekMessage applies it through
+  ;; SetWindowPos -- on the guest thread, as the real loop does, so the
+  ;; WM_WINDOWPOSCHANGING/CHANGED transaction reaches the app.
+  (global $nc_track_hwnd (mut i32) (i32.const 0))
+  (global $nc_track_hit (mut i32) (i32.const 0))
+  (global $nc_track_sx (mut i32) (i32.const 0))
+  (global $nc_track_sy (mut i32) (i32.const 0))
+  (global $nc_track_px (mut i32) (i32.const 0))
+  (global $nc_track_py (mut i32) (i32.const 0))
+  (global $nc_track_x (mut i32) (i32.const 0))
+  (global $nc_track_y (mut i32) (i32.const 0))
+  (global $nc_track_w (mut i32) (i32.const 0))
+  (global $nc_track_h (mut i32) (i32.const 0))
+  (global $nc_track_dirty (mut i32) (i32.const 0))
+  (global $nc_track_ended (mut i32) (i32.const 0))
+
+  (func $nc_track_hit_moves (param $hit i32) (result i32)
+    (i32.or (i32.eq (local.get $hit) (i32.const 2))       ;; HTCAPTION
+      (i32.and (i32.ge_u (local.get $hit) (i32.const 10))  ;; HTLEFT..
+               (i32.le_u (local.get $hit) (i32.const 17))))) ;; ..HTBOTTOMRIGHT
+
+  ;; Begin tracking a press at screen (sx, sy). Returns the hit code when a
+  ;; child caption or sizing border was pressed, 0 otherwise.
+  (func $nc_track_begin (export "nc_track_begin")
+        (param $hwnd i32) (param $sx i32) (param $sy i32) (result i32)
+    (local $hit i32) (local $wh i32)
+    (if (i32.or (i32.eqz (local.get $hwnd))
+          (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000))))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (call $wnd_get_parent (local.get $hwnd))) (then (return (i32.const 0))))
+    (local.set $hit (call $defwndproc_do_nchittest
+      (local.get $hwnd) (local.get $sx) (local.get $sy)))
+    (if (i32.eqz (call $nc_track_hit_moves (local.get $hit))) (then (return (i32.const 0))))
+    (local.set $wh (call $ctrl_get_wh_packed (local.get $hwnd)))
+    (global.set $nc_track_hwnd (local.get $hwnd))
+    (global.set $nc_track_hit (local.get $hit))
+    (global.set $nc_track_sx (local.get $sx))
+    (global.set $nc_track_sy (local.get $sy))
+    (global.set $nc_track_px (local.get $sx))
+    (global.set $nc_track_py (local.get $sy))
+    (global.set $nc_track_x (call $ctrl_get_x_s (local.get $hwnd)))
+    (global.set $nc_track_y (call $ctrl_get_y_s (local.get $hwnd)))
+    (global.set $nc_track_w (i32.and (local.get $wh) (i32.const 0xFFFF)))
+    (global.set $nc_track_h (i32.shr_u (local.get $wh) (i32.const 16)))
+    (global.set $nc_track_dirty (i32.const 0))
+    (global.set $nc_track_ended (i32.const 0))
+    ;; The press itself is still a message the app sees: WM_NCLBUTTONDOWN
+    ;; with the hit code and the screen point (DefWindowProc activates the
+    ;; child from it).
+    (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x00A1)
+      (local.get $hit)
+      (i32.or (i32.shl (i32.and (local.get $sy) (i32.const 0xFFFF)) (i32.const 16))
+              (i32.and (local.get $sx) (i32.const 0xFFFF)))))
+    (local.get $hit))
+
+  (func $nc_track_move (export "nc_track_move") (param $sx i32) (param $sy i32) (result i32)
+    (if (i32.eqz (global.get $nc_track_hwnd)) (then (return (i32.const 0))))
+    (global.set $nc_track_px (local.get $sx))
+    (global.set $nc_track_py (local.get $sy))
+    (global.set $nc_track_dirty (i32.const 1))
+    (i32.const 1))
+
+  (func $nc_track_end (export "nc_track_end") (param $sx i32) (param $sy i32) (result i32)
+    (if (i32.eqz (call $nc_track_move (local.get $sx) (local.get $sy)))
+      (then (return (i32.const 0))))
+    (global.set $nc_track_ended (i32.const 1))
+    (i32.const 1))
+
+  (func $nc_track_pending (result i32)
+    (i32.and (i32.ne (global.get $nc_track_hwnd) (i32.const 0))
+             (i32.ne (global.get $nc_track_dirty) (i32.const 0))))
+
+  ;; Apply the tracked pointer. Called from GetMessage/PeekMessage on the
+  ;; window's thread; a no-op when nothing moved.
+  (func $nc_track_apply
+    (local $hwnd i32) (local $hit i32) (local $dx i32) (local $dy i32)
+    (local $l i32) (local $t i32) (local $r i32) (local $b i32)
+    (local.set $hwnd (global.get $nc_track_hwnd))
+    (if (i32.eqz (call $nc_track_pending)) (then (return)))
+    ;; Only the window's own thread runs its move loop.
+    (if (i32.and
+          (i32.ne (call $wnd_get_thread (local.get $hwnd)) (i32.const 0))
+          (i32.ne (call $wnd_get_thread (local.get $hwnd)) (global.get $current_thread_id)))
+      (then (return)))
+    (global.set $nc_track_dirty (i32.const 0))
+    (if (global.get $nc_track_ended) (then (global.set $nc_track_hwnd (i32.const 0))))
+    (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+      (then (global.set $nc_track_hwnd (i32.const 0)) (return)))
+    (local.set $hit (global.get $nc_track_hit))
+    (local.set $dx (i32.sub (global.get $nc_track_px) (global.get $nc_track_sx)))
+    (local.set $dy (i32.sub (global.get $nc_track_py) (global.get $nc_track_sy)))
+    (local.set $l (global.get $nc_track_x))
+    (local.set $t (global.get $nc_track_y))
+    (local.set $r (i32.add (local.get $l) (global.get $nc_track_w)))
+    (local.set $b (i32.add (local.get $t) (global.get $nc_track_h)))
+    (if (i32.eq (local.get $hit) (i32.const 2))
+      (then
+        (drop (call $set_window_pos_core (local.get $hwnd) (i32.const 0)
+          (i32.add (local.get $l) (local.get $dx)) (i32.add (local.get $t) (local.get $dy))
+          (i32.const 0) (i32.const 0)
+          (i32.const 0x15) ;; SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE
+          (i32.const 0)))
+        (return)))
+    ;; HTLEFT 10, HTRIGHT 11, HTTOP 12, HTTOPLEFT 13, HTTOPRIGHT 14,
+    ;; HTBOTTOM 15, HTBOTTOMLEFT 16, HTBOTTOMRIGHT 17.
+    (if (i32.or (i32.eq (local.get $hit) (i32.const 10))
+          (i32.or (i32.eq (local.get $hit) (i32.const 13)) (i32.eq (local.get $hit) (i32.const 16))))
+      (then (local.set $l (i32.add (local.get $l) (local.get $dx)))))
+    (if (i32.or (i32.eq (local.get $hit) (i32.const 11))
+          (i32.or (i32.eq (local.get $hit) (i32.const 14)) (i32.eq (local.get $hit) (i32.const 17))))
+      (then (local.set $r (i32.add (local.get $r) (local.get $dx)))))
+    (if (i32.and (i32.ge_u (local.get $hit) (i32.const 12)) (i32.le_u (local.get $hit) (i32.const 14)))
+      (then (local.set $t (i32.add (local.get $t) (local.get $dy)))))
+    (if (i32.and (i32.ge_u (local.get $hit) (i32.const 15)) (i32.le_u (local.get $hit) (i32.const 17)))
+      (then (local.set $b (i32.add (local.get $b) (local.get $dy)))))
+    ;; SM_CXMINTRACK / SM_CYMINTRACK, pinned to the edge being dragged.
+    (if (i32.lt_s (i32.sub (local.get $r) (local.get $l)) (i32.const 112))
+      (then
+        (if (i32.eq (local.get $l) (global.get $nc_track_x))
+          (then (local.set $r (i32.add (local.get $l) (i32.const 112))))
+          (else (local.set $l (i32.sub (local.get $r) (i32.const 112)))))))
+    (if (i32.lt_s (i32.sub (local.get $b) (local.get $t)) (i32.const 27))
+      (then
+        (if (i32.eq (local.get $t) (global.get $nc_track_y))
+          (then (local.set $b (i32.add (local.get $t) (i32.const 27))))
+          (else (local.set $t (i32.sub (local.get $b) (i32.const 27)))))))
+    (drop (call $set_window_pos_core (local.get $hwnd) (i32.const 0)
+      (local.get $l) (local.get $t)
+      (i32.sub (local.get $r) (local.get $l)) (i32.sub (local.get $b) (local.get $t))
+      (i32.const 0x14) ;; SWP_NOZORDER|SWP_NOACTIVATE
+      (i32.const 0))))

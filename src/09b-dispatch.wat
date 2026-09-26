@@ -867,16 +867,19 @@
           (then
             (local.set $arg3 (i32.const 0))            ;; lParam
             (local.set $arg4 (call $wnd_table_get (local.get $arg0)))
-            ;; A WAT-native control paints itself, whether or not the app has
-            ;; subclassed it. Routing WM_PAINT at its current wndproc sends it
-            ;; to the subclass, which chains back through CallWindowProc -- and
-            ;; that deliberately drops WM_PAINT, so the control never draws.
-            ;; sndvol32 subclasses the volume-controls list exactly this way.
-            ;; The modeless drain ($paint_drain_native_control_paints) already
-            ;; dispatches natively for the same reason.
+            ;; A WAT-native control nobody subclassed paints itself. A
+            ;; subclassed one gets WM_PAINT at its subclass, exactly as
+            ;; GetMessage delivers it: the subclass decides whether to chain
+            ;; to the native painter (CallWindowProc routes WM_PAINT there).
+            ;; mIRC subclasses a STATIC as its chat display and declines
+            ;; WM_PAINT until the window is set up; painting the STATIC
+            ;; natively instead filled the Status pane with the button face
+            ;; while the About box was up.
             (if (i32.and
-                  (i32.ne (local.get $arg0) (global.get $dlg_pump_hwnd))
-                  (i32.ne (call $ctrl_table_get_class (local.get $arg0)) (i32.const 0)))
+                  (i32.and
+                    (i32.ne (local.get $arg0) (global.get $dlg_pump_hwnd))
+                    (i32.ne (call $ctrl_table_get_class (local.get $arg0)) (i32.const 0)))
+                  (i32.eqz (call $ctrl_is_subclassed (local.get $arg0))))
               (then
                 (drop (call $control_wndproc_dispatch
                   (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))

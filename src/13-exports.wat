@@ -2334,6 +2334,7 @@
     (if (global.get $pending_child_create) (then (return (i32.const 1))))
     (if (global.get $pending_child_size) (then (return (i32.const 1))))
     (if (global.get $pending_input_packed) (then (return (i32.const 1))))
+    (if (call $nc_track_pending) (then (return (i32.const 1))))
     (if (call $post_queue_total_count) (then (return (i32.const 1))))
     (if (call $shared_post_queue_read (i32.const 0) (i32.const 0))
       (then (return (i32.const 1))))

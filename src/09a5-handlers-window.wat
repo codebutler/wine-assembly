@@ -1401,6 +1401,19 @@
     (if (i32.and (i32.eq (local.get $arg1) (i32.const 3))
                  (i32.ne (local.get $arg0) (global.get $main_hwnd)))
       (then (drop (call $mdi_child_maximize (local.get $arg0)))))
+    ;; Minimizing an MDI child makes it a title bar in the client; restoring
+    ;; it (or a maximized one) puts back its normal rectangle. Both answer 0
+    ;; for a window that is not an MDI child.
+    (if (i32.ne (local.get $arg0) (global.get $main_hwnd))
+      (then
+        (if (i32.or (i32.eq (local.get $arg1) (i32.const 2))
+              (i32.or (i32.eq (local.get $arg1) (i32.const 6))
+                      (i32.eq (local.get $arg1) (i32.const 7))))
+          (then (drop (call $mdi_child_iconify (local.get $arg0)))))
+        (if (i32.or (i32.eq (local.get $arg1) (i32.const 9))
+              (i32.or (i32.eq (local.get $arg1) (i32.const 1))
+                      (i32.eq (local.get $arg1) (i32.const 10))))
+          (then (drop (call $mdi_child_restore (local.get $arg0)))))))
     ;; First ShowWindow on main_hwnd (non-hide) drives the synchronous activation
     ;; chain: WM_ACTIVATEAPP → WM_ACTIVATE → WM_SETFOCUS. Non-maximized
     ;; startup still uses pending_wm_size; maximized startup queued resize above.
@@ -1797,6 +1810,7 @@
     (local $sp i32) (local $ret i32) (local $eat i32)
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (local.set $ret (call $gl32 (local.get $sp)))
+    (if (i32.eqz (global.get $code16)) (then (call $nc_track_apply)))
     (loop $fetch
       (call $handle_GetMessageA_fetch (local.get $arg0) (local.get $arg1) (local.get $arg2)
         (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -2101,6 +2115,7 @@
     (local $sp i32) (local $ret i32) (local $eat i32)
     (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (local.set $ret (call $gl32 (local.get $sp)))
+    (if (i32.eqz (global.get $code16)) (then (call $nc_track_apply)))
     (loop $fetch
       (call $handle_PeekMessageA_fetch (local.get $arg0) (local.get $arg1) (local.get $arg2)
         (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -3415,6 +3430,13 @@
     ;; the standard path.
     (if (i32.eq (local.get $arg1) (i32.const 0x00A1))
     (then
+      ;; A press on a child's caption or frame activates it: USER sends
+      ;; WM_CHILDACTIVATE, which DefMDIChildProc turns into MDI activation.
+      (if (i32.and
+            (i32.ne (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000)) (i32.const 0))
+            (call $nc_track_hit_moves (local.get $arg2)))
+        (then (drop (call $wnd_send_message (local.get $arg0) (i32.const 0x0022)
+          (i32.const 0) (i32.const 0)))))
       (if (i32.eq (local.get $arg2) (i32.const 20))  ;; HTCLOSE
         (then (drop (call $post_queue_push (local.get $arg0)
                 (i32.const 0x0112) (i32.const 0xF060) (i32.const 0)))))

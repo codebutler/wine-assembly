@@ -103,12 +103,19 @@
       (then
         (local.set $x (call $ctrl_get_x_s (local.get $arg0)))
         (local.set $y (call $ctrl_get_y_s (local.get $arg0)))
+        ;; An iconic child's icon position is ptMinPosition.
+        (if (call $wnd_min_get (local.get $arg0))
+          (then
+            (i32.store offset=12 (local.get $wa) (local.get $x))
+            (i32.store offset=16 (local.get $wa) (local.get $y))))
         (i32.store offset=28 (local.get $wa) (local.get $x))
         (i32.store offset=32 (local.get $wa) (local.get $y))
         (i32.store offset=36 (local.get $wa)
           (i32.add (local.get $x) (call $wnd_screen_w (local.get $arg0))))
         (i32.store offset=40 (local.get $wa)
-          (i32.add (local.get $y) (call $wnd_screen_h (local.get $arg0)))))
+          (i32.add (local.get $y) (call $wnd_screen_h (local.get $arg0))))
+        (drop (call $mdi_normal_rect_out (local.get $arg0)
+          (i32.add (local.get $wa) (i32.const 28)))))
       (else
         (call $host_get_window_rect (local.get $arg0)
           (i32.add (local.get $wa) (i32.const 28)))))
@@ -808,6 +815,11 @@
     (local $wa i32) (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
     (local $show i32)
     (local.set $wa (call $g2w (local.get $arg1)))
+    (if (call $mdi_child_set_placement (local.get $arg0) (local.get $wa))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (return)))
     ;; Read rcNormalPosition from WINDOWPLACEMENT at offset 28
     (local.set $left   (i32.load offset=28 (local.get $wa)))
     (local.set $top    (i32.load offset=32 (local.get $wa)))
@@ -1650,9 +1662,11 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local $frame i32) (local $old_menu i32) (local $new_menu i32)
     (if (i32.eq (local.get $msg) (i32.const 0x0001)) ;; WM_CREATE
       (then
-        (local.set $state (call $heap_alloc (i32.const 16)))
+        ;; +0 hWindowMenu, +4 idFirstChild, +8 active child, +12 next child
+        ;; id, +16 the normal-rect table (see $mdi_normal_slot).
+        (local.set $state (call $heap_alloc (i32.const 176)))
         (if (i32.eqz (local.get $state)) (then (return (i32.const -1))))
-        (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 16))
+        (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 176))
         (local.set $ccs (call $gl32 (local.get $lParam))) ;; CREATESTRUCT.lpCreateParams
         (if (local.get $ccs)
           (then
@@ -1806,10 +1820,14 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; stayed at the 0x0 it was created with. Returns 0 when $child is not an
   ;; MDI child, so an ordinary child costs one parent lookup.
   (func $mdi_child_maximize (param $child i32) (result i32)
-    (local $client i32) (local $w i32) (local $h i32)
+    (local $client i32) (local $w i32) (local $h i32) (local $state i32)
     (local.set $client (call $wnd_get_parent (local.get $child)))
-    (if (i32.eqz (call $mdi_client_state (local.get $client)))
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (if (i32.eqz (local.get $state))
       (then (return (i32.const 0))))
+    ;; Remember where the child was, once, so SC_RESTORE can put it back.
+    ;; A re-maximize to follow the client's size must not overwrite it.
+    (call $mdi_normal_save (local.get $state) (local.get $child))
     (local.set $w (i32.sub (call $client_rect_get_r (local.get $client))
                            (call $client_rect_get_l (local.get $client))))
     (local.set $h (i32.sub (call $client_rect_get_b (local.get $client))
@@ -1832,9 +1850,210 @@ GetTopWindow(hWnd) — 1 arg stdcall
                (call $client_rect_get_l (local.get $child)))
       (i32.sub (call $client_rect_get_b (local.get $child))
                (call $client_rect_get_t (local.get $child))))
+    (call $gdi_refresh_window_dc_system_clips)
     ;; wParam 2 = SIZE_MAXIMIZED. $post_resize_messages recomputes the
     ;; non-client area itself and queues the matching erase/paint.
     (call $post_resize_messages (local.get $child) (i32.const 2))
+    (i32.const 1))
+
+  ;; Normal rectangles of MDI children that are maximized or iconic: eight
+  ;; entries of { hwnd, x, y, w, h } (client coordinates) at state+16. A
+  ;; child's entry is written the first time it leaves its normal state and
+  ;; consumed when it returns to it, so a re-maximize that follows the
+  ;; client's size, or a minimize of a maximized child, keeps the original.
+  (func $mdi_normal_slot (param $state i32) (param $child i32) (result i32)
+    (local $i i32) (local $p i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 8)))
+      (local.set $p (i32.add (local.get $state) (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 20)))))
+      (if (i32.eq (call $gl32 (local.get $p)) (local.get $child)) (then (return (local.get $p))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $mdi_normal_save (param $state i32) (param $child i32)
+    (local $p i32) (local $wh i32)
+    (if (call $mdi_normal_slot (local.get $state) (local.get $child)) (then (return)))
+    (local.set $p (call $mdi_normal_slot (local.get $state) (i32.const 0)))
+    (if (i32.eqz (local.get $p)) (then (return)))
+    (local.set $wh (call $ctrl_get_wh_packed (local.get $child)))
+    (call $gs32 (local.get $p) (local.get $child))
+    (call $gs32 (i32.add (local.get $p) (i32.const 4)) (call $ctrl_get_x_s (local.get $child)))
+    (call $gs32 (i32.add (local.get $p) (i32.const 8)) (call $ctrl_get_y_s (local.get $child)))
+    (call $gs32 (i32.add (local.get $p) (i32.const 12)) (i32.and (local.get $wh) (i32.const 0xFFFF)))
+    (call $gs32 (i32.add (local.get $p) (i32.const 16)) (i32.shr_u (local.get $wh) (i32.const 16))))
+
+  (func $mdi_normal_set (param $state i32) (param $child i32)
+      (param $x i32) (param $y i32) (param $w i32) (param $h i32)
+    (local $p i32)
+    (local.set $p (call $mdi_normal_slot (local.get $state) (local.get $child)))
+    (if (i32.eqz (local.get $p))
+      (then (local.set $p (call $mdi_normal_slot (local.get $state) (i32.const 0)))))
+    (if (i32.eqz (local.get $p)) (then (return)))
+    (call $gs32 (local.get $p) (local.get $child))
+    (call $gs32 (i32.add (local.get $p) (i32.const 4)) (local.get $x))
+    (call $gs32 (i32.add (local.get $p) (i32.const 8)) (local.get $y))
+    (call $gs32 (i32.add (local.get $p) (i32.const 12)) (local.get $w))
+    (call $gs32 (i32.add (local.get $p) (i32.const 16)) (local.get $h)))
+
+  ;; GetWindowPlacement's rcNormalPosition for an iconic or maximized MDI
+  ;; child: the rectangle it will come back to, not the one it has now.
+  ;; Writes left/top/right/bottom at $out and returns 1 when one is saved.
+  (func $mdi_normal_rect_out (param $child i32) (param $out i32) (result i32)
+    (local $state i32) (local $p i32) (local $x i32) (local $y i32)
+    (local.set $state (call $mdi_client_state (call $wnd_get_parent (local.get $child))))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (local.set $p (call $mdi_normal_slot (local.get $state) (local.get $child)))
+    (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
+    (local.set $x (call $gl32 (i32.add (local.get $p) (i32.const 4))))
+    (local.set $y (call $gl32 (i32.add (local.get $p) (i32.const 8))))
+    (i32.store (local.get $out) (local.get $x))
+    (i32.store offset=4 (local.get $out) (local.get $y))
+    (i32.store offset=8 (local.get $out)
+      (i32.add (local.get $x) (call $gl32 (i32.add (local.get $p) (i32.const 12)))))
+    (i32.store offset=12 (local.get $out)
+      (i32.add (local.get $y) (call $gl32 (i32.add (local.get $p) (i32.const 16)))))
+    (i32.const 1))
+
+  (func $mdi_icon_height (param $child i32) (result i32)
+    ;; Caption (18) plus the frame above and below it.
+    (i32.add (i32.const 18)
+      (i32.mul (call $defwndproc_frame_width (local.get $child)) (i32.const 2))))
+
+  ;; SetWindowPlacement on an MDI child. rcNormalPosition is where the child
+  ;; lives while it is normal; when showCmd minimizes or maximizes it, that
+  ;; rectangle is only remembered for the restore. WPF_SETMINPOSITION places
+  ;; the icon at ptMinPosition -- mIRC minimizes its windows to (-100,-100),
+  ;; off the client, and lists them in its own switchbar. Returns 0 when
+  ;; $child is not an MDI child. $wa is the WINDOWPLACEMENT (wasm address).
+  (func $mdi_child_set_placement (param $child i32) (param $wa i32) (result i32)
+    (local $state i32) (local $show i32) (local $x i32) (local $y i32)
+    (local $w i32) (local $h i32)
+    (local.set $state (call $mdi_client_state (call $wnd_get_parent (local.get $child))))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (local.set $show (i32.load offset=8 (local.get $wa)))
+    (local.set $x (i32.load offset=28 (local.get $wa)))
+    (local.set $y (i32.load offset=32 (local.get $wa)))
+    (local.set $w (i32.sub (i32.load offset=36 (local.get $wa)) (local.get $x)))
+    (local.set $h (i32.sub (i32.load offset=40 (local.get $wa)) (local.get $y)))
+    ;; Every showCmd but SW_HIDE also shows the window.
+    (if (local.get $show)
+      (then
+        (drop (call $wnd_set_style (local.get $child)
+          (i32.or (call $wnd_get_style (local.get $child)) (i32.const 0x10000000))))
+        (drop (call $host_show_window (local.get $child) (i32.const 8))))) ;; SW_SHOWNA
+    (if (i32.or (i32.eq (local.get $show) (i32.const 2))
+          (i32.or (i32.eq (local.get $show) (i32.const 6))
+                  (i32.eq (local.get $show) (i32.const 7))))
+      (then
+        (call $mdi_normal_set (local.get $state) (local.get $child)
+          (local.get $x) (local.get $y) (local.get $w) (local.get $h))
+        (call $wnd_apply_show_state (local.get $child) (local.get $show))
+        (if (i32.and (i32.load offset=4 (local.get $wa)) (i32.const 1)) ;; WPF_SETMINPOSITION
+          (then
+            (call $mdi_child_place (local.get $child)
+              (i32.load offset=12 (local.get $wa)) (i32.load offset=16 (local.get $wa))
+              (i32.const 160) (call $mdi_icon_height (local.get $child))
+              (i32.const 1))) ;; SIZE_MINIMIZED
+          (else (drop (call $mdi_child_iconify (local.get $child)))))
+        (return (i32.const 1))))
+    (if (i32.eq (local.get $show) (i32.const 3))
+      (then
+        (call $mdi_normal_set (local.get $state) (local.get $child)
+          (local.get $x) (local.get $y) (local.get $w) (local.get $h))
+        (call $wnd_apply_show_state (local.get $child) (i32.const 3))
+        (drop (call $mdi_child_maximize (local.get $child)))
+        (return (i32.const 1))))
+    ;; A restoring or normal showCmd: back to rcNormalPosition, or to
+    ;; maximized for SW_RESTORE on an icon that was maximized before.
+    (if (local.get $show)
+      (then (call $wnd_apply_show_state (local.get $child)
+        (select (i32.const 9) (i32.const 1) (i32.eq (local.get $show) (i32.const 9))))))
+    (if (i32.or (call $wnd_min_get (local.get $child)) (call $wnd_max_get (local.get $child)))
+      (then
+        (call $mdi_normal_set (local.get $state) (local.get $child)
+          (local.get $x) (local.get $y) (local.get $w) (local.get $h))
+        (drop (call $mdi_child_restore (local.get $child)))
+        (return (i32.const 1))))
+    (call $mdi_normal_set (local.get $state) (local.get $child)
+      (local.get $x) (local.get $y) (local.get $w) (local.get $h))
+    (drop (call $mdi_child_restore (local.get $child)))
+    (i32.const 1))
+
+  ;; Place an MDI child and deliver the WM_SIZE for its new show state, then
+  ;; repaint the client area it uncovered.
+  (func $mdi_child_place (param $child i32) (param $x i32) (param $y i32)
+      (param $w i32) (param $h i32) (param $size_type i32)
+    (local $old_xy i32) (local $old_wh i32)
+    (local.set $old_xy (call $ctrl_get_xy_packed (local.get $child)))
+    (local.set $old_wh (call $ctrl_get_wh_packed (local.get $child)))
+    (call $host_move_window (local.get $child) (local.get $x) (local.get $y)
+      (local.get $w) (local.get $h) (i32.const 0x0014))
+    (call $ctrl_geom_sync (local.get $child) (local.get $x) (local.get $y)
+      (local.get $w) (local.get $h) (i32.const 0x0014))
+    (call $defwndproc_do_nccalcsize (local.get $child))
+    (call $host_sync_window_client
+      (local.get $child)
+      (call $wnd_client_screen_x (local.get $child))
+      (call $wnd_client_screen_y (local.get $child))
+      (i32.sub (call $client_rect_get_r (local.get $child))
+               (call $client_rect_get_l (local.get $child)))
+      (i32.sub (call $client_rect_get_b (local.get $child))
+               (call $client_rect_get_t (local.get $child))))
+    ;; Retained control DCs cache a visible region; the child's new client
+    ;; area changes every descendant's (as SetWindowPos refreshes them).
+    (call $gdi_refresh_window_dc_system_clips)
+    (call $post_resize_messages (local.get $child) (local.get $size_type))
+    (call $windowpos_child_expose (local.get $child) (local.get $old_xy) (local.get $old_wh)))
+
+  ;; A minimized MDI child is a title bar along the bottom of the MDI client,
+  ;; one 160-pixel slot per iconic sibling, left to right. Called after the
+  ;; iconic bit is set. Returns 0 when $child is not an MDI child.
+  (func $mdi_child_iconify (param $child i32) (result i32)
+    (local $client i32) (local $state i32) (local $slot i32) (local $sib i32)
+    (local $index i32) (local $h i32)
+    (local.set $client (call $wnd_get_parent (local.get $child)))
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (call $mdi_normal_save (local.get $state) (local.get $child))
+    (block $done (loop $scan
+      (local.set $slot (call $wnd_next_child_slot (local.get $client) (local.get $slot)))
+      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
+      (local.set $sib (call $wnd_slot_hwnd (local.get $slot)))
+      (if (i32.and (i32.ne (local.get $sib) (local.get $child))
+                   (call $wnd_min_get (local.get $sib)))
+        (then (local.set $index (i32.add (local.get $index) (i32.const 1)))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (local.set $h (call $mdi_icon_height (local.get $child)))
+    (call $mdi_child_place (local.get $child)
+      (i32.mul (local.get $index) (i32.const 160))
+      (i32.sub (i32.sub (call $client_rect_get_b (local.get $client))
+                        (call $client_rect_get_t (local.get $client)))
+               (local.get $h))
+      (i32.const 160) (local.get $h)
+      (i32.const 1)) ;; SIZE_MINIMIZED
+    (i32.const 1))
+
+  ;; An MDI child leaving the iconic or maximized state, after its show-state
+  ;; bits say where it is going: back to maximized, or to its saved normal
+  ;; rectangle. Returns 0 when $child is not an MDI child with a saved rect.
+  (func $mdi_child_restore (param $child i32) (result i32)
+    (local $state i32) (local $p i32)
+    (local.set $state (call $mdi_client_state (call $wnd_get_parent (local.get $child))))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (local.set $p (call $mdi_normal_slot (local.get $state) (local.get $child)))
+    (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
+    (if (call $wnd_min_get (local.get $child)) (then (return (i32.const 0))))
+    (if (call $wnd_max_get (local.get $child))
+      (then (return (call $mdi_child_maximize (local.get $child)))))
+    (call $gs32 (local.get $p) (i32.const 0))
+    (call $mdi_child_place (local.get $child)
+      (call $gl32 (i32.add (local.get $p) (i32.const 4)))
+      (call $gl32 (i32.add (local.get $p) (i32.const 8)))
+      (call $gl32 (i32.add (local.get $p) (i32.const 12)))
+      (call $gl32 (i32.add (local.get $p) (i32.const 16)))
+      (i32.const 0)) ;; SIZE_RESTORED
     (i32.const 1))
 
   ;; MDI-child messages that add behavior beyond DefWindowProc. The caller
@@ -1873,6 +2092,19 @@ GetTopWindow(hWnd) — 1 arg stdcall
             (drop (call $mdiclient_wndproc
               (local.get $client) (i32.const 0x0224) (local.get $child)
               (i32.eq (local.get $cmd) (i32.const 0xF050))))
+            (return (i32.const 1))))
+        (if (i32.eq (local.get $cmd) (i32.const 0xF120)) ;; SC_RESTORE
+          (then
+            (if (i32.or (call $wnd_min_get (local.get $child))
+                        (call $wnd_max_get (local.get $child)))
+              (then
+                (call $wnd_apply_show_state (local.get $child) (i32.const 9))
+                (drop (call $mdi_child_restore (local.get $child)))
+                (return (i32.const 1))))))
+        (if (i32.eq (local.get $cmd) (i32.const 0xF020)) ;; SC_MINIMIZE
+          (then
+            (call $wnd_apply_show_state (local.get $child) (i32.const 6))
+            (drop (call $mdi_child_iconify (local.get $child)))
             (return (i32.const 1))))
         (if (i32.eq (local.get $cmd) (i32.const 0xF030)) ;; SC_MAXIMIZE
           (then
