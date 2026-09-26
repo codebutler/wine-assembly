@@ -953,7 +953,7 @@
     (call $wnd_table_set (local.get $dlg) (global.get $WNDPROC_CTRL_NATIVE))
     (call $title_table_set (local.get $dlg) (i32.const 0x252) (i32.const 5))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (call $defwndproc_do_nccalcsize (local.get $dlg))
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg))
       (i32.const 15) (i32.const 0))

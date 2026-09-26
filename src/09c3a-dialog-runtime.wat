@@ -1215,7 +1215,7 @@
     (call $wnd_table_set (local.get $dlg) (global.get $WNDPROC_CTRL_NATIVE))
     (call $wnd_unicode_set (local.get $dlg) (local.get $wide))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg)) (i32.const 32) (i32.const 0))
     (if (local.get $caption_w)
       (then (call $title_table_set
@@ -1327,7 +1327,7 @@
       (select (region.addr $USER_DIALOG_STRINGS 0x160) (region.addr $USER_DIALOG_STRINGS 0x17B) (local.get $is_replace))
       (select (i32.const 7) (i32.const 4) (local.get $is_replace)))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     ;; Tag the parent dialog as control class 10 so $control_wndproc_dispatch
     ;; routes WM_COMMAND from child buttons to $findreplace_wndproc.
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg))

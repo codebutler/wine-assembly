@@ -2200,7 +2200,7 @@
     (call $title_table_set (local.get $dlg) (local.get $title_buf_w)
       (i32.add (local.get $app_len) (i32.const 6)))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     ;; USER calculates the client rect before the first WM_NCPAINT. The NC
     ;; painter's clip is window minus client; without this, ShellAbout's
     ;; frame repaint erases the child STATIC/BUTTON controls.
@@ -2411,7 +2411,7 @@
     (call $wnd_table_set (local.get $dlg) (global.get $WNDPROC_CTRL_NATIVE))
     (call $title_table_set (local.get $dlg) (i32.const 0x24C) (i32.const 5))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (call $defwndproc_do_nccalcsize (local.get $dlg))
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg)) (i32.const 13) (i32.const 0))
     (call $nc_flags_set (local.get $dlg) (i32.const 3))
@@ -2460,7 +2460,7 @@
     (call $wnd_table_set (local.get $dlg) (global.get $WNDPROC_CTRL_NATIVE))
     (call $title_table_set (local.get $dlg) (i32.const 0x241) (i32.const 10))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (call $defwndproc_do_nccalcsize (local.get $dlg))
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg)) (i32.const 13) (i32.const 0))
     (call $nc_flags_set (local.get $dlg) (i32.const 3))
@@ -2647,7 +2647,7 @@
       (then (call $title_table_set (local.get $dlg) (local.get $caption_wa)
               (local.get $cap_len))))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg))
       (i32.const 16) (i32.const 0))
     ;; Match the normal dialog path: establish client geometry before any
@@ -2946,7 +2946,7 @@
     (call $wnd_table_set (local.get $dlg) (global.get $WNDPROC_CTRL_NATIVE))
     (call $title_table_set (local.get $dlg) (i32.const 0x258) (i32.const 4))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (call $defwndproc_do_nccalcsize (local.get $dlg))
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg))
       (i32.const 14) (i32.const 0))

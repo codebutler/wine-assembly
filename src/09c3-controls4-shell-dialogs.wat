@@ -39,7 +39,7 @@
     (call $title_table_set (local.get $dlg) (local.get $title_wa)
       (call $strlen (local.get $title_wa)))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     ;; Client geometry must exist before the first WM_NCPAINT, or the frame
     ;; repaint erases the child controls (the same ordering ShellAbout needs).
     (call $defwndproc_do_nccalcsize (local.get $dlg))

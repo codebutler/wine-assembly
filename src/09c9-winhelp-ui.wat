@@ -3100,7 +3100,7 @@
     (call $title_table_set (local.get $hwnd)
       (global.get $help_topics_labels_wa) (i32.const 11))
     (call $wnd_set_owner (local.get $hwnd) (global.get $help_session_owner))
-    (drop (call $wnd_set_style (local.get $hwnd) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $hwnd) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (global.set $help_topics_hwnd (local.get $hwnd))
     (call $defwndproc_do_nccalcsize (local.get $hwnd))
     (call $defwndproc_do_ncpaint (local.get $hwnd))

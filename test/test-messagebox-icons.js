@@ -8,7 +8,8 @@
 // used to ignore those bits. It now carries an SS_ICON static (id 20, as
 // USER's own MessageBox template) holding the stock HICON at the client's
 // top left, with the message moved right of it and the box grown to match.
-// A box without an icon keeps its old layout.
+// A box without an icon keeps its old layout, and the box, a DS_MODALFRAME
+// dialog, has no caption icon either way.
 
 const assert = require('assert');
 const { bootRenderHarness, flushPendingPaints } = require('./render-helper');
@@ -28,6 +29,7 @@ const extraWat = String.raw`
   (func (export "tmi_style") (param $h i32) (result i32) (call $wnd_get_style (local.get $h)))
   (func (export "tmi_stock") (param $id i32) (result i32)
     (call $icon_intern (global.get $ICON_FROM_STOCK) (local.get $id)))
+  (func (export "tmi_caption_icon") (param $h i32) (result i32) (call $caption_icon (local.get $h)))
   (func (export "tmi_first_static_x") (param $dlg i32) (result i32)
     (call $ctrl_get_x_s (call $ctrl_find_by_id (local.get $dlg) (i32.const 0xFFFF))))
 `;
@@ -65,6 +67,8 @@ const extraWat = String.raw`
   assert.strictEqual(e.tmi_first_static_x(plain), 16, 'the message sits at the left margin');
   const plainW = r.windows[plain].w;
   assert.strictEqual(inkIn(plain, yellow), 0, 'and nothing yellow is drawn');
+  // A DS_MODALFRAME dialog, as USER's MessageBox template is: no caption icon.
+  assert.strictEqual(e.tmi_caption_icon(plain), 0, 'the caption shows no icon');
   e.tmi_done();
 
   const IDS = { 0x10: 32513, 0x20: 32514, 0x30: 32515, 0x40: 32516 };

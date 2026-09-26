@@ -78,13 +78,21 @@
     (local.get $icon))
 
   ;; WS_EX_DLGMODALFRAME, or a dialog made from a DS_MODALFRAME template --
-  ;; which is where CreateDialog puts WS_EX_DLGMODALFRAME on Windows.
+  ;; which is where CreateDialog puts WS_EX_DLGMODALFRAME on Windows. The
+  ;; system's own dialogs (MessageBox, the common dialogs) are top-level
+  ;; windows of the built-in control procedure and carry DS_MODALFRAME, as
+  ;; their Windows templates do.
   (func $wnd_modal_frame (param $hwnd i32) (result i32)
+    (local $style i32)
     (if (i32.and (call $ctrl_get_ex_style (local.get $hwnd)) (i32.const 0x1))
       (then (return (i32.const 1))))
+    (local.set $style (call $wnd_get_style (local.get $hwnd)))
+    (if (i32.eqz (i32.and (local.get $style) (i32.const 0x80)))
+      (then (return (i32.const 0))))
+    (if (call $dialog_proc_get (local.get $hwnd)) (then (return (i32.const 1))))
     (i32.and
-      (i32.ne (call $dialog_proc_get (local.get $hwnd)) (i32.const 0))
-      (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x80)) (i32.const 0))))
+      (i32.eq (call $wnd_table_get (local.get $hwnd)) (global.get $WNDPROC_CTRL_NATIVE))
+      (i32.eqz (i32.and (local.get $style) (i32.const 0x40000000)))))  ;; not WS_CHILD
 
   ;; IDI_APPLICATION, the icon a window without one wears.
   (func $stock_icon_default (result i32)

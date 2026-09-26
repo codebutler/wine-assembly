@@ -601,7 +601,7 @@
     (call $title_table_set (local.get $dlg) (local.get $title_wa)
       (call $strlen (local.get $title_wa)))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
-    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
+    (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80080))) ;; WS_POPUP|WS_VISIBLE|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg))
       (i32.const 12) (i32.const 0))
     ;; Match USER's create order: establish the dialog frame/client rect before
