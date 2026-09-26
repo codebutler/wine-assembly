@@ -1532,6 +1532,14 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then (return (i32.const 0))))
     (call $wnd_get_state_ptr (local.get $client)))
 
+;; Is an MDI child shown maximized now? A child minimized from maximized
+  ;; keeps its maximized bit, so SW_RESTORE takes it back to maximized; it is
+  ;; not zoomed while it is an icon.
+  (func $mdi_child_zoomed (param $child i32) (result i32)
+    (i32.and (i32.ne (local.get $child) (i32.const 0))
+      (i32.and (i32.ne (call $wnd_max_get (local.get $child)) (i32.const 0))
+               (i32.eqz (call $wnd_min_get (local.get $child))))))
+
   (func $mdi_client_active (param $client i32) (result i32)
     (local $state i32)
     (local.set $state (call $mdi_client_state (local.get $client)))
@@ -1591,7 +1599,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.and
           (i32.and (i32.ne (local.get $old) (i32.const 0))
                    (i32.ne (local.get $child) (i32.const 0)))
-          (i32.ne (call $wnd_max_get (local.get $old)) (i32.const 0)))
+          (i32.ne (call $mdi_child_zoomed (local.get $old)) (i32.const 0)))
       (then
         (if (i32.eqz (call $wnd_max_get (local.get $child)))
           (then
@@ -1667,7 +1675,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (local.set $guard (i32.sub (local.get $guard) (i32.const 1)))
         ;; Read the next sibling first: re-maximizing may reorder the list.
         (local.set $next (call $wnd_find_next_sibling (local.get $child)))
-        (if (call $wnd_max_get (local.get $child))
+        (if (call $mdi_child_zoomed (local.get $child))
           (then (drop (call $mdi_child_maximize (local.get $child)))))
         (local.set $child (local.get $next))
         (br $walk))))
@@ -1719,7 +1727,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then
         (local.set $child (call $mdi_client_active (local.get $hwnd)))
         (if (local.get $lParam)
-          (then (call $gs32 (local.get $lParam) (call $wnd_max_get (local.get $child)))))
+          (then (call $gs32 (local.get $lParam) (call $mdi_child_zoomed (local.get $child)))))
         (return (local.get $child))))
     (if (i32.eq (local.get $msg) (i32.const 0x0224)) ;; WM_MDINEXT
       (then
@@ -1791,8 +1799,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (if (i32.ge_u (i32.and (local.get $wParam) (i32.const 0xFFFF)) (i32.const 0xF000))
           (then
             (local.set $child (call $mdi_client_active (local.get $client)))
-            (if (i32.and (i32.ne (local.get $child) (i32.const 0))
-                         (i32.ne (call $wnd_max_get (local.get $child)) (i32.const 0)))
+            (if (call $mdi_child_zoomed (local.get $child))
               (then
                 (drop (call $wnd_send_message (local.get $child) (i32.const 0x0112)
                   (i32.and (local.get $wParam) (i32.const 0xFFFF)) (local.get $lParam)))
@@ -1855,8 +1862,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.eqz (local.get $frame)) (then (return)))
     (local.set $child (call $mdi_client_active (local.get $client)))
     (local.set $base (call $gl32 (i32.add (local.get $state) (i32.const 16))))
-    (if (i32.eqz (i32.and (i32.ne (local.get $child) (i32.const 0))
-                          (i32.ne (call $wnd_max_get (local.get $child)) (i32.const 0))))
+    (if (i32.eqz (call $mdi_child_zoomed (local.get $child)))
       (then
         ;; Nothing maximized: give the frame its own title back.
         (if (local.get $base)
@@ -1921,8 +1927,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.eqz (local.get $frame)) (then (return)))
     (if (i32.eqz (call $menu_bar_count (local.get $frame))) (then (return)))
     (local.set $child (call $mdi_client_active (local.get $client)))
-    (if (i32.and (i32.ne (local.get $child) (i32.const 0))
-                 (i32.ne (call $wnd_max_get (local.get $child)) (i32.const 0)))
+    (if (call $mdi_child_zoomed (local.get $child))
       (then (local.set $want (local.get $child))))
     (local.set $has (call $mdi_frame_menu_child (local.get $frame) (local.get $client)))
     (if (i32.eq (local.get $has) (local.get $want)) (then (return)))
@@ -2184,7 +2189,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
             (call $mdi_child_place (local.get $child)
               (i32.load offset=12 (local.get $wa)) (i32.load offset=16 (local.get $wa))
               (i32.const 160) (call $mdi_icon_height (local.get $child))
-              (i32.const 1))) ;; SIZE_MINIMIZED
+              (i32.const 1)) ;; SIZE_MINIMIZED
+            (call $mdi_frame_sync (call $wnd_get_parent (local.get $child))))
           (else (drop (call $mdi_child_iconify (local.get $child)))))
         (return (i32.const 1))))
     (if (i32.eq (local.get $show) (i32.const 3))

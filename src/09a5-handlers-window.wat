@@ -3269,6 +3269,22 @@
   ;; 78: DefWindowProcA
   (func $handle_DefWindowProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $text_wa i32) (local $text_len i32)
+    ;; WM_SETICON (0x80) keeps the window's own icon and returns the one it
+    ;; replaces; WM_GETICON (0x7F) reads it back (wParam: ICON_SMALL 0,
+    ;; ICON_BIG 1). They used to be dropped, so an MDI child's icon -- mIRC's
+    ;; Status sets one this way -- could not be drawn anywhere.
+    (if (i32.or (i32.eq (local.get $arg1) (i32.const 0x0080))
+                (i32.eq (local.get $arg1) (i32.const 0x007F)))
+      (then
+        (i32.store (global.get $reg_base)
+          (if (result i32) (i32.eq (local.get $arg1) (i32.const 0x0080))
+            (then (call $wnd_set_icon (local.get $arg0)
+              (i32.eq (local.get $arg2) (i32.const 1)) (local.get $arg3)))
+            (else (call $wnd_get_icon (local.get $arg0)
+              (i32.eq (local.get $arg2) (i32.const 1))))))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (return)))
     ;; WM_SETREDRAW: USER implements the redraw flag as WS_VISIBLE itself --
     ;; FALSE clears the bit, TRUE sets it. The TRUE half is observable: it
     ;; makes a window that was never shown visible, with no ShowWindow and no

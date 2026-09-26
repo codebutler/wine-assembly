@@ -35,7 +35,7 @@ const callWat = (name, nargs) => {
 
 const APIS = [
   ['GetMenu', 1], ['GetMenuItemCount', 1], ['GetMenuItemID', 2], ['GetSubMenu', 2],
-  ['GetMenuStringA', 5], ['GetMenuState', 3], ['GetSystemMenu', 2],
+  ['GetMenuStringA', 5], ['GetMenuState', 3], ['GetSystemMenu', 2], ['DefWindowProcA', 4],
 ];
 
 const MF_BYPOSITION = 0x400;
@@ -133,6 +133,8 @@ const extraWat = APIS.map(([name, n]) => callWat(name, n)).join('') + String.raw
       (param $msg i32) (param $wp i32) (param $lp i32) (result i32)
     (call $mdi_frame_message (local.get $frame) (local.get $client)
       (local.get $msg) (local.get $wp) (local.get $lp)))
+  (func (export "tmss_small_icon") (param $h i32) (result i32)
+    (call $wnd_small_icon (local.get $h)))
   (func (export "tmss_open_system_menu") (param $h i32)
     (call $system_menu_refresh (local.get $h)))
 `;
@@ -222,6 +224,17 @@ const extraWat = APIS.map(([name, n]) => callWat(name, n)).join('') + String.raw
     [false, true, true, false, true, false],
     'a maximized window can be restored, minimized or closed, not moved, sized or maximized');
 
+  // The icon drawn there is the child's small icon. mIRC gives Status its
+  // icons with WM_SETICON, which DefWindowProc keeps and WM_GETICON returns.
+  assert.strictEqual(e.call_DefWindowProcA(child, 0x0080, 1, 0x650046), 0, 'WM_SETICON big: no previous icon');
+  assert.strictEqual(e.tmss_small_icon(child) >>> 0, 0x650046, 'with only a big icon, that is drawn');
+  assert.strictEqual(e.call_DefWindowProcA(child, 0x0080, 0, 0x650045), 0);
+  assert.strictEqual(e.tmss_small_icon(child) >>> 0, 0x650045, 'the small icon wins');
+  assert.strictEqual(e.call_DefWindowProcA(child, 0x007F, 0, 0) >>> 0, 0x650045, 'WM_GETICON small');
+  assert.strictEqual(e.call_DefWindowProcA(child, 0x007F, 1, 0) >>> 0, 0x650046, 'WM_GETICON big');
+  assert.strictEqual(e.call_DefWindowProcA(child, 0x0080, 0, 0x650047) >>> 0, 0x650045,
+    'WM_SETICON returns the icon it replaces');
+
   // Activating another child moves the maximized state and the items with it.
   e.tmss_activate(client, other);
   assert.strictEqual(e.tmss_zoomed(other), 1);
@@ -247,6 +260,16 @@ const extraWat = APIS.map(([name, n]) => callWat(name, n)).join('') + String.raw
   assert.strictEqual(e.call_GetMenuItemCount(bar), 6);
   e.menu_set_source_guest(frame, blob, size, 0x00BE0091);
   assert.strictEqual(e.call_GetMenuItemCount(bar), 6, 'SetMenu keeps the maximized child\'s items');
+  // Minimizing the maximized child takes its items off; restoring the icon
+  // makes it maximized again (it remembers), and they come back.
+  assert.strictEqual(e.tmss_syscommand(other, SC_MINIMIZE), 1);
+  assert.strictEqual(e.tmss_iconic(other), 1);
+  assert.strictEqual(e.call_GetMenuItemCount(bar), 2, 'an iconic child is not maximized');
+  assert.strictEqual(e.tmss_frame_message(frame, client, 0x0111, SC_RESTORE, 0), 0,
+    'nor does the frame forward its system commands');
+  assert.strictEqual(e.tmss_syscommand(other, SC_RESTORE), 1);
+  assert.strictEqual(e.tmss_zoomed(other), 1, 'SC_RESTORE on the icon goes back to maximized');
+  assert.strictEqual(e.call_GetMenuItemCount(bar), 6);
   assert.strictEqual(e.tmss_syscommand(other, SC_RESTORE), 1);
   assert.strictEqual(e.call_GetMenuItemCount(bar), 2);
 

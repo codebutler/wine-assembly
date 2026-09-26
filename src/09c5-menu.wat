@@ -1792,7 +1792,7 @@
       (then
         (local.set $e (call $menu_bar_own_item (local.get $hwnd) (local.get $pos)))
         (local.set $owner (i32.load offset=20 (local.get $e)))
-        (local.set $icon (select (call $wnd_get_class_icon (local.get $owner)) (i32.const 0)
+        (local.set $icon (select (call $wnd_small_icon (local.get $owner)) (i32.const 0)
           (i32.ne (local.get $owner) (i32.const 0))))
         (if (local.get $icon)
           (then (drop (call $icon_draw_handle (local.get $icon) (local.get $hdc)
@@ -1820,7 +1820,7 @@
     (local $top i32) (local $e i32) (local $n i32)
     (local.set $top (call $menu_bar_top (local.get $hwnd) (local.get $pos)))
     (if (i32.ge_s (local.get $top) (i32.const 0))
-      (then (return (call $menu_child_count (local.get $hwnd) (local.get $top)))))
+      (then (return (call $menu_own_child_count (local.get $hwnd) (local.get $top)))))
     (local.set $e (call $menu_bar_own_item (local.get $hwnd) (local.get $pos)))
     (if (i32.eqz (local.get $e)) (then (return (i32.const 0))))
     (if (i32.eqz (i32.and (i32.load offset=8 (local.get $e)) (i32.const 0x10))) ;; MF_POPUP
@@ -2343,7 +2343,59 @@
     (if (i32.and (i32.load offset=8 (local.get $e)) (i32.const 0x10)) (then (return (i32.const 0))))
     (i32.load offset=12 (local.get $e)))
 
-  ;; Address (in blob_w) of child item $cidx within top item $tidx, or 0.
+;; ---- The window's own menu, for the handle APIs ----
+  ;; The menu_child_* readers below answer for the OPEN dropdown: while a
+  ;; popup is up on a window (TrackPopupMenu, or an HMENU popup the bar holds
+  ;; -- MDI's system menu) that is the popup's blob, and top 0 is the popup.
+  ;; GetSubMenu, GetMenuItemCount, GetMenuItemID, GetMenuState and
+  ;; GetMenuString speak about the window's HMENU whatever is open, so they
+  ;; read its own blob through these. mIRC walks its whole menu bar from
+  ;; WM_INITMENUPOPUP; with the MDI system menu open, File read as the system
+  ;; menu and a cascade lookup past its end read garbage.
+  (func $menu_own_item_w (param $hwnd i32) (param $top i32) (param $idx i32) (result i32)
+    (local $blob i32)
+    (local.set $blob (call $menu_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const 0))))
+    (if (i32.ge_u (local.get $idx) (call $menu_own_child_count (local.get $hwnd) (local.get $top)))
+      (then (return (i32.const 0))))
+    (call $child_item_w (local.get $blob) (local.get $top) (local.get $idx)))
+
+  (func $menu_own_child_count (param $hwnd i32) (param $top i32) (result i32)
+    (local $blob i32) (local $hdr i32)
+    (local.set $blob (call $menu_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const 0))))
+    (if (i32.or (i32.lt_s (local.get $top) (i32.const 0))
+                (i32.ge_u (local.get $top) (i32.load (local.get $blob))))
+      (then (return (i32.const 0))))
+    (local.set $hdr (call $child_hdr_w (local.get $blob) (local.get $top)))
+    (if (i32.eqz (local.get $hdr)) (then (return (i32.const 0))))
+    (i32.load (local.get $hdr)))
+
+  (func $menu_own_child_id (param $hwnd i32) (param $top i32) (param $idx i32) (result i32)
+    (local $it i32)
+    (local.set $it (call $menu_own_item_w (local.get $hwnd) (local.get $top) (local.get $idx)))
+    (if (i32.eqz (local.get $it)) (then (return (i32.const 0))))
+    (i32.load offset=20 (local.get $it)))
+
+  (func $menu_own_child_flags (param $hwnd i32) (param $top i32) (param $idx i32) (result i32)
+    (local $it i32)
+    (local.set $it (call $menu_own_item_w (local.get $hwnd) (local.get $top) (local.get $idx)))
+    (if (i32.eqz (local.get $it)) (then (return (i32.const 0))))
+    (i32.load offset=16 (local.get $it)))
+
+  (func $menu_own_child_label_ptr (param $hwnd i32) (param $top i32) (param $idx i32) (result i32)
+    (local $it i32)
+    (local.set $it (call $menu_own_item_w (local.get $hwnd) (local.get $top) (local.get $idx)))
+    (if (i32.eqz (local.get $it)) (then (return (i32.const 0))))
+    (i32.add (call $menu_blob_w (local.get $hwnd)) (i32.load (local.get $it))))
+
+  (func $menu_own_child_label_len (param $hwnd i32) (param $top i32) (param $idx i32) (result i32)
+    (local $it i32)
+    (local.set $it (call $menu_own_item_w (local.get $hwnd) (local.get $top) (local.get $idx)))
+    (if (i32.eqz (local.get $it)) (then (return (i32.const 0))))
+    (i32.load offset=4 (local.get $it)))
+
+    ;; Address (in blob_w) of child item $cidx within top item $tidx, or 0.
   (func $child_item_w (param $blob_w i32) (param $tidx i32) (param $cidx i32)
                         (result i32)
     (local $hdr i32)
@@ -4413,7 +4465,7 @@
               (i32.or
                 (i32.lt_s (local.get $pos) (i32.const 0))
                 (i32.ge_u (local.get $pos)
-                  (call $menu_child_count (local.get $hwnd) (local.get $top)))))
+                  (call $menu_own_child_count (local.get $hwnd) (local.get $top)))))
           (then (return (i32.const 0))))
         (local.set $blob (call $menu_blob_w (local.get $hwnd)))
         (local.set $item (call $child_item_w
@@ -4440,7 +4492,7 @@
                     (i32.eqz (i32.and (i32.load offset=8 (local.get $item)) (i32.const 0x10))))
           (then (return (i32.const 0))))
         (return (i32.load offset=4 (local.get $item)))))
-    (if (i32.eqz (call $menu_child_count (local.get $hwnd) (local.get $top)))
+    (if (i32.eqz (call $menu_own_child_count (local.get $hwnd) (local.get $top)))
       (then (return (i32.const 0))))
     (i32.or
       (i32.and (local.get $hmenu) (i32.const 0xFFFF))
@@ -4462,7 +4514,7 @@
     (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
     (if (i32.lt_s (local.get $top) (i32.const 0))
       (then (return (call $menu_bar_count (local.get $hwnd)))))
-    (call $menu_child_count (local.get $hwnd) (local.get $top)))
+    (call $menu_own_child_count (local.get $hwnd) (local.get $top)))
 
   ;; Command id at a position. Windows returns -1 for a submenu or a NULL
   ;; identifier, and also for an invalid menu/position.
@@ -4505,9 +4557,9 @@
         (local.set $top (call $menu_bar_id (local.get $hwnd) (local.get $pos)))
         (return (select (local.get $top) (i32.const -1)
           (i32.ne (local.get $top) (i32.const 0))))))
-    (if (i32.ge_u (local.get $pos) (call $menu_child_count (local.get $hwnd) (local.get $top)))
+    (if (i32.ge_u (local.get $pos) (call $menu_own_child_count (local.get $hwnd) (local.get $top)))
       (then (return (i32.const -1))))
-    (local.set $top (call $menu_child_id (local.get $hwnd) (local.get $top) (local.get $pos)))
+    (local.set $top (call $menu_own_child_id (local.get $hwnd) (local.get $top) (local.get $pos)))
     (return (select (local.get $top) (i32.const -1)
       (i32.ne (local.get $top) (i32.const 0)))))
 
@@ -4546,10 +4598,10 @@
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
     (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
     (if (i32.lt_s (local.get $top) (i32.const 0)) (then (return (i32.const 0))))
-    (if (i32.ge_u (local.get $pos) (call $menu_child_count (local.get $hwnd) (local.get $top)))
+    (if (i32.ge_u (local.get $pos) (call $menu_own_child_count (local.get $hwnd) (local.get $top)))
       (then (return (i32.const -1))))
     (call $menu_flags_to_mf
-      (call $menu_child_flags (local.get $hwnd) (local.get $top) (local.get $pos))))
+      (call $menu_own_child_flags (local.get $hwnd) (local.get $top) (local.get $pos))))
 
   ;; Same, addressed by command id rather than position -- MF_BYCOMMAND.
   (func $menu_handle_state_by_id (export "menu_handle_state_by_id")
@@ -4565,14 +4617,14 @@
     (block $done
       (loop $tops
         (br_if $done (i32.ge_s (local.get $bar) (local.get $bars)))
-        (local.set $n (call $menu_child_count (local.get $hwnd) (local.get $bar)))
+        (local.set $n (call $menu_own_child_count (local.get $hwnd) (local.get $bar)))
         (local.set $i (i32.const 0))
         (block $next (loop $items
           (br_if $next (i32.ge_u (local.get $i) (local.get $n)))
-          (if (i32.eq (call $menu_child_id (local.get $hwnd) (local.get $bar) (local.get $i))
+          (if (i32.eq (call $menu_own_child_id (local.get $hwnd) (local.get $bar) (local.get $i))
                       (local.get $id))
             (then (return (call $menu_flags_to_mf
-              (call $menu_child_flags (local.get $hwnd) (local.get $bar) (local.get $i))))))
+              (call $menu_own_child_flags (local.get $hwnd) (local.get $bar) (local.get $i))))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $items)))
         (local.set $bar (i32.add (local.get $bar) (i32.const 1)))
@@ -4591,7 +4643,7 @@
       (then
         (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
         (if (i32.lt_s (local.get $top) (i32.const 0)) (then (return (i32.const -1))))
-        (if (i32.ge_u (local.get $item) (call $menu_child_count (local.get $hwnd) (local.get $top)))
+        (if (i32.ge_u (local.get $item) (call $menu_own_child_count (local.get $hwnd) (local.get $top)))
           (then (return (i32.const -1))))
         (return (i32.or (i32.shl (local.get $top) (i32.const 16)) (local.get $item)))))
     ;; By command id: the id is unique across the whole menu, so scan it all.
@@ -4600,11 +4652,11 @@
     (block $done
       (loop $tops
         (br_if $done (i32.ge_s (local.get $bar) (local.get $bars)))
-        (local.set $n (call $menu_child_count (local.get $hwnd) (local.get $bar)))
+        (local.set $n (call $menu_own_child_count (local.get $hwnd) (local.get $bar)))
         (local.set $i (i32.const 0))
         (block $next (loop $items
           (br_if $next (i32.ge_u (local.get $i) (local.get $n)))
-          (if (i32.eq (call $menu_child_id (local.get $hwnd) (local.get $bar) (local.get $i))
+          (if (i32.eq (call $menu_own_child_id (local.get $hwnd) (local.get $bar) (local.get $i))
                       (local.get $item))
             (then (return (i32.or (i32.shl (local.get $bar) (i32.const 16)) (local.get $i)))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -4659,9 +4711,9 @@
       (if (i32.eq (local.get $loc) (i32.const -1)) (then (return (i32.const 0))))
       (local.set $top (i32.shr_u (local.get $loc) (i32.const 16)))
       (local.set $child (i32.and (local.get $loc) (i32.const 0xFFFF)))
-      (local.set $src (call $menu_child_label_ptr
+      (local.set $src (call $menu_own_child_label_ptr
         (local.get $hwnd) (local.get $top) (local.get $child)))
-      (local.set $len (call $menu_child_label_len
+      (local.set $len (call $menu_own_child_label_len
         (local.get $hwnd) (local.get $top) (local.get $child))))
     ;; A NULL buffer means "just tell me how long it is".
     (if (i32.eqz (local.get $out_wa)) (then (return (local.get $len))))

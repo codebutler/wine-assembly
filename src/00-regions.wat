@@ -365,6 +365,9 @@
     (owner "09c0-window-table.wat:$wnd_z_addr_for_slot"))
   (region.declare $WND_CLASS_ICON_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00001000)
     (owner "09c0-window-table.wat:$wnd_class_icon_reset_slot"))
+  ;; The icons WM_SETICON gave a window: +0 ICON_SMALL, +4 ICON_BIG.
+  (region.declare $WND_ICON_TABLE (stride 0x8 (count $MAX_WINDOWS)) (align 0x00000010)
+    (owner "09c0-window-table.wat:$wnd_icon_cell"))
   (region.declare $WIN16_FILE_TABLE (size 0x00000400) (align 0x00000100)
     (stride 0x4 (count $WIN16_FILE_MAX))
     (owner "01-header.wat:$WIN16_FILE_TABLE"))

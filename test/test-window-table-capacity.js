@@ -88,7 +88,8 @@ const extraWat = String.raw`
   for (const [name, stride] of [
     ['CONTROL_TABLE', 16], ['CLIENT_RECT', 16], ['TITLE_TABLE', 8], ['OWNER_TABLE', 4],
     ['WND_Z_ORDER_TABLE', 4], ['SCROLL_TABLE', 24], ['PAINT_FLAGS', 1],
-    ['GDI_WINDOW_SURFACE_TABLE', 32],
+    ['GDI_WINDOW_SURFACE_TABLE', 32], ['MENU_BAR_TABLE', 4], ['SYSTEM_MENU_TABLE', 4],
+    ['WND_ICON_TABLE', 8],
   ]) {
     assert.strictEqual(RegionMap.SIZE[name], capacity * stride,
       `${name} holds one record per window slot`);

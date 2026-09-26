@@ -1996,6 +1996,8 @@
   ;; (data ...) segment in one file and a table in another share an address.
   (global $WND_CLASS_ICON_TABLE i32 (region.addr $WND_CLASS_ICON_TABLE 0))
   (global $WND_CLASS_ICON_TABLE_SIZE i32 (region.size $WND_CLASS_ICON_TABLE))
+  (global $WND_ICON_TABLE i32 (region.addr $WND_ICON_TABLE 0))
+  (global $WND_ICON_TABLE_SIZE i32 (region.size $WND_ICON_TABLE))
   ;; WND_OWN_DC_TABLE: the private device context of a CS_OWNDC window, one
   ;; entry per window slot. A class registered with CS_OWNDC gets one DC per
   ;; window and keeps it, which is the whole point of the style: what the app

@@ -321,6 +321,7 @@
     (call $wnd_bg_brush_reset_slot (local.get $slot))
     (call $wnd_class_cursor_reset_slot (local.get $slot))
     (call $wnd_class_icon_reset_slot (local.get $slot))
+    (call $wnd_icon_reset_slot (local.get $slot))
     (call $wnd_class_slot_reset_slot (local.get $slot))
     (call $nc_flags_reset_slot (local.get $slot))
     (call $title_table_reset_slot (local.get $slot))
@@ -938,6 +939,47 @@
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
     (i32.load (i32.add (global.get $WND_CLASS_ICON_TABLE) (i32.mul (local.get $idx) (i32.const 4)))))
+
+  ;; ---- The window's own icons (WM_SETICON) ----
+  ;; $big selects ICON_BIG (1) over ICON_SMALL (0). Returns the cell's
+  ;; address, or 0 for no such window.
+  (func $wnd_icon_cell (param $hwnd i32) (param $big i32) (result i32)
+    (local $idx i32)
+    (local.set $idx (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.eq (local.get $idx) (i32.const -1)) (then (return (i32.const 0))))
+    (i32.add (global.get $WND_ICON_TABLE)
+      (i32.add (i32.mul (local.get $idx) (i32.const 8))
+               (select (i32.const 4) (i32.const 0) (i32.ne (local.get $big) (i32.const 0))))))
+
+  (func $wnd_icon_reset_slot (param $slot i32)
+    (i64.store (i32.add (global.get $WND_ICON_TABLE) (i32.mul (local.get $slot) (i32.const 8)))
+      (i64.const 0)))
+
+  ;; WM_SETICON: store the icon and return the one it replaces.
+  (func $wnd_set_icon (param $hwnd i32) (param $big i32) (param $icon i32) (result i32)
+    (local $cell i32) (local $old i32)
+    (local.set $cell (call $wnd_icon_cell (local.get $hwnd) (local.get $big)))
+    (if (i32.eqz (local.get $cell)) (then (return (i32.const 0))))
+    (local.set $old (i32.load (local.get $cell)))
+    (i32.store (local.get $cell) (local.get $icon))
+    (local.get $old))
+
+  (func $wnd_get_icon (param $hwnd i32) (param $big i32) (result i32)
+    (local $cell i32)
+    (local.set $cell (call $wnd_icon_cell (local.get $hwnd) (local.get $big)))
+    (if (i32.eqz (local.get $cell)) (then (return (i32.const 0))))
+    (i32.load (local.get $cell)))
+
+  ;; The small icon USER draws for a window (a caption, MDI's system-menu
+  ;; bitmap): the one WM_SETICON set, else its big one, else its class's.
+  (func $wnd_small_icon (param $hwnd i32) (result i32)
+    (local $icon i32)
+    (local.set $icon (call $wnd_get_icon (local.get $hwnd) (i32.const 0)))
+    (if (i32.eqz (local.get $icon))
+      (then (local.set $icon (call $wnd_get_icon (local.get $hwnd) (i32.const 1)))))
+    (if (i32.eqz (local.get $icon))
+      (then (local.set $icon (call $wnd_get_class_icon (local.get $hwnd)))))
+    (local.get $icon))
 
   ;; ---- Which class a window belongs to ----
   ;;
