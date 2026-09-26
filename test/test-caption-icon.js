@@ -21,6 +21,7 @@
 //   - a second press on the icon ends its system menu, and within the
 //     double-click time is WM_NCLBUTTONDBLCLK(HTSYSMENU), which closes;
 //   - Alt+Space opens the focused top-level window's system menu;
+//   - a caption double-click maximizes a window with a Maximize box;
 //   - WM_CLOSE on a built-in dialog presses Cancel, which is what Close in
 //     its system menu does.
 // The icon's placement (2px in; the title's first pixels at 21, as on a
@@ -172,6 +173,22 @@ const extraWat = String.raw`
   assert.strictEqual(e.tci_queue_find(win, 0x112, 0xF060), 1, 'DefWindowProc: double-clicking the icon is SC_CLOSE');
   e.tci_defwndproc(win, 0xA3, 2, iconLp);
   assert.strictEqual(e.tci_queue_find(win, 0x112, 0xF060), 0, 'a caption double-click is not');
+
+  // A caption double-click (USER's rule: same window, 500 ms, 4x4 box) is
+  // WM_NCLBUTTONDBLCLK(HTCAPTION); DefWindowProc maximizes a window that has
+  // a Maximize box, and leaves one without it alone.
+  const capX = x0 + f + 60, capY = y0 + f + 8;
+  e.tci_queue_find(0, 0, 0);
+  assert.strictEqual(e.nc_caption_press(win, capX, capY), 0, 'a first caption press is a press');
+  assert.strictEqual(e.nc_caption_press(win, capX + 1, capY + 1), 1, 'a second, close by, is a double-click');
+  assert.strictEqual(e.tci_queue_find(win, 0xA3, 2), 1, 'posted as WM_NCLBUTTONDBLCLK(HTCAPTION)');
+  assert.strictEqual(e.nc_caption_press(win, capX, capY), 0, 'a third press starts over');
+  assert.strictEqual(e.nc_caption_press(win, capX + 10, capY), 0, 'a press out of the box is not a double-click');
+  e.tci_queue_find(0, 0, 0);
+  e.tci_defwndproc(win, 0xA3, 2, 0);
+  assert.strictEqual(e.tci_queue_find(win, 0x112, 0xF030), 1, 'DefWindowProc: SC_MAXIMIZE');
+  e.tci_defwndproc(bare, 0xA3, 2, 0);
+  assert.strictEqual(e.tci_queue_find(bare, 0x112, 0xF030), 0, 'no Maximize box: nothing');
 
   // Alt+Space posts SC_KEYMENU ' ' to the focused top-level window, which
   // opens its system menu; a window without WS_SYSMENU has none to open.

@@ -3511,10 +3511,19 @@
 
   ;; DefWindowProc's WM_NCLBUTTONDBLCLK: a double-click on the caption icon
   ;; closes the window (SC_CLOSE), unless its class has CS_NOCLOSE, which is
-  ;; what grays Close in its system menu.
+  ;; what grays Close in its system menu; one on the caption of a window with
+  ;; a Maximize box maximizes it, or restores it when it is maximized or
+  ;; minimized.
   (func $defwndproc_nclbuttondblclk (param $hwnd i32) (param $hit i32) (param $lp i32)
     (call $utrace (i32.const 1) "WM_NCLBUTTONDBLCLK default (hwnd, hit, point)"
       (local.get $hwnd) (local.get $hit) (local.get $lp))
+    (if (i32.and (i32.eq (local.get $hit) (i32.const 2))
+                 (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00010000))
+                         (i32.const 0)))  ;; WS_MAXIMIZEBOX
+      (then (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x0112)
+              (select (i32.const 0xF120) (i32.const 0xF030)
+                (i32.or (call $wnd_max_get (local.get $hwnd)) (call $wnd_min_get (local.get $hwnd))))
+              (local.get $lp)))))
     (if (i32.and (i32.eq (local.get $hit) (i32.const 3))
                  (i32.eqz (i32.and (call $class_long_get (local.get $hwnd) (i32.const -26))
                                    (i32.const 0x0200))))  ;; CS_NOCLOSE

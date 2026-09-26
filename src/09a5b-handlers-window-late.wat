@@ -25,14 +25,18 @@
           (i32.or
             (i32.or (global.get $quit_flag)
                     (i32.gt_u (call $post_queue_total_count) (i32.const 0)))
-            (i32.or (call $shared_post_queue_read
-                      (call $w2g (call $paint_scratch_take)) (i32.const 0))
+            ;; A probe: a null buffer asks only whether a message is there.
+            ;; A real buffer takes a whole 28-byte MSG (time and point too),
+            ;; and a 16-byte paint scratch slot here let the last slot of the
+            ;; ring spill into WND_CLASS_SLOT_TABLE -- mIRC's frame, window
+            ;; 0, ended up with another class's icon after its About box.
+            (i32.or (call $shared_post_queue_read (i32.const 0) (i32.const 0))
                     (global.get $pending_input_packed)))
           (i32.or
             (i32.or (global.get $paint_pending)
                     (global.get $nc_flags_count))
             (i32.or (call $paint_flag_any)
-                    (call $timer_check_due (call $paint_scratch_take) (i32.const 0)))))
+                    (call $timer_check_due (i32.const 0) (i32.const 0)))))
       (then
         ;; Message available: return WAIT_OBJECT_0 + nCount
         (i32.store offset=0 (global.get $reg_base) (local.get $arg0))

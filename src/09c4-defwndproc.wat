@@ -81,6 +81,8 @@
     (if (i32.eq (local.get $msg) (i32.const 0x007F))
       (then (return (call $wnd_get_icon (local.get $hwnd)
         (i32.eq (local.get $wParam) (i32.const 1))))))
+    (call $utrace (i32.const 1) "WM_SETICON (hwnd, big, icon)"
+      (local.get $hwnd) (local.get $wParam) (local.get $lParam))
     (local.set $old (call $wnd_set_icon (local.get $hwnd)
       (i32.eq (local.get $wParam) (i32.const 1)) (local.get $lParam)))
     (if (i32.and (i32.ne (local.get $old) (local.get $lParam))
@@ -1259,6 +1261,40 @@
         (call $nc_set_pressed (local.get $hwnd) (local.get $hit))
         (call $defwndproc_do_ncpaint (local.get $hwnd))
         (return (local.get $hit))))
+    (i32.const 0))
+
+  ;; USER's double-click rule for a caption press: the second press on the
+  ;; same window within GetDoubleClickTime (500 ms), inside the 4x4
+  ;; SM_CXDOUBLECLK box, is WM_NCLBUTTONDBLCLK(HTCAPTION) -- non-client
+  ;; double-clicks do not need CS_DBLCLKS. Returns TRUE when it was one (the
+  ;; host then does not start a caption drag); a third press starts over.
+  (global $nc_caption_last_hwnd (mut i32) (i32.const 0))
+  (global $nc_caption_last_time (mut i32) (i32.const 0))
+  (global $nc_caption_last_x (mut i32) (i32.const 0))
+  (global $nc_caption_last_y (mut i32) (i32.const 0))
+  (func (export "nc_caption_press") (param $hwnd i32) (param $sx i32) (param $sy i32) (result i32)
+    (local $now i32)
+    (local.set $now (call $host_get_ticks))
+    (if (i32.and
+          (i32.and (i32.eq (local.get $hwnd) (global.get $nc_caption_last_hwnd))
+                   (i32.le_u (i32.sub (local.get $now) (global.get $nc_caption_last_time))
+                             (i32.const 500)))
+          (i32.and
+            (i32.le_u (i32.add (i32.sub (local.get $sx) (global.get $nc_caption_last_x)) (i32.const 2))
+                      (i32.const 4))
+            (i32.le_u (i32.add (i32.sub (local.get $sy) (global.get $nc_caption_last_y)) (i32.const 2))
+                      (i32.const 4))))
+      (then
+        (global.set $nc_caption_last_hwnd (i32.const 0))
+        (call $utrace (i32.const 1) "caption double-click (hwnd)" (local.get $hwnd) (i32.const 0) (i32.const 0))
+        (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x00A3) (i32.const 2)
+          (i32.or (i32.shl (i32.and (local.get $sy) (i32.const 0xFFFF)) (i32.const 16))
+                  (i32.and (local.get $sx) (i32.const 0xFFFF)))))
+        (return (i32.const 1))))
+    (global.set $nc_caption_last_hwnd (local.get $hwnd))
+    (global.set $nc_caption_last_time (local.get $now))
+    (global.set $nc_caption_last_x (local.get $sx))
+    (global.set $nc_caption_last_y (local.get $sy))
     (i32.const 0))
 
   (func $nc_sysbutton_move (export "nc_sysbutton_move")

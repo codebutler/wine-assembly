@@ -124,6 +124,9 @@
   (region.declare $PAINT_SCRATCH (size 0x00000100) (align 0x00000100)
     (stride 0x10 (count $PAINT_SCRATCH_SLOTS))
     (owner "10-helpers.wat:$paint_scratch_take"))
+  ;; The MSG the modal dialog pump reads a due timer into (28 bytes).
+  (region.declare $MODAL_PUMP_MSG (size 0x00000020) (align 0x00000010)
+    (owner "09b-dispatch.wat:$win32_dispatch"))
   (region.declare $WND_CLASS_SLOT_TABLE (stride 0x1 (count $MAX_WINDOWS)) (align 0x00000100)
     (owner "09c0-window-table.wat:$wnd_class_slot_reset_slot"))
   ;; One past the highest WND_RECORDS slot ever claimed. Scans stop here, so
@@ -243,7 +246,7 @@
   ;; map is the middle of $D3DIM_AUX. Nothing hand-places bytes in here and no
   ;; offset into it is ever written down — that is the entire point. Growing it
   ;; is a one-line edit and the compiler says exactly how many bytes short it is.
-  (region.declare $WATX_STRING_POOL (size 0x00000800) (align 0x00000010)
+  (region.declare $WATX_STRING_POOL (size 0x00001000) (align 0x00000010)
     (owner "01-header.wat:$WATX_STRING_POOL"))
   (region.declare $DI_DIK_VK_TABLE (size 0x00000100) (align 0x00000100)
     (owner "09a8-handlers-directx.wat:$DI_DIK_VK_TABLE"))

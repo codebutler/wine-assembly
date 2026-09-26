@@ -1026,6 +1026,10 @@
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 8)) (i32.const 0))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 20)) (local.get 1))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 2))
+    ;; fdwUnderline and fdwStrikeOut (7th, 8th): not underlined, not struck.
+    ;; Left unwritten they are whatever the stack held, and CreateFontW reads them.
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 28)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 32)) (i32.const 0))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 52)) (i32.const 0))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 56)) (local.get 3))
     (call $handle_CreateFontW
@@ -2348,7 +2352,7 @@
     ;; only when retrieval runs. Wake for it even before that mirror exists.
     (if (global.get $paint_pending) (then (return (i32.const 1))))
     (if (call $paint_flag_any) (then (return (i32.const 1))))
-    (if (call $timer_check_due (call $paint_scratch_take) (i32.const 0))
+    (if (call $timer_check_due (i32.const 0) (i32.const 0))
       (then (return (i32.const 1))))
     (i32.const 0))
 
@@ -2587,6 +2591,23 @@
   (func $utrace (param $cat i32) (param $text i32) (param $a i32) (param $b i32) (param $c i32)
     (if (i32.and (global.get $user_trace_mask) (local.get $cat))
       (then (call $host_user_trace (local.get $text) (local.get $a) (local.get $b) (local.get $c)))))
+
+  ;; --trace-user=8: a canary on window 0's WND_CLASS_SLOT_TABLE byte, the
+  ;; byte just past the paint scratch ring. Checked at every API entry; a
+  ;; change logs the API that just ran and the one starting. Built to find
+  ;; writers that overrun a 16-byte scratch RECT (see MsgWaitForMultipleObjects).
+  (global $class_slot_watch_last (mut i32) (i32.const -1))
+  (global $class_slot_watch_api (mut i32) (i32.const 0))
+  (func $class_slot_watch (param $api_id i32)
+    (local $now i32)
+    (if (i32.eqz (i32.and (global.get $user_trace_mask) (i32.const 8))) (then (return)))
+    (local.set $now (i32.load (global.get $WND_CLASS_SLOT_TABLE)))
+    (if (i32.and (i32.ne (global.get $class_slot_watch_last) (i32.const -1))
+                 (i32.ne (local.get $now) (global.get $class_slot_watch_last)))
+      (then (call $utrace (i32.const 8) "class slots 0-3 changed (was, now, previous api)"
+              (global.get $class_slot_watch_last) (local.get $now) (global.get $class_slot_watch_api))))
+    (global.set $class_slot_watch_last (local.get $now))
+    (global.set $class_slot_watch_api (local.get $api_id)))
 
   ;; The icon a shell shows for a window: its small icon, else its big one,
   ;; else its class's -- what Win98's taskbar asks a window for. 0 when the

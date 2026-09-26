@@ -126,6 +126,7 @@
     ;; Read thunk data
     (local.set $name_rva (i32.load (i32.add (global.get $THUNK_BASE) (i32.mul (local.get $thunk_idx) (i32.const 8)))))
     (local.set $api_id (i32.load (i32.add (i32.add (global.get $THUNK_BASE) (i32.mul (local.get $thunk_idx) (i32.const 8))) (i32.const 4))))
+    (call $class_slot_watch (local.get $api_id))
 
     ;; The handler consumes this one-shot bit at entry. Its Win16 caller does
     ;; not pass through this dispatcher and therefore must not undo activity
@@ -1022,7 +1023,9 @@
         ;; by a dialog procedure remained live forever.  mIRC 5.9 finishes
         ;; scanning its installer payload, arms a 25ms hwnd timer, and then
         ;; waits at "Scanning files... 0%" for exactly this missing dispatch.
-        (local.set $arg4 (call $w2g (call $paint_scratch_take)))
+        ;; A whole MSG (28 bytes): a paint scratch RECT is 16, and the ring's
+        ;; last slot would spill into WND_CLASS_SLOT_TABLE.
+        (local.set $arg4 (call $w2g (global.get $MODAL_PUMP_MSG)))
         (if (call $timer_check_due (local.get $arg4) (i32.const 1))
           (then
             (local.set $arg0 (call $gl32 (local.get $arg4)))

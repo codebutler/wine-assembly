@@ -342,6 +342,9 @@
                 ;; Timer is due — only update last_tick if consuming
                 (if (local.get $consume)
                   (then (i32.store (i32.add (local.get $addr) (i32.const 12)) (global.get $tick_count))))
+                ;; A null msg_ptr only asks whether a timer is due. A buffer
+                ;; takes a whole 28-byte MSG, time and point included.
+                (if (local.get $msg_ptr) (then
                 (call $gs32 (local.get $msg_ptr) (i32.load (local.get $addr)))                          ;; hwnd
                 (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (i32.const 0x0113))            ;; WM_TIMER
                 (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (i32.load (i32.add (local.get $addr) (i32.const 4))))   ;; wParam=timerID
@@ -356,7 +359,7 @@
                   (local.get $msg_ptr)
                   (i32.load (local.get $addr))
                   (i32.const 0x0113)
-                  (i32.load (i32.add (local.get $addr) (i32.const 16))))
+                  (i32.load (i32.add (local.get $addr) (i32.const 16))))))
                 (local.set $found (i32.const 1))
                 (br $break)
               )
@@ -375,6 +378,7 @@
       (then
         ;; The MSG carries dwUser itself: a one-shot retires the moment it is
         ;; taken, so DispatchMessage can no longer find its slot by timer id.
+        (if (local.get $msg_ptr) (then
         (call $gs32 (local.get $msg_ptr) (i32.load offset=12 (local.get $addr)))          ;; hwnd field = dwUser
         (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (i32.const 0x7FF0))      ;; internal MM_TIMER
         (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (i32.load (local.get $addr)))  ;; wParam=timerID
@@ -384,7 +388,7 @@
           (local.get $msg_ptr)
           (i32.load offset=12 (local.get $addr))
           (i32.const 0x7FF0)
-          (i32.load offset=8 (local.get $addr)))
+          (i32.load offset=8 (local.get $addr)))))
         ;; Retire the one-shot only when the caller is really taking the
         ;; message; a PM_NOREMOVE peek must still see it next time.
         (if (local.get $consume)

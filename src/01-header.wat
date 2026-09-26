@@ -4174,6 +4174,8 @@
   (global $STATIC_SYS_DLL_FIRST_DX i32 (i32.const 3))
   (global $DX_VERSION_INFO i32 (region.addr $DX_VERSION_INFO 0))
   (global $DX_VERSION_INFO_SIZE i32 (region.size $DX_VERSION_INFO))
+  (global $MODAL_PUMP_MSG i32 (region.addr $MODAL_PUMP_MSG 0))
+  (global $MODAL_PUMP_MSG_SIZE i32 (region.size $MODAL_PUMP_MSG))
   (global $WIN16_NAME_KERNEL   i32 (region.addr $RESERVED_PAGE_STRINGS 0x000000F0))
   (global $WIN16_NAME_USER     i32 (region.addr $RESERVED_PAGE_STRINGS 0x000000F7))
   (global $WIN16_NAME_GDI      i32 (region.addr $RESERVED_PAGE_STRINGS 0x000000FC))

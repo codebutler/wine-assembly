@@ -141,7 +141,9 @@ const UNIONS = {
       '$gdi_font_set_charset':       'GdiFont',    // 10f:692 `+4 == 4`
       '$gdi_font_charset':           'GdiFont',    // 10f:705 `+4 == 4`
       '$gdi_font_weight':            'GdiFont',    // 10f:728 `+4 == 4`
-      '$gdi_font_italic':            'GdiFont',    // 10f:737 `+4 == 4`
+      '$gdi_font_set_decorations':   'GdiFont',    // 10f:741 `+4 == 4`
+      '$gdi_font_decoration':        'GdiFont',    // 10f:758 `+4 == 4`
+      '$gdi_font_italic':            'GdiFont',    // 10f:768 `+4 == 4`
       '$gdi_font_create':            'GdiFont',    // 10f:767 gdi_object_alloc(4,..)
       '$gdi_font_face':              'GdiFont',    // 10f:779 `+4 == 4`
 
@@ -205,12 +207,12 @@ const UNIONS = {
       // that the site at each new line still does what its comment says (the
       // pre-branch pair, then the `type == 1` arm, then the else arm) and
       // renumber; do NOT delete the entry to make the gate pass.
-      '10f-gdi-dc.wat:911': 'GdiPenBrush',         // style, pre-branch
-      '10f-gdi-dc.wat:912': 'GdiPenBrush',         // flags, pre-branch
-      '10f-gdi-dc.wat:915': 'GdiPen',              // width, in the `type == 1` arm
-      '10f-gdi-dc.wat:916': 'GdiPen',              // color, in the `type == 1` arm
-      '10f-gdi-dc.wat:918': 'GdiBrush',            // color, in the `type == 2` arm
-      '10f-gdi-dc.wat:919': 'GdiBrush',            // hatch, in the `type == 2` arm
+      '10f-gdi-dc.wat:942': 'GdiPenBrush',         // style, pre-branch
+      '10f-gdi-dc.wat:943': 'GdiPenBrush',         // flags, pre-branch
+      '10f-gdi-dc.wat:946': 'GdiPen',              // width, in the `type == 1` arm
+      '10f-gdi-dc.wat:947': 'GdiPen',              // color, in the `type == 1` arm
+      '10f-gdi-dc.wat:949': 'GdiBrush',            // color, in the `type == 2` arm
+      '10f-gdi-dc.wat:950': 'GdiBrush',            // hatch, in the `type == 2` arm
 
       // $gdi_brush_sample (10g:775) holds a brush record AND the record of the
       // bitmap named by brush.pattern_bitmap, in one frame, and reads +16 from

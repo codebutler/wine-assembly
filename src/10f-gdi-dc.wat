@@ -730,6 +730,35 @@
     (select (i32.const 700) (i32.const 400)
       (i32.eq (local.get $handle) (i32.const 0x30022))))
 
+  ;; lfUnderline and lfStrikeOut, kept in GdiFont flags bits 1 and 2 (bit 0
+  ;; is the bitmap-bind mark). ExtTextOut draws the underline; both reach
+  ;; GetObject's LOGFONT and GetTextMetrics.
+  (func $gdi_font_set_decorations (param $handle i32) (param $underline i32) (param $strikeout i32)
+    (local $p i32)
+    (local.set $p (call $gdi_object_record (local.get $handle)))
+    (if (i32.and (i32.ne (local.get $p) (i32.const 0))
+          (i32.eq (load.field.memarg GdiObject type (local.get $p)) (i32.const 4)))
+      (then (store.field.memarg GdiFont flags (local.get $p)
+        (i32.or (i32.and (load.field.memarg GdiFont flags (local.get $p)) (i32.const -7))
+          (i32.or
+            (select (i32.const 2) (i32.const 0) (i32.ne (i32.and (local.get $underline) (i32.const 0xFF)) (i32.const 0)))
+            (select (i32.const 4) (i32.const 0) (i32.ne (i32.and (local.get $strikeout) (i32.const 0xFF)) (i32.const 0)))))))))
+
+  (func $gdi_font_underline (param $handle i32) (result i32)
+    (call $gdi_font_decoration (local.get $handle) (i32.const 2)))
+
+  (func $gdi_font_strikeout (param $handle i32) (result i32)
+    (call $gdi_font_decoration (local.get $handle) (i32.const 4)))
+
+  (func $gdi_font_decoration (param $handle i32) (param $bit i32) (result i32)
+    (local $p i32)
+    (local.set $p (call $gdi_object_record (local.get $handle)))
+    (if (i32.and (i32.ne (local.get $p) (i32.const 0))
+          (i32.eq (load.field.memarg GdiObject type (local.get $p)) (i32.const 4)))
+      (then (return (i32.ne (i32.and (load.field.memarg GdiFont flags (local.get $p))
+                              (local.get $bit)) (i32.const 0)))))
+    (i32.const 0))
+
   (func $gdi_font_italic (param $handle i32) (result i32)
     (local $p i32)
     (local.set $p (call $gdi_object_record (local.get $handle)))
@@ -815,6 +844,8 @@
     (i32.store offset=4 (local.get $dest) (call $gdi_font_width (local.get $handle)))
     (i32.store offset=16 (local.get $dest) (call $gdi_font_weight (local.get $handle)))
     (i32.store8 offset=20 (local.get $dest) (call $gdi_font_italic (local.get $handle)))
+    (i32.store8 offset=21 (local.get $dest) (call $gdi_font_underline (local.get $handle)))
+    (i32.store8 offset=22 (local.get $dest) (call $gdi_font_strikeout (local.get $handle)))
     (i32.store8 offset=23 (local.get $dest)
       (call $gdi_font_requested_charset (local.get $handle)))
     (i32.store8 offset=27 (local.get $dest)

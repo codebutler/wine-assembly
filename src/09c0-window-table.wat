@@ -988,6 +988,8 @@
         (if (i32.ge_s (local.get $slot) (i32.const 0))
           (then (local.set $icon (i32.load offset=20
             (call $class_wndclass_addr (local.get $slot))))))))
+    (call $utrace (i32.const 4) "window icon (hwnd, icon, class slot)"
+      (local.get $hwnd) (local.get $icon) (call $wnd_get_class_slot (local.get $hwnd)))
     (local.get $icon))
 
   ;; ---- Which class a window belongs to ----
@@ -1112,6 +1114,8 @@
 
   (func $class_long_set (param $hwnd i32) (param $index i32) (param $value i32) (result i32)
     (local $addr i32) (local $prev i32)
+    (call $utrace (i32.const 1) "SetClassLong (hwnd, index, value)"
+      (local.get $hwnd) (local.get $index) (local.get $value))
     (local.set $addr (call $class_long_addr (local.get $hwnd) (local.get $index)))
     (if (i32.eqz (local.get $addr)) (then (return (i32.const 0))))
     (local.set $prev (i32.load (local.get $addr)))

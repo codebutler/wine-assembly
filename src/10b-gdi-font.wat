@@ -1668,6 +1668,26 @@
           (local.get $hdc) (local.get $strike) (local.get $height))))
       (i64.extend_i32_u (i32.load offset=20 (local.get $strike)))))
 
+  ;; GDI's simulated bold. A raster font has no outline to embolden, so when
+  ;; a font asks for bold (weight 600 or more) and the strike it was bound to
+  ;; is not bold, Windows overstrikes: each glyph is drawn again one pixel to
+  ;; the right, each advance grows by one, and TEXTMETRIC reports the weight
+  ;; asked for with tmOverhang 1. Win98's captions are this -- MS Sans Serif
+  ;; ships no bold strike -- and a Windows 98 capture of a caption measures
+  ;; exactly one extra pixel per character over the regular face.
+  (func $gdi_bitmap_font_emboldened (param $hdc i32) (param $strike i32) (result i32)
+    (if (i32.ge_u (i32.load offset=48 (local.get $strike)) (i32.const 600))
+      (then (return (i32.const 0))))
+    (i32.ge_u (call $gdi_font_weight (call $gdi_dc_selected_font (local.get $hdc)))
+      (i32.const 600)))
+
+  ;; The font handle selected into a DC (0 when the DC is unknown).
+  (func $gdi_dc_selected_font (param $hdc i32) (result i32)
+    (local $dc i32)
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
+    (load.field.memarg GdiDcState font (local.get $dc)))
+
   (func $gdi_bitmap_font_scaled_width (param $hdc i32) (param $strike i32) (param $glyph i32)
         (param $height i32) (result i32)
     (local $width i32)
@@ -1677,7 +1697,9 @@
       (i64.mul (i64.extend_i32_u (i32.load16_u (local.get $glyph)))
         (i64.extend_i32_u (local.get $height)))
       (i64.extend_i32_u (i32.load offset=20 (local.get $strike)))))
-    (select (local.get $width) (i32.const 1) (i32.gt_s (local.get $width) (i32.const 0))))
+    (i32.add
+      (select (local.get $width) (i32.const 1) (i32.gt_s (local.get $width) (i32.const 0)))
+      (call $gdi_bitmap_font_emboldened (local.get $hdc) (local.get $strike))))
 
   (func $gdi_bitmap_font_glyph_pixel (param $strike i32) (param $glyph_offset i32)
         (param $native_width i32) (param $native_height i32)
@@ -2056,10 +2078,11 @@
     (local $native_height i32) (local $ascent i32) (local $descent i32)
     (local $internal i32) (local $external i32) (local $average i32)
     (local $maximum i32) (local $first i32) (local $last i32)
-    (local $default i32) (local $break i32)
+    (local $default i32) (local $break i32) (local $bold i32)
     (if (i32.eqz (local.get $out)) (then (return (i32.const 0))))
     (local.set $strike (call $gdi_bitmap_font_selected (local.get $hdc)))
     (if (i32.eqz (local.get $strike)) (then (return (i32.const 0))))
+    (local.set $bold (call $gdi_bitmap_font_emboldened (local.get $hdc) (local.get $strike)))
     (local.set $source (i32.load offset=8 (local.get $strike)))
     (local.set $native_height (i32.load offset=20 (local.get $strike)))
     (if (i32.eqz (local.get $native_height)) (then (return (i32.const 0))))
@@ -2106,9 +2129,11 @@
     (i32.store offset=8 (local.get $out) (local.get $descent))
     (i32.store offset=12 (local.get $out) (local.get $internal))
     (i32.store offset=16 (local.get $out) (local.get $external))
-    (i32.store offset=20 (local.get $out) (local.get $average))
-    (i32.store offset=24 (local.get $out) (local.get $maximum))
-    (i32.store offset=28 (local.get $out) (i32.load offset=48 (local.get $strike)))
+    (i32.store offset=20 (local.get $out) (i32.add (local.get $average) (local.get $bold)))
+    (i32.store offset=24 (local.get $out) (i32.add (local.get $maximum) (local.get $bold)))
+    (i32.store offset=28 (local.get $out)
+      (select (i32.const 700) (i32.load offset=48 (local.get $strike)) (local.get $bold)))
+    (i32.store offset=32 (local.get $out) (local.get $bold)) ;; tmOverhang
     (i32.store offset=36 (local.get $out) (i32.load16_u offset=72 (local.get $source)))
     (i32.store offset=40 (local.get $out) (i32.load16_u offset=70 (local.get $source)))
     (if (local.get $wide)
@@ -2118,8 +2143,10 @@
         (i32.store16 offset=48 (local.get $out) (local.get $default))
         (i32.store16 offset=50 (local.get $out) (local.get $break))
         (i32.store8 offset=52 (local.get $out) (i32.load8_u offset=80 (local.get $source)))
-        (i32.store8 offset=53 (local.get $out) (i32.load8_u offset=81 (local.get $source)))
-        (i32.store8 offset=54 (local.get $out) (i32.load8_u offset=82 (local.get $source)))
+        (i32.store8 offset=53 (local.get $out) (i32.or (i32.load8_u offset=81 (local.get $source))
+          (call $gdi_font_underline (call $gdi_dc_selected_font (local.get $hdc)))))
+        (i32.store8 offset=54 (local.get $out) (i32.or (i32.load8_u offset=82 (local.get $source))
+          (call $gdi_font_strikeout (call $gdi_dc_selected_font (local.get $hdc)))))
         (i32.store8 offset=55 (local.get $out) (i32.load8_u offset=90 (local.get $source)))
         (i32.store8 offset=56 (local.get $out) (i32.load offset=52 (local.get $strike))))
       (else
@@ -2128,8 +2155,10 @@
         (i32.store8 offset=46 (local.get $out) (local.get $default))
         (i32.store8 offset=47 (local.get $out) (local.get $break))
         (i32.store8 offset=48 (local.get $out) (i32.load8_u offset=80 (local.get $source)))
-        (i32.store8 offset=49 (local.get $out) (i32.load8_u offset=81 (local.get $source)))
-        (i32.store8 offset=50 (local.get $out) (i32.load8_u offset=82 (local.get $source)))
+        (i32.store8 offset=49 (local.get $out) (i32.or (i32.load8_u offset=81 (local.get $source))
+          (call $gdi_font_underline (call $gdi_dc_selected_font (local.get $hdc)))))
+        (i32.store8 offset=50 (local.get $out) (i32.or (i32.load8_u offset=82 (local.get $source))
+          (call $gdi_font_strikeout (call $gdi_dc_selected_font (local.get $hdc)))))
         (i32.store8 offset=51 (local.get $out) (i32.load8_u offset=90 (local.get $source)))
         (i32.store8 offset=52 (local.get $out) (i32.load offset=52 (local.get $strike)))))
     (i32.const 1))
@@ -2819,10 +2848,13 @@
     (local $dirty_right i32) (local $dirty_bottom i32)
     (local $path_open i32) (local $path_entry i32) (local $path_points i64)
     (local $path_origin_x i32) (local $path_origin_y i32)
-    (local $indexed i32) (local $tt_face i32) (local $tt_ppem i32)
+    (local $indexed i32) (local $tt_face i32) (local $tt_ppem i32) (local $bold i32)
+    (local $underlined i32)
     (call $gdi_clip_row_reset)
     (local.set $strike (call $gdi_bitmap_font_selected (local.get $hdc)))
     (if (i32.eqz (local.get $strike)) (then (return (i32.const -1))))
+    (local.set $bold (call $gdi_bitmap_font_emboldened (local.get $hdc) (local.get $strike)))
+    (local.set $underlined (call $gdi_font_underline (call $gdi_dc_selected_font (local.get $hdc))))
     (if (i32.or (i32.lt_s (local.get $count) (i32.const 0))
           (i32.or (i32.gt_u (local.get $count) (i32.const 65536))
             (i32.and (i32.gt_s (local.get $count) (i32.const 0))
@@ -3054,11 +3086,11 @@
         (then (local.set $dirty_left
           (i32.add (local.get $cursor) (local.get $ink_left)))))
       (if (i32.gt_s (i32.add (i32.add (local.get $cursor) (local.get $ink_left))
-              (local.get $ink_width))
+              (i32.add (local.get $ink_width) (local.get $bold)))
             (local.get $dirty_right))
         (then (local.set $dirty_right
           (i32.add (i32.add (local.get $cursor) (local.get $ink_left))
-            (local.get $ink_width)))))
+            (i32.add (local.get $ink_width) (local.get $bold))))))
       (if (i32.lt_s (local.get $top) (local.get $dirty_top))
         (then (local.set $dirty_top (local.get $top))))
       (if (i32.gt_s (i32.add (local.get $top) (local.get $height))
@@ -3095,24 +3127,38 @@
                     (local.get $path_origin_y))
                   (i32.sub (i32.add (i32.add
                       (i32.add (local.get $cursor) (local.get $ink_left))
-                      (local.get $dx)) (i32.const 1)) (local.get $path_origin_x))
+                      (local.get $dx)) (i32.add (i32.const 1) (local.get $bold)))
+                    (local.get $path_origin_x))
                   (i32.sub (i32.add (i32.add (local.get $top) (local.get $dy))
                     (i32.const 1)) (local.get $path_origin_y)))))
-                (else (drop (call $gdi_bitmap_text_pixel_rect
-                  (local.get $hdc) (local.get $desc)
-                  (i32.add (i32.add (local.get $cursor) (local.get $ink_left))
-                    (local.get $dx))
-                  (i32.add (local.get $top) (local.get $dy)) (local.get $text_color)
-                  (local.get $clip) (local.get $clip_left) (local.get $clip_top)
-                  (local.get $clip_right) (local.get $clip_bottom)))))))
+                (else
+                  (drop (call $gdi_bitmap_text_pixel_rect
+                    (local.get $hdc) (local.get $desc)
+                    (i32.add (i32.add (local.get $cursor) (local.get $ink_left))
+                      (local.get $dx))
+                    (i32.add (local.get $top) (local.get $dy)) (local.get $text_color)
+                    (local.get $clip) (local.get $clip_left) (local.get $clip_top)
+                    (local.get $clip_right) (local.get $clip_bottom)))
+                  ;; Simulated bold: the overstrike one pixel right.
+                  (if (local.get $bold)
+                    (then (drop (call $gdi_bitmap_text_pixel_rect
+                      (local.get $hdc) (local.get $desc)
+                      (i32.add (i32.add (i32.add (local.get $cursor) (local.get $ink_left))
+                        (local.get $dx)) (i32.const 1))
+                      (i32.add (local.get $top) (local.get $dy)) (local.get $text_color)
+                      (local.get $clip) (local.get $clip_left) (local.get $clip_top)
+                      (local.get $clip_right) (local.get $clip_bottom)))))))))
           (local.set $dx (i32.add (local.get $dx) (i32.const 1)))
           (br $glyph_row)))
         (local.set $dy (i32.add (local.get $dy) (i32.const 1)))
         (br $glyph_rows)))
       ;; DrawText prefix flags are stored separately from UTF-16 code units.
-      ;; Underline the marked glyph on the final cell row.
-      (if (i32.and (i32.and (i32.eqz (local.get $indexed)) (call $gdi_bitmap_text_is_prefix
-              (local.get $text) (local.get $i)))
+      ;; Underline the marked glyph on the final cell row -- every glyph when
+      ;; the font itself is underlined (lfUnderline). A Windows 98 capture of
+      ;; mIRC's About link puts that line on the same row, ascent + 1.
+      (if (i32.and (i32.or (local.get $underlined)
+                           (i32.and (i32.eqz (local.get $indexed)) (call $gdi_bitmap_text_is_prefix
+                             (local.get $text) (local.get $i))))
             (i32.eqz (local.get $is_tab)))
         (then
           (local.set $dx (i32.const 0))
