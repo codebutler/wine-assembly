@@ -150,6 +150,10 @@
   ;; the bar is exactly its menu resource.
   (region.declare $MENU_BAR_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000010)
     (owner "09c5-menu.wat:$menu_bar_list_cell"))
+  ;; A window's system menu (GetSystemMenu): a dynamic HMENU per slot, built
+  ;; on first request, 0 before then.
+  (region.declare $SYSTEM_MENU_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000010)
+    (owner "09c5-menu.wat:$system_menu_cell"))
   (region.declare $MENU_DATA_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000010)
     (owner "09c0-window-table.wat:$menu_data_reset_slot"))
   (region.declare $WND_DLG_RECORDS (stride 0x20 (count $MAX_WINDOWS)) (align 0x00000010)

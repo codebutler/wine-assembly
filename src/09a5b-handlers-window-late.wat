@@ -1611,7 +1611,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
           (local.get $old) (local.get $child)))
         (if (i32.eqz (call $mdi_focus_within (local.get $child)))
           (then (call $set_focus (local.get $child))))))
-    (call $mdi_frame_title_sync (local.get $client))
+    (call $mdi_frame_sync (local.get $client))
     (i32.const 1))
 
   ;; Give a newly created MDI child the next CLIENTCREATESTRUCT command ID
@@ -1786,6 +1786,17 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then (return (i32.const 0))))
     (if (i32.eq (local.get $msg) (i32.const 0x0111)) ;; WM_COMMAND
       (then
+        ;; A system command from the maximized child's items on the frame's
+        ;; bar (its system menu, its buttons) goes to that child.
+        (if (i32.ge_u (i32.and (local.get $wParam) (i32.const 0xFFFF)) (i32.const 0xF000))
+          (then
+            (local.set $child (call $mdi_client_active (local.get $client)))
+            (if (i32.and (i32.ne (local.get $child) (i32.const 0))
+                         (i32.ne (call $wnd_max_get (local.get $child)) (i32.const 0)))
+              (then
+                (drop (call $wnd_send_message (local.get $child) (i32.const 0x0112)
+                  (i32.and (local.get $wParam) (i32.const 0xFFFF)) (local.get $lParam)))
+                (return (i32.const 1))))))
         (local.set $child (call $ctrl_find_by_id
           (local.get $client) (i32.and (local.get $wParam) (i32.const 0xFFFF))))
         (if (local.get $child)
@@ -1888,7 +1899,105 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (call $mdi_frame_set_caption (local.get $frame) (call $g2w (local.get $buf)))
     (call $heap_free (local.get $buf)))
 
-  ;; Set a top-level window's caption from WAT: the same three steps
+;; Everything the frame shows of a maximized active child: its title and
+  ;; its menu-bar items. Called after anything that can change either.
+  (func $mdi_frame_sync (param $client i32)
+    (call $mdi_frame_title_sync (local.get $client))
+    (call $mdi_frame_menu_sync (local.get $client)))
+
+  ;; The frame's menu bar while the active child is maximized carries that
+  ;; child's system menu (its icon, at the left) and its Minimize, Restore
+  ;; and Close buttons (right-justified), as Win98 MDI inserts them into the
+  ;; frame's HMENU; the program sees them in GetMenuItemCount and friends.
+  ;; Choosing one reaches the frame as WM_COMMAND, which DefFrameProc hands
+  ;; to the child as WM_SYSCOMMAND. Every inserted item carries the child in
+  ;; its dwItemData, so the bar itself says which child it is dressed for and
+  ;; this can run as often as it likes.
+  (func $mdi_frame_menu_sync (param $client i32)
+    (local $frame i32) (local $child i32) (local $want i32) (local $has i32)
+    (local $sys i32)
+    (if (i32.eqz (call $mdi_client_state (local.get $client))) (then (return)))
+    (local.set $frame (call $wnd_get_parent (local.get $client)))
+    (if (i32.eqz (local.get $frame)) (then (return)))
+    (if (i32.eqz (call $menu_bar_count (local.get $frame))) (then (return)))
+    (local.set $child (call $mdi_client_active (local.get $client)))
+    (if (i32.and (i32.ne (local.get $child) (i32.const 0))
+                 (i32.ne (call $wnd_max_get (local.get $child)) (i32.const 0)))
+      (then (local.set $want (local.get $child))))
+    (local.set $has (call $mdi_frame_menu_child (local.get $frame) (local.get $client)))
+    (if (i32.eq (local.get $has) (local.get $want)) (then (return)))
+    (call $mdi_frame_menu_strip (local.get $frame) (local.get $client))
+    (if (local.get $want)
+      (then
+        (local.set $sys (call $system_menu_get (local.get $want)))
+        (if (local.get $sys)
+          (then (drop (call $menu_bar_insert (local.get $frame) (i32.const 0)
+            (i32.const 0x14) (i32.const 0) (local.get $sys)          ;; MF_POPUP|MF_BITMAP
+            (i32.const 1) (i32.const 0) (local.get $want) (i32.const 0)))))  ;; HBMMENU_SYSTEM
+        (drop (call $menu_bar_insert (local.get $frame) (i32.const -1)
+          (i32.const 0x4004) (i32.const 0xF020) (i32.const 0)        ;; MF_HELP|MF_BITMAP, SC_MINIMIZE
+          (select (i32.const 3) (i32.const 7)                          ;; MBAR_MINIMIZE / _D
+            (i32.ne (i32.and (call $wnd_get_style (local.get $want)) (i32.const 0x00020000)) (i32.const 0)))
+          (i32.const 0) (local.get $want) (i32.const 0)))
+        (drop (call $menu_bar_insert (local.get $frame) (i32.const -1)
+          (i32.const 0x4) (i32.const 0xF120) (i32.const 0)           ;; SC_RESTORE
+          (i32.const 2) (i32.const 0) (local.get $want) (i32.const 0)))
+        (drop (call $menu_bar_insert (local.get $frame) (i32.const -1)
+          (i32.const 0x4) (i32.const 0xF060) (i32.const 0)           ;; SC_CLOSE
+          (i32.const 5) (i32.const 0) (local.get $want) (i32.const 0)))))
+    (call $defwndproc_do_ncpaint (local.get $frame))
+    (call $host_invalidate_frame (local.get $frame)))
+
+  ;; Is this bar item one MDI put there for a child of $client?
+  (func $mdi_frame_menu_item_is_ours (param $frame i32) (param $pos i32) (param $client i32)
+      (result i32)
+    (local $bmp i32) (local $owner i32)
+    (local.set $bmp (call $menu_bar_item_bitmap (local.get $frame) (local.get $pos)))
+    (if (i32.eqz (i32.or (i32.eq (local.get $bmp) (i32.const 1))
+          (i32.or (i32.eq (local.get $bmp) (i32.const 2))
+            (i32.or (i32.eq (local.get $bmp) (i32.const 3))
+              (i32.or (i32.eq (local.get $bmp) (i32.const 5))
+                (i32.or (i32.eq (local.get $bmp) (i32.const 6)) (i32.eq (local.get $bmp) (i32.const 7))))))))
+      (then (return (i32.const 0))))
+    (local.set $owner (i32.load offset=20 (call $menu_bar_own_item (local.get $frame) (local.get $pos))))
+    (if (i32.eqz (local.get $owner)) (then (return (i32.const 0))))
+    ;; A child that is gone still counts: its items must come off.
+    (i32.or (i32.lt_s (call $wnd_table_find (local.get $owner)) (i32.const 0))
+            (i32.eq (call $wnd_get_parent (local.get $owner)) (local.get $client))))
+
+  ;; The child the frame's bar is dressed for, or 0.
+  (func $mdi_frame_menu_child (param $frame i32) (param $client i32) (result i32)
+    (local $n i32) (local $i i32)
+    (local.set $n (call $menu_bar_count (local.get $frame)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (if (call $mdi_frame_menu_item_is_ours (local.get $frame) (local.get $i) (local.get $client))
+        (then (return (i32.load offset=20
+          (call $menu_bar_own_item (local.get $frame) (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Take MDI's items off the frame's bar (RemoveMenu: the child's system
+  ;; menu stays the child's).
+  (func $mdi_frame_menu_strip (param $frame i32) (param $client i32)
+    (local $i i32)
+    (local.set $i (call $menu_bar_count (local.get $frame)))
+    (block $done (loop $scan
+      (br_if $done (i32.le_s (local.get $i) (i32.const 0)))
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+      (if (call $mdi_frame_menu_item_is_ours (local.get $frame) (local.get $i) (local.get $client))
+        (then (drop (call $menu_bar_remove_at (local.get $frame) (local.get $i) (i32.const 0)))))
+      (br $scan))))
+
+  ;; A new menu on a frame (SetMenu, WM_MDISETMENU) starts from its resource;
+  ;; dress it again if a child is maximized.
+  (func $mdi_frame_menu_reattach (param $frame i32)
+    (local $client i32)
+    (local.set $client (call $mdi_client_of_frame (local.get $frame)))
+    (if (local.get $client) (then (call $mdi_frame_menu_sync (local.get $client)))))
+
+    ;; Set a top-level window's caption from WAT: the same three steps
   ;; SetWindowText takes for one, without the guest round trip.
   (func $mdi_frame_set_caption (param $frame i32) (param $wa i32)
     (call $title_table_set (local.get $frame) (local.get $wa) (call $strlen (local.get $wa)))
@@ -1923,7 +2032,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (call $gs32 (i32.add (local.get $state) (i32.const 16)) (local.get $base))
     (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
     (memory.copy (call $g2w (local.get $base)) (local.get $wa) (i32.add (local.get $len) (i32.const 1)))
-    (call $mdi_frame_title_sync (local.get $client))
+    (call $mdi_frame_sync (local.get $client))
     (i32.const 1))
 
   ;; DefMDIChildProc's SC_MAXIMIZE geometry: USER sizes a maximized MDI child
@@ -1972,7 +2081,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (i32.add (local.get $w) (i32.mul (local.get $l) (i32.const 2)))
       (i32.add (local.get $h) (i32.add (local.get $t) (local.get $l)))
       (i32.const 2)) ;; SIZE_MAXIMIZED
-    (call $mdi_frame_title_sync (local.get $client))
+    (call $mdi_frame_sync (local.get $client))
     (i32.const 1))
 
   ;; A window's normal rectangle while it is maximized or iconic (Win32's
@@ -2154,7 +2263,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
                (local.get $h))
       (i32.const 160) (local.get $h)
       (i32.const 1)) ;; SIZE_MINIMIZED
-    (call $mdi_frame_title_sync (local.get $client))
+    (call $mdi_frame_sync (local.get $client))
     (i32.const 1))
 
   ;; An MDI child leaving the iconic or maximized state, after its show-state
@@ -2176,7 +2285,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (i32.load offset=12 (local.get $p))
       (i32.load offset=16 (local.get $p))
       (i32.const 0)) ;; SIZE_RESTORED
-    (call $mdi_frame_title_sync (call $wnd_get_parent (local.get $child)))
+    (call $mdi_frame_sync (call $wnd_get_parent (local.get $child)))
     (i32.const 1))
 
   ;; MDI-child messages that add behavior beyond DefWindowProc. The caller

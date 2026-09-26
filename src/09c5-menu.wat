@@ -847,6 +847,8 @@
 
   (func $dynamic_menu_make_popup_blob (param $hmenu i32) (result i32)
     (local $sw i32) (local $struct i32) (local $total i32) (local $blob_g i32)
+    ;; A system menu shows the window's current state each time it opens.
+    (call $system_menu_refresh (local.get $hmenu))
     (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
     (if (i32.eqz (local.get $sw)) (then (return (i32.const 0))))
     (if (i32.eqz (i32.load offset=4 (local.get $sw))) (then (return (i32.const 0))))
@@ -1458,7 +1460,8 @@
     (i32.store (local.get $tbl) (i32.add (local.get $newg) (i32.const 8)))
     ;; Host-built menus are serialized only after SetMenu has returned to the
     ;; browser bridge. Recompute now that menu_bar_count can see the blob.
-    (call $defwndproc_do_nccalcsize (local.get $hwnd)))
+    (call $defwndproc_do_nccalcsize (local.get $hwnd))
+    (call $mdi_frame_menu_reattach (local.get $hwnd)))
 
   ;; Host-created menu bars have no RT_MENU resource key, but GetMenu and the
   ;; handle-based mutation APIs still need the CreateMenu handle as identity.
@@ -1485,7 +1488,9 @@
       (i32.add (local.get $neww) (i32.const 8))
       (local.get $src_wa) (local.get $len))
     (i32.store (local.get $tbl) (i32.add (local.get $newg) (i32.const 8)))
-    (call $defwndproc_do_nccalcsize (local.get $hwnd)))
+    (call $defwndproc_do_nccalcsize (local.get $hwnd))
+    ;; A new menu on an MDI frame is dressed for its maximized child again.
+    (call $mdi_frame_menu_reattach (local.get $hwnd)))
 
   ;; Browser hosts do not carry a JS guest-address translator. Let them fill a
   ;; temporary guest allocation through guest_write8 and translate it here.
@@ -4516,9 +4521,27 @@
       (select (i32.const 8) (i32.const 0)
         (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0)))))
 
+  ;; GetMenuState of a dynamic menu's item: its MF_* type and state bits, and
+  ;; for a popup the popup's item count in the high byte, as USER answers.
+  (func $dynamic_menu_item_state (param $hmenu i32) (param $item i32) (param $by_pos i32)
+      (result i32)
+    (local $rec i32) (local $flags i32) (local $n i32)
+    (local.set $rec (call $dynamic_menu_item_w (local.get $hmenu) (local.get $item) (local.get $by_pos)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const -1))))
+    (local.set $flags (i32.and (i32.load (local.get $rec)) (i32.const 0x7FFFFFFF)))
+    (if (i32.and (local.get $flags) (i32.const 0x10))
+      (then
+        (local.set $n (call $menu_handle_item_count (i32.load offset=12 (local.get $rec))))
+        (return (i32.or (i32.and (local.get $flags) (i32.const 0xFF))
+          (i32.shl (select (local.get $n) (i32.const 0) (i32.gt_s (local.get $n) (i32.const 0)))
+                   (i32.const 8))))))
+    (i32.and (local.get $flags) (i32.const 0xFFFF)))
+
   (func $menu_handle_item_state (export "menu_handle_item_state")
         (param $hmenu i32) (param $pos i32) (result i32)
     (local $hwnd i32) (local $top i32)
+    (if (call $dynamic_menu_state_w (local.get $hmenu))
+      (then (return (call $dynamic_menu_item_state (local.get $hmenu) (local.get $pos) (i32.const 1)))))
     (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
     (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
@@ -4533,6 +4556,8 @@
         (param $hmenu i32) (param $id i32) (result i32)
     (local $hwnd i32) (local $bar i32) (local $bars i32)
     (local $i i32) (local $n i32)
+    (if (call $dynamic_menu_state_w (local.get $hmenu))
+      (then (return (call $dynamic_menu_item_state (local.get $hmenu) (local.get $id) (i32.const 0)))))
     (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
     ;; Every dropdown in the blob, whatever the bar's arrangement.
@@ -5339,10 +5364,144 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 314: GetSystemMenu(hwnd, bRevert) — stdcall(2)
+  ;; Returns the window's system menu, building it on first request; with
+  ;; bRevert, discards any copy the program changed and returns NULL, as
+  ;; Win32 does. A window without WS_SYSMENU has none.
   (func $handle_GetSystemMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0x40003))
+    (local $slot i32)
+    (local.set $slot (call $wnd_table_find (local.get $arg0)))
+    (if (i32.and (i32.ne (local.get $arg1) (i32.const 0)) (i32.ge_s (local.get $slot) (i32.const 0)))
+      (then (call $system_menu_reset_slot (local.get $slot))))
+    (i32.store offset=0 (global.get $reg_base)
+      (if (result i32) (local.get $arg1)
+        (then (i32.const 0))
+        (else (call $system_menu_get (local.get $arg0)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
+
+  ;; ---- The system menu ----
+  ;; A window's system menu is an ordinary dynamic HMENU (so every menu API
+  ;; edits it), built from the window's style the first time it is asked for.
+  ;; Its MNUD header's reserved word (+12) names the window it belongs to;
+  ;; that is how an open system menu knows whose state to show.
+  ;; Nothing opens it from a caption yet -- captions draw no icon -- so today
+  ;; it is reached through MDI: a maximized child's system menu is the icon
+  ;; at the left of the frame's menu bar.
+
+  (func $system_menu_cell (param $slot i32) (result i32)
+    (i32.add (global.get $SYSTEM_MENU_TABLE) (i32.mul (local.get $slot) (i32.const 4))))
+
+  (func $system_menu_reset_slot (param $slot i32)
+    (local $cell i32) (local $h i32)
+    (local.set $cell (call $system_menu_cell (local.get $slot)))
+    (local.set $h (i32.load (local.get $cell)))
+    (i32.store (local.get $cell) (i32.const 0))
+    (if (local.get $h) (then (drop (call $dynamic_menu_destroy (local.get $h))))))
+
+  ;; The window a system menu belongs to, or 0 for any other menu.
+  (func $system_menu_owner (param $hmenu i32) (result i32)
+    (local $sw i32)
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (if (i32.eqz (local.get $sw)) (then (return (i32.const 0))))
+    (i32.load offset=12 (local.get $sw)))
+
+  ;; Append one item whose label is a WATX string literal (a wasm address).
+  (func $system_menu_add (param $hmenu i32) (param $flags i32) (param $id i32) (param $text_wa i32)
+    (local $sw i32) (local $len i32) (local $copy i32) (local $rec i32)
+    (if (i32.eqz (call $dynamic_menu_append (local.get $hmenu) (local.get $flags) (local.get $id) (i32.const 0)))
+      (then (return)))
+    (if (i32.eqz (local.get $text_wa)) (then (return)))
+    (local.set $len (call $strlen (local.get $text_wa)))
+    (local.set $copy (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+    (if (i32.eqz (local.get $copy)) (then (return)))
+    (call $memcpy (call $g2w (local.get $copy)) (local.get $text_wa) (i32.add (local.get $len) (i32.const 1)))
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (local.set $rec (i32.add (local.get $sw)
+      (i32.add (i32.const 16)
+        (i32.mul (i32.sub (i32.load offset=4 (local.get $sw)) (i32.const 1))
+                 (global.get $DYNAMIC_MENU_ITEM_BYTES)))))
+    (i32.store offset=16 (local.get $rec) (local.get $copy))
+    (i32.store (local.get $rec)
+      (i32.or (i32.load (local.get $rec)) (global.get $DYNAMIC_MENU_OWNS_TEXT))))
+
+  ;; The window's system menu, built on first request, or 0.
+  ;; Items follow Win98: Restore, Minimize and Maximize only for a window
+  ;; with a minimize or maximize box, Size only for a sizing border; an MDI
+  ;; child closes with Ctrl+F4 and adds Next (Ctrl+F6).
+  (func $system_menu_get (param $hwnd i32) (result i32)
+    (local $slot i32) (local $cell i32) (local $h i32) (local $style i32)
+    (local $boxes i32) (local $mdi i32)
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $style (call $wnd_get_style (local.get $hwnd)))
+    (if (i32.eqz (i32.and (local.get $style) (i32.const 0x00080000))) ;; WS_SYSMENU
+      (then (return (i32.const 0))))
+    (local.set $cell (call $system_menu_cell (local.get $slot)))
+    (local.set $h (i32.load (local.get $cell)))
+    ;; The program may have destroyed it: build a fresh one.
+    (if (i32.and (i32.ne (local.get $h) (i32.const 0))
+                 (i32.ne (call $dynamic_menu_state_w (local.get $h)) (i32.const 0)))
+      (then (return (local.get $h))))
+    (local.set $h (call $dynamic_menu_create))
+    (if (i32.eqz (local.get $h)) (then (return (i32.const 0))))
+    (i32.store offset=12 (call $dynamic_menu_state_w (local.get $h)) (local.get $hwnd))
+    (local.set $boxes (i32.and (local.get $style) (i32.const 0x00030000)))
+    (local.set $mdi (i32.and
+      (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0))
+      (i32.ne (call $mdi_client_state (call $wnd_get_parent (local.get $hwnd))) (i32.const 0))))
+    (if (local.get $boxes)
+      (then (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF120) "&Restore")))
+    (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF010) "&Move")
+    (if (i32.and (local.get $style) (i32.const 0x00040000))
+      (then (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF000) "&Size")))
+    (if (local.get $boxes)
+      (then
+        (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF020) "Mi&nimize")
+        (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF030) "Ma&ximize")))
+    (call $system_menu_add (local.get $h) (i32.const 0x800) (i32.const 0) (i32.const 0))
+    (if (local.get $mdi)
+      (then
+        (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF060) "&Close\tCtrl+F4")
+        (call $system_menu_add (local.get $h) (i32.const 0x800) (i32.const 0) (i32.const 0))
+        (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF040) "Nex&t\tCtrl+F6"))
+      (else
+        (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF060) "&Close\tAlt+F4")))
+    (i32.store (local.get $cell) (local.get $h))
+    (local.get $h))
+
+  ;; Gray what does not apply to the window as it is now, as USER does each
+  ;; time a system menu opens: Restore unless minimized or maximized, Move
+  ;; and Size while maximized (Size also while minimized), Minimize while
+  ;; minimized, Maximize while maximized. Items the program added keep their
+  ;; own state.
+  (func $system_menu_refresh (param $hmenu i32)
+    (local $hwnd i32) (local $sw i32) (local $n i32) (local $i i32) (local $rec i32)
+    (local $id i32) (local $gray i32) (local $min i32) (local $max i32)
+    (local.set $hwnd (call $system_menu_owner (local.get $hmenu)))
+    (if (i32.eqz (local.get $hwnd)) (then (return)))
+    (local.set $min (call $wnd_min_get (local.get $hwnd)))
+    (local.set $max (call $wnd_max_get (local.get $hwnd)))
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (local.set $n (i32.load offset=4 (local.get $sw)))
+    (block $done (loop $each
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $rec (i32.add (local.get $sw)
+        (i32.add (i32.const 16) (i32.mul (local.get $i) (global.get $DYNAMIC_MENU_ITEM_BYTES)))))
+      (local.set $id (i32.load offset=4 (local.get $rec)))
+      (local.set $gray (i32.const -1))
+      (if (i32.eq (local.get $id) (i32.const 0xF120))
+        (then (local.set $gray (i32.eqz (i32.or (local.get $min) (local.get $max))))))
+      (if (i32.eq (local.get $id) (i32.const 0xF010)) (then (local.set $gray (local.get $max))))
+      (if (i32.eq (local.get $id) (i32.const 0xF000))
+        (then (local.set $gray (i32.or (local.get $min) (local.get $max)))))
+      (if (i32.eq (local.get $id) (i32.const 0xF020)) (then (local.set $gray (local.get $min))))
+      (if (i32.eq (local.get $id) (i32.const 0xF030)) (then (local.set $gray (local.get $max))))
+      (if (i32.ge_s (local.get $gray) (i32.const 0))
+        (then (i32.store (local.get $rec)
+          (i32.or (i32.and (i32.load (local.get $rec)) (i32.const -4))
+                  (select (i32.const 1) (i32.const 0) (local.get $gray))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $each))))
 
   ;; 113: EnableMenuItem(hMenu, uIDEnableItem, uEnable).
   ;; EnableMenuItem(hMenu, uIDEnableItem, uEnable). MF_BYPOSITION is 0x400 and

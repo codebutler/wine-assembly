@@ -1909,6 +1909,8 @@
   (global $WND_NORMAL_RECT i32 (region.addr $WND_NORMAL_RECT 0))
   (global $MENU_BAR_TABLE i32 (region.addr $MENU_BAR_TABLE 0))
   (global $MENU_BAR_TABLE_SIZE i32 (region.size $MENU_BAR_TABLE))
+  (global $SYSTEM_MENU_TABLE i32 (region.addr $SYSTEM_MENU_TABLE 0))
+  (global $SYSTEM_MENU_TABLE_SIZE i32 (region.size $SYSTEM_MENU_TABLE))
   (global $WND_NORMAL_RECT_SIZE i32 (region.size $WND_NORMAL_RECT))
   (global $WND_SLOT_END_SIZE i32 (region.size $WND_SLOT_END))
   ;; CLASS_NAME_STRINGS: the built-in control class names dialog templates and

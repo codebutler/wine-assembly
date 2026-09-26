@@ -335,6 +335,7 @@
     (call $wnd_hinstance_reset_slot (local.get $slot))
     (call $menu_data_reset_slot (local.get $slot))
     (call $menu_bar_list_reset_slot (local.get $slot))
+    (call $system_menu_reset_slot (local.get $slot))
     (call $dialog_state_reset_slot (local.get $slot))
     (call $wnd_unicode_reset_slot (local.get $slot))
     (call $wnd_extra_reset_slot (local.get $slot))
