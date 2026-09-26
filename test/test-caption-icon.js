@@ -16,6 +16,8 @@
 //   - a press on it posts WM_NCLBUTTONDOWN(HTSYSMENU); the default turns that
 //     into SC_MOUSEMENU, which tracks the window's system menu, and a pick
 //     from it is WM_SYSCOMMAND -- for a built-in dialog as for a window;
+//   - window_shell_icon hands a host the same icon for its taskbar button,
+//     whatever the window's styles;
 //   - WM_CLOSE on a built-in dialog presses Cancel, which is what Close in
 //     its system menu does.
 // The icon's placement (2px in; the title's first pixels at 21, as on a
@@ -115,6 +117,12 @@ const extraWat = String.raw`
   const bare = e.tci_make(0x10C00000, 0) >>> 0;
   e.tci_defwndproc(bare, 0x80, 0, icon);
   assert.strictEqual(e.tci_caption_icon(bare), 0, 'no WS_SYSMENU: no caption icon');
+
+  // The shell's icon (a taskbar button's) is the window's whatever its styles.
+  assert.strictEqual(e.window_shell_icon(win) >>> 0, icon, 'the shell icon is the window icon');
+  assert.strictEqual(e.window_shell_icon(tool) >>> 0, icon, 'a tool window still has a shell icon');
+  assert.strictEqual(e.window_shell_icon(bare) >>> 0, icon, 'so does one without WS_SYSMENU');
+  assert.strictEqual(e.window_shell_icon(e.tci_make(WS_OVERLAPPEDWINDOW, 0) >>> 0), 0, 'none of its own: 0');
 
   // The icon is HTSYSMENU; the caption beside it HTCAPTION.
   const x0 = e.wnd_window_screen_x(win) | 0;

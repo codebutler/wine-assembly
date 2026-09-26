@@ -2579,8 +2579,6 @@
     (global.get $GUEST_PAGE_TABLE_SIZE))
   (func (export "get_bp_first_caller") (result i32) (global.get $bp_first_caller))
 
-  ;; --trace-esp wiring (test harness uses this). Pass hi=0 to disable the
-  ;; upper bound; pass flag=0 to turn off tracing.
   ;; Turn USER trace categories on (see $user_trace_mask). Each traced step
   ;; logs "[user-trace] <what> a b c" through host.user_trace.
   (func (export "set_user_trace") (param $mask i32)
@@ -2590,6 +2588,18 @@
     (if (i32.and (global.get $user_trace_mask) (local.get $cat))
       (then (call $host_user_trace (local.get $text) (local.get $a) (local.get $b) (local.get $c)))))
 
+  ;; The icon a shell shows for a window: its small icon, else its big one,
+  ;; else its class's -- what Win98's taskbar asks a window for. 0 when the
+  ;; window has none the renderer can draw (stock icons carry no pixels), so
+  ;; a host keeps its own default. Pair with icon_rasterize_rgba.
+  (func (export "window_shell_icon") (param $hwnd i32) (result i32)
+    (local $icon i32)
+    (local.set $icon (call $wnd_small_icon (local.get $hwnd)))
+    (if (result i32) (i32.eq (i32.and (local.get $icon) (i32.const 0xFFFF0000)) (global.get $ICON_HANDLE_TAG))
+      (then (local.get $icon)) (else (i32.const 0))))
+
+  ;; --trace-esp wiring (test harness uses this). Pass hi=0 to disable the
+  ;; upper bound; pass flag=0 to turn off tracing.
   (func (export "set_trace_esp") (param $flag i32) (param $lo i32) (param $hi i32)
     (global.set $trace_esp_flag (local.get $flag))
     (global.set $trace_esp_lo (local.get $lo))
