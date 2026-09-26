@@ -305,7 +305,17 @@
         (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $text_gp)))
         (call $host_set_window_text (local.get $arg0) (local.get $text_wa))
+        ;; A maximized MDI child's title is part of its frame's caption.
+        (call $mdi_frame_title_sync (call $wnd_get_parent (local.get $arg0)))
         (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (return)))
+    ;; A frame showing a maximized MDI child keeps "Frame - [Child]".
+    (if (i32.and (i32.ne (local.get $text_wa) (i32.const 0))
+                 (call $mdi_frame_retitle (local.get $arg0) (local.get $text_wa)))
+      (then
+        (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $title_table_set (local.get $arg0) (local.get $text_wa) (local.get $len))

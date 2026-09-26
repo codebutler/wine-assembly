@@ -86,6 +86,18 @@ const extraWat = String.raw`
   (func (export "tmss_y") (param $h i32) (result i32) (call $ctrl_get_y_s (local.get $h)))
   (func (export "tmss_wh") (param $h i32) (result i32) (call $ctrl_get_wh_packed (local.get $h)))
   (func (export "tmss_iconic") (param $h i32) (result i32) (call $wnd_min_get (local.get $h)))
+  (func (export "tmss_client_l") (param $h i32) (result i32) (call $client_rect_get_l (local.get $h)))
+  (func (export "tmss_client_t") (param $h i32) (result i32) (call $client_rect_get_t (local.get $h)))
+  (func (export "tmss_client_w") (param $h i32) (result i32)
+    (i32.sub (call $client_rect_get_r (local.get $h)) (call $client_rect_get_l (local.get $h))))
+  (func (export "tmss_client_h") (param $h i32) (result i32)
+    (i32.sub (call $client_rect_get_b (local.get $h)) (call $client_rect_get_t (local.get $h))))
+  (func (export "tmss_set_title") (param $h i32) (param $wa i32)
+    (call $title_table_set (local.get $h) (local.get $wa) (call $strlen (local.get $wa))))
+  (func (export "tmss_title_ptr") (param $h i32) (result i32) (call $title_table_get_ptr (local.get $h)))
+  (func (export "tmss_title_len") (param $h i32) (result i32) (call $title_table_get_len (local.get $h)))
+  (func (export "tmss_activate") (param $client i32) (param $child i32) (result i32)
+    (call $mdi_client_activate (local.get $client) (local.get $child)))
   (func (export "tmss_zoomed") (param $h i32) (result i32) (call $wnd_max_get (local.get $h)))
 `;
 
@@ -119,8 +131,17 @@ const extraWat = String.raw`
 
   // Maximize, then restore.
   assert.strictEqual(e.tmss_syscommand(child, 0xF030), 1, 'SC_MAXIMIZE is MDI work');
-  assert.deepStrictEqual(rect(child), { x: 0, y: 0, w: 400, h: 300 },
-    'a maximized child fills the MDI client');
+  {
+    // Win98 sizes a maximized MDI child with AdjustWindowRectEx: its CLIENT
+    // area is the MDI client, and its caption and frame lie outside it.
+    const r = rect(child);
+    const l = e.tmss_client_l(child), t = e.tmss_client_t(child);
+    assert.ok(l > 0 && t > l, 'the child has a frame and a caption');
+    assert.deepStrictEqual(r, { x: -l, y: -t, w: 400 + 2 * l, h: 300 + t + l },
+      'a maximized child puts its caption and frame outside the MDI client');
+    assert.deepStrictEqual([e.tmss_client_w(child), e.tmss_client_h(child)], [400, 300],
+      'and its client area is exactly the MDI client');
+  }
   assert.strictEqual(e.tmss_syscommand(child, 0xF120), 1, 'SC_RESTORE is MDI work');
   assert.strictEqual(e.tmss_zoomed(child), 0);
   assert.deepStrictEqual(rect(child), NORMAL,
@@ -174,6 +195,33 @@ const extraWat = String.raw`
   assert.strictEqual(e.tmss_set_placement(child, wp), 1);
   assert.strictEqual(e.tmss_iconic(child), 0);
   assert.deepStrictEqual(rect(child), NORMAL, 'SW_RESTORE returns to rcNormalPosition');
+
+  // The frame's caption names a maximized child, and only while it is one.
+  const text = (h) => {
+    const len = e.tmss_title_len(h);
+    return Buffer.from(memory.buffer, e.tmss_title_ptr(h), len).toString('latin1');
+  };
+  const put = (h, str) => {
+    const g = e.guest_alloc(str.length + 1) >>> 0;
+    for (let i = 0; i < str.length; i++) e.guest_write8(g + i, str.charCodeAt(i));
+    e.guest_write8(g + str.length, 0);
+    e.tmss_set_title(h, e.get_guest_base() + g - e.get_image_base());
+  };
+  put(frame, 'App');
+  put(child, 'Doc');
+  put(other, 'Other');
+  e.tmss_activate(client, child);
+  assert.strictEqual(e.tmss_syscommand(child, 0xF030), 1);
+  assert.strictEqual(text(frame), 'App - [Doc]', 'a maximized child is named in the frame caption');
+  // Activating another child while one is maximized maximizes it instead.
+  e.tmss_activate(client, other);
+  assert.strictEqual(e.tmss_zoomed(other), 1, 'the newly active child takes over the maximized state');
+  assert.strictEqual(e.tmss_zoomed(child), 0, 'and the one it replaced is restored');
+  assert.deepStrictEqual(rect(child), NORMAL, 'to its own rectangle');
+  assert.strictEqual(text(frame), 'App - [Other]', 'the caption follows the active child');
+  assert.strictEqual(e.tmss_syscommand(other, 0xF120), 1);
+  assert.strictEqual(text(frame), 'App', 'restoring gives the frame its own title back');
+  e.tmss_activate(client, child);
 
   // Every child keeps its own restore rectangle, however many are iconic at
   // once. The rectangles used to live in an eight-entry list in the MDI

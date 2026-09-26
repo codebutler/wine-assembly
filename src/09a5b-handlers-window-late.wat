@@ -1585,6 +1585,20 @@ GetTopWindow(hWnd) — 1 arg stdcall
           (then (call $set_focus (local.get $child))))
         (return (i32.const 1))))
     (call $gs32 (i32.add (local.get $state) (i32.const 8)) (local.get $child))
+    ;; While a child is maximized, every child that becomes active is shown
+    ;; maximized in its place and the one it replaces is restored: there is
+    ;; only ever one maximized MDI child, and it is the active one.
+    (if (i32.and
+          (i32.and (i32.ne (local.get $old) (i32.const 0))
+                   (i32.ne (local.get $child) (i32.const 0)))
+          (i32.ne (call $wnd_max_get (local.get $old)) (i32.const 0)))
+      (then
+        (if (i32.eqz (call $wnd_max_get (local.get $child)))
+          (then
+            (call $wnd_apply_show_state (local.get $child) (i32.const 3))
+            (drop (call $mdi_child_maximize (local.get $child)))))
+        (call $wnd_apply_show_state (local.get $old) (i32.const 9))
+        (drop (call $mdi_child_restore (local.get $old)))))
     (if (local.get $old)
       (then (drop (call $wnd_send_message
         (local.get $old) (i32.const 0x0222)
@@ -1597,6 +1611,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
           (local.get $old) (local.get $child)))
         (if (i32.eqz (call $mdi_focus_within (local.get $child)))
           (then (call $set_focus (local.get $child))))))
+    (call $mdi_frame_title_sync (local.get $client))
     (i32.const 1))
 
   ;; Give a newly created MDI child the next CLIENTCREATESTRUCT command ID
@@ -1662,10 +1677,12 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local $frame i32) (local $old_menu i32) (local $new_menu i32)
     (if (i32.eq (local.get $msg) (i32.const 0x0001)) ;; WM_CREATE
       (then
-        ;; +0 hWindowMenu, +4 idFirstChild, +8 active child, +12 next child id.
-        (local.set $state (call $heap_alloc (i32.const 16)))
+        ;; +0 hWindowMenu, +4 idFirstChild, +8 active child, +12 next child
+        ;; id, +16 the frame's own title while a child is maximized (a heap
+        ;; copy; see $mdi_frame_title_sync), 0 otherwise.
+        (local.set $state (call $heap_alloc (i32.const 20)))
         (if (i32.eqz (local.get $state)) (then (return (i32.const -1))))
-        (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 16))
+        (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 20))
         (local.set $ccs (call $gl32 (local.get $lParam))) ;; CREATESTRUCT.lpCreateParams
         (if (local.get $ccs)
           (then
@@ -1680,6 +1697,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
     (if (i32.eq (local.get $msg) (i32.const 0x0002)) ;; WM_DESTROY
       (then
+        (if (call $gl32 (i32.add (local.get $state) (i32.const 16)))
+          (then (call $heap_free (call $gl32 (i32.add (local.get $state) (i32.const 16))))))
         (call $heap_free (local.get $state))
         (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0))
         (return (i32.const 0))))
@@ -1809,6 +1828,104 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (return (i32.const 1))))
     (i32.const 0))
 
+  ;; The frame's caption while its active MDI child is maximized is
+  ;; "Frame - [Child]", as DefFrameProc makes it on Win98, and GetWindowText
+  ;; on the frame returns that whole caption. The frame's own title is kept
+  ;; in the MDI client's state (+16) for as long as the composition lasts and
+  ;; put back when no child is maximized any more. Called after anything that
+  ;; can change the answer: maximize, restore, minimize, activation, a child
+  ;; retitled, the frame retitled, and the maximized child going away.
+  (func $mdi_frame_title_sync (param $client i32)
+    (local $state i32) (local $frame i32) (local $child i32) (local $base i32)
+    (local $base_len i32) (local $child_len i32) (local $buf i32) (local $w i32)
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (if (i32.eqz (local.get $state)) (then (return)))
+    (local.set $frame (call $wnd_get_parent (local.get $client)))
+    (if (i32.eqz (local.get $frame)) (then (return)))
+    (local.set $child (call $mdi_client_active (local.get $client)))
+    (local.set $base (call $gl32 (i32.add (local.get $state) (i32.const 16))))
+    (if (i32.eqz (i32.and (i32.ne (local.get $child) (i32.const 0))
+                          (i32.ne (call $wnd_max_get (local.get $child)) (i32.const 0))))
+      (then
+        ;; Nothing maximized: give the frame its own title back.
+        (if (local.get $base)
+          (then
+            (call $gs32 (i32.add (local.get $state) (i32.const 16)) (i32.const 0))
+            (call $mdi_frame_set_caption (local.get $frame) (call $g2w (local.get $base)))
+            (call $heap_free (local.get $base))))
+        (return)))
+    (if (i32.eqz (local.get $base))
+      (then
+        ;; First composition: remember what the frame was called.
+        (local.set $base_len (call $title_table_get_len (local.get $frame)))
+        (local.set $base (call $heap_alloc (i32.add (local.get $base_len) (i32.const 1))))
+        (if (i32.eqz (local.get $base)) (then (return)))
+        (if (local.get $base_len)
+          (then (memory.copy (call $g2w (local.get $base))
+                  (call $title_table_get_ptr (local.get $frame)) (local.get $base_len))))
+        (i32.store8 (i32.add (call $g2w (local.get $base)) (local.get $base_len)) (i32.const 0))
+        (call $gs32 (i32.add (local.get $state) (i32.const 16)) (local.get $base))))
+    (local.set $base_len (call $strlen (call $g2w (local.get $base))))
+    (local.set $child_len (call $title_table_get_len (local.get $child)))
+    ;; base + " - [" + child + "]" + NUL
+    (local.set $buf (call $heap_alloc
+      (i32.add (i32.add (local.get $base_len) (local.get $child_len)) (i32.const 6))))
+    (if (i32.eqz (local.get $buf)) (then (return)))
+    (local.set $w (call $g2w (local.get $buf)))
+    (memory.copy (local.get $w) (call $g2w (local.get $base)) (local.get $base_len))
+    (local.set $w (i32.add (local.get $w) (local.get $base_len)))
+    (i32.store8 (local.get $w) (i32.const 0x20))
+    (i32.store8 offset=1 (local.get $w) (i32.const 0x2D))
+    (i32.store8 offset=2 (local.get $w) (i32.const 0x20))
+    (i32.store8 offset=3 (local.get $w) (i32.const 0x5B))
+    (local.set $w (i32.add (local.get $w) (i32.const 4)))
+    (if (local.get $child_len)
+      (then (memory.copy (local.get $w)
+              (call $title_table_get_ptr (local.get $child)) (local.get $child_len))))
+    (local.set $w (i32.add (local.get $w) (local.get $child_len)))
+    (i32.store8 (local.get $w) (i32.const 0x5D))
+    (i32.store8 offset=1 (local.get $w) (i32.const 0))
+    (call $mdi_frame_set_caption (local.get $frame) (call $g2w (local.get $buf)))
+    (call $heap_free (local.get $buf)))
+
+  ;; Set a top-level window's caption from WAT: the same three steps
+  ;; SetWindowText takes for one, without the guest round trip.
+  (func $mdi_frame_set_caption (param $frame i32) (param $wa i32)
+    (call $title_table_set (local.get $frame) (local.get $wa) (call $strlen (local.get $wa)))
+    (call $nc_flags_set (local.get $frame) (i32.const 1))
+    (call $defwndproc_do_ncpaint (local.get $frame))
+    (call $host_set_window_text (local.get $frame) (local.get $wa)))
+
+  ;; The MDI client of a frame, or 0.
+  (func $mdi_client_of_frame (param $frame i32) (result i32)
+    (local $slot i32) (local $hwnd i32)
+    (block $done (loop $scan
+      (local.set $slot (call $wnd_next_child_slot (local.get $frame) (local.get $slot)))
+      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
+      (local.set $hwnd (call $wnd_slot_hwnd (local.get $slot)))
+      (if (call $mdi_client_state (local.get $hwnd)) (then (return (local.get $hwnd))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; SetWindowText on a frame whose child is maximized changes the frame's
+  ;; own title; the caption is recomposed around it. Returns 1 when it did.
+  (func $mdi_frame_retitle (param $frame i32) (param $wa i32) (result i32)
+    (local $client i32) (local $state i32) (local $base i32) (local $len i32)
+    (local.set $client (call $mdi_client_of_frame (local.get $frame)))
+    (if (i32.eqz (local.get $client)) (then (return (i32.const 0))))
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (local.set $base (call $gl32 (i32.add (local.get $state) (i32.const 16))))
+    (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
+    (call $heap_free (local.get $base))
+    (local.set $len (call $strlen (local.get $wa)))
+    (local.set $base (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+    (call $gs32 (i32.add (local.get $state) (i32.const 16)) (local.get $base))
+    (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
+    (memory.copy (call $g2w (local.get $base)) (local.get $wa) (i32.add (local.get $len) (i32.const 1)))
+    (call $mdi_frame_title_sync (local.get $client))
+    (i32.const 1))
+
   ;; DefMDIChildProc's SC_MAXIMIZE geometry: USER sizes a maximized MDI child
   ;; to the whole MDI client area. Nothing else in this emulator does it --
   ;; the renderer's showWindow gates its cmd===3 resize on !win.isChild, and
@@ -1820,6 +1937,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; MDI child, so an ordinary child costs one parent lookup.
   (func $mdi_child_maximize (param $child i32) (result i32)
     (local $client i32) (local $w i32) (local $h i32) (local $state i32)
+    (local $l i32) (local $t i32)
     (local.set $client (call $wnd_get_parent (local.get $child)))
     (local.set $state (call $mdi_client_state (local.get $client)))
     (if (i32.eqz (local.get $state))
@@ -1834,25 +1952,27 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.or (i32.le_s (local.get $w) (i32.const 0))
                 (i32.le_s (local.get $h) (i32.const 0)))
       (then (return (i32.const 0))))
-    ;; SWP_NOZORDER | SWP_NOACTIVATE -- maximizing does not reorder the MDI
-    ;; child list, and the frame owns activation.
-    (call $host_move_window (local.get $child) (i32.const 0) (i32.const 0)
-      (local.get $w) (local.get $h) (i32.const 0x0014))
-    (call $ctrl_geom_sync (local.get $child) (i32.const 0) (i32.const 0)
-      (local.get $w) (local.get $h) (i32.const 0x0014))
+    ;; A maximized MDI child's CLIENT area is the MDI client: USER sizes it
+    ;; with AdjustWindowRectEx, so its caption and sizing border sit outside
+    ;; the MDI client, clipped away, and only the frame's menu bar shows its
+    ;; buttons. The insets come from the child's own non-client layout (they
+    ;; depend on its style, not its size); the frame is the same width on
+    ;; every side, and scroll bars are not part of the adjustment.
     (call $defwndproc_do_nccalcsize (local.get $child))
-    (call $host_sync_window_client
-      (local.get $child)
-      (call $wnd_client_screen_x (local.get $child))
-      (call $wnd_client_screen_y (local.get $child))
-      (i32.sub (call $client_rect_get_r (local.get $child))
-               (call $client_rect_get_l (local.get $child)))
-      (i32.sub (call $client_rect_get_b (local.get $child))
-               (call $client_rect_get_t (local.get $child))))
-    (call $gdi_refresh_window_dc_system_clips)
-    ;; wParam 2 = SIZE_MAXIMIZED. $post_resize_messages recomputes the
-    ;; non-client area itself and queues the matching erase/paint.
-    (call $post_resize_messages (local.get $child) (i32.const 2))
+    (local.set $l (call $client_rect_get_l (local.get $child)))
+    (local.set $t (call $client_rect_get_t (local.get $child)))
+    ;; The same placement every MDI show state uses: move, non-client and
+    ;; client sync, the DC clip refresh, WM_SIZE (SIZE_MAXIMIZED), and the
+    ;; repaint of what moved -- the child's descendants included, since their
+    ;; screen position changes with it. Maximize had its own copy of this
+    ;; without the last step, so the rows the child's old caption covered
+    ;; were never repainted after it maximized.
+    (call $mdi_child_place (local.get $child)
+      (i32.sub (i32.const 0) (local.get $l)) (i32.sub (i32.const 0) (local.get $t))
+      (i32.add (local.get $w) (i32.mul (local.get $l) (i32.const 2)))
+      (i32.add (local.get $h) (i32.add (local.get $t) (local.get $l)))
+      (i32.const 2)) ;; SIZE_MAXIMIZED
+    (call $mdi_frame_title_sync (local.get $client))
     (i32.const 1))
 
   ;; A window's normal rectangle while it is maximized or iconic (Win32's
@@ -2034,6 +2154,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
                (local.get $h))
       (i32.const 160) (local.get $h)
       (i32.const 1)) ;; SIZE_MINIMIZED
+    (call $mdi_frame_title_sync (local.get $client))
     (i32.const 1))
 
   ;; An MDI child leaving the iconic or maximized state, after its show-state
@@ -2055,6 +2176,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (i32.load offset=12 (local.get $p))
       (i32.load offset=16 (local.get $p))
       (i32.const 0)) ;; SIZE_RESTORED
+    (call $mdi_frame_title_sync (call $wnd_get_parent (local.get $child)))
     (i32.const 1))
 
   ;; MDI-child messages that add behavior beyond DefWindowProc. The caller

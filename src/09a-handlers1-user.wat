@@ -930,6 +930,15 @@
         (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $arg1)))
         (call $host_set_window_text (local.get $arg0) (local.get $wa))
+        ;; A maximized MDI child's title is part of its frame's caption.
+        (call $mdi_frame_title_sync (call $wnd_get_parent (local.get $arg0)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (return)))
+    ;; A frame showing a maximized MDI child keeps "Frame - [Child]": the new
+    ;; text is the frame's own part of it.
+    (if (call $mdi_frame_retitle (local.get $arg0) (local.get $wa))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Store in TITLE_TABLE so DefWindowProc WM_NCPAINT can redraw the
