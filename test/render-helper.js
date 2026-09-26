@@ -213,4 +213,4 @@ async function runRenderTest(name, body, { minColors = 8 } = {}) {
 }
 
 module.exports = { bootRenderHarness, mountBundledFonts, countUniqueColors,
-  pixelMatches, writePng, runRenderTest };
+  pixelMatches, writePng, runRenderTest, flushPendingPaints };

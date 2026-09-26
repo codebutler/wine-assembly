@@ -2554,7 +2554,17 @@
     (local $bx i32) (local $by i32) (local $longest i32)
     (local $slot i32) (local $ch i32) (local $scan i32)
     (local $line_len i32) (local $line_last i32) (local $line_started i32)
+    (local $icon i32) (local $text_x i32) (local $icon_hwnd i32)
     (local.set $text_len (call $strlen (local.get $text_wa)))
+    ;; MB_ICONHAND/QUESTION/EXCLAMATION/ASTERISK (0x10..0x40) name the stock
+    ;; icons IDI_HAND..IDI_ASTERISK. The icon sits at the client's top left
+    ;; and the message moves right of it; the box grows by the same amount.
+    (local.set $icon (i32.shr_u (i32.and (local.get $uType) (i32.const 0xF0)) (i32.const 4)))
+    (if (i32.and (i32.ge_u (local.get $icon) (i32.const 1)) (i32.le_u (local.get $icon) (i32.const 4)))
+      (then (local.set $icon (call $icon_intern (global.get $ICON_FROM_STOCK)
+              (i32.add (i32.const 32512) (local.get $icon)))))
+      (else (local.set $icon (i32.const 0))))
+    (local.set $text_x (select (i32.const 64) (i32.const 16) (local.get $icon)))
     (if (i32.eqz (local.get $caption_wa))
       (then (local.set $cap_len (i32.const 0)))
       (else (local.set $cap_len (call $strlen (local.get $caption_wa)))))
@@ -2618,6 +2628,7 @@
       (then (local.set $w (i32.add (local.get $row_w) (i32.const 32)))))
     (if (i32.lt_u (local.get $w) (i32.const 148)) (then (local.set $w (i32.const 148))))
     (if (i32.gt_u (local.get $w) (i32.const 420)) (then (local.set $w (i32.const 420))))
+    (local.set $w (i32.add (local.get $w) (i32.sub (local.get $text_x) (i32.const 16))))
     (local.set $h (i32.const 124))
     (call $host_register_dialog_frame
       (local.get $dlg) (local.get $owner)
@@ -2653,14 +2664,24 @@
     ;; Message text static.
     (local.set $text_g (call $wat_str_to_heap (local.get $text_wa) (local.get $text_len)))
     (drop (call $ctrl_create_child (local.get $dlg) (i32.const 3) (i32.const 0xFFFF)
-            (i32.const 16) (i32.const 24)
+            (local.get $text_x) (i32.const 24)
             ;; Stop at the button row. WAT-native sibling windows do not get
             ;; USER's WS_CLIPSIBLINGS exclusion automatically; an invalidated
             ;; message static otherwise repaints over the top eight pixels of
             ;; Klotski's OK button after focus has already drawn the button.
-            (i32.sub (local.get $w) (i32.const 32)) (i32.const 40)
+            (i32.sub (local.get $w) (i32.add (local.get $text_x) (i32.const 16))) (i32.const 40)
             (i32.const 0x50000000)
             (local.get $text_g)))
+    ;; The icon: an SS_ICON static (id 20, as USER's MessageBox template has
+    ;; it) holding the stock HICON.
+    (if (local.get $icon)
+      (then
+        (local.set $icon_hwnd (call $ctrl_create_child (local.get $dlg) (i32.const 3) (i32.const 20)
+          (i32.const 16) (i32.const 16) (i32.const 32) (i32.const 32)
+          (i32.const 0x50000003)
+          (call $wat_str_to_heap (local.get $text_wa) (i32.const 0))))
+        (drop (call $wnd_send_message (local.get $icon_hwnd)
+          (i32.const 0x0170) (local.get $icon) (i32.const 0)))))
     ;; Button row, left edge centered around dialog midpoint.
     ;; Child controls use client coordinates. MessageBox has a captioned
     ;; 3px frame, 19px caption/client separator, and 4px bottom border, so
@@ -2742,10 +2763,11 @@
       ;; Fallback: lone OK.
       (call $msgbox_btn (local.get $dlg) (i32.const 1)
         (local.get $bx) (local.get $by) (region.addr $USER_DIALOG_STRINGS 0x0) (i32.const 2) (i32.const 1)))
-    ;; Static text + buttons. Used by renderer-input.js for Enter/Esc
+    ;; Static text (+ icon) + buttons. Used by renderer-input.js for Enter/Esc
     ;; handling on the message box.
     (i32.store offset=28 (call $dlg_record_for_hwnd (local.get $dlg))
-               (i32.add (local.get $n_btn) (i32.const 1)))
+               (i32.add (local.get $n_btn)
+                 (select (i32.const 2) (i32.const 1) (local.get $icon))))
     ;; Paint the WAT-built children immediately for the same reason as the
     ;; frame/background above.
     (local.set $slot (i32.const 0))
