@@ -54,6 +54,47 @@
         (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00040000))
         (i32.const 0))))
 
+;; The icon USER draws at the left of a caption, or 0 for none: the
+  ;; window's small icon (WM_SETICON small, then big, then the class's), for
+  ;; a window with a system menu that is not a tool window. Win98 gives an
+  ;; icon-less window the stock application icon; stock icons have no
+  ;; pixels here, so such a caption keeps its text at the left instead of
+  ;; showing an empty square.
+  (func $caption_icon (param $hwnd i32) (result i32)
+    (local $icon i32)
+    (if (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00080000))) ;; WS_SYSMENU
+      (then (return (i32.const 0))))
+    (if (i32.and (call $ctrl_get_ex_style (local.get $hwnd)) (i32.const 0x80)) ;; WS_EX_TOOLWINDOW
+      (then (return (i32.const 0))))
+    (local.set $icon (call $wnd_small_icon (local.get $hwnd)))
+    (if (i32.ne (i32.and (local.get $icon) (i32.const 0xFFFF0000)) (global.get $ICON_HANDLE_TAG))
+      (then (return (i32.const 0))))
+    (local.get $icon))
+
+;; DefWindowProc's WM_SETICON (0x80) and WM_GETICON (0x7F): keep the
+  ;; window's own icons (wParam ICON_SMALL 0, ICON_BIG 1), returning the one
+  ;; replaced, and redraw the caption that shows it. Both used to be dropped,
+  ;; so no caption could show an icon a program set this way.
+  (func $defwndproc_icon_message (param $hwnd i32) (param $msg i32)
+      (param $wParam i32) (param $lParam i32) (result i32)
+    (local $old i32)
+    (if (i32.eq (local.get $msg) (i32.const 0x007F))
+      (then (return (call $wnd_get_icon (local.get $hwnd)
+        (i32.eq (local.get $wParam) (i32.const 1))))))
+    (local.set $old (call $wnd_set_icon (local.get $hwnd)
+      (i32.eq (local.get $wParam) (i32.const 1)) (local.get $lParam)))
+    (if (i32.and (i32.ne (local.get $old) (local.get $lParam))
+                 (i32.ne (call $wnd_is_effectively_visible (local.get $hwnd)) (i32.const 0)))
+      (then (call $defwndproc_do_ncpaint (local.get $hwnd))))
+    (local.get $old))
+
+  ;; Measured on a Windows 98 capture of PuTTY: the icon's first pixels sit
+  ;; 2px into the caption and the title's at 21, where they sit at 5 with no
+  ;; icon. So the title moves 16px, and the system-menu box (the hit area)
+  ;; is the icon and its margins, 18px.
+  (global $CAPTION_ICON_ADVANCE i32 (i32.const 16))
+  (global $CAPTION_ICON_BOX i32 (i32.const 18))
+
   (func $defwndproc_ncpaint (export "defwndproc_ncpaint")
         (param $hwnd i32) (param $w i32) (param $h i32)
         (param $title_wa i32) (param $title_len i32) (param $flags i32)
@@ -84,6 +125,7 @@
     (local $simple_child_border i32)
     (local $glyph_brush i32)
     (local $frame i32)
+    (local $icon i32) (local $text_l i32)
 
     ;; NC paint gets a real typed DC with a WAT-built visible clip:
     ;; window rect minus client rect. JS only applies this region to the
@@ -194,6 +236,17 @@
                 (i32.const 0x808080)
                 (i32.const 0xC0C0C0)))))
 
+    ;; The window's icon, 16x16, two pixels into the caption; the title
+    ;; moves over to make room for it.
+    (local.set $text_l (i32.add (local.get $cap_l) (i32.const 4)))
+    (local.set $icon (call $caption_icon (local.get $hwnd)))
+    (if (local.get $icon)
+      (then
+        (drop (call $icon_draw_handle (local.get $icon) (local.get $hdc)
+          (i32.add (local.get $cap_l) (i32.const 2)) (i32.add (local.get $cap_top) (i32.const 1))
+          (i32.const 16) (i32.const 16) (global.get $DI_NORMAL)))
+        (local.set $text_l (i32.add (local.get $text_l) (global.get $CAPTION_ICON_ADVANCE)))))
+
     ;; -------------------------------------------------
     ;; Title text. White, MS Sans Serif Bold, left-aligned with 4px
     ;; pad, vertically centred. Use TRANSPARENT bk so the gradient
@@ -209,7 +262,7 @@
         ;; window rect this function is still holding in $rect.
         (drop (call $host_gdi_draw_text (local.get $hdc)
                 (local.get $title_wa) (local.get $title_len)
-                (call $paint_rect (i32.add (local.get $cap_l) (i32.const 4))
+                (call $paint_rect (local.get $text_l)
                                   (local.get $cap_top)
                                   (local.get $cap_r) (local.get $cap_bot))
                 (i32.const 0x824) (i32.const 0)))))
@@ -943,6 +996,11 @@
                                   (i32.and (i32.ge_s (local.get $lx) (local.get $min_x))
                                            (i32.lt_s (local.get $lx) (i32.add (local.get $min_x) (local.get $bw)))))
                       (then (return (i32.const 8))))))))  ;; HTMINBUTTON
+            ;; The icon at the left is the system-menu box.
+            (if (i32.and
+                  (i32.lt_s (local.get $lx) (i32.add (local.get $cap_l) (global.get $CAPTION_ICON_BOX)))
+                  (i32.ne (call $caption_icon (local.get $hwnd)) (i32.const 0)))
+              (then (return (i32.const 3)))) ;; HTSYSMENU
             (return (i32.const 2)))))) ;; HTCAPTION
     ;; Border band, as wide as the frame the painter drew; thick-frame windows
     ;; get resize codes (corners win over edges within a 12 px zone).
@@ -1183,6 +1241,14 @@
     (local $hit i32)
     (local.set $hit (call $defwndproc_do_nchittest
       (local.get $hwnd) (local.get $sx) (local.get $sy)))
+    (call $utrace (i32.const 1) "nc press (hwnd, hit)" (local.get $hwnd) (local.get $hit) (i32.const 0))
+    ;; The caption icon opens the system menu on the press, not the release.
+    (if (i32.eq (local.get $hit) (i32.const 3)) ;; HTSYSMENU
+      (then
+        (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x00A1) (i32.const 3)
+          (i32.or (i32.shl (i32.and (local.get $sy) (i32.const 0xFFFF)) (i32.const 16))
+                  (i32.and (local.get $sx) (i32.const 0xFFFF)))))
+        (return (local.get $hit))))
     (if (i32.or
           (i32.or
             (i32.or (i32.eq (local.get $hit) (i32.const 20))
@@ -1218,6 +1284,8 @@
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const 0))))
     (local.set $cur_hit (call $defwndproc_do_nchittest
       (local.get $hwnd) (local.get $sx) (local.get $sy)))
+    (call $utrace (i32.const 1) "nc release (hwnd, pressed, now over)"
+      (local.get $hwnd) (local.get $down_hit) (local.get $cur_hit))
     (call $nc_clear_pressed)
     (call $defwndproc_do_ncpaint (local.get $hwnd))
     (if (i32.and

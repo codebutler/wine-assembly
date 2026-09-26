@@ -2581,6 +2581,15 @@
 
   ;; --trace-esp wiring (test harness uses this). Pass hi=0 to disable the
   ;; upper bound; pass flag=0 to turn off tracing.
+  ;; Turn USER trace categories on (see $user_trace_mask). Each traced step
+  ;; logs "[user-trace] <what> a b c" through host.user_trace.
+  (func (export "set_user_trace") (param $mask i32)
+    (global.set $user_trace_mask (local.get $mask)))
+
+  (func $utrace (param $cat i32) (param $text i32) (param $a i32) (param $b i32) (param $c i32)
+    (if (i32.and (global.get $user_trace_mask) (local.get $cat))
+      (then (call $host_user_trace (local.get $text) (local.get $a) (local.get $b) (local.get $c)))))
+
   (func (export "set_trace_esp") (param $flag i32) (param $lo i32) (param $hi i32)
     (global.set $trace_esp_flag (local.get $flag))
     (global.set $trace_esp_lo (local.get $lo))

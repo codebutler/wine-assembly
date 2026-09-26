@@ -15,6 +15,10 @@
   ;; ---- Host imports ----
   (import "host" "log" (func $host_log (param i32 i32)))
   (import "host" "log_i32" (func $host_log_i32 (param i32)))
+  ;; USER trace: one line per step of a USER pipeline -- text (a WATX string
+  ;; literal) and three values. Called only through $utrace, which checks
+  ;; $user_trace_mask first, so it costs a load and a branch while off.
+  (import "host" "user_trace" (func $host_user_trace (param i32 i32 i32 i32)))
   (import "host" "log_api_exit" (func $host_log_api_exit))
   (import "host" "log_block" (func $host_log_block (param i32 i32)))
   ;; log_block(eip, esp) — invoked at the top of each decoded block when
@@ -3838,6 +3842,9 @@
   ;; at each block boundary whose EIP falls inside [lo, hi]. hi=0 means
   ;; "no upper bound". Used to narrow per-block ESP deltas against the
   ;; statically-expected stack effect. See apps/mcm.md MCM-1.
+;; USER trace categories (set_user_trace): 1 non-client presses and system
+  ;; commands, 2 menus. 0 = off.
+  (global $user_trace_mask (mut i32) (i32.const 0))
   (global $trace_esp_flag (mut i32) (i32.const 0))
   (global $trace_esp_lo (mut i32) (i32.const 0))
   (global $trace_esp_hi (mut i32) (i32.const 0))

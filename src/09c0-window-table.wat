@@ -971,14 +971,23 @@
     (i32.load (local.get $cell)))
 
   ;; The small icon USER draws for a window (a caption, MDI's system-menu
-  ;; bitmap): the one WM_SETICON set, else its big one, else its class's.
+  ;; bitmap): the one WM_SETICON set, else its big one, else its class's --
+  ;; a Win16 window's (recorded per window at creation), or the Win32 class
+  ;; record's hIcon, read live so SetClassLong(GCL_HICON) reaches it. The
+  ;; painter picks the group's 16x16 image, as USER derives the small icon.
   (func $wnd_small_icon (param $hwnd i32) (result i32)
-    (local $icon i32)
+    (local $icon i32) (local $slot i32)
     (local.set $icon (call $wnd_get_icon (local.get $hwnd) (i32.const 0)))
     (if (i32.eqz (local.get $icon))
       (then (local.set $icon (call $wnd_get_icon (local.get $hwnd) (i32.const 1)))))
     (if (i32.eqz (local.get $icon))
       (then (local.set $icon (call $wnd_get_class_icon (local.get $hwnd)))))
+    (if (i32.eqz (local.get $icon))
+      (then
+        (local.set $slot (call $wnd_get_class_slot (local.get $hwnd)))
+        (if (i32.ge_s (local.get $slot) (i32.const 0))
+          (then (local.set $icon (i32.load offset=20
+            (call $class_wndclass_addr (local.get $slot))))))))
     (local.get $icon))
 
   ;; ---- Which class a window belongs to ----

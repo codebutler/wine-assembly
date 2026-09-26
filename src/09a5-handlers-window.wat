@@ -3269,19 +3269,11 @@
   ;; 78: DefWindowProcA
   (func $handle_DefWindowProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $text_wa i32) (local $text_len i32)
-    ;; WM_SETICON (0x80) keeps the window's own icon and returns the one it
-    ;; replaces; WM_GETICON (0x7F) reads it back (wParam: ICON_SMALL 0,
-    ;; ICON_BIG 1). They used to be dropped, so an MDI child's icon -- mIRC's
-    ;; Status sets one this way -- could not be drawn anywhere.
     (if (i32.or (i32.eq (local.get $arg1) (i32.const 0x0080))
                 (i32.eq (local.get $arg1) (i32.const 0x007F)))
       (then
-        (i32.store (global.get $reg_base)
-          (if (result i32) (i32.eq (local.get $arg1) (i32.const 0x0080))
-            (then (call $wnd_set_icon (local.get $arg0)
-              (i32.eq (local.get $arg2) (i32.const 1)) (local.get $arg3)))
-            (else (call $wnd_get_icon (local.get $arg0)
-              (i32.eq (local.get $arg2) (i32.const 1))))))
+        (i32.store (global.get $reg_base) (call $defwndproc_icon_message
+          (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
         (i32.store offset=16 (global.get $reg_base)
           (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
@@ -3457,32 +3449,11 @@
       (i32.shr_s (i32.shl (i32.and (local.get $arg3) (i32.const 0xFFFF)) (i32.const 16)) (i32.const 16))
       (i32.shr_s (i32.shl (i32.and (i32.shr_u (local.get $arg3) (i32.const 16)) (i32.const 0xFFFF)) (i32.const 16)) (i32.const 16))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
-    ;; WM_NCLBUTTONDOWN (0xA1): wParam=hit_code. Translate sysbutton hits
-    ;; into WM_SYSCOMMAND posts so guest wndprocs can intercept via
-    ;; the standard path.
+    ;; WM_NCLBUTTONDOWN (0xA1) and WM_SYSCOMMAND (0x112): shared with the
+    ;; built-in dialog procedure's default ($dialog_default_proc).
     (if (i32.eq (local.get $arg1) (i32.const 0x00A1))
     (then
-      ;; A press on a child's caption or frame activates it: USER sends
-      ;; WM_CHILDACTIVATE, which DefMDIChildProc turns into MDI activation.
-      (if (i32.and
-            (i32.ne (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000)) (i32.const 0))
-            (call $nc_track_hit_moves (local.get $arg2)))
-        (then (drop (call $wnd_send_message (local.get $arg0) (i32.const 0x0022)
-          (i32.const 0) (i32.const 0)))))
-      (if (i32.eq (local.get $arg2) (i32.const 20))  ;; HTCLOSE
-        (then (drop (call $post_queue_push (local.get $arg0)
-                (i32.const 0x0112) (i32.const 0xF060) (i32.const 0)))))
-      (if (i32.eq (local.get $arg2) (i32.const 8))   ;; HTMINBUTTON
-        (then (drop (call $post_queue_push (local.get $arg0)
-                (i32.const 0x0112) (i32.const 0xF020) (i32.const 0)))))
-      (if (i32.eq (local.get $arg2) (i32.const 9))   ;; HTMAXBUTTON
-        (then (drop (call $post_queue_push (local.get $arg0)
-                (i32.const 0x0112)
-                ;; If already maximized, flip to SC_RESTORE (0xF120). Otherwise
-                ;; SC_MAXIMIZE (0xF030). Lets a second click un-maximize.
-                (select (i32.const 0xF120) (i32.const 0xF030)
-                        (call $wnd_max_get (local.get $arg0)))
-                (i32.const 0)))))
+      (call $defwndproc_nclbuttondown (local.get $arg0) (local.get $arg2) (local.get $arg3))
       (i32.store offset=0 (global.get $reg_base) (i32.const 0))
       (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_SETCURSOR (0x0020): wParam=hwnd under cursor, LOWORD(lParam)=hit code.
@@ -3493,39 +3464,73 @@
         (local.get $arg0)
         (i32.and (local.get $arg3) (i32.const 0xFFFF))))
       (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
-    ;; WM_SYSCOMMAND (0x0112): SC_CLOSE → post WM_CLOSE; MIN/MAX/RESTORE →
-    ;; update host window state. JS still owns the rendering-side geometry
-    ;; via host_sys_command (see lib/host-imports.js).
     (if (i32.eq (local.get $arg1) (i32.const 0x0112))
     (then
-      (if (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF060))
-        (then
-          (drop (call $post_queue_push (local.get $arg0)
-                  (i32.const 0x0010) (i32.const 0) (i32.const 0)))
-          (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
-      (if (i32.or
-            (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF020))
-            (i32.or
-              (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF030))
-              (i32.eq (i32.and (local.get $arg2) (i32.const 0xFFF0)) (i32.const 0xF120))))
-        (then
-          (if (call $window_system_show_needs_query (local.get $arg0) (local.get $arg2))
-            (then
-              (if (i32.eqz (call $wnd_query_open_allowed (local.get $arg0)))
-                (then
-                  (i32.store (global.get $reg_base) (i32.const 0))
-                  (i32.store offset=16 (global.get $reg_base)
-                    (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-                  (return)))))
-          (call $window_system_show_commit (local.get $arg0) (local.get $arg2))
-          (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
+      (call $defwndproc_syscommand (local.get $arg0) (local.get $arg2) (local.get $arg3))
       (i32.store offset=0 (global.get $reg_base) (i32.const 0))
       (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
+
+  ;; DefWindowProc's WM_NCLBUTTONDOWN: a press on a caption button or the
+  ;; caption icon becomes the WM_SYSCOMMAND it stands for, posted so the
+  ;; window procedure can intercept it the standard way; a press on a child's
+  ;; caption, frame or icon activates the child (WM_CHILDACTIVATE, which
+  ;; DefMDIChildProc turns into MDI activation).
+  (func $defwndproc_nclbuttondown (param $hwnd i32) (param $hit i32) (param $lp i32)
+    (call $utrace (i32.const 1) "WM_NCLBUTTONDOWN default (hwnd, hit, point)"
+      (local.get $hwnd) (local.get $hit) (local.get $lp))
+    (if (i32.and
+          (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)) (i32.const 0))
+          (i32.or (call $nc_track_hit_moves (local.get $hit))
+                  (i32.eq (local.get $hit) (i32.const 3)))) ;; HTSYSMENU
+      (then (drop (call $wnd_send_message (local.get $hwnd) (i32.const 0x0022)
+        (i32.const 0) (i32.const 0)))))
+    (if (i32.eq (local.get $hit) (i32.const 20))  ;; HTCLOSE
+      (then (drop (call $post_queue_push (local.get $hwnd)
+              (i32.const 0x0112) (i32.const 0xF060) (i32.const 0)))))
+    (if (i32.eq (local.get $hit) (i32.const 3))   ;; HTSYSMENU: SC_MOUSEMENU
+      (then (drop (call $post_queue_push (local.get $hwnd)
+              (i32.const 0x0112) (i32.const 0xF090) (local.get $lp)))))
+    (if (i32.eq (local.get $hit) (i32.const 8))   ;; HTMINBUTTON
+      (then (drop (call $post_queue_push (local.get $hwnd)
+              (i32.const 0x0112) (i32.const 0xF020) (i32.const 0)))))
+    (if (i32.eq (local.get $hit) (i32.const 9))   ;; HTMAXBUTTON
+      (then (drop (call $post_queue_push (local.get $hwnd)
+              (i32.const 0x0112)
+              ;; A second click on a maximized window restores it.
+              (select (i32.const 0xF120) (i32.const 0xF030)
+                      (call $wnd_max_get (local.get $hwnd)))
+              (i32.const 0))))))
+
+  ;; DefWindowProc's WM_SYSCOMMAND: SC_CLOSE posts WM_CLOSE; minimize,
+  ;; maximize and restore change the window's state (the host owns its
+  ;; rendering-side geometry, see host_sys_command); SC_MOUSEMENU (the caption
+  ;; icon) and SC_KEYMENU with a space (Alt+Space) open its system menu.
+  (func $defwndproc_syscommand (param $hwnd i32) (param $sc i32) (param $lp i32)
+    (local $cmd i32)
+    (call $utrace (i32.const 1) "WM_SYSCOMMAND default (hwnd, command, lParam)"
+      (local.get $hwnd) (local.get $sc) (local.get $lp))
+    (local.set $cmd (i32.and (local.get $sc) (i32.const 0xFFF0)))
+    (if (i32.or (i32.eq (local.get $cmd) (i32.const 0xF090))
+          (i32.and (i32.eq (local.get $cmd) (i32.const 0xF100))
+                   (i32.eq (local.get $lp) (i32.const 0x20))))
+      (then (drop (call $system_menu_track (local.get $hwnd))) (return)))
+    (if (i32.eq (local.get $cmd) (i32.const 0xF060))
+      (then
+        (drop (call $post_queue_push (local.get $hwnd)
+                (i32.const 0x0010) (i32.const 0) (i32.const 0)))
+        (return)))
+    (if (i32.or (i32.eq (local.get $cmd) (i32.const 0xF020))
+          (i32.or (i32.eq (local.get $cmd) (i32.const 0xF030))
+                  (i32.eq (local.get $cmd) (i32.const 0xF120))))
+      (then
+        (if (call $window_system_show_needs_query (local.get $hwnd) (local.get $sc))
+          (then
+            (if (i32.eqz (call $wnd_query_open_allowed (local.get $hwnd)))
+              (then (return)))))
+        (call $window_system_show_commit (local.get $hwnd) (local.get $sc)))))
 
   ;; Query delivery differs for Win32 and Win16; state publication does not.
   (func $window_system_show_needs_query (param $hwnd i32) (param $sc i32) (result i32)

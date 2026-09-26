@@ -4822,6 +4822,8 @@
         (param $hmenu i32) (param $flags i32) (param $x i32) (param $y i32) (param $hwnd i32)
         (result i32)
     (local $menu_id i32) (local $top_idx i32)
+    (call $utrace (i32.const 2) "track popup (menu, flags, hwnd)"
+      (local.get $hmenu) (local.get $flags) (local.get $hwnd))
     ;; TPM_RETURNCMD asks USER32 to return the selected command synchronously.
     ;; We do not run a nested modal menu loop yet, so report no selection.
     (if (i32.and (local.get $flags) (i32.const 0x0100)) (then (return (i32.const 0))))
@@ -4898,6 +4900,8 @@
     (i32.const 1))
 
   (func $menu_close (export "menu_close")
+    (call $utrace (i32.const 2) "menu close (hwnd, bar position, popup menu)"
+      (global.get $menu_open_hwnd) (global.get $menu_open_bar_pos) (global.get $menu_open_dynamic_hmenu))
     (if (global.get $menu_open_popup_blob)
       (then
         (call $heap_free (global.get $menu_open_popup_blob))
@@ -5283,15 +5287,19 @@
           (then (return (i32.const 0))))
         (local.set $id (call $menu_subchild_id
                          (local.get $hwnd) (local.get $top) (local.get $hover) (local.get $sub)))
-        (if (call $menu_try_edit_command (local.get $id))
+        (if (i32.and (i32.eq (call $menu_pick_message) (i32.const 0x0111))
+                     (call $menu_try_edit_command (local.get $id)))
           (then (nop))
-          (else (call $menu_post (local.get $hwnd) (i32.const 0x0111) (local.get $id) (i32.const 0))))
+          (else (call $menu_post (local.get $hwnd) (call $menu_pick_message) (local.get $id) (i32.const 0))))
         (call $menu_close)
         (return (local.get $id))))
     (local.set $id (call $menu_child_id (local.get $hwnd) (local.get $top) (local.get $hover)))
-    (if (call $menu_try_edit_command (local.get $id))
+    (call $utrace (i32.const 2) "menu pick (hwnd, id, message)"
+      (local.get $hwnd) (local.get $id) (call $menu_pick_message))
+    (if (i32.and (i32.eq (call $menu_pick_message) (i32.const 0x0111))
+                 (call $menu_try_edit_command (local.get $id)))
       (then (nop))
-      (else (call $menu_post (local.get $hwnd) (i32.const 0x0111) (local.get $id) (i32.const 0))))
+      (else (call $menu_post (local.get $hwnd) (call $menu_pick_message) (local.get $id) (i32.const 0))))
     (call $menu_close)
     (local.get $id))
 
@@ -5520,6 +5528,35 @@
         (call $system_menu_add (local.get $h) (i32.const 0) (i32.const 0xF060) "&Close\tAlt+F4")))
     (i32.store (local.get $cell) (local.get $h))
     (local.get $h))
+
+;; Open the window's system menu under its caption icon, as a click on the
+  ;; icon (SC_MOUSEMENU) or Alt+Space does. Its picks reach the window as
+  ;; WM_SYSCOMMAND ($menu_pick_message). Returns TRUE when a menu opened.
+  (func $system_menu_track (param $hwnd i32) (result i32)
+    (local $sys i32) (local $rect i32) (local $frame i32)
+    (local.set $sys (call $system_menu_get (local.get $hwnd)))
+    (call $utrace (i32.const 2) "system menu track (hwnd, menu)" (local.get $hwnd) (local.get $sys) (i32.const 0))
+    (if (i32.eqz (local.get $sys)) (then (return (i32.const 0))))
+    (local.set $rect (call $paint_scratch_take))
+    (call $host_get_window_rect (local.get $hwnd) (local.get $rect))
+    (local.set $frame (call $defwndproc_frame_width (local.get $hwnd)))
+    (call $menu_track_popup_open (local.get $sys) (i32.const 0)
+      (i32.add (load.field PaintRect left (local.get $rect)) (local.get $frame))
+      (i32.add (load.field.memarg PaintRect top (local.get $rect))
+               (i32.add (local.get $frame) (i32.const 18)))
+      (local.get $hwnd)))
+
+  ;; The message a pick from the open menu posts: WM_SYSCOMMAND when it is
+  ;; the window's own system menu, WM_COMMAND for anything else -- including
+  ;; a maximized MDI child's system menu on its frame's bar, which the frame
+  ;; receives as WM_COMMAND and DefFrameProc hands on.
+  (func $menu_pick_message (result i32)
+    (if (i32.and
+          (i32.ne (global.get $menu_open_dynamic_hmenu) (i32.const 0))
+          (i32.eq (call $system_menu_owner (global.get $menu_open_dynamic_hmenu))
+                  (global.get $menu_open_hwnd)))
+      (then (return (i32.const 0x0112))))
+    (i32.const 0x0111))
 
   ;; Gray what does not apply to the window as it is now, as USER does each
   ;; time a system menu opens: Restore unless minimized or maximized, Move

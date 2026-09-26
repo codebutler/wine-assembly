@@ -292,6 +292,13 @@ const TRACE_CTRL = hasFlag('trace-ctrl'); // --trace-ctrl: log every WAT-native 
 // makes no API call, so an API trace shows a healthy-looking message pump and
 // nothing else. This names the early return that ate it.
 const TRACE_INPUT = hasFlag('trace-input');
+// --trace-user[=MASK]: USER's own steps after the renderer hands input over,
+// as "[user-trace]" lines: 1 non-client presses and system commands, 2 menus
+// (default: all). Pairs with --trace-input, which stops where WAT begins.
+const TRACE_USER_RAW = args.find(a => a === '--trace-user' || a.startsWith('--trace-user='));
+const TRACE_USER_MASK = TRACE_USER_RAW
+  ? (TRACE_USER_RAW.includes('=') ? (parseInt(TRACE_USER_RAW.split('=')[1]) >>> 0) : 0xFFFFFFFF)
+  : 0;
 const TRACE_ERASE = hasFlag('trace-erase'); // --trace-erase: log every window-background erase + the brush it fills with
 const TRACE_RGN = hasFlag('trace-rgn');   // --trace-rgn: log HRGN create/combine/select + branch counts
 const TRACE_DC = hasFlag('trace-dc');     // --trace-dc: log DC→canvas target resolution (hwnd, ox/oy, canvas size)
@@ -8645,6 +8652,9 @@ async function main() {
       }
     }
     // --trace-esp: arm range once
+    if (TRACE_USER_MASK && batch === 0 && instance.exports.set_user_trace) {
+      instance.exports.set_user_trace(TRACE_USER_MASK);
+    }
     if (traceEspOn && batch === 0 && instance.exports.set_trace_esp) {
       instance.exports.set_trace_esp(1, traceEspLo, traceEspHi);
     }

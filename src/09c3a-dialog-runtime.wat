@@ -399,6 +399,29 @@
         (return (select (i32.const 0x30021) (i32.const 0)
           (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40))
             (i32.const 0))))))
+    ;; ...and caption presses and system commands. A built-in dialog used to
+    ;; drop both, so its caption icon and system menu did nothing.
+    (if (i32.eq (local.get $msg) (i32.const 0x00A1)) ;; WM_NCLBUTTONDOWN
+      (then
+        (call $defwndproc_nclbuttondown (local.get $hwnd) (local.get $wParam) (local.get $lParam))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0112)) ;; WM_SYSCOMMAND
+      (then
+        (call $defwndproc_syscommand (local.get $hwnd) (local.get $wParam) (local.get $lParam))
+        (return (i32.const 0))))
+    ;; WM_CLOSE: DefDlgProc presses Cancel (WM_COMMAND IDCANCEL), which is
+    ;; what the system menu's Close does to a dialog.
+    (if (i32.eq (local.get $msg) (i32.const 0x0010))
+      (then
+        (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x0111)
+          (i32.const 2) (call $ctrl_find_by_id (local.get $hwnd) (i32.const 2))))
+        (return (i32.const 0))))
+    ;; ...and the window's icons. PuTTY sets its configuration box's icon
+    ;; with WM_SETICON from WM_INITDIALOG and returns FALSE for it.
+    (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0080))
+                (i32.eq (local.get $msg) (i32.const 0x007F)))
+      (then (return (call $defwndproc_icon_message
+        (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; DefDlgProc's DefWindowProc tail owns WM_SETREDRAW's visible bit.
     (if (i32.eq (local.get $msg) (i32.const 0x000B))
       (then
