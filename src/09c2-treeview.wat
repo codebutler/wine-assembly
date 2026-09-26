@@ -1201,7 +1201,7 @@
   (func $tv_hit_test (param $hittest_wa i32) (result i32)
     (local $x i32) (local $y i32) (local $row i32)
     (local $hItem i32) (local $slot i32) (local $base i32)
-    (local $depth i32) (local $box_x i32) (local $text_x i32) (local $flags i32)
+    (local $depth i32) (local $text_x i32) (local $flags i32)
     (local.set $x (i32.load (local.get $hittest_wa)))
     (local.set $y (i32.load offset=4 (local.get $hittest_wa)))
     (if (i32.lt_s (local.get $y) (i32.const 0))
@@ -1209,10 +1209,7 @@
         (i32.store offset=8 (local.get $hittest_wa) (i32.const 0x0001))
         (i32.store offset=12 (local.get $hittest_wa) (i32.const 0))
         (return (i32.const 0))))
-    (if (i32.lt_s (local.get $y) (i32.const 3))
-      (then (local.set $row (i32.const 0)))
-      (else
-        (local.set $row (i32.div_s (i32.sub (local.get $y) (i32.const 3)) (i32.const 16)))))
+    (local.set $row (call $tv_row_at_y (local.get $y)))
     (local.set $row (i32.add (local.get $row) (call $tv_view_row)))
     (local.set $hItem (call $tv_visible_handle_at_row (local.get $row)))
     (if (i32.eqz (local.get $hItem))
@@ -1228,18 +1225,15 @@
         (return (i32.const 0))))
     (local.set $base (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
     (local.set $depth (call $tv_item_depth (local.get $base)))
-    (local.set $box_x (i32.add (i32.const 4) (i32.mul (local.get $depth) (i32.const 16))))
-    (local.set $text_x (local.get $box_x))
-    (if (call $tv_item_has_children (local.get $base))
-      (then (local.set $text_x (i32.add (local.get $text_x) (i32.const 12)))))
-    (if (i32.lt_s (local.get $x) (local.get $box_x))
-      (then (local.set $flags (i32.const 0x0008))) ;; TVHT_ONITEMINDENT
+    (local.set $text_x (call $tv_content_x (local.get $depth)))
+    (if (i32.ge_s (local.get $x) (local.get $text_x))
+      (then (local.set $flags (i32.const 0x0004))) ;; TVHT_ONITEMLABEL
       (else
         (if (i32.and
               (call $tv_item_has_children (local.get $base))
-              (i32.lt_s (local.get $x) (i32.add (local.get $box_x) (i32.const 20))))
+              (call $tv_in_button_zone (local.get $depth) (local.get $x)))
           (then (local.set $flags (i32.const 0x0010))) ;; TVHT_ONITEMBUTTON
-          (else (local.set $flags (i32.const 0x0004)))))) ;; TVHT_ONITEMLABEL
+          (else (local.set $flags (i32.const 0x0008)))))) ;; TVHT_ONITEMINDENT
     (i32.store offset=8 (local.get $hittest_wa) (local.get $flags))
     (i32.store offset=12 (local.get $hittest_wa) (local.get $hItem))
     (local.get $hItem))
@@ -1532,7 +1526,7 @@
   (func $treeview_handle_mouse (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $x i32) (local $y i32) (local $row i32)
     (local $hItem i32) (local $slot i32) (local $base i32)
-    (local $depth i32) (local $box_x i32)
+    (local $depth i32)
     (local $sz i32) (local $w i32) (local $h i32)
     (local $max i32) (local $visible i32) (local $hit i32) (local $new_row i32)
     (local.set $x (i32.and (local.get $lParam) (i32.const 0xFFFF)))
@@ -1634,10 +1628,7 @@
                 (call $treeview_paint_wat (local.get $hwnd))
                 (return (i32.const 1))))))))
 
-    (if (i32.lt_s (local.get $y) (i32.const 3))
-      (then (local.set $row (i32.const 0)))
-      (else
-        (local.set $row (i32.div_s (i32.sub (local.get $y) (i32.const 3)) (i32.const 16)))))
+    (local.set $row (call $tv_row_at_y (local.get $y)))
     (local.set $row (i32.add (local.get $row) (call $tv_view_row)))
     (local.set $hItem (call $tv_visible_handle_at_row (local.get $row)))
     (if (i32.eqz (local.get $hItem))
@@ -1651,14 +1642,11 @@
       (then (return (i32.const 0))))
     (local.set $base (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
     (local.set $depth (call $tv_item_depth (local.get $base)))
-    (local.set $box_x (i32.add (i32.const 4) (i32.mul (local.get $depth) (i32.const 16))))
     (if (i32.and
           (call $tv_item_has_children (local.get $base))
           (i32.or
             (i32.eq (local.get $msg) (i32.const 0x0203))
-            (i32.and
-              (i32.ge_s (local.get $x) (i32.sub (local.get $box_x) (i32.const 3)))
-              (i32.lt_s (local.get $x) (i32.add (local.get $box_x) (i32.const 20))))))
+            (call $tv_in_button_zone (local.get $depth) (local.get $x))))
       (then (return (call $tv_set_expanded
         (local.get $hwnd) (local.get $hItem) (i32.const 3)))))
     (if (i32.eq (local.get $msg) (i32.const 0x0203))
@@ -1775,6 +1763,93 @@
       (br $walk)))
     (local.get $depth))
 
+  ;; ---- Item geometry (comctl32's, measured on a Windows 98 capture of
+  ;; PuTTY's configuration tree). Window coordinates: the client area starts
+  ;; inside the 2px client edge. Rows are 16px from the client top. Each
+  ;; level has a 19px column (the default indent) whose line runs through its
+  ;; centre, 9px in; the 9x9 button is centred on that line, and the item's
+  ;; image or label starts 12px right of it. Roots always get a column here
+  ;; (comctl32 gives them one only with TVS_LINESATROOT).
+  (func $tv_row_top (param $draw_row i32) (result i32)
+    (i32.add (i32.const 2) (i32.mul (local.get $draw_row) (i32.const 16))))
+  (func $tv_row_at_y (param $y i32) (result i32)
+    (if (i32.lt_s (local.get $y) (i32.const 2)) (then (return (i32.const 0))))
+    (i32.div_s (i32.sub (local.get $y) (i32.const 2)) (i32.const 16)))
+  (func $tv_line_x (param $level i32) (result i32)
+    (i32.add (i32.const 11) (i32.mul (local.get $level) (i32.const 19))))
+  (func $tv_content_x (param $level i32) (result i32)
+    (i32.add (call $tv_line_x (local.get $level)) (i32.const 12)))
+  ;; A press between the column's left edge and the label toggles an item
+  ;; that has children.
+  (func $tv_in_button_zone (param $level i32) (param $x i32) (result i32)
+    (i32.and
+      (i32.ge_s (local.get $x) (i32.sub (call $tv_line_x (local.get $level)) (i32.const 9)))
+      (i32.lt_s (local.get $x) (call $tv_content_x (local.get $level)))))
+
+  ;; TVS_HASLINES: comctl32's dotted lines, one dot every other pixel from
+  ;; each line's own start, in COLOR_GRAYTEXT. An item's column carries a
+  ;; horizontal line to its content and a vertical line from its row top (the
+  ;; first root: from its centre) down to its centre, or through the row when
+  ;; a sibling follows; each ancestor with a sibling still to come carries its
+  ;; vertical line through the row. Root-level lines need TVS_LINESATROOT.
+  (func $tv_dots (param $hdc i32) (param $x i32) (param $y0 i32) (param $y1 i32)
+                 (param $dx i32) (param $dy i32)
+    (local $x1 i32)
+    (local.set $x1 (i32.add (local.get $x) (select (i32.const 8) (i32.const 0) (local.get $dx))))
+    (block $done (loop $dot
+      (br_if $done (i32.gt_s (local.get $y0) (local.get $y1)))
+      (br_if $done (i32.gt_s (local.get $x) (local.get $x1)))
+      (drop (call $host_gdi_fill_rect (local.get $hdc)
+        (local.get $x) (local.get $y0)
+        (i32.add (local.get $x) (i32.const 1)) (i32.add (local.get $y0) (i32.const 1))
+        (i32.const 0x30012)))
+      (local.set $x (i32.add (local.get $x) (local.get $dx)))
+      (local.set $y0 (i32.add (local.get $y0) (local.get $dy)))
+      (br $dot))))
+
+  (func $tv_paint_lines (param $hdc i32) (param $base i32) (param $level i32)
+                        (param $y i32) (param $style i32) (param $right i32)
+    (local $min_level i32) (local $cx i32) (local $start i32) (local $end i32)
+    (local $parent i32) (local $slot i32) (local $lvl i32) (local $pbase i32)
+    (if (i32.eqz (i32.and (local.get $style) (i32.const 0x2))) (then (return)))
+    (local.set $min_level (select (i32.const 0) (i32.const 1)
+      (i32.and (local.get $style) (i32.const 0x4))))
+    (if (i32.ge_s (local.get $level) (local.get $min_level))
+      (then
+        (local.set $cx (call $tv_line_x (local.get $level)))
+        (if (i32.lt_s (local.get $cx) (local.get $right))
+          (then
+            ;; Horizontal: from the column to 2px short of the next one.
+            (call $tv_dots (local.get $hdc) (local.get $cx)
+              (i32.add (local.get $y) (i32.const 8)) (i32.add (local.get $y) (i32.const 8))
+              (i32.const 2) (i32.const 0))
+            (local.set $start
+              (select (i32.add (local.get $y) (i32.const 8)) (local.get $y)
+                (i32.and (i32.eqz (i32.load offset=4 (local.get $base)))
+                         (i32.eqz (i32.load offset=16 (local.get $base))))))
+            (local.set $end
+              (select (i32.add (local.get $y) (i32.const 15)) (i32.add (local.get $y) (i32.const 8))
+                (i32.ne (i32.load offset=12 (local.get $base)) (i32.const 0))))
+            (call $tv_dots (local.get $hdc) (local.get $cx)
+              (local.get $start) (local.get $end) (i32.const 0) (i32.const 2))))))
+    ;; Ancestors whose siblings are still to come.
+    (local.set $parent (i32.load offset=4 (local.get $base)))
+    (local.set $lvl (i32.sub (local.get $level) (i32.const 1)))
+    (block $done (loop $up
+      (br_if $done (i32.eqz (local.get $parent)))
+      (br_if $done (i32.lt_s (local.get $lvl) (local.get $min_level)))
+      (local.set $slot (call $tv_find_slot (local.get $parent)))
+      (br_if $done (i32.eq (local.get $slot) (i32.const -1)))
+      (local.set $pbase (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+      (if (i32.and (i32.ne (i32.load offset=12 (local.get $pbase)) (i32.const 0))
+                   (i32.lt_s (call $tv_line_x (local.get $lvl)) (local.get $right)))
+        (then
+          (call $tv_dots (local.get $hdc) (call $tv_line_x (local.get $lvl))
+            (local.get $y) (i32.add (local.get $y) (i32.const 15)) (i32.const 0) (i32.const 2))))
+      (local.set $parent (i32.load offset=4 (local.get $pbase)))
+      (local.set $lvl (i32.sub (local.get $lvl) (i32.const 1)))
+      (br $up))))
+
   (func $treeview_paint_wat (param $hwnd i32)
     (local $hdc i32) (local $sz i32) (local $w i32) (local $h i32)
     (local $i i32) (local $base i32) (local $row i32) (local $draw_row i32) (local $y i32)
@@ -1845,12 +1920,14 @@
           (if (i32.ge_s (local.get $draw_row) (local.get $first_row))
             (then
               (local.set $draw_row (i32.sub (local.get $draw_row) (local.get $first_row)))
-              (local.set $y (i32.add (i32.const 3) (i32.mul (local.get $draw_row) (i32.const 16))))
+              (local.set $y (call $tv_row_top (local.get $draw_row)))
               (global.set $tv_debug_paint_last_y (local.get $y))
               (if (i32.lt_u (local.get $y) (i32.sub (local.get $h) (i32.const 4)))
                 (then
                   (local.set $depth (call $tv_item_depth (local.get $base)))
-	              (local.set $x (i32.add (i32.const 4) (i32.mul (local.get $depth) (i32.const 16))))
+	              (local.set $x (call $tv_line_x (local.get $depth)))
+	              (call $tv_paint_lines (local.get $hdc) (local.get $base) (local.get $depth)
+	                (local.get $y) (local.get $style) (local.get $content_right))
 	              ;; Selection paint follows this item's state exactly. Win98
 	              ;; permits TVM_SETITEM to mark a hidden descendant selected
 	              ;; without moving the caret; that does not select its parent
@@ -1862,28 +1939,30 @@
 
 	              (if (call $tv_item_has_children (local.get $base))
                 (then
+                  ;; The 9x9 button, centred on the item's line (x) and row
+                  ;; centre (y + 8), over the dots.
                   (drop (call $host_gdi_fill_rect (local.get $hdc)
-                    (local.get $x) (i32.add (local.get $y) (i32.const 3))
-                    (i32.add (local.get $x) (i32.const 9)) (i32.add (local.get $y) (i32.const 12))
+                    (i32.sub (local.get $x) (i32.const 4)) (i32.add (local.get $y) (i32.const 4))
+                    (i32.add (local.get $x) (i32.const 5)) (i32.add (local.get $y) (i32.const 13))
                     (i32.const 0x30010)))
                   ;; comctl32 frames the button flat in the shadow colour. A
                   ;; sunken edge on a white box shows only its dark top-left
                   ;; strokes, which with the minus bar reads as an "F".
                   (drop (call $host_gdi_frame_rect (local.get $hdc)
-                    (local.get $x) (i32.add (local.get $y) (i32.const 3))
-                    (i32.add (local.get $x) (i32.const 9)) (i32.add (local.get $y) (i32.const 12))
+                    (i32.sub (local.get $x) (i32.const 4)) (i32.add (local.get $y) (i32.const 4))
+                    (i32.add (local.get $x) (i32.const 5)) (i32.add (local.get $y) (i32.const 13))
                     (i32.const 0x30012) (local.get $hwnd)))
                   (drop (call $host_gdi_fill_rect (local.get $hdc)
-                    (i32.add (local.get $x) (i32.const 2)) (i32.add (local.get $y) (i32.const 7))
-                    (i32.add (local.get $x) (i32.const 7)) (i32.add (local.get $y) (i32.const 8))
+                    (i32.sub (local.get $x) (i32.const 2)) (i32.add (local.get $y) (i32.const 8))
+                    (i32.add (local.get $x) (i32.const 3)) (i32.add (local.get $y) (i32.const 9))
                     (i32.const 0x30014)))
                   (if (i32.eqz (i32.and (local.get $state) (i32.const 0x20)))
                     (then
                       (drop (call $host_gdi_fill_rect (local.get $hdc)
-                        (i32.add (local.get $x) (i32.const 4)) (i32.add (local.get $y) (i32.const 5))
-                        (i32.add (local.get $x) (i32.const 5)) (i32.add (local.get $y) (i32.const 10))
-                        (i32.const 0x30014)))))
-                  (local.set $x (i32.add (local.get $x) (i32.const 12)))))
+                        (local.get $x) (i32.add (local.get $y) (i32.const 6))
+                        (i32.add (local.get $x) (i32.const 1)) (i32.add (local.get $y) (i32.const 11))
+                        (i32.const 0x30014)))))))
+              (local.set $x (call $tv_content_x (local.get $depth)))
 
               (local.set $check (i32.const 0))
               (if (i32.and (local.get $style) (i32.const 0x100))
@@ -1943,15 +2022,19 @@
 	                    (then
 	                      (if (local.get $selected)
 	                        (then
+	                          ;; The label box: 2px either side of the text, the
+	                          ;; row's full height.
 	                          (local.set $sel_right
 	                            (i32.add (local.get $x)
-	                              (i32.add (i32.mul (local.get $text_len) (i32.const 7)) (i32.const 4))))
+	                              (i32.add (call $host_measure_text (local.get $hdc)
+	                                (local.get $text_w) (local.get $text_len) (i32.const 0))
+	                                (i32.const 2))))
 		                          (if (i32.gt_s (local.get $sel_right) (i32.sub (local.get $content_right) (i32.const 2)))
 		                            (then (local.set $sel_right (i32.sub (local.get $content_right) (i32.const 2)))))
 	                          (local.set $brush (call $host_gdi_create_solid_brush (i32.const 0x00800000)))
 	                          (drop (call $host_gdi_fill_rect (local.get $hdc)
-	                            (local.get $x) (local.get $y)
-	                            (local.get $sel_right) (i32.add (local.get $y) (i32.const 15))
+	                            (i32.sub (local.get $x) (i32.const 2)) (local.get $y)
+	                            (local.get $sel_right) (i32.add (local.get $y) (i32.const 16))
 	                            (local.get $brush)))
 	                          (drop (call $host_gdi_delete_object (local.get $brush)))
 	                          (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x00FFFFFF)))
