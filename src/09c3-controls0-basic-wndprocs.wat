@@ -1279,6 +1279,40 @@
       (local.get $msg) (local.get $hdc) (local.get $ctl)))
     (select (local.get $brush) (local.get $default) (i32.ne (local.get $brush) (i32.const 0))))
 
+  ;; WM_DRAWITEM for an SS_OWNERDRAW static. DRAWITEMSTRUCT (48 bytes):
+  ;; CtlType=ODT_STATIC(5), CtlID, itemID 0, itemAction ODA_DRAWENTIRE,
+  ;; itemState ODS_DISABLED when WS_DISABLED, hwndItem, hDC, the client rect,
+  ;; itemData 0.
+  (func $static_send_drawitem (param $hwnd i32) (param $hdc i32) (param $ctrl_id i32)
+                              (param $w i32) (param $h i32) (param $font i32)
+    (local $dis i32) (local $disw i32) (local $parent i32)
+    (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    (drop (call $host_gdi_select_clip_rgn (local.get $hdc) (i32.const 0)))
+    (drop (call $host_gdi_select_object (local.get $hdc)
+      (select (local.get $font) (i32.const 0x30021) (local.get $font))))
+    (drop (call $ctl_color_brush (local.get $parent) (i32.const 0x0138)
+      (local.get $hdc) (local.get $hwnd) (i32.const 0x30011)))
+    (local.set $dis (call $heap_alloc (i32.const 48)))
+    (if (i32.eqz (local.get $dis)) (then (return)))
+    (local.set $disw (call $g2w (local.get $dis)))
+    (i32.store           (local.get $disw) (i32.const 5))
+    (i32.store offset=4  (local.get $disw) (i32.and (local.get $ctrl_id) (i32.const 0xFFFF)))
+    (i32.store offset=8  (local.get $disw) (i32.const 0))
+    (i32.store offset=12 (local.get $disw) (i32.const 1))
+    (i32.store offset=16 (local.get $disw)
+      (select (i32.const 4) (i32.const 0)
+        (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 134217728)))) ;; WS_DISABLED
+    (i32.store offset=20 (local.get $disw) (local.get $hwnd))
+    (i32.store offset=24 (local.get $disw) (local.get $hdc))
+    (i32.store offset=28 (local.get $disw) (i32.const 0))
+    (i32.store offset=32 (local.get $disw) (i32.const 0))
+    (i32.store offset=36 (local.get $disw) (local.get $w))
+    (i32.store offset=40 (local.get $disw) (local.get $h))
+    (i32.store offset=44 (local.get $disw) (i32.const 0))
+    (drop (call $wnd_send_message (local.get $parent) (i32.const 0x002B)
+      (i32.and (local.get $ctrl_id) (i32.const 0xFFFF)) (local.get $dis)))
+    (call $heap_free (local.get $dis)))
+
   (func $static_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $state i32) (local $state_w i32) (local $cs_w i32)
     (local $hdc i32) (local $sz i32) (local $w i32) (local $h i32)
@@ -1479,6 +1513,17 @@
         (local.set $style (i32.and (local.get $full_style) (i32.const 0x1F)))
         (local.set $ex (call $ctrl_get_ex_style (local.get $hwnd)))
         (local.set $ctrl_id (call $ctrl_table_get_id (local.get $hwnd)))
+        ;; SS_OWNERDRAW: the parent paints it. USER selects the control's
+        ;; font, sends WM_CTLCOLORSTATIC and then WM_DRAWITEM with an
+        ;; ODT_STATIC DRAWITEMSTRUCT (PuTTY draws its panel titles this way).
+        (if (i32.eq (local.get $style) (i32.const 0x0D))
+          (then
+            (call $static_send_drawitem (local.get $hwnd) (local.get $hdc)
+              (local.get $ctrl_id) (local.get $w) (local.get $h)
+              (call $static_font (local.get $state_w)))
+            (call $update_clear_hwnd (local.get $hwnd))
+            (call $paint_flag_clear_hwnd (local.get $hwnd))
+            (return (i32.const 0))))
         ;; Etched statics are borders, not labels. In particular, do not erase
         ;; artwork the parent painted inside an SS_ETCHEDFRAME rectangle.
         (if (i32.and (i32.ge_u (local.get $style) (i32.const 0x10))
