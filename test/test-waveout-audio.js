@@ -4,7 +4,11 @@ const { createHostImports } = require('../lib/host-imports');
 // waveOutOpen's {handle, callback, instance, cbType} record: an allocated
 // region, so its base comes from the mirror (a literal here once agreed with a
 // stale host-audio.js copy and hid Civ2's lost MM_WOM_DONE).
-const WAVE_OUT_SHARED = require('../lib/region-map.generated').BASE.WAVE_OUT_SHARED;
+const RegionMap = require('../lib/region-map.generated');
+const WAVE_OUT_SHARED = RegionMap.BASE.WAVE_OUT_SHARED;
+// The fake linear memories reach past the shared wave-out block, wherever the
+// memory map places it.
+const MEM_BYTES = Math.max(512 * 1024, RegionMap.END.WAVE_OUT_SHARED + 0x1000);
 
 const MM_WOM_DONE = 0x03BD;
 const WHDR_DONE = 0x01;
@@ -100,7 +104,7 @@ const oldClearTimeout = globalThis.clearTimeout;
 globalThis.AudioContext = FakeAudioContext;
 
 try {
-  const mem = new ArrayBuffer(512 * 1024);
+  const mem = new ArrayBuffer(MEM_BYTES);
   const bytes = new Uint8Array(mem);
   const pcmPtr = 0x1000;
   const rate = 22050;
@@ -174,7 +178,7 @@ try {
 
   globalThis.AudioContext = undefined;
   let clockMs = 0;
-  const pacedMem = new ArrayBuffer(512 * 1024);
+  const pacedMem = new ArrayBuffer(MEM_BYTES);
   const pacedBytes = new Uint8Array(pacedMem);
   for (let i = 0; i < oneSecond; i++) pacedBytes[pcmPtr + i] = i & 0xff;
   const pacedPosted = [];
@@ -252,7 +256,7 @@ try {
   console.log('PASS  waveOut CALLBACK_FUNCTION dispatches WOM_DONE between guest slices');
 
   globalThis.AudioContext = FakeAudioContext;
-  const browserMem = new ArrayBuffer(512 * 1024);
+  const browserMem = new ArrayBuffer(MEM_BYTES);
   const browserBytes = new Uint8Array(browserMem);
   for (let i = 0; i < oneSecond; i++) browserBytes[pcmPtr + i] = i & 0xff;
   const browserCtx = { getMemory: () => browserMem };
@@ -306,7 +310,7 @@ try {
   browserImports.host.wave_out_close(browserHandle);
   console.log('PASS  browser waveOut completion waits for the AudioContext clock');
 
-  const windowMem = new ArrayBuffer(512 * 1024);
+  const windowMem = new ArrayBuffer(MEM_BYTES);
   const windowBytes = new Uint8Array(windowMem);
   for (let i = 0; i < oneSecond; i++) windowBytes[pcmPtr + i] = i & 0xff;
   const posted = [];
@@ -341,7 +345,7 @@ try {
   windowImports.host.wave_out_close(windowHandle);
   console.log('PASS  browser waveOut CALLBACK_WINDOW posts MM_WOM_DONE at buffer end');
 
-  const resetMem = new ArrayBuffer(512 * 1024);
+  const resetMem = new ArrayBuffer(MEM_BYTES);
   const resetBytes = new Uint8Array(resetMem);
   for (let i = 0; i < oneSecond * 2; i++) resetBytes[pcmPtr + i] = i & 0xff;
   const resetPosted = [];
