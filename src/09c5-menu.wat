@@ -4564,6 +4564,16 @@
     (local.set $src (call $menu_source_get (local.get $hwnd)))
     (if (i32.eqz (local.get $src)) (then (local.set $src (i32.const 0x80001))))
     (if (i32.eq (local.get $src) (local.get $hmenu)) (then (return (i32.const -1))))
+    ;; The bar may be recorded under its bare resource id (CreateWindowEx's
+    ;; hMenu, a class menu) while the app holds LoadMenu's tagged handle for
+    ;; the same resource: that handle is the bar too, not a dropdown at
+    ;; position 0xBE. mIRC loads its menu, checks items on it, then SetMenus
+    ;; the handle onto a frame created with that menu.
+    (if (i32.and
+          (i32.eq (i32.and (local.get $hmenu) (i32.const 0xFFFF0000)) (i32.const 0x00BE0000))
+          (i32.eq (i32.and (local.get $hmenu) (i32.const 0xFFFF))
+                  (i32.and (local.get $src) (i32.const 0xFFFF))))
+      (then (return (i32.const -1))))
     (i32.sub (i32.shr_u (local.get $hmenu) (i32.const 16)) (i32.const 1)))
 
   ;; Resolve the submenu activated by a zero-based item position. Dynamic
