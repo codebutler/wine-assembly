@@ -21,7 +21,7 @@ const { createHostImports } = require('../lib/host-imports');
 const { compileSrcWasm } = require('./compile-src');
 const { Win98Renderer } = require('../lib/renderer');
 const { fontMounts, BUNDLED_BITMAP_FONTS } = require('../lib/font-substitutions');
-const { STOCK_ICON_FILES, mountSystemDataFiles } = require('../lib/process-boot');
+const { STOCK_ICON_FILES } = require('../lib/process-boot');
 
 // Mount the fonts a real host mounts. Every guest glyph now comes from a strike
 // the VFS supplies, so a harness with an empty font directory draws no text at
@@ -91,10 +91,15 @@ async function bootRenderHarness({
   if (ctx.vfs) {
     ctx.vfs.dirs.add('c:\\windows');
     ctx.vfs.dirs.add('c:\\windows\\system');
-    mountSystemDataFiles(ctx.vfs, STOCK_ICON_FILES.map(file => ({
-      ...file,
-      bytes: new Uint8Array(fs.readFileSync(path.join(__dirname, '..', file.url))),
-    })));
+    // Only the icons: mountSystemDataFiles would also add every system module
+    // stub (opengl32.dll among them), which tests of missing files rely on not
+    // being there.
+    for (const file of STOCK_ICON_FILES) {
+      ctx.vfs.files.set(file.vfsPath.toLowerCase(), {
+        data: new Uint8Array(fs.readFileSync(path.join(__dirname, '..', file.url))),
+        attrs: 0x20,
+      });
+    }
   }
   base.host.memory = memory;
   base.host.create_thread = () => 0;
