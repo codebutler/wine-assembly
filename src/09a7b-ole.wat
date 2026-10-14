@@ -1740,6 +1740,38 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
+  ;; OleSetMenuDescriptor(holemenu, hwndFrame, hwndActiveObject, lpFrame,
+  ;; lpActiveObject) — 5 args stdcall. A NULL holemenu removes the frame's
+  ;; menu-dispatch hook; no hook is ever installed here, so that is S_OK with
+  ;; nothing to undo (VB5 does it on every in-place deactivation). Installing
+  ;; one means routing the frame's menu messages to the active object, which
+  ;; is not implemented.
+  (func $handle_OleSetMenuDescriptor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg0)
+      (then (call $crash_unimplemented (local.get $name_ptr)) (return)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+  )
+
+  ;; CreateItemMoniker(lpszDelim, lpszItem, ppmk). OLEAUT32's
+  ;; RegisterActiveObject/GetActiveObject key the ROT with "!" + "{CLSID}".
+  (func $handle_CreateItemMoniker (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $obj i32)
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
+    (call $gs32 (local.get $arg2) (i32.const 0))
+    (local.set $obj (call $ole_create_item_moniker (local.get $arg0) (local.get $arg1)))
+    (if (local.get $obj)
+      (then
+        (call $gs32 (local.get $arg2) (local.get $obj))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E)))) ;; E_OUTOFMEMORY
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+  )
+
   ;; MkParseDisplayName(pbc, displayName, eaten, ppmk) recognizes the file
   ;; display names consumed by the Win9x InstallShield runtime. The full OLE
   ;; parser also delegates class/item/composite syntaxes; keep this path
@@ -1959,8 +1991,11 @@
     (if (i32.eqz (local.get $arg1))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else
-        ;; CLSID_FileMoniker {00000303-0000-0000-C000-000000000046}
-        (call $gs32 (local.get $arg1) (i32.const 0x00000303))
+        ;; CLSID_FileMoniker {00000303-0000-0000-C000-000000000046};
+        ;; CLSID_ItemMoniker is {00000304-...}.
+        (call $gs32 (local.get $arg1)
+          (select (i32.const 0x00000304) (i32.const 0x00000303)
+            (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (i32.const 23))))
         (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (i32.const 0))
         (call $gs32 (i32.add (local.get $arg1) (i32.const 8)) (i32.const 0x000000C0))
         (call $gs32 (i32.add (local.get $arg1) (i32.const 12)) (i32.const 0x46000000))
@@ -1970,6 +2005,9 @@
 
   (func $handle_IMoniker_Load (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $state i32) (local $ret i32) (local $ctx i32)
+    ;; Only the file-moniker stream format is implemented.
+    (if (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (i32.const 23))
+      (then (call $crash_unimplemented (local.get $name_ptr)) (return)))
     (if (i32.eqz (local.get $arg1))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))
@@ -2010,6 +2048,9 @@
   (func $handle_IMoniker_Save (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $blob i32) (local $size i32) (local $written i32)
     (local $hr i32) (local $ret i32) (local $ctx i32)
+    ;; Only the file-moniker stream format is implemented.
+    (if (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (i32.const 23))
+      (then (call $crash_unimplemented (local.get $name_ptr)) (return)))
     (if (i32.eqz (local.get $arg1))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))
@@ -2169,11 +2210,8 @@
     (if (i32.eqz (local.get $arg1))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))) ;; E_INVALIDARG
       (else
-        (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.and
-                (i32.eq (call $gl32 (local.get $arg1)) (global.get $DX_VTBL_OLE_MONIKER))
-                (call $ole_moniker_paths_equal
-                  (call $gl32 (i32.add (local.get $arg0) (i32.const 12)))
-                  (call $gl32 (i32.add (local.get $arg1) (i32.const 12)))))
+        (i32.store offset=0 (global.get $reg_base) (if (result i32)
+              (call $ole_rot_monikers_equal (local.get $arg0) (local.get $arg1))
             (then (i32.const 0))
             (else (i32.const 1))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
@@ -2266,22 +2304,87 @@
     (if (i32.eqz (local.get $arg1))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else
-        (call $gs32 (local.get $arg1) (i32.const 2)) ;; MKSYS_FILEMONIKER
+        (call $gs32 (local.get $arg1) ;; MKSYS_ITEMMONIKER / MKSYS_FILEMONIKER
+          (select (i32.const 4) (i32.const 2)
+            (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (i32.const 23))))
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; StgIsStorageFile(pwcsName) — report "not a structured storage file".
 
   ;; StgOpenStorage(pwcsName, pstgPriority, grfMode, snbExclude, reserved, ppstgOpen)
-  ;; Structured storage is not implemented; zero the out pointer and fail
-  ;; gracefully so callers can fall back to flat-file handling where available.
+  ;; Read the named compound file into a memory ILockBytes and open it through
+  ;; the same CFB parser StgOpenStorageOnILockBytes uses. Opened for write, the
+  ;; lockbytes keeps the path, so IStorage::Commit writes the image back the
+  ;; way StgCreateDocfile's does. Windows Installer opens every .msi here; the
+  ;; old always-STG_E_FILENOTFOUND stub made msiexec report 1619.
   (func $handle_StgOpenStorage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $out i32)
+    (local $out i32) (local $hr i32)
     (local.set $out (i32.load (i32.add (call $g2w (i32.load offset=16 (global.get $reg_base))) (i32.const 24))))
-    (if (local.get $out) (then (call $gs32 (local.get $out) (i32.const 0))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80030002)) ;; STG_E_FILENOTFOUND
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+    (if (local.get $out) (then (call $gs32 (local.get $out) (i32.const 0))))
+    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $out)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80030009)) (return))) ;; STG_E_INVALIDPOINTER
+    (local.set $hr (call $ole_open_storage_file (local.get $arg0) (local.get $arg2) (local.get $out)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hr))
   )
+
+  (func $ole_open_storage_file (param $path i32) (param $mode i32) (param $out i32) (result i32)
+    (local $handle i32) (local $size i32) (local $data i32) (local $read i32)
+    (local $ok i32) (local $lockbytes i32) (local $owned_path i32) (local $hr i32)
+    (local $storage i32)
+    (local.set $handle (call $host_fs_create_file
+      (call $g2w (local.get $path))
+      (i32.const 0x80000000) ;; GENERIC_READ
+      (i32.const 3)          ;; OPEN_EXISTING
+      (i32.const 0x80)       ;; FILE_ATTRIBUTE_NORMAL
+      (i32.const 1)))        ;; UTF-16
+    (if (i32.eq (local.get $handle) (i32.const -1))
+      (then (return (i32.const 0x80030002)))) ;; STG_E_FILENOTFOUND
+    (local.set $size (call $host_fs_get_file_size (local.get $handle)))
+    (local.set $data (call $heap_alloc (select (local.get $size) (i32.const 1) (local.get $size))))
+    (local.set $read (call $heap_alloc (i32.const 4)))
+    (if (i32.or (i32.eqz (local.get $data)) (i32.eqz (local.get $read)))
+      (then
+        (if (local.get $data) (then (call $heap_free (local.get $data))))
+        (if (local.get $read) (then (call $heap_free (local.get $read))))
+        (drop (call $host_fs_close_handle (local.get $handle)))
+        (return (i32.const 0x80030008)))) ;; STG_E_INSUFFICIENTMEMORY
+    (call $gs32 (local.get $read) (i32.const 0))
+    (local.set $ok (call $host_fs_read_file
+      (local.get $handle) (local.get $data) (local.get $size) (local.get $read)))
+    (local.set $ok (i32.and (i32.ne (local.get $ok) (i32.const 0))
+      (i32.eq (call $gl32 (local.get $read)) (local.get $size))))
+    (call $heap_free (local.get $read))
+    (drop (call $host_fs_close_handle (local.get $handle)))
+    (if (i32.eqz (local.get $ok))
+      (then (call $heap_free (local.get $data)) (return (i32.const 0x8003001E)))) ;; STG_E_READFAULT
+    (local.set $lockbytes (call $ole_create_lockbytes (i32.const 0) (i32.const 1)))
+    (if (i32.eqz (local.get $lockbytes))
+      (then (call $heap_free (local.get $data)) (return (i32.const 0x80030008))))
+    (call $gs32 (i32.add (local.get $lockbytes) (i32.const 12)) (local.get $data))
+    (call $gs32 (i32.add (local.get $lockbytes) (i32.const 16)) (local.get $size))
+    (call $gs32 (i32.add (local.get $lockbytes) (i32.const 20)) (local.get $size))
+    (call $gs32 (i32.add (local.get $lockbytes) (i32.const 32)) (i32.const 1))
+    ;; STGM_WRITE (1) or STGM_READWRITE (2): Commit persists to the file.
+    (if (i32.ne (i32.and (local.get $mode) (i32.const 3)) (i32.const 0))
+      (then
+        (local.set $owned_path (call $ole_wide_dup (local.get $path)))
+        (if (local.get $owned_path)
+          (then (call $gs32 (i32.add (local.get $lockbytes) (i32.const 40)) (local.get $owned_path))))))
+    (local.set $hr (call $ole_cfb_deserialize (local.get $lockbytes) (local.get $out)))
+    ;; On success the root storage holds its own reference.
+    (drop (call $ole_obj_release (local.get $lockbytes)))
+    ;; A file-backed root's STATSTG.pwcsName is the file's path. msi.dll logs
+    ;; it as "Package we're running from" and builds SourceDir from its
+    ;; directory, so a nameless root raised Internal Error 2343 (empty path).
+    (if (i32.eqz (local.get $hr))
+      (then
+        (local.set $storage (call $gl32 (local.get $out)))
+        (if (i32.eqz (call $gl32 (i32.add (local.get $storage) (i32.const 40))))
+          (then (call $gs32 (i32.add (local.get $storage) (i32.const 40))
+            (call $ole_wide_dup (local.get $path)))))))
+    (local.get $hr))
 
   ;; StgCreateDocfile(pwcsName, grfMode, reserved, ppstgOpen)
   (func $handle_StgCreateDocfile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2352,8 +2455,10 @@
   ;;   +20 cursor, +24 owns snapshot. Entry (48 bytes): object, name, type,
   ;;   size-low, CLSID[16], state bits, mode, locks supported, reserved.
   (func $ole_obj_addref (param $obj i32) (result i32)
-    (local $rc i32)
+    (local $rc i32) (local $owner i32)
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
+    (local.set $owner (call $ole_data_controlling_owner (local.get $obj)))
+    (if (local.get $owner) (then (return (call $ole_obj_addref (local.get $owner)))))
     (if (i32.eq (call $gl32 (i32.add (local.get $obj) (i32.const 8))) (i32.const 9))
       (then (call $gs32 (i32.add (local.get $obj) (i32.const 12))
         (i32.add (call $gl32 (i32.add (local.get $obj) (i32.const 12))) (i32.const 1)))))
@@ -2452,6 +2557,49 @@
     (call $gs32 (i32.add (local.get $obj) (i32.const 16))
       (call $ole_moniker_hash_path (local.get $copy)))
     (local.get $obj))
+
+  ;; IMoniker item value (20 bytes, kind=23): the file-moniker layout, with
+  ;; +12 owning delimiter+item as one UTF-16 string — which is exactly the
+  ;; item moniker's display name ("!{CLSID}" for RegisterActiveObject).
+  (func $ole_create_item_moniker (param $delim i32) (param $item i32) (result i32)
+    (local $obj i32) (local $copy i32) (local $dlen i32) (local $ilen i32)
+    (if (local.get $delim) (then (local.set $dlen (call $guest_wcslen (local.get $delim)))))
+    (if (local.get $item) (then (local.set $ilen (call $guest_wcslen (local.get $item)))))
+    (local.set $copy (call $heap_alloc
+      (i32.shl (i32.add (i32.add (local.get $dlen) (local.get $ilen)) (i32.const 1)) (i32.const 1))))
+    (if (i32.eqz (local.get $copy)) (then (return (i32.const 0))))
+    (call $gs16 (local.get $copy) (i32.const 0))
+    (if (local.get $dlen) (then (call $guest_wcscpy (local.get $copy) (local.get $delim))))
+    (if (local.get $ilen)
+      (then (call $guest_wcscpy
+        (i32.add (local.get $copy) (i32.shl (local.get $dlen) (i32.const 1))) (local.get $item))))
+    (local.set $obj (call $heap_alloc (i32.const 20)))
+    (if (i32.eqz (local.get $obj))
+      (then (call $heap_free (local.get $copy)) (return (i32.const 0))))
+    (call $zero_memory (call $g2w (local.get $obj)) (i32.const 20))
+    (call $gs32 (local.get $obj) (global.get $DX_VTBL_OLE_MONIKER))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 4)) (i32.const 1))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 8)) (i32.const 23))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 12)) (local.get $copy))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 16))
+      (call $ole_moniker_hash_path (local.get $copy)))
+    (local.get $obj))
+
+  ;; Item names compare case-insensitively (lstrcmpiW), with no path folding.
+  (func $ole_moniker_items_equal (param $left i32) (param $right i32) (result i32)
+    (local $index i32) (local $a i32) (local $b i32)
+    (if (i32.or (i32.eqz (local.get $left)) (i32.eqz (local.get $right)))
+      (then (return (i32.const 0))))
+    (block $equal (loop $scan
+      (local.set $a (call $tolower
+        (call $gl16 (i32.add (local.get $left) (i32.shl (local.get $index) (i32.const 1))))))
+      (local.set $b (call $tolower
+        (call $gl16 (i32.add (local.get $right) (i32.shl (local.get $index) (i32.const 1))))))
+      (if (i32.ne (local.get $a) (local.get $b)) (then (return (i32.const 0))))
+      (br_if $equal (i32.eqz (local.get $a)))
+      (local.set $index (i32.add (local.get $index) (i32.const 1)))
+      (br $scan)))
+    (i32.const 1))
 
   ;; XP-compatible file-moniker IPersistStream payload. The leading size word
   ;; is private bookkeeping and is not written to the stream. The persisted
@@ -2696,20 +2844,30 @@
   ;; runtime implements; unsupported moniker classes fail instead of silently
   ;; comparing interface addresses.
   (func $ole_rot_moniker_supported (param $moniker i32) (result i32)
-    (i32.and
-      (i32.ne (local.get $moniker) (i32.const 0))
-      (i32.and
-        (i32.eq (call $gl32 (local.get $moniker)) (global.get $DX_VTBL_OLE_MONIKER))
-        (i32.eq (call $gl32 (i32.add (local.get $moniker) (i32.const 8))) (i32.const 11)))))
+    (local $kind i32)
+    (if (i32.eqz (local.get $moniker)) (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (local.get $moniker)) (global.get $DX_VTBL_OLE_MONIKER))
+      (then (return (i32.const 0))))
+    (local.set $kind (call $gl32 (i32.add (local.get $moniker) (i32.const 8))))
+    (i32.or (i32.eq (local.get $kind) (i32.const 11))    ;; file
+            (i32.eq (local.get $kind) (i32.const 23))))  ;; item
 
   (func $ole_rot_monikers_equal (param $left i32) (param $right i32) (result i32)
-    (i32.and
-      (i32.and
-        (call $ole_rot_moniker_supported (local.get $left))
-        (call $ole_rot_moniker_supported (local.get $right)))
-      (call $ole_moniker_paths_equal
+    (local $kind i32)
+    (if (i32.eqz (i32.and
+          (call $ole_rot_moniker_supported (local.get $left))
+          (call $ole_rot_moniker_supported (local.get $right))))
+      (then (return (i32.const 0))))
+    (local.set $kind (call $gl32 (i32.add (local.get $left) (i32.const 8))))
+    (if (i32.ne (local.get $kind) (call $gl32 (i32.add (local.get $right) (i32.const 8))))
+      (then (return (i32.const 0))))
+    (if (i32.eq (local.get $kind) (i32.const 23))
+      (then (return (call $ole_moniker_items_equal
         (call $gl32 (i32.add (local.get $left) (i32.const 12)))
-        (call $gl32 (i32.add (local.get $right) (i32.const 12))))))
+        (call $gl32 (i32.add (local.get $right) (i32.const 12)))))))
+    (call $ole_moniker_paths_equal
+      (call $gl32 (i32.add (local.get $left) (i32.const 12)))
+      (call $gl32 (i32.add (local.get $right) (i32.const 12)))))
 
   (func $ole_rot_find_moniker (param $moniker i32) (result i32)
     (local $entry i32)
@@ -3123,7 +3281,7 @@
   (func $ole_font_invalidate (param $obj i32)
     (if (call $gl32 (i32.add (local.get $obj) (i32.const 44)))
       (then
-        (drop (call $host_gdi_delete_object (call $gl32 (i32.add (local.get $obj) (i32.const 44)))))
+        (drop (call $gdi_native_delete_object (call $gl32 (i32.add (local.get $obj) (i32.const 44)))))
         (call $gs32 (i32.add (local.get $obj) (i32.const 44)) (i32.const 0)))))
 
   ;; CY point size is the size in points scaled by 10000; LOGFONT height is
@@ -3680,8 +3838,11 @@
 
   (func $ole_resize_buffer (param $obj i32) (param $new_size i32) (result i32)
     (local $data i32) (local $old_size i32) (local $capacity i32) (local $new_data i32) (local $new_data_wa i32) (local $new_capacity i32)
+    (local $global_stream i32)
     (local.set $obj (call $ole_stream_root (local.get $obj)))
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0x80004003))))
+    (if (i32.eq (call $gl32 (i32.add (local.get $obj) (i32.const 8))) (i32.const 3))
+      (then (local.set $global_stream (call $gl32 (i32.add (local.get $obj) (i32.const 60))))))
     (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 12))))
     (local.set $old_size (call $gl32 (i32.add (local.get $obj) (i32.const 16))))
     (local.set $capacity (call $gl32 (i32.add (local.get $obj) (i32.const 20))))
@@ -3719,13 +3880,22 @@
         (call $gl32 (i32.add (local.get $obj) (i32.const 16))))))
     (if (i32.and
           (i32.ne (local.get $data) (i32.const 0))
-          (i32.ne (call $gl32 (i32.add (local.get $obj) (i32.const 32))) (i32.const 0)))
-      (then (call $heap_free (local.get $data))))
+          (i32.or (i32.ne (local.get $global_stream) (i32.const 0))
+            (i32.ne (call $gl32 (i32.add (local.get $obj) (i32.const 32))) (i32.const 0))))
+      (then (call $ole_free_buffer (local.get $data))))
+    (if (local.get $global_stream) (then (call $heap_global_mark (local.get $new_data))))
     (call $gs32 (i32.add (local.get $obj) (i32.const 12)) (local.get $new_data))
     (call $gs32 (i32.add (local.get $obj) (i32.const 16)) (local.get $new_size))
     (call $gs32 (i32.add (local.get $obj) (i32.const 20)) (local.get $new_capacity))
-    (call $gs32 (i32.add (local.get $obj) (i32.const 32)) (i32.const 1))
+    (if (i32.eqz (local.get $global_stream))
+      (then (call $gs32 (i32.add (local.get $obj) (i32.const 32)) (i32.const 1))))
     (i32.const 0))
+
+  ;; Stream buffers may be private storage or published Global memory.
+  (func $ole_free_buffer (param $data i32)
+    (if (call $heap_global_block_size (local.get $data) (i32.const 0))
+      (then (drop (call $heap_global_free (local.get $data))))
+      (else (call $heap_free (local.get $data)))))
 
   (func $ole_create_lockbytes (param $hglobal i32) (param $delete_on_release i32) (result i32)
     (local $obj i32) (local $size i32)
@@ -3791,9 +3961,10 @@
 
   (func $ole_create_stream (param $owner i32) (param $name i32) (result i32)
     (local $obj i32)
-    (local.set $obj (call $heap_alloc (i32.const 60)))
+    ;; +60 distinguishes HGLOBAL streams from private structured-storage data.
+    (local.set $obj (call $heap_alloc (i32.const 64)))
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $obj)) (i32.const 60))
+    (call $zero_memory (call $g2w (local.get $obj)) (i32.const 64))
     (call $gs32 (local.get $obj) (global.get $DX_VTBL_OLE_STREAM))
     (call $gs32 (i32.add (local.get $obj) (i32.const 4)) (i32.const 1))
     (call $gs32 (i32.add (local.get $obj) (i32.const 8)) (i32.const 3))
@@ -3962,6 +4133,7 @@
     (local $obj i32) (local $capacity i32)
     (local.set $obj (call $ole_create_stream (i32.const 0) (i32.const 0)))
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
+    (call $gs32 (i32.add (local.get $obj) (i32.const 60)) (i32.const 1))
     (if (i32.eqz (local.get $hglobal))
       (then
         ;; A NULL input requests a new zero-length HGLOBAL. Keep one backing
@@ -3969,13 +4141,14 @@
         (local.set $hglobal (call $heap_alloc (i32.const 1)))
         (if (i32.eqz (local.get $hglobal))
           (then (call $heap_free (local.get $obj)) (return (i32.const 0))))
+        (call $heap_global_mark (local.get $hglobal))
         (local.set $capacity
           (call $heap_payload_size_unchecked (local.get $hglobal)))
         (call $gs32 (i32.add (local.get $obj) (i32.const 12)) (local.get $hglobal))
         (call $gs32 (i32.add (local.get $obj) (i32.const 16)) (i32.const 0))
         (call $gs32 (i32.add (local.get $obj) (i32.const 20)) (local.get $capacity))
-        ;; COM owns HGLOBALs it creates even when the caller supplied FALSE.
-        (call $gs32 (i32.add (local.get $obj) (i32.const 32)) (i32.const 1)))
+        ;; FALSE leaves the final HGLOBAL to the caller, even for NULL input.
+        (call $gs32 (i32.add (local.get $obj) (i32.const 32)) (local.get $delete_on_release)))
       (else
         (local.set $capacity
           (call $heap_payload_size_unchecked (local.get $hglobal)))
@@ -5600,6 +5773,8 @@
   (func $ole_obj_release (param $obj i32) (result i32)
     (local $rc i32) (local $kind i32) (local $data i32) (local $child i32) (local $next i32)
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
+    (local.set $data (call $ole_data_controlling_owner (local.get $obj)))
+    (if (local.get $data) (then (return (call $ole_obj_release (local.get $data)))))
     (local.set $kind (call $gl32 (i32.add (local.get $obj) (i32.const 8))))
     (if (i32.eq (local.get $kind) (i32.const 9))
       (then (call $gs32 (i32.add (local.get $obj) (i32.const 16))
@@ -5662,7 +5837,7 @@
             (if (i32.and
                   (i32.ne (local.get $data) (i32.const 0))
                   (i32.ne (call $gl32 (i32.add (local.get $obj) (i32.const 32))) (i32.const 0)))
-              (then (call $heap_free (local.get $data))))
+              (then (call $ole_free_buffer (local.get $data))))
             (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 48))))
             (if (local.get $data) (then (call $heap_free (local.get $data))))
             (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 56))))
@@ -5723,13 +5898,21 @@
         (if (local.get $data) (then (call $heap_free (local.get $data))))
         (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 120))))
         (if (local.get $data) (then (call $heap_free (local.get $data))))
-        ;; The IDataObject face holds copies of the cached media, so it is torn
-        ;; down like any other object we own.
+        ;; The live IDataObject face borrows cache media. Drop its metadata
+        ;; while its owner marker is still present; never release media twice.
         (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 164))))
         (if (local.get $data)
           (then
             (call $gs32 (i32.add (local.get $obj) (i32.const 164)) (i32.const 0))
+            (call $ole_data_clear_entries (local.get $data))
+            ;; Retire privately owned face storage without delegating back
+            ;; into the controlling object that is already being destroyed.
+            (call $gs32 (i32.add (local.get $data) (i32.const 32)) (i32.const 0))
             (drop (call $ole_obj_release (local.get $data)))))
+        ;; The synthesized presentation is root-owned; the live face only
+        ;; borrowed it, while GetData/standalone snapshots now own deep copies.
+        (call $ole_free_metafile_picture
+          (call $gl32 (i32.add (local.get $obj) (i32.const 168))))
         (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 148))))
         (local.set $child (i32.const 0))
         (block $advise_done (loop $advise_entries
@@ -5784,7 +5967,8 @@
           (local.set $child (i32.add (local.get $child) (i32.const 1)))
           (br $advise_enum_entries)))
         (if (local.get $data) (then (call $heap_free (local.get $data))))))
-    (if (i32.eq (local.get $kind) (i32.const 11))
+    (if (i32.or (i32.eq (local.get $kind) (i32.const 11))   ;; file moniker
+                (i32.eq (local.get $kind) (i32.const 23)))  ;; item moniker
       (then
         (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 12))))
         (if (local.get $data) (then (call $heap_free (local.get $data))))))
@@ -5858,7 +6042,7 @@
         (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 12))))
         (if (local.get $data) (then (call $heap_free (i32.sub (local.get $data) (i32.const 4)))))
         (local.set $data (call $gl32 (i32.add (local.get $obj) (i32.const 44))))
-        (if (local.get $data) (then (drop (call $host_gdi_delete_object (local.get $data)))))))
+        (if (local.get $data) (then (drop (call $gdi_native_delete_object (local.get $data)))))))
     (call $heap_free (local.get $obj))
     (i32.const 0))
 
@@ -5876,14 +6060,21 @@
     (local.set $take (select (local.get $count) (local.get $available) (i32.lt_u (local.get $count) (local.get $available))))
     (if (call $ole_stream_lock_conflict (local.get $obj) (local.get $pos) (local.get $take) (i32.const 0))
       (then (return (i32.const 0x80030021))))
-    (if (local.get $take)
-      (then (memory.copy
-        (call $g2w (local.get $buf))
-        (i32.add (call $g2w (call $gl32 (i32.add (local.get $root) (i32.const 12)))) (local.get $pos))
-        (local.get $take))))
+    ;; The caller's buffer is a guest range and may straddle two VirtualAlloc
+    ;; pages whose backing is not adjacent: one memory.copy through g2w(buf)
+    ;; spilled every byte past the page boundary into foreign WASM memory.
+    ;; msi.dll's 1KB table reader sat 68 bytes below a page end, so tables
+    ;; loaded as zeros and the installer's ControlEvent lookups matched nothing.
+    (call $guest_memmove (local.get $buf)
+      (i32.add (call $gl32 (i32.add (local.get $root) (i32.const 12))) (local.get $pos))
+      (local.get $take))
     (call $ole_set_data_position (local.get $obj) (i32.add (local.get $pos) (local.get $take)))
     (if (local.get $read_out) (then (call $gs32 (local.get $read_out) (local.get $take))))
-    (select (i32.const 0) (i32.const 1) (i32.eq (local.get $take) (local.get $count))))
+    ;; A short read at end of stream is S_OK with the smaller count, as in
+    ;; OLE32's compound-file and HGLOBAL streams. msi.dll's 1KB buffered
+    ;; reader fails any nonzero HRESULT, so S_FALSE here rejected every
+    ;; SummaryInformation stream as ERROR_INSTALL_PACKAGE_INVALID.
+    (i32.const 0))
 
   (func $ole_stream_write (param $obj i32) (param $buf i32) (param $count i32) (param $written_out i32) (result i32)
     (local $root i32) (local $pos i32) (local $end i32) (local $hr i32)
@@ -5902,11 +6093,11 @@
       (select (local.get $end) (call $gl32 (i32.add (local.get $root) (i32.const 16)))
         (i32.gt_u (local.get $end) (call $gl32 (i32.add (local.get $root) (i32.const 16)))))))
     (if (local.get $hr) (then (return (local.get $hr))))
-    (if (local.get $count)
-      (then (memory.copy
-        (i32.add (call $g2w (call $gl32 (i32.add (local.get $root) (i32.const 12)))) (local.get $pos))
-        (call $g2w (local.get $buf))
-        (local.get $count))))
+    ;; Page-safe for the same reason as $ole_stream_read.
+    (call $guest_memmove
+      (i32.add (call $gl32 (i32.add (local.get $root) (i32.const 12))) (local.get $pos))
+      (local.get $buf)
+      (local.get $count))
     (call $ole_set_data_position (local.get $obj) (local.get $end))
     (if (local.get $written_out) (then (call $gs32 (local.get $written_out) (local.get $count))))
     (i32.const 0))
@@ -5993,7 +6184,11 @@
         (call $ole_set_data_position (local.get $arg0) (local.get $old_pos))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_ILockBytes_SetSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (select (call $ole_resize_buffer (local.get $arg0) (local.get $arg1)) (i32.const 0x80030019) (i32.eqz (local.get $arg2))))
+    ;; select evaluates both values: reject the high word before resizing.
+    (i32.store offset=0 (global.get $reg_base)
+      (if (result i32) (i32.eqz (local.get $arg2))
+        (then (call $ole_resize_buffer (local.get $arg0) (local.get $arg1)))
+        (else (i32.const 0x80030019))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_ILockBytes_Stat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_fill_statstg (local.get $arg0) (local.get $arg1) (local.get $arg2)))
@@ -6031,7 +6226,10 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IStream_SetSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (select (call $ole_stream_set_size (local.get $arg0) (local.get $arg1)) (i32.const 0x80030019) (i32.eqz (local.get $arg2))))
+    (i32.store offset=0 (global.get $reg_base)
+      (if (result i32) (i32.eqz (local.get $arg2))
+        (then (call $ole_stream_set_size (local.get $arg0) (local.get $arg1)))
+        (else (i32.const 0x80030019))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IStream_CopyTo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_stream_copy_to
@@ -6045,18 +6243,18 @@
     (i32.store offset=0 (global.get $reg_base) (call $ole_stream_revert (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IStream_LockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (select
-      (call $ole_stream_lock_region (local.get $arg0) (local.get $arg1) (local.get $arg3)
-        (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-      (i32.const 0x80030019)
-      (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg4)))))
+    (i32.store offset=0 (global.get $reg_base)
+      (if (result i32) (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg4)))
+        (then (call $ole_stream_lock_region (local.get $arg0) (local.get $arg1) (local.get $arg3)
+          (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+        (else (i32.const 0x80030019))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IStream_UnlockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (select
-      (call $ole_stream_unlock_region (local.get $arg0) (local.get $arg1) (local.get $arg3)
-        (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-      (i32.const 0x80030019)
-      (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg4)))))
+    (i32.store offset=0 (global.get $reg_base)
+      (if (result i32) (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg4)))
+        (then (call $ole_stream_unlock_region (local.get $arg0) (local.get $arg1) (local.get $arg3)
+          (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+        (else (i32.const 0x80030019))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IStream_Stat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_fill_statstg (local.get $arg0) (local.get $arg1) (local.get $arg2)))
@@ -6262,9 +6460,15 @@
           (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
-  ;; IDataObject layout (32 bytes): +0 vtable, +4 refcount, +8 kind=4,
+  ;; IDataObject layout (36 bytes): +0 vtable, +4 refcount, +8 kind=4,
+  ;; +32 controlling static owner (0 for independent objects/snapshots).
+  ;; An aggregated face keeps one private storage reference; all external
+  ;; references delegate to the owner, so parent/child ownership cannot cycle.
   ;; +12 owned entries, +16 count, +20 capacity. Entry (32 bytes):
   ;; FORMATETC[20], STGMEDIUM[12]. FORMATETC::ptd is independently owned.
+  ;; With +32 nonzero, STGMEDIUM is borrowed from the controlling cache (or
+  ;; its synthesized metafile); only entry/FORMATETC storage belongs to the
+  ;; face. SetData forwards to that cache; GetData returns an owned copy/ref.
   ;; IEnumFORMATETC layout (28 bytes): +0 vtable, +4 refcount, +8 kind=5,
   ;; +12 owned FORMATETC snapshot, +16 count, +20 cursor, +24 owns snapshot.
   ;; Release an interface only when it is one of this runtime's bounded OLE
@@ -6447,6 +6651,8 @@
   (func $ole_owned_media_guest_releases_valid (param $obj i32) (result i32)
     (local $kind i32) (local $entries i32) (local $count i32)
     (local $i i32) (local $medium i32)
+    (if (call $ole_data_controlling_owner (local.get $obj))
+      (then (return (i32.const 1)))) ;; live-face media belong to the cache
     (local.set $kind (call $gl32 (i32.add (local.get $obj) (i32.const 8))))
     (if (i32.eq (local.get $kind) (i32.const 4))
       (then
@@ -6485,6 +6691,8 @@
   (func $ole_owned_media_has_guest (param $obj i32) (result i32)
     (local $kind i32) (local $entries i32) (local $count i32)
     (local $i i32) (local $medium i32)
+    (if (call $ole_data_controlling_owner (local.get $obj))
+      (then (return (i32.const 0))))
     (local.set $kind (call $gl32 (i32.add (local.get $obj) (i32.const 8))))
     (if (i32.eq (local.get $kind) (i32.const 4))
       (then
@@ -6520,6 +6728,8 @@
     (local $obj i32) (local $kind i32) (local $cursor i32)
     (local $entries i32) (local $count i32) (local $medium i32)
     (local.set $obj (call $gl32 (i32.add (local.get $ctx) (i32.const 20))))
+    (if (call $ole_data_controlling_owner (local.get $obj))
+      (then (return (i32.const 0))))
     (local.set $kind (call $gl32 (i32.add (local.get $obj) (i32.const 8))))
     (local.set $cursor (call $gl32 (i32.add (local.get $ctx) (i32.const 40))))
     (if (i32.eq (local.get $kind) (i32.const 4))
@@ -6764,7 +6974,12 @@
     (i32.const 0))
 
   (func $ole_owned_object_release_api (param $obj i32) (param $pop_bytes i32)
-    (local $ret i32) (local $ctx i32)
+    (local $ret i32) (local $ctx i32) (local $owner i32)
+    (local.set $owner (call $ole_data_controlling_owner (local.get $obj)))
+    (if (local.get $owner)
+      (then
+        (call $ole_static_release_api (local.get $owner) (local.get $pop_bytes))
+        (return)))
     (if (i32.and
           (i32.eq (call $gl32 (i32.add (local.get $obj) (i32.const 8))) (i32.const 4))
           (i32.and
@@ -6789,6 +7004,30 @@
     (i32.store offset=0 (global.get $reg_base) (call $ole_obj_release (local.get $obj)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (local.get $pop_bytes))))
 
+  ;; A METAFILEPICT owns both its Global-memory wrapper and a GDI metafile.
+  (func $ole_copy_metafile_picture (param $source i32) (result i32)
+    (local $source_w i32) (local $copy i32) (local $copy_w i32) (local $mf i32)
+    (if (i32.eqz (local.get $source)) (then (return (i32.const 0))))
+    (local.set $source_w (call $g2w (local.get $source)))
+    (local.set $mf (call $gdi_metafile_copy
+      (i32.load offset=12 (local.get $source_w)) (i32.const 6)))
+    (if (i32.eqz (local.get $mf)) (then (return (i32.const 0))))
+    (local.set $copy (call $heap_alloc (i32.const 16)))
+    (if (i32.eqz (local.get $copy))
+      (then (drop (call $gdi_object_delete_full (local.get $mf))) (return (i32.const 0))))
+    (local.set $copy_w (call $g2w (local.get $copy)))
+    (memory.copy (local.get $copy_w) (local.get $source_w) (i32.const 16))
+    (i32.store offset=12 (local.get $copy_w) (local.get $mf))
+    (call $heap_global_mark (local.get $copy))
+    (local.get $copy))
+
+  (func $ole_free_metafile_picture (param $picture i32)
+    (if (local.get $picture)
+      (then
+        (drop (call $gdi_object_delete_full
+          (i32.load offset=12 (call $g2w (local.get $picture)))))
+        (call $ole_free_buffer (local.get $picture)))))
+
   (func $ole_release_medium (param $medium i32)
     (local $tymed i32) (local $data i32) (local $unk i32)
     (if (i32.eqz (local.get $medium)) (then (return)))
@@ -6809,6 +7048,10 @@
     (if (local.get $unk)
       (then (drop (call $ole_release_local_interface (local.get $unk))))
       (else
+        (if (i32.eq (local.get $tymed) (i32.const 32))
+          (then (call $ole_free_metafile_picture (local.get $data))))
+        (if (i32.eq (local.get $tymed) (i32.const 64))
+          (then (drop (call $gdi_object_delete_full (local.get $data)))))
         ;; GetClipboardData returns borrowed system-owned handles. RichEdit can
         ;; wrap one in an fRelease STGMEDIUM while creating a static object;
         ;; consume the medium, but keep the clipboard's durable value alive.
@@ -6844,6 +7087,10 @@
       (then (local.set $data (call $ole_copy_hglobal (local.get $data)))))
     (if (i32.eq (local.get $tymed) (i32.const 2))
       (then (local.set $data (call $ole_wide_dup (local.get $data)))))
+    (if (i32.eq (local.get $tymed) (i32.const 32))
+      (then (local.set $data (call $ole_copy_metafile_picture (local.get $data)))))
+    (if (i32.eq (local.get $tymed) (i32.const 64))
+      (then (local.set $data (call $gdi_metafile_copy (local.get $data) (i32.const 7)))))
     (if (i32.and
           (i32.ne (call $gl32 (i32.add (local.get $src) (i32.const 4))) (i32.const 0))
           (i32.eqz (local.get $data)))
@@ -7460,11 +7707,19 @@
         (return (i32.const 0))))
     (i32.const 0x80040069)) ;; DV_E_TYMED
 
+  (func $ole_data_controlling_owner (param $obj i32) (result i32)
+    (local $w i32)
+    (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
+    (local.set $w (call $g2w (local.get $obj)))
+    (if (i32.ne (i32.load offset=8 (local.get $w)) (i32.const 4))
+      (then (return (i32.const 0))))
+    (i32.load offset=32 (local.get $w)))
+
   (func $ole_create_data_object (param $formatetc i32) (param $medium i32) (result i32)
     (local $obj i32) (local $hr i32)
-    (local.set $obj (call $heap_alloc (i32.const 32)))
+    (local.set $obj (call $heap_alloc (i32.const 36)))
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $obj)) (i32.const 32))
+    (call $zero_memory (call $g2w (local.get $obj)) (i32.const 36))
     (call $gs32 (local.get $obj) (global.get $DX_VTBL_OLE_DATAOBJECT))
     (call $gs32 (i32.add (local.get $obj) (i32.const 4)) (i32.const 1))
     (call $gs32 (i32.add (local.get $obj) (i32.const 8)) (i32.const 4))
@@ -8099,7 +8354,15 @@
     (local.get $obj))
 
   (func $handle_IDataObject_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $iid i32)
+    (local $iid i32) (local $owner i32)
+    (local.set $owner (call $ole_data_controlling_owner (local.get $arg0)))
+    (if (local.get $owner)
+      (then
+        (i32.store (global.get $reg_base) (call $ole_static_query_interface
+          (local.get $owner) (local.get $arg1) (local.get $arg2)))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (if (i32.eqz (local.get $arg2)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (local.set $iid (select (call $gl32 (local.get $arg1)) (i32.const 0) (local.get $arg1)))
     (if (i32.or (i32.eqz (local.get $iid)) (i32.eq (local.get $iid) (i32.const 0x0000010E)))
@@ -8191,6 +8454,16 @@
 
   (func $handle_IDataObject_SetData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $retired_out i32) (local $retired i32) (local $hr i32) (local $data_iface i32)
+    (local $owner i32)
+    (local.set $owner (call $ole_data_controlling_owner (local.get $arg0)))
+    (if (local.get $owner)
+      (then
+        ;; The cache is the sole media owner for every face of this object.
+        ;; Reuse its guest AddRef/retirement transaction and identical ABI.
+        (call $handle_IOleCache_SetData (i32.add (local.get $owner) (i32.const 52))
+          (local.get $arg1) (local.get $arg2) (local.get $arg3)
+          (local.get $arg4) (local.get $name_ptr))
+        (return)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else
@@ -8590,6 +8863,7 @@
   ;; 34: CoSetState AddRef/Release replacement transaction;
   ;; 35: CoGetState returned-reference AddRef.
   ;; 36: DoDragDrop source/target modal callback sequence.
+  ;; 37: COMCTL32 ImageList_Read through a DLL-private IStream (09a9).
   (func $ole_guest_callback_continue
     (local $ctx i32) (local $operation i32) (local $stage i32)
     (local $root i32) (local $p1 i32) (local $p2 i32) (local $p3 i32) (local $p4 i32)
@@ -8605,6 +8879,10 @@
     (if (i32.eq (local.get $operation) (i32.const 36))
       (then
         (call $ole_drag_continue (local.get $ctx) (local.get $root))
+        (return)))
+    (if (i32.eq (local.get $operation) (i32.const 37))
+      (then
+        (call $image_list_read_continue (local.get $ctx) (local.get $p1))
         (return)))
     (if (i32.eq (local.get $operation) (i32.const 1))
       (then
@@ -9509,11 +9787,22 @@
   )
 
   (func $ole_static_set_extent (param $root i32) (param $aspect i32) (param $size i32) (result i32)
+    (local $root_w i32) (local $size_w i32) (local $picture i32)
     (if (i32.eqz (local.get $size)) (then (return (i32.const 0x80004003))))
     (if (i32.ne (local.get $aspect) (i32.const 1)) (then (return (i32.const 0x8004006B))))
-    (call $gs32 (i32.add (local.get $root) (i32.const 40)) (call $gl32 (local.get $size)))
-    (call $gs32 (i32.add (local.get $root) (i32.const 44)) (call $gl32 (i32.add (local.get $size) (i32.const 4))))
-    (call $gs32 (i32.add (local.get $root) (i32.const 48)) (i32.const 1))
+    (local.set $root_w (call $g2w (local.get $root)))
+    (local.set $size_w (call $g2w (local.get $size)))
+    (i32.store offset=40 (local.get $root_w) (i32.load (local.get $size_w)))
+    (i32.store offset=44 (local.get $root_w) (i32.load offset=4 (local.get $size_w)))
+    (i32.store offset=48 (local.get $root_w) (i32.const 1))
+    ;; Extents change the suggested display size, not the WMF record stream.
+    ;; The live face borrows this wrapper; previously returned copies do not.
+    (local.set $picture (i32.load offset=168 (local.get $root_w)))
+    (if (local.get $picture)
+      (then
+        (local.set $picture (call $g2w (local.get $picture)))
+        (i32.store offset=4 (local.get $picture) (i32.load (local.get $size_w)))
+        (i32.store offset=8 (local.get $picture) (i32.load offset=4 (local.get $size_w)))))
     (i32.const 0)
   )
 
@@ -9553,13 +9842,16 @@
   ;; Drop every format a data object is holding, keeping the array allocation.
   (func $ole_data_clear_entries (param $obj i32)
     (local $entries i32) (local $i i32) (local $entry i32)
+    (local $borrowed i32)
     (if (i32.eqz (local.get $obj)) (then (return)))
+    (local.set $borrowed (call $ole_data_controlling_owner (local.get $obj)))
     (local.set $entries (call $gl32 (i32.add (local.get $obj) (i32.const 12))))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i)
         (call $gl32 (i32.add (local.get $obj) (i32.const 16)))))
       (local.set $entry (i32.add (local.get $entries) (i32.shl (local.get $i) (i32.const 5))))
-      (call $ole_release_medium (i32.add (local.get $entry) (i32.const 20)))
+      (if (i32.eqz (local.get $borrowed))
+        (then (call $ole_release_medium (i32.add (local.get $entry) (i32.const 20)))))
       (call $ole_format_free (local.get $entry))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -9572,7 +9864,7 @@
   ;; CF_METAFILEPICT it takes from an object before writing it into RTF, and
   ;; while the export was missing the save stopped there with an empty file.
   (func $handle_OleDuplicateData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $copy i32) (local $mf i32)
+    (local $copy i32)
     (if (i32.eqz (local.get $arg0))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
@@ -9580,23 +9872,19 @@
         (return)))
     (if (i32.eq (local.get $arg1) (i32.const 3))           ;; CF_METAFILEPICT
       (then
-        (local.set $mf (call $gdi_metafile_copy
-          (call $gl32 (i32.add (local.get $arg0) (i32.const 12))) (i32.const 6)))
-        (if (local.get $mf)
-          (then
-            (local.set $copy (call $heap_alloc (i32.const 16)))
-            (if (local.get $copy)
-              (then
-                (memory.copy (call $g2w (local.get $copy)) (call $g2w (local.get $arg0))
-                  (i32.const 16))
-                (call $gs32 (i32.add (local.get $copy) (i32.const 12)) (local.get $mf)))
-              (else (drop (call $gdi_object_delete_full (local.get $mf))))))))
+        (local.set $copy (call $ole_copy_metafile_picture (local.get $arg0))))
       (else
         (if (i32.eq (local.get $arg1) (i32.const 14))      ;; CF_ENHMETAFILE
           (then (local.set $copy (call $gdi_metafile_copy (local.get $arg0) (i32.const 7))))
           ;; Everything else this transfer layer produces is a memory handle,
           ;; and its size is the allocation's own.
           (else (local.set $copy (call $ole_copy_hglobal (local.get $arg0)))))))
+    ;; Copied memory (including the METAFILEPICT wrapper) is an HGLOBAL,
+    ;; not a private heap pointer. Publish through the Global* ownership
+    ;; marker so callers can GlobalLock/GlobalSize/GlobalFree it. Enhanced
+    ;; metafiles remain GDI handles and must not receive a heap marker.
+    (if (i32.ne (local.get $arg1) (i32.const 14))
+      (then (call $heap_global_mark (local.get $copy))))
     (i32.store offset=0 (global.get $reg_base) (local.get $copy))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
@@ -9623,10 +9911,13 @@
     (if (i32.or (i32.le_s (local.get $width) (i32.const 0))
                 (i32.le_s (local.get $height) (i32.const 0)))
       (then (return (i32.const 0))))
+    ;; A clipboard metafile supplies the logical window; its player chooses
+    ;; the viewport (MS-WMF 3.1.3). Recording the original pixel viewport here
+    ;; would override a container's requested size during playback.
     ;; header 18 + SetMapMode 8 + SetWindowOrg 10 + SetWindowExt 10 +
-    ;; SetViewportExt 10 + STRETCHDIB (28 + DIB) + EOF 6, padded to a word.
+    ;; STRETCHDIB (28 + DIB) + EOF 6, padded to a word.
     (local.set $total (i32.and
-      (i32.add (i32.add (local.get $dib_size) (i32.const 90)) (i32.const 1))
+      (i32.add (i32.add (local.get $dib_size) (i32.const 80)) (i32.const 1))
       (i32.const -2)))
     (local.set $bytes (call $heap_alloc (local.get $total)))
     (if (i32.eqz (local.get $bytes)) (then (return (i32.const 0))))
@@ -9647,11 +9938,7 @@
     (i32.store16 offset=40 (local.get $p) (i32.const 0x020C)) ;; SetWindowExt
     (i32.store16 offset=42 (local.get $p) (local.get $height))
     (i32.store16 offset=44 (local.get $p) (local.get $width))
-    (i32.store offset=46 (local.get $p) (i32.const 5))
-    (i32.store16 offset=50 (local.get $p) (i32.const 0x020E)) ;; SetViewportExt
-    (i32.store16 offset=52 (local.get $p) (local.get $height))
-    (i32.store16 offset=54 (local.get $p) (local.get $width))
-    (local.set $record (i32.add (local.get $p) (i32.const 56)))
+    (local.set $record (i32.add (local.get $p) (i32.const 46)))
     (i32.store (local.get $record)
       (i32.shr_u (i32.add (local.get $dib_size) (i32.const 28)) (i32.const 1)))
     (i32.store16 offset=4 (local.get $record) (i32.const 0x0F43)) ;; META_STRETCHDIB
@@ -9684,21 +9971,44 @@
   ;; \pict, so a saved document lost every picture in it.
   ;;
   ;; The face is a real data object of ours, created once and kept at root+164,
-  ;; so QueryInterface returns the same pointer every time as COM requires. Its
-  ;; contents are rebuilt from the cache here and on every cache change, and each
-  ;; medium is copied, so releasing this object can never free bytes the cache
-  ;; still owns.
+  ;; so repeated QueryInterface can return it without mutating its data. Cache
+  ;; changes explicitly refresh the face; interface navigation does not.
   (func $ole_static_data_object (param $root i32) (result i32)
+    (local $child i32)
+    (if (i32.eqz (local.get $root)) (then (return (i32.const 0))))
+    (local.set $child (call $gl32 (i32.add (local.get $root) (i32.const 164))))
+    (if (local.get $child) (then (return (local.get $child))))
+    (call $ole_static_refresh_data_object (local.get $root)))
+
+  (func $ole_static_refresh_data_object (param $root i32) (result i32)
     (local $child i32) (local $entries i32) (local $count i32) (local $i i32)
-    (local $entry i32) (local $dib i32)
+    (local $entry i32) (local $dib i32) (local $medium i32) (local $medium_w i32)
+    (local $old_picture i32) (local $created i32) (local $hr i32) (local $has_metafile i32) (local $entry_w i32)
     (if (i32.eqz (local.get $root)) (then (return (i32.const 0))))
     (local.set $child (call $gl32 (i32.add (local.get $root) (i32.const 164))))
     (if (i32.eqz (local.get $child))
       (then
         (local.set $child (call $ole_create_data_object (i32.const 0) (i32.const 0)))
         (if (i32.eqz (local.get $child)) (then (return (i32.const 0))))
-        (call $gs32 (i32.add (local.get $root) (i32.const 164)) (local.get $child)))
+        ;; Do not publish a lazily constructed face until all descriptors and
+        ;; its derived presentation exist. A failed QI must be retryable.
+        (local.set $created (i32.const 1))
+        (call $gs32 (i32.add (local.get $child) (i32.const 32)) (local.get $root)))
       (else (call $ole_data_clear_entries (local.get $child))))
+    ;; This is a cache mutation (repeated QI returns the existing face without
+    ;; refreshing). Discard the derived picture after detaching its borrowed
+    ;; descriptor, so new GetData calls cannot observe obsolete DIB pixels.
+    (local.set $old_picture (call $gl32 (i32.add (local.get $root) (i32.const 168))))
+    (call $gs32 (i32.add (local.get $root) (i32.const 168)) (i32.const 0))
+    (call $ole_free_metafile_picture (local.get $old_picture))
+    ;; Copy only descriptors into this live view. No second reference is
+    ;; acquired: external face references already retain the owning root.
+    ;; A temporary descriptor lets the ordinary transfer helper consume it
+    ;; without clearing the cache's canonical STGMEDIUM.
+    (block $failed
+    (local.set $medium (call $heap_alloc (i32.const 12)))
+    (br_if $failed (i32.eqz (local.get $medium)))
+    (local.set $medium_w (call $g2w (local.get $medium)))
     (local.set $entries (call $gl32 (i32.add (local.get $root) (i32.const 100))))
     (local.set $count (call $gl32 (i32.add (local.get $root) (i32.const 104))))
     (block $done (loop $scan
@@ -9706,25 +10016,58 @@
       (local.set $entry (i32.add (local.get $entries) (i32.mul (local.get $i) (i32.const 40))))
       ;; An empty cache slot is one that was declared by IOleCache::Cache but
       ;; never filled; it has no bytes to offer and must not be advertised.
-      (if (call $gl32 (i32.add (local.get $entry) (i32.const 28)))
+      (local.set $entry_w (call $g2w (local.get $entry)))
+      (if (i32.load offset=28 (local.get $entry_w))
         (then
-          (drop (call $ole_data_set_entry (local.get $child)
+          (memory.copy (local.get $medium_w)
+            (i32.add (local.get $entry_w) (i32.const 28)) (i32.const 12))
+          (local.set $hr (call $ole_data_set_entry (local.get $child)
             (i32.add (local.get $entry) (i32.const 8))
-            (i32.add (local.get $entry) (i32.const 28)) (i32.const 0)))
+            (local.get $medium) (i32.const 1)))
+          (br_if $failed (local.get $hr))
+          ;; Prefer an explicit presentation with the same FORMATETC as our
+          ;; synthesized content WMF. Replacing this borrowed entry through
+          ;; the ordinary owning helper would also retire canonical media.
+          (if (i32.and
+                (i32.and
+                  (i32.eq (i32.load16_u offset=8 (local.get $entry_w)) (i32.const 3))
+                  (i32.eq (i32.load offset=28 (local.get $entry_w)) (i32.const 32)))
+                (i32.and
+                  (i32.eqz (i32.load offset=12 (local.get $entry_w)))
+                  (i32.and
+                    (i32.eq (i32.load offset=16 (local.get $entry_w)) (i32.const 1))
+                    (i32.eq (i32.load offset=20 (local.get $entry_w)) (i32.const -1)))))
+            (then (local.set $has_metafile (i32.const 1))))
           ;; Remember the first cached DIB; the metafile below is built from it.
           (if (i32.and (i32.eqz (local.get $dib))
-                (i32.eq (call $gl16 (i32.add (local.get $entry) (i32.const 8))) (i32.const 8)))
+                (i32.eq (i32.load16_u offset=8 (local.get $entry_w)) (i32.const 8)))
             (then (local.set $dib
-              (call $gl32 (i32.add (local.get $entry) (i32.const 32))))))))
+              (i32.load offset=32 (local.get $entry_w)))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
-    (if (local.get $dib) (then (drop (call $ole_static_offer_metafile
-      (local.get $root) (local.get $child) (local.get $dib)))))
-    (local.get $child))
+    (if (i32.and (i32.ne (local.get $dib) (i32.const 0)) (i32.eqz (local.get $has_metafile))) (then
+      (br_if $failed (call $ole_static_offer_metafile
+        (local.get $root) (local.get $child) (local.get $dib)))))
+    (call $heap_free (local.get $medium))
+    (if (local.get $created)
+      (then (call $gs32 (i32.add (local.get $root) (i32.const 164)) (local.get $child))))
+    (return (local.get $child)))
+    ;; Descriptors borrow media from the canonical cache. Keep that owner
+    ;; attached while clearing them; ordinary Release would release the root.
+    (if (local.get $medium) (then (call $heap_free (local.get $medium))))
+    (call $ole_data_clear_entries (local.get $child))
+    (local.set $old_picture (call $gl32 (i32.add (local.get $root) (i32.const 168))))
+    (call $gs32 (i32.add (local.get $root) (i32.const 168)) (i32.const 0))
+    (call $ole_free_metafile_picture (local.get $old_picture))
+    (if (local.get $created)
+      (then
+        (local.set $entries (call $gl32 (i32.add (local.get $child) (i32.const 12))))
+        (if (local.get $entries) (then (call $heap_free (local.get $entries))))
+        (call $heap_free (local.get $child))))
+    (i32.const 0))
 
-  ;; Advertise the cached picture as CF_METAFILEPICT too. Built once and kept on
-  ;; the handler, so a rebuilt face re-offers the same metafile instead of
-  ;; leaking a new one each time.
+  ;; Advertise the cached picture as CF_METAFILEPICT too. The root owns the
+  ;; derived presentation until a cache mutation invalidates it or it dies.
   (func $ole_static_offer_metafile
         (param $root i32) (param $child i32) (param $dib i32) (result i32)
     (local $pict i32) (local $formatetc i32) (local $medium i32) (local $hr i32)
@@ -9760,11 +10103,29 @@
     (local.get $hr))
 
   (func $ole_static_query_interface (param $root i32) (param $iid i32) (param $out i32) (result i32)
-    (local $data1 i32) (local $iface i32) (local $owner i32)
+    (local $data1 i32) (local $iface i32) (local $owner i32) (local $iid_w i32)
     (if (i32.eqz (local.get $out)) (then (return (i32.const 0x80004003))))
     (call $gs32 (local.get $out) (i32.const 0))
     (if (i32.eqz (local.get $iid)) (then (return (i32.const 0x80004003))))
-    (local.set $data1 (call $gl32 (local.get $iid)))
+    (local.set $iid_w (call $g2w (local.get $iid)))
+    (local.set $data1 (i32.load (local.get $iid_w)))
+    ;; Translate once and validate all remaining GUID bytes before selecting
+    ;; an interface or creating the lazily allocated IDataObject face.
+    (if (i32.eq (local.get $data1) (i32.const 0x7FD52380))
+      (then
+        (if (i32.or
+              (i32.ne (i32.load offset=4 (local.get $iid_w)) (i32.const 0x101B4E07))
+              (i32.or
+                (i32.ne (i32.load offset=8 (local.get $iid_w)) (i32.const 0x00082DAE))
+                (i32.ne (i32.load offset=12 (local.get $iid_w)) (i32.const 0x13C72E2B))))
+          (then (return (i32.const 0x80004002)))))
+      (else
+        (if (i32.or
+              (i32.ne (i32.load offset=4 (local.get $iid_w)) (i32.const 0))
+              (i32.or
+                (i32.ne (i32.load offset=8 (local.get $iid_w)) (i32.const 0x000000C0))
+                (i32.ne (i32.load offset=12 (local.get $iid_w)) (i32.const 0x46000000))))
+          (then (return (i32.const 0x80004002))))))
     (if (i32.or (i32.eqz (local.get $data1)) (i32.eq (local.get $data1) (i32.const 0x00000112)))
       (then (local.set $iface (local.get $root))))
     (if (i32.or
@@ -9788,24 +10149,20 @@
           (i32.eq (call $gl32 (i32.add (local.get $root) (i32.const 24)))
                   (i32.const 0xF9043C85)))
       (then (local.set $iface (i32.add (local.get $root) (i32.const 176)))))
-    ;; IViewObject (10D), IViewObject2 (127) and the cache-control interface
-    ;; (11D) all sit on the same vtable -- IViewObject2 only adds GetExtent, and
-    ;; this vtable is the 2 flavour, which is why it is named for it. Leaving 127
-    ;; out meant an MFC container asking for the interface it actually wants got
-    ;; E_NOINTERFACE from an object that implements it, and turned that into a
-    ;; COleException instead of inserting the object it had just created.
+    ;; IViewObject2 (127) extends IViewObject (10D) with GetExtent and shares
+    ;; this view vtable. IID 11D is IOleLink, whose unrelated methods cannot
+    ;; use a view pointer; this static embedded handler does not implement it.
     (if (i32.or
           (i32.eq (local.get $data1) (i32.const 0x0000010D))
-          (i32.or
-            (i32.eq (local.get $data1) (i32.const 0x00000127))
-            (i32.eq (local.get $data1) (i32.const 0x0000011D))))
+          (i32.eq (local.get $data1) (i32.const 0x00000127)))
       (then (local.set $iface (i32.add (local.get $root) (i32.const 56)))))
-    ;; IID_IDataObject is served by a separate object, so the reference the
-    ;; caller is handed belongs to that object and not to the handler.
+    ;; IID_IDataObject has a separate face but delegates its reference to the
+    ;; controlling root. Allocation failure is not an unsupported interface.
     (local.set $owner (local.get $root))
     (if (i32.eq (local.get $data1) (i32.const 0x0000010E))
       (then
         (local.set $iface (call $ole_static_data_object (local.get $root)))
+        (if (i32.eqz (local.get $iface)) (then (return (i32.const 0x8007000E))))
         (local.set $owner (local.get $iface))))
     (if (i32.eqz (local.get $iface)) (then (return (i32.const 0x80004002))))
     (call $gs32 (local.get $out) (local.get $iface))
@@ -10241,9 +10598,9 @@
   (func $handle_IPersistStorage_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_static_query_interface (call $ole_static_root (local.get $arg0)) (local.get $arg1) (local.get $arg2)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
-  (func $handle_IPersistStorage_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $handle_ole_static_interface_addref (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_obj_addref (call $ole_static_root (local.get $arg0)))) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
-  (func $handle_IPersistStorage_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $handle_ole_static_interface_release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $ole_static_release_api (call $ole_static_root (local.get $arg0)) (i32.const 8)))
   (func $handle_IPersistStorage_GetClassID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $root i32) (local.set $root (call $ole_static_root (local.get $arg0)))
@@ -10713,7 +11070,7 @@
     ;; the cache changes — a container holding the pointer sees the new formats
     ;; rather than the ones the object had when it first asked.
     (if (call $gl32 (i32.add (local.get $root) (i32.const 164)))
-      (then (drop (call $ole_static_data_object (local.get $root)))))
+      (then (drop (call $ole_static_refresh_data_object (local.get $root)))))
     (if (call $gl32 (i32.add (local.get $root) (i32.const 92)))
       (then (call $ole_release_medium (i32.add (local.get $root) (i32.const 60)))))
     (call $ole_format_free (i32.add (local.get $root) (i32.const 72)))
@@ -11214,11 +11571,6 @@
   (func $handle_IOleCache_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_static_query_interface (call $ole_static_root (local.get $arg0)) (local.get $arg1) (local.get $arg2)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
-  (func $handle_IOleCache_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $ole_obj_addref (call $ole_static_root (local.get $arg0))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
-  (func $handle_IOleCache_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $ole_static_release_api (call $ole_static_root (local.get $arg0)) (i32.const 8)))
   (func $handle_IOleCache_Cache (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_cache_add
       (call $ole_static_root (local.get $arg0)) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
@@ -11285,38 +11637,164 @@
             (return)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
-  ;; IViewObject renders the cached CF_DIB presentation retained by IOleCache.
+  ;; Play a cached WMF picture or enhanced-metafile handle into the caller DC.
+  ;; MS-WMF 3.1.3: the picture supplies the window, the player the viewport.
+  ;; Bounds are in the caller's logical coordinates, not screen coordinates.
+  ;; Keep its device origin and clip intact; restore every DC field afterward.
+  ;; picture/bounds are translated addresses; enhanced_handle is opaque.
+  (func $ole_draw_cached_metafile (param $hdc i32) (param $picture i32)
+        (param $bounds i32) (param $enhanced_handle i32) (result i32)
+    (local $dc i32) (local $left i32) (local $top i32)
+    (local $right i32) (local $bottom i32) (local $saved i32) (local $ok i32)
+    (local $target i32) (local $target_w i32)
+    (if (i32.eqz (local.get $enhanced_handle))
+      (then
+        (if (i32.ne (i32.load (local.get $picture)) (i32.const 8))
+          (then (return (i32.const 0x80040140)))))) ;; VIEW_E_DRAW
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0x80040140))))
+    (local.set $left (call $gdi_map_coordinate (i32.load (local.get $bounds))
+      (load.field.memarg GdiDcState window_org_x (local.get $dc))
+      (load.field.memarg GdiDcState window_ext_x (local.get $dc))
+      (load.field.memarg GdiDcState viewport_org_x (local.get $dc))
+      (load.field.memarg GdiDcState viewport_ext_x (local.get $dc))))
+    (local.set $right (call $gdi_map_coordinate (i32.load offset=8 (local.get $bounds))
+      (load.field.memarg GdiDcState window_org_x (local.get $dc))
+      (load.field.memarg GdiDcState window_ext_x (local.get $dc))
+      (load.field.memarg GdiDcState viewport_org_x (local.get $dc))
+      (load.field.memarg GdiDcState viewport_ext_x (local.get $dc))))
+    (local.set $top (call $gdi_map_coordinate (i32.load offset=4 (local.get $bounds))
+      (load.field.memarg GdiDcState window_org_y (local.get $dc))
+      (load.field.memarg GdiDcState window_ext_y (local.get $dc))
+      (load.field.memarg GdiDcState viewport_org_y (local.get $dc))
+      (load.field.memarg GdiDcState viewport_ext_y (local.get $dc))))
+    (local.set $bottom (call $gdi_map_coordinate (i32.load offset=12 (local.get $bounds))
+      (load.field.memarg GdiDcState window_org_y (local.get $dc))
+      (load.field.memarg GdiDcState window_ext_y (local.get $dc))
+      (load.field.memarg GdiDcState viewport_org_y (local.get $dc))
+      (load.field.memarg GdiDcState viewport_ext_y (local.get $dc))))
+    (if (i32.or (i32.eq (local.get $left) (local.get $right))
+          (i32.eq (local.get $top) (local.get $bottom)))
+      (then (return (i32.const 0x8004000D)))) ;; OLE_E_INVALIDRECT
+    (if (local.get $enhanced_handle)
+      (then
+        ;; The native EMF player owns SaveDC/RestoreDC and composes its records
+        ;; into this device-space target. Device origin remains in the DC.
+        (local.set $target (call $heap_alloc (i32.const 16)))
+        (if (i32.eqz (local.get $target)) (then (return (i32.const 0x8007000E))))
+        (local.set $target_w (call $g2w (local.get $target)))
+        (i32.store (local.get $target_w) (local.get $left))
+        (i32.store offset=4 (local.get $target_w) (local.get $top))
+        (i32.store offset=8 (local.get $target_w) (local.get $right))
+        (i32.store offset=12 (local.get $target_w) (local.get $bottom))
+        (local.set $ok (call $gdi_metafile_play_emf
+          (local.get $hdc) (local.get $enhanced_handle) (local.get $target_w)))
+        (call $heap_free (local.get $target))
+        (return (if (result i32) (local.get $ok)
+          (then (i32.const 0)) (else (i32.const 0x80040140))))))
+    (local.set $saved (call $gdi_dc_save (local.get $hdc)))
+    (if (i32.eqz (local.get $saved)) (then (return (i32.const 0x80040140))))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 36) (i32.const 8) (i32.const 1)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 40) (i32.const 0) (i32.const 0)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 44) (i32.const 0) (i32.const 0)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 48) (i32.const 1) (i32.const 1)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 52) (i32.const 1) (i32.const 1)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 56) (local.get $left) (i32.const 0)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 60) (local.get $top) (i32.const 0)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 64)
+      (i32.sub (local.get $right) (local.get $left)) (i32.const 1)))
+    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 68)
+      (i32.sub (local.get $bottom) (local.get $top)) (i32.const 1)))
+    (local.set $ok (call $gdi_metafile_play_wmf (local.get $hdc)
+      (i32.load offset=12 (local.get $picture)) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (drop (call $gdi_dc_restore (local.get $hdc) (local.get $saved)))
+    (if (result i32) (local.get $ok)
+      (then (i32.const 0)) (else (i32.const 0x80040140))))
+
+  ;; Shared cached-presentation draw for OleDraw and IViewObject::Draw.
+  ;; Inspect the canonical cache, not just its legacy CF_DIB mirror.
+  (func $ole_static_draw (param $root i32) (param $aspect i32) (param $index i32)
+        (param $hdc i32) (param $bounds_guest i32) (result i32)
+    (local $root_wa i32) (local $entries i32) (local $count i32) (local $entry i32)
+    (local $i i32) (local $format i32) (local $medium i32) (local $data i32)
+    (local $bounds i32) (local $colors i32) (local $bits i32) (local $ok i32)
+    (if (i32.eqz (local.get $root)) (then (return (i32.const 0x80004003))))
+    ;; Static, non-windowless views require a rectangle and support only the
+    ;; ordinary single DVASPECT values and whole-object lindex (-1).
+    (if (i32.eqz (local.get $bounds_guest)) (then (return (i32.const 0x80070057))))
+    (if (i32.ne (local.get $index) (i32.const -1))
+      (then (return (i32.const 0x80040068)))) ;; DV_E_LINDEX
+    (if (i32.eqz (i32.or
+          (i32.or (i32.eq (local.get $aspect) (i32.const 1))
+                  (i32.eq (local.get $aspect) (i32.const 2)))
+          (i32.or (i32.eq (local.get $aspect) (i32.const 4))
+                  (i32.eq (local.get $aspect) (i32.const 8)))))
+      (then (return (i32.const 0x8004006B)))) ;; DV_E_DVASPECT
+    (local.set $root_wa (call $g2w (local.get $root)))
+    (local.set $bounds (call $g2w (local.get $bounds_guest)))
+    (if (i32.or
+          (i32.eq (i32.load (local.get $bounds)) (i32.load offset=8 (local.get $bounds)))
+          (i32.eq (i32.load offset=4 (local.get $bounds)) (i32.load offset=12 (local.get $bounds))))
+      (then (return (i32.const 0x8004000D)))) ;; OLE_E_INVALIDRECT
+    (if (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+      (then (return (i32.const 0x80040140)))) ;; VIEW_E_DRAW (also covers DIBs)
+    (local.set $count (i32.load offset=104 (local.get $root_wa)))
+    (local.set $entries (call $g2w (i32.load offset=100 (local.get $root_wa))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $entry (i32.add (local.get $entries) (i32.mul (local.get $i) (i32.const 40))))
+      (if (i32.and
+            (i32.eq (i32.load offset=16 (local.get $entry)) (local.get $aspect))
+            (i32.eq (i32.load offset=20 (local.get $entry)) (local.get $index)))
+        (then
+          (local.set $format (i32.load16_u offset=8 (local.get $entry)))
+          (local.set $medium (i32.load offset=28 (local.get $entry)))
+          (if (i32.load offset=32 (local.get $entry))
+            (then
+              ;; TYMED_ENHMF contains a GDI handle, not a guest address.
+              (if (i32.and (i32.eq (local.get $format) (i32.const 14))
+                    (i32.eq (local.get $medium) (i32.const 64)))
+                (then (return (call $ole_draw_cached_metafile
+                  (local.get $hdc) (i32.const 0) (local.get $bounds)
+                  (i32.load offset=32 (local.get $entry))))))
+              (local.set $data (call $g2w (i32.load offset=32 (local.get $entry))))
+              (if (i32.and (i32.eq (local.get $format) (i32.const 3))
+                    (i32.eq (local.get $medium) (i32.const 32)))
+                (then (return (call $ole_draw_cached_metafile
+                  (local.get $hdc) (local.get $data) (local.get $bounds) (i32.const 0)))))
+              (if (i32.and (i32.eq (local.get $format) (i32.const 8))
+                    (i32.eq (local.get $medium) (i32.const 1)))
+                (then
+                  (local.set $colors (i32.load offset=32 (local.get $data)))
+                  (if (i32.and (i32.eqz (local.get $colors))
+                        (i32.le_u (i32.load16_u offset=14 (local.get $data)) (i32.const 8)))
+                    (then (local.set $colors (i32.shl (i32.const 1)
+                      (i32.load16_u offset=14 (local.get $data))))))
+                  (local.set $bits (i32.add (local.get $data)
+                    (i32.add (i32.load (local.get $data)) (i32.shl (local.get $colors) (i32.const 2)))))
+                  (local.set $ok (call $gdi_native_stretch_dib_bits (local.get $hdc)
+                    (i32.load (local.get $bounds)) (i32.load offset=4 (local.get $bounds))
+                    (i32.sub (i32.load offset=8 (local.get $bounds)) (i32.load (local.get $bounds)))
+                    (i32.sub (i32.load offset=12 (local.get $bounds)) (i32.load offset=4 (local.get $bounds)))
+                    (i32.const 0) (i32.const 0)
+                    (i32.load offset=4 (local.get $data)) (i32.load offset=8 (local.get $data))
+                    (local.get $bits) (local.get $data) (i32.const 0) (i32.const 0x00CC0020)))
+                  (return (if (result i32) (i32.eq (local.get $ok) (i32.const -1))
+                    (then (i32.const 0x80040140)) (else (i32.const 0))))))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0x80040007)) ;; OLE_E_BLANK: no drawable presentation for this aspect
+
+  ;; IViewObject renders presentations retained by IOleCache.
   (func $handle_IViewObject_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $ole_static_query_interface (call $ole_static_root (local.get $arg0)) (local.get $arg1) (local.get $arg2)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
-  (func $handle_IViewObject_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $ole_obj_addref (call $ole_static_root (local.get $arg0)))) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
-  (func $handle_IViewObject_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $ole_static_release_api (call $ole_static_root (local.get $arg0)) (i32.const 8)))
   (func $handle_IViewObject_Draw (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $root i32) (local $dib i32) (local $bounds i32) (local $width i32) (local $height i32) (local $bits i32) (local $colors i32)
-    (local.set $root (call $ole_static_root (local.get $arg0)))
-    (local.set $dib (call $gl32 (i32.add (local.get $root) (i32.const 64))))
-    (local.set $bounds (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
-    (if (i32.or
-          (i32.eqz (call $gl32 (i32.add (local.get $root) (i32.const 92))))
-          (i32.or (i32.eqz (local.get $dib)) (i32.eqz (local.get $bounds))))
-      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)))
-      (else
-        (local.set $width (call $gl32 (i32.add (local.get $dib) (i32.const 4))))
-        (local.set $height (call $gl32 (i32.add (local.get $dib) (i32.const 8))))
-        (local.set $colors (i32.const 0))
-        (if (i32.le_u (call $gl16 (i32.add (local.get $dib) (i32.const 14))) (i32.const 8))
-          (then (local.set $colors (i32.shl (i32.const 1) (call $gl16 (i32.add (local.get $dib) (i32.const 14)))))))
-        (local.set $bits (i32.add (local.get $dib) (i32.add (call $gl32 (local.get $dib)) (i32.mul (local.get $colors) (i32.const 4)))))
-        (drop (call $host_gdi_stretch_dib_bits
-          (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
-          (call $gl32 (local.get $bounds)) (call $gl32 (i32.add (local.get $bounds) (i32.const 4)))
-          (i32.sub (call $gl32 (i32.add (local.get $bounds) (i32.const 8))) (call $gl32 (local.get $bounds)))
-          (i32.sub (call $gl32 (i32.add (local.get $bounds) (i32.const 12))) (call $gl32 (i32.add (local.get $bounds) (i32.const 4))))
-          (i32.const 0) (i32.const 0) (local.get $width) (local.get $height)
-          (call $g2w (local.get $bits)) (call $g2w (local.get $dib)) (i32.const 0) (i32.const 0x00CC0020)))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (local $stack i32)
+    (local.set $stack (call $g2w (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (call $ole_static_draw
+      (call $ole_static_root (local.get $arg0)) (local.get $arg1) (local.get $arg2)
+      (i32.load offset=28 (local.get $stack)) (i32.load offset=32 (local.get $stack))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 48))))
   (func $handle_IViewObject_GetColorSet (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $out i32) (local.set $out (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
@@ -11572,14 +12050,14 @@
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
     ;; CF_TEXT is stored without its terminator, but a paste target reading an
     ;; HGLOBAL expects one, so the copy is one byte longer than the text.
-    (if (global.get $clipboard_len)
+    (if (global.get $clipboard_text_present)
       (then
         (if (i32.eqz (call $ole_clipboard_wrap_format (local.get $obj) (i32.const 1)
               (global.get $clipboard_ptr)
               (i32.add (global.get $clipboard_len) (i32.const 1))))
           (then (local.set $added (i32.const 1))))))
     (if (i32.and (i32.ne (global.get $clipboard_rtf_format_id) (i32.const 0))
-                 (i32.ne (global.get $clipboard_rtf_len) (i32.const 0)))
+                 (i32.ne (global.get $clipboard_rtf_present) (i32.const 0)))
       (then
         (if (i32.eqz (call $ole_clipboard_wrap_format (local.get $obj)
               (global.get $clipboard_rtf_format_id)
@@ -11734,6 +12212,11 @@
         (br $cols)))
       (local.set $y (i32.add (local.get $y) (i32.const 1)))
       (br $rows)))
+    ;; GetClipboardData hands this out as the CF_DIB HGLOBAL, and GlobalLock
+    ;; accepts only GlobalAlloc provenance (bf45d4a68). Unmarked, the lock
+    ;; returned NULL and Paint's Paste reported "Error getting the Clipboard
+    ;; Data!" — the same mark $clipboard_store_binary_data gives its copy.
+    (call $heap_global_mark (local.get $dst_g))
     (global.set $clipboard_binary_format (i32.const 8)) ;; CF_DIB
     (global.set $clipboard_binary_ptr (local.get $dst_g))
     (global.set $clipboard_binary_len (i32.wrap_i64 (local.get $size64)))
@@ -11751,8 +12234,13 @@
   ;; called through address zero. AddRef through the object's own vtable instead,
   ;; which means suspending the handler on the standard OLE continuation.
   (func $handle_OleSetClipboard (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $old i32) (local $new_guest i32) (local $ctx i32)
+    (local $old i32) (local $new_guest i32) (local $ctx i32) (local $new_local i32)
     (local.set $old (global.get $clipboard_ole_data_object))
+    ;; Retain before retiring the previous clipboard reference, including when
+    ;; the incoming and outgoing pointers identify the same local object.
+    (local.set $new_local (call $ole_clipboard_owner_is_local (local.get $arg0)))
+    (if (local.get $new_local)
+      (then (drop (call $ole_obj_addref (local.get $arg0)))))
     ;; Our own objects have no guest code to run, so their half stays inline.
     (if (call $ole_clipboard_owner_is_local (local.get $old))
       (then
@@ -11760,9 +12248,8 @@
         (local.set $old (i32.const 0))))
     (call $clipboard_clear_binary_data)
     (global.set $clipboard_ole_data_object (local.get $arg0))
-    (if (call $ole_clipboard_owner_is_local (local.get $arg0))
-      (then (drop (call $ole_obj_addref (local.get $arg0))))
-      (else
+    (if (i32.eqz (local.get $new_local))
+      (then
         (local.set $new_guest (local.get $arg0))
         ;; Paint currently publishes a DLL-private delayed-render object, so
         ;; materialize its newest bitmap eagerly. Applying that heuristic to
@@ -12550,29 +13037,9 @@
 
   ;; OleDraw(pUnknown, dwAspect, hdcDraw, lprcBounds). RichEdit uses this
   ;; helper rather than invoking IViewObject::Draw directly for cached static
-  ;; presentations. Dispatch the retained CF_DIB to the host GDI renderer.
+  ;; presentations. Share cache selection and rendering with IViewObject.
   (func $handle_OleDraw (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $root i32) (local $dib i32) (local $width i32) (local $height i32) (local $bits i32) (local $colors i32)
-    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg3)))
-      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
-      (else
-        (local.set $root (call $ole_static_root (local.get $arg0)))
-        (local.set $dib (call $gl32 (i32.add (local.get $root) (i32.const 64))))
-        (if (i32.or (i32.eqz (call $gl32 (i32.add (local.get $root) (i32.const 92)))) (i32.eqz (local.get $dib)))
-          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)))
-          (else
-            (local.set $width (call $gl32 (i32.add (local.get $dib) (i32.const 4))))
-            (local.set $height (call $gl32 (i32.add (local.get $dib) (i32.const 8))))
-            (local.set $colors (i32.const 0))
-            (if (i32.le_u (call $gl16 (i32.add (local.get $dib) (i32.const 14))) (i32.const 8))
-              (then (local.set $colors (i32.shl (i32.const 1) (call $gl16 (i32.add (local.get $dib) (i32.const 14)))))))
-            (local.set $bits (i32.add (local.get $dib) (i32.add (call $gl32 (local.get $dib)) (i32.mul (local.get $colors) (i32.const 4)))))
-            (drop (call $host_gdi_stretch_dib_bits
-              (local.get $arg2)
-              (call $gl32 (local.get $arg3)) (call $gl32 (i32.add (local.get $arg3) (i32.const 4)))
-              (i32.sub (call $gl32 (i32.add (local.get $arg3) (i32.const 8))) (call $gl32 (local.get $arg3)))
-              (i32.sub (call $gl32 (i32.add (local.get $arg3) (i32.const 12))) (call $gl32 (i32.add (local.get $arg3) (i32.const 4))))
-              (i32.const 0) (i32.const 0) (local.get $width) (local.get $height)
-              (call $g2w (local.get $bits)) (call $g2w (local.get $dib)) (i32.const 0) (i32.const 0x00CC0020)))
-            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=0 (global.get $reg_base) (call $ole_static_draw
+      (call $ole_static_root (local.get $arg0)) (local.get $arg1) (i32.const -1)
+      (local.get $arg2) (local.get $arg3)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))

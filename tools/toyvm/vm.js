@@ -39,7 +39,8 @@ async function buildModule(variant, opts = {}) {
   const suffix = (opts.hist ? '-hist' : '')
     + (opts.ipHist ? '-iphist' : '')
     + (opts.lazyFlags === false ? '-eager' : '')
-    + (opts.fuseCond === false ? '-genericcond' : '') + regionKey;
+    + (opts.fuseCond === false ? '-genericcond' : '')
+    + (opts.exportAll ? '-xall' : '') + regionKey;
   const file = `toyvm-${variant}${suffix}.wat`;
   const bytes = await compileWat(
     (f) => { if (f !== file) throw new Error(`unexpected file ${f}`); return wat; },
@@ -59,7 +60,7 @@ async function makeVm(variant, opts = {}) {
     : await buildModule(variant,
       { hist: !!opts.hist, ipHist: !!opts.ipHist,
         lazyFlags: opts.lazyFlags !== false, fuseCond: opts.fuseCond !== false,
-        regions: opts.regions || null });
+        exportAll: !!opts.exportAll, regions: opts.regions || null });
   // WHERE THE REGIONS LANDED IN THE TABLE. Regions are appended after the
   // ordinary handlers, so their index is HANDLERS.length + n -- but only as
   // measured against the table THIS module was built with. HANDLERS is rebuilt
@@ -167,8 +168,11 @@ async function makeVm(variant, opts = {}) {
     // Decode one instruction at cs:ip into the thread arena, then run it to the
     // `end` op. Returns false when the opcode is not implemented.
     stepOne() {
+      if (ex.get_cr0() < 0) return require('./paging-exec').step(self);
       const cs = get('cs'), ip = get('gip');
-      const d = decodeOne((lin) => mem[lin], cs, ip);
+      const d = decodeOne((lin) => mem[lin], cs, ip, ex.get_csb() >>> 0,
+        ex.get_linmask() >>> 0, !!ex.get_d32(), null,
+        !!ex.get_d32() || (!!(ex.get_cr0() & 1) && !ex.get_vm86()));
       if (!d) return false;
       // A branch writes the guest IP itself and stops, since both its arena
       // successors are 0 here. Appending `end` after it would overwrite that

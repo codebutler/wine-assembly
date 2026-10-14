@@ -10,7 +10,25 @@ const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
 
 async function main() {
-  const wasm = compileSrcWasm();
+  // Fail exactly one OLE allocation, without exhausting unrelated arenas or
+  // adding a production fault-injection branch to the allocator.
+  const wasm = compileSrcWasm((file, source) => {
+    if (file === '09a7b-ole.wat') return source.replaceAll('(call $heap_alloc ', '(call $test_ole_alloc ');
+    if (file === '13-exports.wat') return source + `
+      (global $test_ole_alloc_count (mut i32) (i32.const 0))
+      (global $test_ole_alloc_fail (mut i32) (i32.const 0))
+      (func (export "ole_alloc_arm") (param $nth i32)
+        (global.set $test_ole_alloc_count (i32.const 0))
+        (global.set $test_ole_alloc_fail (local.get $nth)))
+      (func (export "ole_alloc_count") (result i32) (global.get $test_ole_alloc_count))
+      (func $test_ole_alloc (param $size i32) (result i32)
+        (global.set $test_ole_alloc_count (i32.add (global.get $test_ole_alloc_count) (i32.const 1)))
+        (if (i32.eq (global.get $test_ole_alloc_count) (global.get $test_ole_alloc_fail))
+          (then (return (i32.const 0))))
+        (call $heap_alloc (local.get $size)))
+    `;
+    return source;
+  });
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const imports = createHostImports({ getMemory: () => memory.buffer, renderer: null, resourceJson: {} });
   imports.host.memory = memory;
@@ -40,6 +58,8 @@ async function main() {
 
   const iidPersistStorage = alloc(16);
   dv.setUint32(wa(iidPersistStorage), 0x0000010a, true);
+  dv.setUint32(wa(iidPersistStorage) + 8, 0xc0, true);
+  dv.setUint32(wa(iidPersistStorage) + 12, 0x46000000, true);
   const out = alloc(4);
   check('QueryInterface exposes embedded IPersistStorage',
     e.test_ole_static_query(object, iidPersistStorage, out) === 0 &&
@@ -48,6 +68,8 @@ async function main() {
 
   const iidOleCache = alloc(16);
   dv.setUint32(wa(iidOleCache), 0x0000011e, true);
+  dv.setUint32(wa(iidOleCache) + 8, 0xc0, true);
+  dv.setUint32(wa(iidOleCache) + 12, 0x46000000, true);
   check('QueryInterface exposes the embedded static-presentation IOleCache',
     e.test_ole_static_query(object, iidOleCache, out) === 0 &&
     dv.getUint32(wa(out), true) === object + 52);
@@ -55,17 +77,30 @@ async function main() {
 
   const iidViewObject = alloc(16);
   dv.setUint32(wa(iidViewObject), 0x0000010d, true);
+  dv.setUint32(wa(iidViewObject) + 8, 0xc0, true);
+  dv.setUint32(wa(iidViewObject) + 12, 0x46000000, true);
   check('QueryInterface exposes the cached-presentation IViewObject',
     e.test_ole_static_query(object, iidViewObject, out) === 0 &&
     dv.getUint32(wa(out), true) === object + 56);
   check('IViewObject shares the root reference count', e.test_ole_release(object) === 1);
 
   const iidViewObject2 = alloc(16);
-  dv.setUint32(wa(iidViewObject2), 0x0000011d, true);
+  dv.setUint32(wa(iidViewObject2), 0x00000127, true);
+  dv.setUint32(wa(iidViewObject2) + 8, 0x000000c0, true);
+  dv.setUint32(wa(iidViewObject2) + 12, 0x46000000, true);
   check('QueryInterface exposes the extended IViewObject2 contract',
     e.test_ole_static_query(object, iidViewObject2, out) === 0 &&
     dv.getUint32(wa(out), true) === object + 56);
   check('IViewObject2 shares the root reference count', e.test_ole_release(object) === 1);
+
+  const iidOleLink = alloc(16);
+  dv.setUint32(wa(iidOleLink), 0x0000011d, true);
+  dv.setUint32(wa(iidOleLink) + 8, 0x000000c0, true);
+  dv.setUint32(wa(iidOleLink) + 12, 0x46000000, true);
+  dv.setUint32(wa(out), 0x12345678, true);
+  check('unsupported IOleLink cannot masquerade as IViewObject2',
+    (e.test_ole_static_query(object, iidOleLink, out) >>> 0) === 0x80004002 &&
+    dv.getUint32(wa(out), true) === 0 && dv.getUint32(wa(object) + 4, true) === 1);
 
   const unknownIid = alloc(16);
   dv.setUint32(wa(unknownIid), 0x00000119, true); // IAdviseSink
@@ -468,6 +503,97 @@ async function main() {
     dv.getUint32(wa(testSite) + 16, true) === 2);
   check('caller client-site reference remains independently releasable', e.test_ole_release(testSite) === 0);
   check('caller lockbytes reference remains independently releasable', e.test_ole_release(lockbytes) === 0);
+
+  const dataIid = alloc(16), dataOut = alloc(4), pictureFormat = alloc(20), pictureMedium = alloc(12);
+  [[dataIid, 16], [dataOut, 4], [pictureFormat, 20], [pictureMedium, 12]]
+    .forEach(([p, size]) => u8.fill(0, wa(p), wa(p) + size));
+  dv.setUint32(wa(dataIid), 0x10e, true);
+  dv.setUint32(wa(dataIid) + 8, 0xc0, true);
+  dv.setUint32(wa(dataIid) + 12, 0x46000000, true);
+  [8, 0, 1, -1, 1].forEach((v, i) => dv.setUint32(wa(pictureFormat) + i * 4, v, true));
+  const dib = alloc(44);
+  u8.fill(0, wa(dib), wa(dib) + 44);
+  [[0, 40], [4, 1], [8, 1], [12, 0x00180001], [20, 4], [40, 0xff0000]]
+    .forEach(([offset, value]) => dv.setUint32(wa(dib) + offset, value, true));
+  dv.setUint32(wa(pictureMedium), 1, true);
+  dv.setUint32(wa(pictureMedium) + 4, dib, true);
+  const fixture = () => {
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    if (e.test_ole_cache_set_data(root, pictureFormat, pictureMedium, 0)) throw Error('cache fixture failed');
+    return root;
+  };
+  const baseline = fixture();
+  e.ole_alloc_arm(0);
+  check('baseline initial data face includes cached DIB and synthesized WMF',
+    e.test_ole_static_query(baseline, dataIid, dataOut) === 0 &&
+    e.test_ole_data_count(dv.getUint32(wa(dataOut), true)) === 2);
+  const allocations = e.ole_alloc_count();
+  if (allocations < 1) throw Error('allocation injection did not observe construction');
+  const metafileFormat = alloc(20), metafileMedium = alloc(12);
+  u8.fill(0, wa(metafileMedium), wa(metafileMedium) + 12);
+  [3, 0, 1, -1, 32].forEach((v, i) => dv.setUint32(wa(metafileFormat) + i * 4, v, true));
+  check('explicit WMF fixture gets an independently owned presentation',
+    e.test_ole_data_get(dv.getUint32(wa(dataOut), true), metafileFormat, metafileMedium) === 0);
+  const explicitPicture = dv.getUint32(wa(metafileMedium) + 4, true);
+  const explicitHandle = dv.getUint32(wa(explicitPicture) + 12, true);
+  const mixed = fixture();
+  check('cache accepts both DIB and explicit WMF presentations',
+    e.test_ole_cache_set_data(mixed, metafileFormat, metafileMedium, 1) === 0);
+  e.test_ole_release(dv.getUint32(wa(dataOut), true));
+  e.test_ole_release(baseline);
+  check('building mixed-format data face preserves the explicit WMF owner',
+    e.test_ole_static_query(mixed, dataIid, dataOut) === 0 &&
+    e.test_call_GetObjectType(explicitHandle) === 9 &&
+    dv.getUint32(wa(mixed) + 168, true) === 0);
+  const mixedFace = dv.getUint32(wa(dataOut), true);
+  const mixedEntries = dv.getUint32(wa(mixedFace) + 12, true);
+  check('live face borrows explicit WMF rather than replacing it with DIB synthesis',
+    e.test_ole_data_count(mixedFace) === 2 &&
+    dv.getUint16(wa(mixedEntries) + 32, true) === 3 &&
+    dv.getUint32(wa(mixedEntries) + 32 + 24, true) === explicitPicture);
+  check('DIB replacement preserves explicit WMF on an already held data face',
+    e.test_ole_cache_set_data(mixed, pictureFormat, pictureMedium, 0) === 0 &&
+    e.test_call_GetObjectType(explicitHandle) === 9 &&
+    dv.getUint32(wa(mixed) + 164, true) === mixedFace &&
+    dv.getUint32(wa(mixed) + 168, true) === 0 && e.test_ole_data_count(mixedFace) === 2);
+  // An icon WMF is a different presentation and must not suppress synthesis
+  // of the DIB's content view. Copy it before destroying the owning cache.
+  dv.setUint32(wa(metafileFormat) + 8, 4, true);
+  dv.setUint32(wa(metafileMedium), 32, true);
+  dv.setUint32(wa(metafileMedium) + 4, explicitPicture, true);
+  const iconMixed = fixture();
+  check('an explicit icon WMF does not suppress synthesized content WMF',
+    e.test_ole_cache_set_data(iconMixed, metafileFormat, metafileMedium, 0) === 0 &&
+    e.test_ole_static_query(iconMixed, dataIid, dataOut) === 0 &&
+    e.test_ole_data_count(dv.getUint32(wa(dataOut), true)) === 3 &&
+    dv.getUint32(wa(iconMixed) + 168, true) !== 0);
+  e.test_ole_release(dv.getUint32(wa(dataOut), true));
+  e.test_ole_release(iconMixed);
+  e.test_ole_release(mixedFace);
+  e.test_ole_release(mixed);
+  check('final mixed cache release retires its explicit WMF', e.test_call_GetObjectType(explicitHandle) === 0);
+  e.guest_free(metafileFormat);
+  e.guest_free(metafileMedium);
+  for (let nth = 1; nth <= allocations; nth++) {
+    e.ole_alloc_arm(0);
+    const root = fixture();
+    e.ole_alloc_arm(nth);
+    const hr = e.test_ole_static_query(root, dataIid, dataOut) >>> 0;
+    e.ole_alloc_arm(0);
+    const returned = dv.getUint32(wa(dataOut), true);
+    check(`initial data-face allocation ${nth} fails without publishing partial state`,
+      hr === 0x8007000e && returned === 0 &&
+      dv.getUint32(wa(root) + 164, true) === 0 &&
+      dv.getUint32(wa(root) + 168, true) === 0 &&
+      dv.getUint32(wa(root) + 4, true) === 1 && e.test_ole_cache_count(root) === 1);
+    if (hr === 0 && returned) e.test_ole_release(returned);
+    check(`initial data-face allocation ${nth} can retry with both formats`,
+      e.test_ole_static_query(root, dataIid, dataOut) === 0 &&
+      e.test_ole_data_count(dv.getUint32(wa(dataOut), true)) === 2);
+    e.test_ole_release(dv.getUint32(wa(dataOut), true));
+    e.test_ole_release(root);
+  }
+  [dataIid, dataOut, pictureFormat, pictureMedium, dib].forEach(p => e.guest_free(p));
 
   console.log(`\n${pass}/${pass + fail} checks passed`);
   if (fail) process.exit(1);

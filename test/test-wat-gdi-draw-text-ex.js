@@ -93,11 +93,11 @@ const extraWat = String.raw`
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bitsOut = allocZero(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   wat.test_call_SelectObject(hdc, bitmap);
   const face = writeWide('ExParams');
-  const font = wat.test_call_CreateFontW(-8, 400, 0, face) >>> 0;
+  const font = wat.test_call_CreateFontW(-8, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, face) >>> 0;
   wat.test_call_SelectObject(hdc, font);
   wat.test_gdi_dc_set_field(hdc, 28, 1, 2); // TRANSPARENT
   wat.test_gdi_dc_set_field(hdc, 20, 0x000000, 0); // black

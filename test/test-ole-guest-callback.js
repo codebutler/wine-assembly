@@ -173,7 +173,198 @@ async function main() {
   };
 
   const dragHwndA = 0x12345;
+  for (const format of [1, 8, 0xc560]) {
+    const source = callApi('GlobalAlloc', 0, 4);
+    assert(source);
+    write(source, 0x12345678);
+    const copy = callApi('OleDuplicateData', source, format, 0);
+    check('OleDuplicateData publishes copied memory as an independent HGLOBAL',
+      copy !== 0 && copy !== source && callApi('GlobalLock', copy) === copy &&
+      callApi('GlobalSize', copy) >= 4 && read(copy) === 0x12345678);
+    write(source, 0x87654321);
+    assert.strictEqual(read(copy), 0x12345678);
+    check('OleDuplicateData result can be freed through the Global API exactly once',
+      callApi('GlobalFree', copy) === 0 && callApi('GlobalLock', copy) === 0 &&
+      callApi('GlobalFree', copy) === copy && callApi('GlobalLock', source) === source);
+    assert.strictEqual(callApi('GlobalFree', source), 0);
+  }
   const dragHwndB = 0x12346;
+  {
+    const bits = alloc(64);
+    bytes.fill(0, wa(bits), wa(bits) + 64);
+    write(bits, 0x00090001); // memory WMF, nine-word header
+    write(bits + 4, 0x300);
+    write(bits + 6, 12); // header + three-word EOF = 24 bytes
+    write(bits + 12, 3);
+    write(bits + 18, 3);
+    const mf = callApi('SetMetaFileBitsEx', 64, bits);
+    check('SetMetaFileBitsEx excludes allocation padding from the WMF extent',
+      mf !== 0 && callApi('GetMetaFileBitsEx', mf, 0, 0) === 24);
+    assert(callApi('DeleteMetaFile', mf));
+    write(bits + 6, 33);
+    check('SetMetaFileBitsEx rejects a declared extent beyond the input buffer',
+      callApi('SetMetaFileBitsEx', 64, bits) === 0);
+  }
+  for (const enhanced of [false, true]) {
+    const bits = alloc(108);
+    bytes.fill(0, wa(bits), wa(bits) + 108);
+    if (enhanced) {
+      [[0, 1], [4, 88], [40, 0x464d4520], [44, 0x10000], [48, 108],
+        [52, 2], [56, 1], [88, 14], [92, 20], [104, 20]]
+        .forEach(([offset, value]) => write(bits + offset, value));
+    } else {
+      [[0, 0x00090001], [4, 0x300], [6, 12], [12, 3], [18, 3]]
+        .forEach(([offset, value]) => write(bits + offset, value));
+    }
+    const mf = enhanced ? callApi('SetEnhMetaFileBits', 108, bits)
+      : callApi('SetMetaFileBitsEx', 24, bits);
+    assert(mf);
+    const picture = enhanced ? mf : callApi('GlobalAlloc', 0, 16);
+    if (!enhanced) [8, 529, 529, mf].forEach((value, i) => write(picture + i * 4, value));
+    const medium = alloc(12);
+    const tymed = enhanced ? 64 : 32;
+    const format = makeFormat(enhanced ? 14 : 3, tymed);
+    [tymed, picture, 0].forEach((value, i) => write(medium + i * 4, value));
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    assert.strictEqual(callApi('IOleCache_SetData', root + 52, format, medium, 0), 0);
+    const snapshot = e.test_ole_static_get_clipboard_data(root) >>> 0;
+    assert(snapshot);
+    const output = alloc(12);
+    assert.strictEqual(callApi('IDataObject_GetData', snapshot, format, output), 0);
+    const copiedPicture = read(output + 4);
+    const copiedMf = enhanced ? copiedPicture : read(copiedPicture + 12);
+    check(`cached ${enhanced ? 'EMF' : 'WMF'} GetData owns independent metafile records`,
+      copiedPicture !== picture && copiedMf !== mf && read(output + 8) === 0 &&
+      callApi('GetObjectType', copiedMf) === (enhanced ? 13 : 9));
+    if (!enhanced) check('copied METAFILEPICT is valid Global memory with preserved extents',
+      callApi('GlobalLock', copiedPicture) === copiedPicture &&
+      read(copiedPicture) === 8 && read(copiedPicture + 4) === 529);
+    releaseMedium(medium);
+    assert.strictEqual(callApi('IOleObject_Release', root), 0);
+    assert.strictEqual(callApi('IDataObject_Release', snapshot), 0);
+    check(`independent ${enhanced ? 'EMF' : 'WMF'} output survives source/cache/snapshot retirement`,
+      callApi('GetObjectType', mf) === 0 &&
+      callApi('GetObjectType', copiedMf) === (enhanced ? 13 : 9));
+    const releaser = makeGuestSite();
+    write(output + 8, releaser);
+    releaseMedium(output);
+    check(`custom releaser retains responsibility for ${enhanced ? 'EMF' : 'WMF'} payload`,
+      read(releaser + 4) === 0 && read(releaser + 12) === 1 &&
+      callApi('GetObjectType', copiedMf) === (enhanced ? 13 : 9));
+    [tymed, copiedPicture, 0].forEach((value, i) => write(output + i * 4, value));
+    releaseMedium(output);
+    check(`owned ${enhanced ? 'EMF' : 'WMF'} release retires handle and clears descriptor`,
+      callApi('GetObjectType', copiedMf) === 0 && read(output) === 0 && read(output + 4) === 0);
+    if (!enhanced) check('owned METAFILEPICT release also retires outer Global memory',
+      callApi('GlobalLock', copiedPicture) === 0);
+    releaseMedium(output); // cleared descriptor is harmless
+  }
+  {
+    const dib = callApi('GlobalAlloc', 0x40, 44);
+    [[0, 40], [4, 1], [8, 1], [12, 0x00180001], [20, 4], [40, 0x0000ff]]
+      .forEach(([offset, value]) => write(dib + offset, value));
+    const medium = alloc(12);
+    [1, dib, 0].forEach((value, i) => write(medium + i * 4, value));
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    assert.strictEqual(callApi('IOleCache_SetData', root + 52, makeFormat(8), medium, 1), 0);
+    const iid = alloc(16), out = alloc(4);
+    [0x10e, 0, 0xc0, 0x46000000].forEach((value, i) => write(iid + i * 4, value));
+    assert.strictEqual(callApi('IOleObject_QueryInterface', root, iid, out), 0);
+    const face = read(out);
+    const synthesized = read(root + 168), synthesizedMf = read(synthesized + 12);
+    assert(synthesized && synthesizedMf);
+    assert.strictEqual(callApi('IDataObject_GetData', face, makeFormat(3, 32), medium), 0);
+    const copy = read(medium + 4), copyMf = read(copy + 12);
+    const metafilePixel = handle => {
+      const size = callApi('GetMetaFileBitsEx', handle, 0, 0);
+      assert(size >= 24);
+      const buffer = alloc(size);
+      assert.strictEqual(callApi('GetMetaFileBitsEx', handle, size, buffer), size);
+      const view = new DataView(memory.buffer);
+      let pixel;
+      for (let offset = 18; offset + 6 <= size;) {
+        const words = read(buffer + offset);
+        assert(words >= 3 && offset + words * 2 <= size);
+        if (view.getUint16(wa(buffer + offset + 4), true) === 0x0f43) {
+          const bmi = buffer + offset + 28;
+          pixel = read(bmi + read(bmi)) & 0xffffff;
+        }
+        offset += words * 2;
+      }
+      e.guest_free(buffer);
+      assert.notStrictEqual(pixel, undefined);
+      return pixel;
+    };
+    assert.strictEqual(metafilePixel(copyMf), 0x0000ff);
+    const updatedDib = callApi('GlobalAlloc', 0x40, 44);
+    [[0, 40], [4, 1], [8, 1], [12, 0x00180001], [20, 4], [40, 0xff0000]]
+      .forEach(([offset, value]) => write(updatedDib + offset, value));
+    const replacement = alloc(12);
+    [1, updatedDib, 0].forEach((value, i) => write(replacement + i * 4, value));
+    assert.strictEqual(callApi('IOleCache_SetData', root + 52, makeFormat(8), replacement, 1), 0);
+    const refreshed = alloc(12);
+    assert.strictEqual(callApi('IDataObject_GetData', face, makeFormat(3, 32), refreshed), 0);
+    check('held data face refreshes synthesized pixels without changing earlier GetData output',
+      metafilePixel(read(read(refreshed + 4) + 12)) === 0xff0000 &&
+      metafilePixel(copyMf) === 0x0000ff);
+    releaseMedium(refreshed);
+    const extent = alloc(8);
+    write(extent, 2540); write(extent + 4, 1270);
+    assert.strictEqual(callApi('IOleObject_SetExtent', root, 1, extent), 0);
+    assert.strictEqual(callApi('IDataObject_GetData', face, makeFormat(3, 32), refreshed), 0);
+    check('SetExtent refreshes synthesized METAFILEPICT dimensions on the held face',
+      read(read(refreshed + 4) + 4) === 2540 && read(read(refreshed + 4) + 8) === 1270 &&
+      read(copy + 4) !== 2540);
+    releaseMedium(refreshed);
+    const removedSynthesizedMf = read(read(root + 168) + 12);
+    const connection = read(read(root + 100));
+    assert.strictEqual(callApi('IOleCache_Uncache', root + 52, connection), 0);
+    check('Uncache removes the derived WMF from the held face and retires its handle',
+      read(root + 168) === 0 && callApi('GetObjectType', removedSynthesizedMf) === 0 &&
+      callApi('IDataObject_QueryGetData', face, makeFormat(3, 32)) !== 0 &&
+      metafilePixel(copyMf) === 0x0000ff);
+    // Populate again so the existing final-release assertion still proves
+    // destruction of a live synthesized presentation, not an empty cache.
+    const restoredDib = callApi('GlobalAlloc', 0x40, 44);
+    [[0, 40], [4, 1], [8, 1], [12, 0x00180001], [20, 4], [40, 0xff0000]]
+      .forEach(([offset, value]) => write(restoredDib + offset, value));
+    [1, restoredDib, 0].forEach((value, i) => write(replacement + i * 4, value));
+    assert.strictEqual(callApi('IOleCache_SetData', root + 52, makeFormat(8), replacement, 1), 0);
+    const finalSynthesizedMf = read(read(root + 168) + 12);
+    assert.strictEqual(callApi('GetObjectType', finalSynthesizedMf), 9);
+    assert.strictEqual(callApi('IOleObject_Release', root), 1);
+    assert.strictEqual(callApi('IDataObject_Release', face), 0);
+    check('final live-face release retires root-owned synthesized metafile, not its GetData copy',
+      copy !== synthesized && copyMf !== synthesizedMf &&
+      callApi('GetObjectType', finalSynthesizedMf) === 0 && callApi('GetObjectType', copyMf) === 9);
+    releaseMedium(medium);
+    check('synthesized GetData copy is independently retired', callApi('GetObjectType', copyMf) === 0);
+  }
+  for (const destroy of [0, 1]) {
+    const out = alloc(4), handleOut = alloc(4), written = alloc(4), cloneOut = alloc(4);
+    assert.strictEqual(callApi('CreateStreamOnHGlobal', 0, destroy, out), 0);
+    const stream = read(out);
+    assert.strictEqual(callApi('GetHGlobalFromStream', stream, handleOut), 0);
+    const original = read(handleOut);
+    assert.strictEqual(callApi('GlobalLock', original), original);
+    const payload = alloc(4096);
+    write(payload, 0x12345678);
+    assert.strictEqual(callMethod(stream, 4, payload, 4096, written), 0);
+    assert.strictEqual(read(written), 4096);
+    assert.strictEqual(callApi('GetHGlobalFromStream', stream, handleOut), 0);
+    const grown = read(handleOut);
+    check(`HGLOBAL stream growth preserves Global provenance (delete=${destroy})`,
+      grown !== original && callApi('GlobalLock', original) === 0 &&
+      callApi('GlobalLock', grown) === grown && read(grown) === 0x12345678);
+    assert.strictEqual(callMethod(stream, 13, cloneOut), 0);
+    const clone = read(cloneOut);
+    assert.strictEqual(callMethod(stream, 2), 1);
+    assert.strictEqual(callApi('GlobalLock', grown), grown, 'clone keeps backing memory alive');
+    assert.strictEqual(callMethod(clone, 2), 0);
+    check(`HGLOBAL stream final release honors fDeleteOnRelease=${destroy}`,
+      callApi('GlobalLock', grown) === (destroy ? 0 : grown));
+    if (!destroy) assert.strictEqual(callApi('GlobalFree', grown), 0);
+  }
   const dragHwndC = 0x12347;
   e.test_wnd_table_set(dragHwndA, 0x401000);
   e.test_wnd_table_set(dragHwndB, 0x401000);
@@ -390,6 +581,19 @@ async function main() {
     callMethod(finalObject, 2) === 0 &&
     read(finalSite + 4) === 1 && read(finalSite + 12) === 1 &&
     read(finalSink + 4) === 1 && read(finalSink + 12) === 1);
+
+  for (const [iface, offset] of [['IPersistStorage', 12], ['IOleCache', 52], ['IViewObject', 56]]) {
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    const site = makeGuestSite();
+    const sink = makeGuestSite();
+    const connection = alloc(4);
+    assert.strictEqual(callMethod(root, 3, site), 0);
+    assert.strictEqual(callMethod(root, 19, sink, connection), 0);
+    check(`${iface} final Release completes guest site and sink teardown`,
+      callMethod(root + offset, 2) === 0 &&
+      read(site + 4) === 1 && read(site + 12) === 1 &&
+      read(sink + 4) === 1 && read(sink + 12) === 1);
+  }
 
   const notifyObject = e.test_ole_create_static_handler(0) >>> 0;
   const notifySite = makeGuestSite();
@@ -642,6 +846,137 @@ async function main() {
     read(ownedStreamReleaser + 4) === 0 && read(ownedStreamReleaser + 36) === 2 &&
     read(ownedHglobalReleaser + 4) === 0 && read(ownedHglobalReleaser + 36) === 3 &&
     read(ownedHglobalPayload) === 0x78563412);
+
+  // An IDataObject obtained through static-handler QI is a face, not a snapshot.
+  for (const rootFirst of [true, false]) {
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    const iid = alloc(16), out = alloc(4);
+    [0x10e, 0, 0xc0, 0x46000000].forEach((v, i) => write(iid + 4 * i, v));
+    assert.strictEqual(callMethod(root, 0, iid, out), 0);
+    const face = read(out);
+    assert.strictEqual(e.test_ole_addref(face), 3, 'internal AddRef delegates to root');
+    assert.strictEqual(e.test_ole_release(face), 2, 'internal Release balances root');
+    assert.strictEqual(read(face + 4), 1, 'private face storage reference stays independent');
+    assert.strictEqual(callMethod(face, 1), 3, 'public AddRef delegates to root');
+    assert.strictEqual(callMethod(face, 2), 2, 'public Release balances root');
+    const site = makeGuestSite(), sink = makeGuestSite(), connection = alloc(4);
+    assert.strictEqual(callMethod(root, 3, site), 0);
+    assert.strictEqual(callMethod(root, 19, sink, connection), 0);
+    write(iid, 0);
+    assert.strictEqual(callMethod(face, 0, iid, out), 0);
+    assert.strictEqual(read(out), root, 'data face shares controlling IUnknown');
+    assert.strictEqual(callMethod(read(out), 2), 2);
+    write(iid + 4, 1);
+    assert.strictEqual(callMethod(face, 0, iid, out), 0x80004002);
+    assert.strictEqual(read(out), 0, 'delegated QI rejects forged GUID suffix');
+    const sequence = alloc(4);
+    write(sequence, 0);
+    const stream = makeGuestSite(sequence), releaser = makeGuestSite(sequence);
+    const medium = alloc(12);
+    write(medium, 4); write(medium + 4, stream); write(medium + 8, releaser);
+    assert.strictEqual(callMethod(face, 7, makeFormat(0xc540, 4), medium, 1), 0);
+    // Merely reacquiring an interface must not clear its successfully stored
+    // media, lose their owned references, or invoke cleanup callbacks.
+    write(iid, 0x10e); write(iid + 4, 0);
+    const entriesBeforeQuery = read(face + 12);
+    for (const from of [root, face, root + 12, root + 52, root + 56]) {
+      assert.strictEqual(callMethod(from, 0, iid, out), 0);
+      assert.strictEqual(read(out), face);
+      assert.strictEqual(read(face + 12), entriesBeforeQuery);
+      assert.strictEqual(read(face + 16), 1, 'repeated QI preserves stored data');
+      assert.strictEqual(callMethod(face, 5, makeFormat(0xc540, 4)), 0);
+      assert.strictEqual(read(sequence), 0, 'QI must not retire owned guest media');
+      assert.strictEqual(callMethod(face, 2), 2);
+    }
+    check(`static data face keeps owner alive (${rootFirst ? 'root' : 'face'} released first)`,
+      callMethod(rootFirst ? root : face, 2) === 1 && read(root + 4) === 1 &&
+      read(site + 12) === 0 && read(sink + 12) === 0 && read(sequence) === 0);
+    const last = rootFirst ? face : root;
+    const vt = read(releaser), release = read(vt + 8);
+    write(vt + 8, 0);
+    check('static final Release preflights data-face media before any guest teardown',
+      callMethod(last, 2) === 1 && read(root + 4) === 1 &&
+      read(site + 12) === 0 && read(sink + 12) === 0 && read(sequence) === 0);
+    write(vt + 8, release);
+    check('static final Release drains site, sink and data-face media exactly once',
+      callMethod(last, 2) === 0 && read(site + 12) === 1 && read(sink + 12) === 1 &&
+      read(stream + 4) === 0 && read(stream + 12) === 1 && read(stream + 36) === 1 &&
+      read(releaser + 4) === 0 && read(releaser + 12) === 1 && read(releaser + 36) === 2);
+  }
+
+  {
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    const iid = alloc(16), out = alloc(4), connection = alloc(4);
+    [0x10e, 0, 0xc0, 0x46000000].forEach((v, i) => write(iid + 4 * i, v));
+    assert.strictEqual(callMethod(root, 0, iid, out), 0);
+    const face = read(out), format = makeFormat(0xc541), result = alloc(12);
+    assert.strictEqual(callMethod(root + 52, 3, format, 0, connection), 0);
+    for (const value of [0x12345678, 0x23456789]) {
+      const payload = alloc(4), medium = alloc(12);
+      write(payload, value);
+      write(medium, 1); write(medium + 4, payload); write(medium + 8, 0);
+      assert.strictEqual(callMethod(root + 52, 7, format, medium, 1), 0);
+      check('cache SetData refreshes an already-held data interface',
+        callMethod(face, 3, format, result) === 0 && read(read(result + 4)) === value);
+      releaseMedium(result);
+    }
+    assert.strictEqual(callMethod(root + 52, 4, read(connection)), 0);
+    check('cache Uncache removes the format from an already-held data interface',
+      callMethod(face, 5, format) !== 0 && read(face + 16) === 0);
+    assert.strictEqual(callMethod(root, 2), 1);
+    assert.strictEqual(callMethod(face, 2), 0);
+  }
+
+  // Opaque guest layout: +4 is not a refcount. Raw host writes must not
+  // masquerade as vtable calls when a live face mirrors cached media.
+  for (const tymed of [4, 8]) for (const take of [0, 1]) {
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    const iid = alloc(16), out = alloc(4), result = alloc(12), snapshotOut = alloc(4);
+    [0x10e, 0, 0xc0, 0x46000000].forEach((v, i) => write(iid + 4 * i, v));
+    assert.strictEqual(callMethod(root, 0, iid, out), 0);
+    const face = read(out), object = alloc(40), vt = alloc(12), code = alloc(40);
+    bytes.fill(0, wa(object), wa(object) + 40);
+    bytes.fill(0, wa(vt), wa(vt) + 12);
+    write(object, vt); write(object + 4, 0x13572468); write(object + 24, 1);
+    bytes.set([0x8b,0x44,0x24,0x04, 0xff,0x40,0x18, 0xff,0x40,0x1c,
+      0x8b,0x40,0x18, 0xc2,0x04,0x00], wa(code));
+    bytes.set([0x8b,0x44,0x24,0x04, 0xff,0x48,0x18, 0xff,0x40,0x20,
+      0x8b,0x40,0x18, 0xc2,0x04,0x00], wa(code + 20));
+    write(vt + 4, code); write(vt + 8, code + 20);
+    const format = makeFormat(0xc542, tymed), medium = alloc(12);
+    write(medium, tymed); write(medium + 4, object); write(medium + 8, 0);
+    assert.strictEqual(callMethod(face, 7, format, medium, take), 0);
+    const ownedRefs = take ? 1 : 2;
+    check(`live face SetData(${take}) keeps one canonical TYMED ${tymed} owner`,
+      read(root + 104) === 1 && read(object + 24) === ownedRefs &&
+      read(object + 28) === (take ? 0 : 1) && read(object + 4) === 0x13572468);
+    assert.strictEqual(callMethod(face, 3, format, result), 0);
+    assert.strictEqual(read(result + 4), object);
+    assert.strictEqual(read(object + 24), ownedRefs + 1, 'GetData owns a guest reference');
+    releaseMedium(result);
+    assert.strictEqual(read(object + 24), ownedRefs);
+    assert.strictEqual(callMethod(root, 10, 0, snapshotOut), 0);
+    const snapshot = read(snapshotOut);
+    assert.notStrictEqual(snapshot, face);
+    assert.strictEqual(read(snapshot + 32), 0, 'clipboard snapshot is independent');
+    assert.strictEqual(read(object + 24), ownedRefs + 1);
+    if (!take) {
+      const connection = read(read(root + 100));
+      assert.strictEqual(callMethod(root + 52, 4, connection), 0);
+      check('Uncache retires canonical guest media without releasing the borrowed view twice',
+        read(object + 24) === ownedRefs && callMethod(face, 5, format) !== 0 &&
+        read(face + 16) === 0 && read(object + 4) === 0x13572468);
+    }
+    assert.strictEqual(callMethod(root, 2), 1);
+    assert.strictEqual(callMethod(face, 2), 0);
+    check('independent clipboard snapshot survives live-face destruction',
+      read(object + 24) === ownedRefs && read(object + 4) === 0x13572468);
+    assert.strictEqual(callMethod(snapshot, 2), 0);
+    if (!take) assert.strictEqual(callMethod(object, 2), 0);
+    check('opaque guest medium has exactly balanced vtable references',
+      read(object + 24) === 0 && read(object + 32) === read(object + 28) + 1 &&
+      read(object + 4) === 0x13572468);
+  }
 
   const cacheSequence = alloc(4);
   write(cacheSequence, 0);
@@ -1138,10 +1473,11 @@ async function main() {
   write(flushMedium + 8, 0);
   const flushOwner = e.test_ole_create_data_object(0, 0) >>> 0;
   assert.strictEqual(e.test_ole_data_set(flushOwner, flushFormat, flushMedium, 1), 0);
-  e.test_ole_set_clipboard(flushOwner);
+  assert.strictEqual(callApi('OleSetClipboard', flushOwner), 0);
   assert.strictEqual(e.test_ole_release(flushOwner), 1);
   const flushHr = callApi('OleFlushClipboard');
-  const durableOwner = e.test_ole_get_clipboard() >>> 0;
+  assert.strictEqual(callApi('OleGetClipboard', out), 0);
+  const durableOwner = read(out);
   const durableMedium = alloc(12);
   const durableGetHr = e.test_ole_data_get(durableOwner, flushFormat, durableMedium) >>> 0;
   const durableStream = read(durableMedium + 4);
@@ -1195,7 +1531,7 @@ async function main() {
   write(rejectedStreamMedium + 8, 0);
   assert.strictEqual(e.test_ole_data_set(
     rejectedOwner, rejectedStreamFormat, rejectedStreamMedium, 1), 0);
-  e.test_ole_set_clipboard(rejectedOwner);
+  assert.strictEqual(callApi('OleSetClipboard', rejectedOwner), 0);
   const rejectedHr = callApi('OleFlushClipboard');
   check('OleFlushClipboard rejects a malformed later guest format without partial publication',
     rejectedHr === 0x80004002 && e.clipboard_ole_data_object() === rejectedOwner &&
@@ -1216,7 +1552,7 @@ async function main() {
     e.clipboard_ole_data_object() === rejectedOwner &&
     e.test_ole_stream_position(rejectedSource) === 7 && read(rejectedSource + 4) === 1);
   write(rejectedGuestVtable + 13 * 4, rejectedClone);
-  e.test_ole_set_clipboard(0);
+  assert.strictEqual(callApi('OleSetClipboard', 0), 0);
   assert.strictEqual(read(rejectedOwner + 4), 1);
   assert.strictEqual(callMethod(rejectedOwner, 2), 0);
 
@@ -1260,10 +1596,11 @@ async function main() {
   const flushStorageOwner = e.test_ole_create_data_object(0, 0) >>> 0;
   assert.strictEqual(e.test_ole_data_set(
     flushStorageOwner, flushStorageFormat, flushStorageMedium, 1), 0);
-  e.test_ole_set_clipboard(flushStorageOwner);
+  assert.strictEqual(callApi('OleSetClipboard', flushStorageOwner), 0);
   assert.strictEqual(e.test_ole_release(flushStorageOwner), 1);
   const flushStorageHr = callApi('OleFlushClipboard');
-  const durableStorageOwner = e.test_ole_get_clipboard() >>> 0;
+  assert.strictEqual(callApi('OleGetClipboard', out), 0);
+  const durableStorageOwner = read(out);
   const durableStorageMedium = alloc(12);
   assert.strictEqual(e.test_ole_data_get(
     durableStorageOwner, flushStorageFormat, durableStorageMedium), 0);

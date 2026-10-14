@@ -152,14 +152,14 @@ async function main() {
   const wideFace = wat.guest_alloc(32) >>> 0;
   'Arial'.split('').forEach((ch, i) => wat.guest_write16(wideFace + i * 2, ch.charCodeAt(0)));
   wat.guest_write16(wideFace + 10, 0);
-  const wideFont = wat.test_call_CreateFontW(-17, 700, 1, wideFace) >>> 0;
+  const wideFont = wat.test_call_CreateFontW(-17, 0, 0, 0, 700, 1, 0, 0, 0, 0, 0, 0, 0, wideFace) >>> 0;
   assert(wideFont, 'CreateFontW should allocate through the text-only host boundary');
   assert.strictEqual(wat.test_gdi_object_type(wideFont), 4);
   const wideLogfont = wat.guest_alloc(92) >>> 0;
   assert.strictEqual(wat.test_call_GetObjectW(wideFont, 92, wideLogfont), 92);
   assert.strictEqual(wat.guest_read32(wideLogfont), -17);
   assert.strictEqual(wat.guest_read32(wideLogfont + 16), 700);
-  const wideDc = wat.test_call_CreateDCW() >>> 0;
+  const wideDc = wat.test_call_CreateDCW(0, 0, 0, 0) >>> 0;
   assert(wideDc, 'CreateDCW should allocate a usable screen/printer DC');
   assert.strictEqual(wat.test_call_GetObjectType(wideDc), 3);
 

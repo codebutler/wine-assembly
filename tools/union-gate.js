@@ -98,9 +98,10 @@ const UNIONS = {
     // helpers), or the producer that made the handle. Functions that touch more
     // than one variant are listed in bySite below instead.
     byFunction: {
+      '$gdi_write_surface_upload': 'GdiBitmap', // gdi_bitmap_record_valid guards the record
       // --- bitmap (type 3) ---
-      '$host_gdi_get_object_w':      'GdiBitmap',  // 01-header:471 `+4 == 3`
-      '$host_gdi_get_object_h':      'GdiBitmap',  // 01-header:478 `+4 == 3`
+      '$gdi_native_get_object_w':      'GdiBitmap',  // 01-header:471 `+4 == 3`
+      '$gdi_native_get_object_h':      'GdiBitmap',  // 01-header:478 `+4 == 3`
       '$cursor_scale_bitmap':        'GdiBitmap',  // 09a:4551 $gdi_bitmap_record_valid
       '$cursor_plane_row':           'GdiBitmap',  // 09a:4824 $hbm is a cursor plane
       '$copy_image_bitmap':          'GdiBitmap',  // 09a:18619 record_valid
@@ -112,6 +113,7 @@ const UNIONS = {
       '$gdi_metafile_recording_dc_create': 'GdiBitmap', // 10e:531 compat bitmap
       '$gdi_bitmap_bits':            'GdiBitmap',  // 10a:723 record_valid
       '$gdi_bitmap_create_common_toolbar': 'GdiBitmap', // 10a:794 create_owned
+      '$gdi_bitmap_create_system':   'GdiBitmap',  // handle produced by gdi_bitmap_create_owned
       '$gdi_bitmap_clone_owned':     'GdiBitmap',  // 10a:873 record_valid
       '$mapped_bitmap_apply_colors':'GdiBitmap',  // 09a9 gdi_bitmap_record_valid
       '$mapped_bitmap_create_masked':'GdiBitmap', // 09a9 gdi_bitmap_record_valid
@@ -126,6 +128,7 @@ const UNIONS = {
       '$gdi_raster_desc_from_bitmap':'GdiBitmap',  // 10g:5736 record_valid
       '$gdi_get_dibits':             'GdiBitmap',  // 10g:5772 desc_from_bitmap first
       '$win16_DeleteObject':         'GdiBitmap',  // 09e gdi_object_type == 3 guard
+      '$gl_sw_export_bind_bitmap':   'GdiBitmap',  // 09a8g $gdi_bitmap_record_valid
 
       // --- font (type 4) ---
       '$handle_GetFontData':         'GdiFont',    // 09a4:1255 handle is DC+88
@@ -181,21 +184,21 @@ const UNIONS = {
     // the three places where the union is visible inside a single stack frame,
     // and are the reason a per-function map is not enough.
     bySite: {
-      // $gdi_object_delete_full (10e:2571) — the union's own dispatch. Each arm
+      // $gdi_object_delete_full (10e:2576) — the union's own dispatch. Each arm
       // is guarded by an explicit `+4 == N` and frees a different +24.
-      '10e-gdi-metafile.wat:2581': 'GdiBitmap',    // bits,        under `type == 3`
-      '10e-gdi-metafile.wat:2582': 'GdiBitmap',    // flags,       under `type == 3`
-      '10e-gdi-metafile.wat:2583': 'GdiBitmap',    // self_handle, under `type == 3`
-      '10e-gdi-metafile.wat:2587': 'GdiPalette',   // storage,     under `type == 5`
-      '10e-gdi-metafile.wat:2588': 'GdiPalette',   // flags,       under `type == 5`
-      '10e-gdi-metafile.wat:2590': 'GdiFont',      // face,        under `type == 4`
-      '10e-gdi-metafile.wat:2594': 'GdiMetafile',  // bits,        under `type == 6|7`
-      '10e-gdi-metafile.wat:2595': 'GdiMetafile',  // flags,       under `type == 6|7`
-      '10e-gdi-metafile.wat:2597': 'GdiBrush',     // style,       under `type == 2`
-      '10e-gdi-metafile.wat:2598': 'GdiBrush',     // style,       under `type == 2`
-      '10e-gdi-metafile.wat:2599': 'GdiBrush',     // pattern_bitmap, style is 3|6
+      '10e-gdi-metafile.wat:2756': 'GdiBitmap',    // bits,        under `type == 3`
+      '10e-gdi-metafile.wat:2757': 'GdiBitmap',    // flags,       under `type == 3`
+      '10e-gdi-metafile.wat:2758': 'GdiBitmap',    // self_handle, under `type == 3`
+      '10e-gdi-metafile.wat:2762': 'GdiPalette',   // storage,     under `type == 5`
+      '10e-gdi-metafile.wat:2763': 'GdiPalette',   // flags,       under `type == 5`
+      '10e-gdi-metafile.wat:2765': 'GdiFont',      // face,        under `type == 4`
+      '10e-gdi-metafile.wat:2769': 'GdiMetafile',  // bits,        under `type == 6|7`
+      '10e-gdi-metafile.wat:2770': 'GdiMetafile',  // flags,       under `type == 6|7`
+      '10e-gdi-metafile.wat:2772': 'GdiBrush',     // style,       under `type == 2`
+      '10e-gdi-metafile.wat:2773': 'GdiBrush',     // style,       under `type == 2`
+      '10e-gdi-metafile.wat:2774': 'GdiBrush',     // pattern_bitmap, style is 3|6
 
-      // $gdi_object_write_pen_brush (10f:870) — style and flags are read BEFORE
+      // $gdi_object_write_pen_brush (10f:877) — style and flags are read BEFORE
       // the pen/brush branch, which is precisely why the GdiPenBrush view
       // exists.
       //
@@ -207,25 +210,25 @@ const UNIONS = {
       // that the site at each new line still does what its comment says (the
       // pre-branch pair, then the `type == 1` arm, then the else arm) and
       // renumber; do NOT delete the entry to make the gate pass.
-      '10f-gdi-dc.wat:942': 'GdiPenBrush',         // style, pre-branch
-      '10f-gdi-dc.wat:943': 'GdiPenBrush',         // flags, pre-branch
-      '10f-gdi-dc.wat:946': 'GdiPen',              // width, in the `type == 1` arm
-      '10f-gdi-dc.wat:947': 'GdiPen',              // color, in the `type == 1` arm
-      '10f-gdi-dc.wat:949': 'GdiBrush',            // color, in the `type == 2` arm
-      '10f-gdi-dc.wat:950': 'GdiBrush',            // hatch, in the `type == 2` arm
+      '10f-gdi-dc.wat:982': 'GdiPenBrush',         // style, pre-branch
+      '10f-gdi-dc.wat:983': 'GdiPenBrush',         // flags, pre-branch
+      '10f-gdi-dc.wat:986': 'GdiPen',              // width, in the `type == 1` arm
+      '10f-gdi-dc.wat:987': 'GdiPen',              // color, in the `type == 1` arm
+      '10f-gdi-dc.wat:989': 'GdiBrush',            // color, in the `type == 2` arm
+      '10f-gdi-dc.wat:990': 'GdiBrush',            // hatch, in the `type == 2` arm
 
       // $gdi_brush_sample (10g:775) holds a brush record AND the record of the
       // bitmap named by brush.pattern_bitmap, in one frame, and reads +16 from
       // both. The clearest single-frame demonstration of the union.
-      '10g-gdi-raster.wat:823': 'GdiBrush',        // style
-      '10g-gdi-raster.wat:826': 'GdiBrush',        // color
-      '10g-gdi-raster.wat:832': 'GdiBrush',        // pattern_bitmap
-      '10g-gdi-raster.wat:849': 'GdiBitmap',       // flags   of the pattern bitmap
-      '10g-gdi-raster.wat:856': 'GdiBitmap',       // palette_count
-      '10g-gdi-raster.wat:859': 'GdiBitmap',       // palette
-      '10g-gdi-raster.wat:879': 'GdiBitmap',       // bpp
-      '10g-gdi-raster.wat:897': 'GdiBrush',        // hatch
-      '10g-gdi-raster.wat:923': 'GdiBrush',        // color
+      '10g-gdi-raster.wat:821': 'GdiBrush',        // style
+      '10g-gdi-raster.wat:824': 'GdiBrush',        // color
+      '10g-gdi-raster.wat:830': 'GdiBrush',        // pattern_bitmap
+      '10g-gdi-raster.wat:847': 'GdiBitmap',       // flags   of the pattern bitmap
+      '10g-gdi-raster.wat:854': 'GdiBitmap',       // palette_count
+      '10g-gdi-raster.wat:857': 'GdiBitmap',       // palette
+      '10g-gdi-raster.wat:877': 'GdiBitmap',       // bpp
+      '10g-gdi-raster.wat:895': 'GdiBrush',        // hatch
+      '10g-gdi-raster.wat:921': 'GdiBrush',        // color
     },
   },
 };

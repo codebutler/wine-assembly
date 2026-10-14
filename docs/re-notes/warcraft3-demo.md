@@ -4,6 +4,38 @@ App id `warcraft3_demo` (`lib/apps.js`), install tree at
 `test/binaries/candidates/warcraft3-demo/`. Provenance is in
 `test/candidate-corpus/manifest.json`.
 
+## Ordinary browser software control, 8 October 2026
+
+Fresh guest OpenGL **software** execution on the accepted reference
+`f62ab3c9` / module `4dc5ac2c` reaches the original Prologue, selects Thrall
+(Level 1 Far Seer, 500/500 health, 285/285 mana), and obeys two opposing
+ordinary right-click move orders. Worker reviewed selection, move, return and
+settled final images against fixed hut, stone circle and rocks. Both live host
+and owning render Worker report `api: gl, backend: software`; pinned software
+context creation returns before WebGL creation. Chrome SwiftShader alone is
+not this proof. Coordinator review/integration is pending; no current-main
+build, FPS, audio, combat or completion claim.
+
+Run `scratch/runs/20261008T0400Z-warcraft3-software-runtime` retains all 542
+pins, twelve original media paths, ordinary trusted input receipts and 28
+screenshots. Original menu coordinates match the reviewed WebGL route:
+Single Player (594,327), ABC, Create (228,391), Select (226,542), Campaign
+(593,365), Prologue (473,373). Separate hover and five-second DOWN/UP are
+used, with actual image review before each action; first clicks can merely
+highlight. Chapter PRESS ANY KEY is visible at 04:07:01.117. Space held for
+2000 ms gives an immediate black transition; next capture already shows the
+gameplay HUD, so no Escape is sent into that HUD. Filenames do not determine
+scene identity. Select Thrall (255,524) with a reviewed second click, then
+right-click (375,430) and (220,480); fixed camera landmarks establish actual
+displacement, retained at 04:14:30.715. Pointer Lock is false before absolute
+input. No guest-state write or engine repair.
+
+Fresh no-env boat `bx_mw27w2n4`, immutable 240/900/90-second transfer/browser/
+cleanup budgets. Ordinary quit at 04:14:42.001 precedes 04:15:55 deadline;
+Chrome exit 0, no pending streams, independent PID/socket/pin checks pass,
+63 files retrieved/hash checked before prefix removal at 04:14:43.577.
+[Exact identity, helper contracts, route deviations and lifecycle handoff](../../ops/handoffs/warcraft3-software-20261008.md).
+
 ## Shape of the program
 
 | Module | Original base | Role |
@@ -1988,3 +2020,301 @@ comparable window to window, which is why they are the unit here — but they
 are not time. `ops/block` falls steadily across the series (10.29 → 4.87), so
 later windows retire cheaper blocks, and a share of entries is not a share of
 wall clock. Nothing above should be quoted as a speedup.
+
+## GAMEPLAY REACHED (2026-09-28), and a replayable route into it
+
+The Prologue now plays: HUD, Thrall selectable (Level 1 Far Seer, 500/500),
+move orders obeyed. Recorded by stepping a frozen CLI session with
+`tools/ctl.js` and logging each action at the batch it was sent. The whole walk
+is the `wc3g` game in `tools/uop-game-ab.js`, which replays it as `--input`:
+
+```sh
+node test/run.js --app=warcraft3_demo --no-threads --headless-gl   # or --gl-renderer=software
+  --batch-size=20000 --max-batches=21530 --no-close --input=<wc3g's list>
+```
+
+| batch | state |
+|---|---|
+| 2000 | main menu (640x480 layout: Single Player 546,113) |
+| 2300-2820 | profile `ABC`: keypress 65/66/67, Create 203,173, row 130,225, Select 203,314 |
+| 3050 | Campaign 546,149 -> campaign screen by ~3550 |
+| 3650 | Prologue **bullet** 433,156 -> map load |
+| ~15950 | Chapter One card, PRESS ANY KEY |
+| 16530 | `keydown:32` (a click on the bar does NOT dismiss it) -> in-engine cinematic |
+| 18350 | `keydown:27` skips the cinematic -> gameplay HUD by 19170 |
+| 19170+ | select Thrall 230,300; `rclick` 385,125 / 520,260 / 150,230 |
+
+The map load that took ~40 minutes on 2026-09-14 now takes about 12,000 batches
+at `--batch-size=20000`, 2-3 minutes of wall clock. The replay reproduces the
+interactive recording's final frame to 0 pixels (same renderer), and it is
+deterministic across renderers in guest terms: the micro-op tier's counters
+are identical under software GL and `--headless-gl`.
+
+**Headless GL needs an AWAKE display, not just a kept-awake one.**
+`caffeinate -d` stops the display from sleeping but does not wake one that
+already has. `caffeinate -u -t 3` (a simulated user-activity assertion) wakes
+it, and `caffeinate -dimu` holds it for the run. Check for `1 display(s)` in the
+`[gl]` line. With zero displays both arms reach the "unable to initialize
+DirectX" modal, run at spin speed and compare as IDENTICAL, which reads as a
+pass.
+
+Software GL draws a large grey wedge across the left of the opening cinematic
+(filmed at batch 18350). It does not block anything and was not investigated.
+
+**SOLVED (2026-09-28): the wedge was our glDrawElements reading indices past a
+guest page end.** Not the software rasterizer: `--headless-gl` drew the same
+wedge at the same place (dark and bark-streaked there, flat grey under
+software -- the texture coordinates were garbage too). `--trace-gl
+--trace-gl-verts` (new: every vertex of each packed draw) over batches
+18000..18120 found one draw per frame, a 612-vertex cliff mesh (`tex=0x3ce`,
+and its second pass `0x471`), whose vertices are sane up to v367 and garbage
+from v368 on: `(-1.70141e+38, -1.70141e+38, -1.74145e+38)`, `(6.5e-43,
+7.3e28, 0.79)`, normals read as positions. Index 368 is byte 736 of a u16 index
+array -- the page end. `$gl_state_intercept` op 102 did `$g2w` on the index
+pointer once and walked that wasm pointer through all `count` indices, and
+`$gl_array_addr` translated only each vertex's first byte; Game.dll's buffers
+live in sparse VirtualAlloc pages that are not adjacent in wasm memory, so
+everything past the boundary was read out of unrelated memory. Both GL
+backends consume the same packed stream, which is why both showed it.
+
+Fixed in `src/09a8e-gl-state.wat`: indices and every array component are
+translated per element (`$gl_array_read`/`_or_zero` take guest addresses now),
+and `src/09a8c-gl-encoder.wat` `$gl_copy_from_guest` gathers copied pointer
+arguments (matrices, light/fog vectors, `glCallLists`) that cross a page.
+Regression: `test/test-opengl-sparse-page-arrays.js` (fails on the old code
+with `-3.7e28` for a straddling vertex). After the fix the cinematic frame is
+clean in both renderers and no traced vertex exceeds 1e10.
+
+Same bug class, not fixed: borrowed texture uploads (`glTexImage2D`/
+`glTexSubImage2D`) are still read as one contiguous span from one translation
+in `lib/gl-compat.js` `_pointerBytes`, and the small `glColor*v`/`glNormal3fv`
+/`glVertex*v` readers in `09a8e` read up to 16 bytes off one `$g2w`.
+
+About 500 block decodes per batch run during gameplay (1.2M across 19170..21530)
+in both uop arms, with 97% of all decode work in storms. That is worth a
+`--trace-code-writes` look on its own.
+
+## Decode storms were the emulator's code cache, not guest SMC (2026-09-28)
+
+The ~500 decodes/batch in gameplay had **no guest cause**. `--trace-code-writes`
+over the whole route: **0** retiring guest writes. What it did show — 818K
+blocks retired "by an overlapping publish", top pairs Storm `0x00cad89b <-
+0x00cad8a0` (Storm+0x3389b, a `nop; lea esp,[esp]` alignment pad falling into
+a loop head) and Game.dll `0x005e7353 <- 0x005e735b` — is the ordinary cost of
+re-decoding pages that had been thrown away: the outer entry and the loop head
+share bytes, so rebuilding one retires the other. The pages were being thrown
+away by three emulator mechanisms, found in this order:
+
+1. **Chain-epoch wrap flushed the whole cache.** `$chain_bump` (04-cache.wat)
+   runs on every retire, page drop and chunk free; its 13-bit epoch wrapped
+   every 8192 bumps and requested a full `$thread_arena_flush_if_safe` — even
+   though block chaining is OFF by default and no slot held an epoch. 736 full
+   clears over the route, 154 of them in the 2360 gameplay batches (one every
+   ~15). Fix: `$chain_slots_live`, set by `$chain_patch`, cleared by the flush;
+   with it 0 the wrap just restarts at 1. Clears 736 -> 30. Decodes barely moved
+   (1.113M -> 1.117M in gameplay), because the clears were a symptom of (2)/(3).
+2. **Page-index arena too small.** 128 index slots on the main thread; gameplay
+   executes ~450 distinct code pages. `$page_index_alloc`'s clock walk evicted
+   a live page on almost every page miss: 549K "index arena full" evictions.
+3. **Page directory aliasing.** PAGE_DIR is direct-mapped on page number with
+   1024 entries, so pages 4MB apart share a slot (Game.dll at 0x561000,
+   Storm 0xc7a000, msvcrt 0x1213000...): 585K collision evictions.
+
+`test/run.js` now prints `cache: page evictions by cause: index arena full N |
+directory slot collision M` — that split is what made (2)/(3) visible, since
+`cache_evicts` had lumped them together.
+
+Fix for (2)/(3): main-thread index slots 128 -> 512 (`PAGE_INDEX_ARENA`
+0x33C000 -> 0x69C000), directory 1024 -> 4096 entries (`PAGE_DIR_BASE` 0x26000
+-> 0x3E000), and a **second-chance** bit at PAGE_DIR +24 (set on create and on
+`$page_enter`, cleared as the clock passes) so eviction skips recently entered
+pages. Worker sizes unchanged. Measured arms, same route, uop off:
+
+| build | gameplay decodes (19170..21530) | whole-route decodes | full clears | guest ms/batch gameplay |
+|---|---|---|---|---|
+| before | 1,113,408 | 6,262,093 | 736 | 5.86 |
+| epoch fix only | 1,116,801 | 6,177,622 | 30 | (noise) |
+| + 384 slots / 4096 dir | 247,127 | 652,761 | 0 | 4.39 |
+| + 384 / 4096 / second chance | 192,847 | 503,666 | 0 | 3.53 |
+| + 512 / 4096 (plain clock) | 60,572 | 185,846 | 0 | 3.77 |
+| **shipped: 512 / 4096 / second chance** | **35,512** | **125,618** | **0** | **2.43** |
+
+Gameplay decodes -97% (472/batch -> 15/batch); gameplay guest-slice time
+5.86 -> 2.43 ms/batch and the whole route's guest time 175.8s -> 102.7s
+(wall-clock, loaded box, same order of runs — read the decode column as the
+durable number). The final frame is the same scene (HUD, Thrall selected,
+500/500) but not pixel-identical: cache layout changes which fall-throughs are
+free, which moves the block-budget clock, so animation phase differs — the same
+8.6% difference appears between the baseline and the epoch-only build.
+
+Still open: 11.6K index-full evictions remain over the route (mostly the map
+load); Storm+0x3389b/0x338a0's pad-into-loop-head pair still re-decodes each
+other when either is rebuilt (a `$fuse_stop`-like "stop at an existing entry"
+already exists for the forward direction in `$decode_block`; the backward
+direction — a head published INTO an existing outer block — retires the outer
+one by design, see `$page_publish`).
+
+## x87 fold under `--threads`: FPU_UNIMPL in the Miles MP3 thread (2026-09-28)
+
+`?debug&uop&x87-fold` with Worker threads trapped within a minute:
+`UNIMPLEMENTED API: FPU_UNIMPL` at `Mp3dec.asi+0x68ca` (orig VA `0x26f068ca`,
+straight-line IMDCT butterfly `fld/fchs/fmul/fadd/fxch/fstp`), ESP in tid 4's
+stack (Mss32 thread entry `0xecc590`). Fold off: clean. Cooperative CLI with
+the fold: clean. So the trigger was parallel decoding, not the x87 code.
+
+Cause: `$OP_INDEX` -- the decoder's op-start list for the block just emitted,
+which every loop matcher and x87 fuser reads right after `$te` fills it -- was
+one fixed region shared by every instance. Two Workers decoding at once
+overwrite each other's list between `$te` and the fuser, so thread A's island
+fuser (`$x87_island_fuse_block`) walks thread B's record pointers, rewrites a
+handler word in B's thread-cache partition, and packs a run count that spans
+records from two unrelated blocks. H451 then feeds a non-x87 record to
+`$fpu_exec_reg`, which traps. The island is simply the fuser most willing to
+match garbage (any 3+ H188/189/190 in a row); every other matcher had the same
+race and mostly declined.
+
+Fix: `$OP_INDEX_REGION` is tid-strided (16 x 8KB); `$OP_INDEX` is a
+per-instance global that `$init_thread` points at `tid * $OP_INDEX_SLICE`.
+Regression: `test/test-op-index-per-thread.js` (two instances on one memory;
+fails on the old layout with "thread B's decode must not rewrite thread A's
+OP_INDEX"). After the fix the browser repro ran 120 s, screen live in 112/121
+probes, no FPU_UNIMPL.
+
+Still shared and still racy in worker mode, not fixed: `$BX_RG_BASE` (block
+executor region builder, only with `--block-exec`) and `$PAGE_OVFL_MEMO`
+(a heuristic memo; a lost update costs a decision, not correctness).
+
+## Software GL drew nothing, 2026-10-06: a second SetPixelFormat was refused
+
+The GLD3D sweep found `--gl-renderer=software` black from boot: 2.85M
+`glLightfv`, 413 texture uploads, 2677 presents, zero `glDrawElements`. The
+context creator at Game.dll `0x6f0bc180` (runtime `0x61d180`) does GetDC,
+DescribePixelFormat, SetPixelFormat, and calls `wglCreateContext` only if
+SetPixelFormat returned TRUE. WC3 sets format 1, creates and deletes a probe
+context, destroys its BlockingWindow, then sets format 1 again on the same
+window for the real context. `$gdi_pixel_format_set` refused any second set,
+so no real context was ever made. Setting the format a window already has
+succeeds on Windows and in Wine (only a different format is refused): fixed in
+`579ee802`, and the main menu renders on software GL again by batch 2000.
+Evidence `scratch/runs/20261006T030624Z-warcraft3_demo-swgl-regress`.
+
+## Original Prologue browser preparation, October 8
+
+The September 28 CLI controlled gameplay above remains historical evidence;
+the October 6 WebGL menu result does not supersede it or establish fresh browser
+control. Prepared ordinary browser harness `tools/warcraft3-prologue/` uses
+accepted source/host `f62ab3c9` and module `4dc5ac2c`, retaining SetPixelFormat
+`579ee802` and sparse-page GL reads `604f0fd14`. No new build is needed.
+
+All 12 registered media paths are present in the shared fixture tree, including
+War3Demo.exe SHA `4bfa825510527235c2a14f7682dba1d4b339664f312f85206f01206e98d8000a`,
+Game.dll SHA `286823c37a1083e91f07d040e46a9df7af4c4952e01fcbba460589bd4e297654`,
+Storm.dll SHA `99974ea6dab31eff68a6c22d259dd6d8abcab0b2947417b3b41ebf01ab366e61`,
+and war3.mpq SHA `9e19d7ffb65054e4bdd3add7e26d70e16f063cdc20fa5b57639f3b9b7a196f9c`.
+The isolated worktree lacks private fixtures; preparation hardlinks originals
+from the shared fixture tree and authenticates the immutable baseline closure.
+A broken historical `Warcraft` symlink is outside the registered route.
+
+Prepared run `20261008T0135Z-warcraft3-prologue-ready` passes 542 SHA pins,
+542 HTTP HEADs, eight full GET hashes, range and drain checks. This is source
+and local HTTP readiness, not browser execution. The input harness requires
+personally reviewed actual state before every ordinary ABC/Create/Select,
+Campaign/Prologue, chapter Space, cinematic Escape, Thrall/right-click action.
+It checks live host AND owning renderer `api: gl` WebGL endpoints; neutral D3D
+endpoint proof is rejected. FPS/audio are unknown. Budget and serialized
+runtime conditions are in the [handoff](../../ops/handoffs/warcraft3-prologue-20261008.md).
+
+
+### Fresh ordinary WebGL navigation reached Campaign, October 8
+
+Run `20261008T0134Z-warcraft3-prologue-runtime` used the unchanged accepted
+`f62ab3c9` / `4dc5ac2c` closure on temporary bx_qms4q3z7. The original demo
+renders and ordinary trusted inputs reach Single Player Profiles, visibly type
+ABC, create/highlight that profile, Select, and reach Campaign with Prologue
+visible. Fourteen reviewed captures and live host AND owning `api: gl` WebGL
+endpoints are retained. Pointer Lock was false in every scene. The former
+October 3 inability to type a profile is not reproduced on this reference.
+
+Actual screenshot targets at this viewport were 594,327 (Single Player),
+228,391 (Create), 226,542 (Select), 593,365 (Campaign). A first 750 ms click
+remained at main-menu hover; a later five-second click reached Profiles.
+Create similarly responded only in a later capture after another reviewed
+click. Select/Campaign used separate reviewed hover before five-second holds.
+This records ordinary input response; the precise first-click cause is unknown.
+The GPU backing canvas's zero DOM rectangle is not valid target geometry.
+
+The original 600-second deadline stopped the run after Campaign, before any
+Prologue bullet/map/chapter/cinematic/Thrall input. **Fresh Prologue gameplay
+is not qualified.** September 28 gameplay is retained historical evidence.
+Next queue a fresh <=600-second ordinary route with these reviewed hover/hold
+steps and the majority of time reserved for actual map loading and controls.
+No engine patch, rebuild or optimization is justified by this route cap.
+
+354 actual served hashes (261 full, 93 range) match the source pins; actual
+full WASM response is `4dc5ac2c`. Original 12 registered paths remain present
+and unmodified. FPS/audio are unknown. Deadline cleanup at 01:45:38.601 closed
+Chrome with exit 0 and streams 0; independent PIDs/socket/pins checked, all
+34 actual attempt files downloaded, prefix removed at 01:46:29.223 within the
+90-second cleanup budget. Shell auth/stdole2 probes were strictly refused and
+retained. See the [handoff](../../ops/handoffs/warcraft3-prologue-20261008.md)
+for exact source/media identity, cleanup receipts and transient local disk-floor
+violation; no original media or evidence was deleted.
+
+## Fresh original Prologue unit movement (2026-10-08)
+
+Run `20261008T0156Z-warcraft3-campaign-world-runtime` advances beyond the
+previous Campaign-only result on the same unchanged `f62ab3c9` reference and
+actual served module `4dc5ac2c`. The reviewed `b17bb614d` browser helper is
+unchanged. Original media, source and archives were reused through hardlinks;
+all 542 pins and 788 served full/range hashes match.
+
+Ordinary ABC/Create/Select/Campaign followed by the actual Prologue bullet at
+page (473,373) reaches Chapter One: Chasing Visions. The chapter subsequently
+says PRESS ANY KEY TO CONTINUE. Space enters the visible cinematic; Escape
+leads to the gameplay HUD. The first Thrall click at (255,524) shows his hover
+label; the next selects him with Level 1 Far Seer, health 500/500, mana 285/285.
+Right-click (375,430) moves him from the lower path to below the stone circle;
+right-click (220,480) moves him back left/down. Compare `thrall-selected.png`,
+`move-order.png`, `move-return.png` and the settled `gameplay-final.png`:
+the hut, circle, rocks and camera remain fixed. Worker reviewed these actual
+screenshots. Coordinator review/integration is pending at worker exit.
+
+Matching host AND owning OpenGL WebGL endpoints and Pointer Lock false are
+retained with every state; trusted ordinary inputs and host right DOWN/UP
+receipts are recorded. No guest-state or clock changes, engine fix, rebuild,
+native run or performance benchmark was made. FPS/audio/combat/completion and
+whole-game compatibility remain unmeasured. Ordinary quit at 02:15:53.697
+closed Chrome with exit 0 before the original 02:17:36.858 deadline; all 67
+actual files were SHA-checked, independent PID/socket/pin checks passed, and
+the scoped remote prefix was removed at 02:16:07.994. Root owns the adopted
+temporary box. The [scoped handoff](../../ops/handoffs/warcraft3-campaign-world-20261008.md)
+records exact screenshot/source identities, strict shell probe refusals,
+resource checks, and a preparation receipt hardlink mistake restored exactly
+against both prior sealed indices. No further phase follows in budget mode.
+
+## Control route and frame counter qualified (2026-10-10)
+
+The `wc3g` replay still reaches Prologue gameplay on main (bc3505ce6): Thrall
+selects (portrait, Level 1 Far Seer 500/500, command card) and walks all three
+right-click move orders. Deterministic: the HUD and final frames are
+byte-identical across three runs, with and without tracing. Evidence:
+`scratch/runs/20261010T0330Z-warcraft3-demo-control-frames`.
+
+**Frame counter.** `--present-distinct` counts GL presents (kind `gpu`, from
+`gl-compat _publishContext`). Over batches 19170-21530 it counted 54, and
+`--trace-gl=gpuPresent` over the same window traced exactly 54
+`gpuPresent(0x310002)`: one GL context, one present per guest `SwapBuffers`.
+`--frame-stats`'s flush series fires **twice** per frame here (the present and
+the window blit, 0-1 batches apart), so take one per pair before reading
+intervals (`wc3-frames.js` in the evidence directory does).
+
+**What a frame costs.** p50 43 batches of 20,000 blocks between frames (~860k
+guest blocks per gameplay frame), p90 66, max 85. The route runs at the default
+200 ms/batch tick, so "presents per guest-second" (0.1) is a tick artifact, not
+a frame rate. The boat CLI (4 vCPU, software GL) produced 2.9-3.4 frames per
+wall-second; browser FPS is not measured.
+
+**Fresh boats cannot fetch this demo:** `fetch-candidate-corpus
+--id=warcraft3-demo` downloads `W3Demo.exe` and then fails `7z exit 2` with no
+`unar`. Ship the local install tree, and `test/binaries/dlls` too: without the
+real `msvcrt.dll` the game traps on `_clearfp`.

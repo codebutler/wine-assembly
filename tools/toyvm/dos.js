@@ -28,8 +28,17 @@ const { Sound, PIT_HZ } = require('./audio');
 const { Gus } = require('./gus');
 
 const VGA_BASE = 0xA0000;
-const STUB_SEG = 0xF000;      // vector v points at F000:(0x100+v), one refused byte
+const STUB_SEG = 0xF000;      // dedicated host entries occupy F000:0100-01FF
 const STUB_OFF = 0x100;       // ...leaving F000:0000-00FF for driver signatures
+const DEFAULT_IRET_OFF = 0x200;
+// Keep host services and hardware delivery entries individually addressable.
+const HOST_VECTORS = new Set([0, 4, 6, 0x0D, 0x10, 0x11, 0x12, 0x15, 0x16,
+  0x1A, 0x1C, 0x31, 0x33, 0x40, 0x5C, 0x67,
+  // Defined BIOS/DOS services stay observable even where not implemented.
+  2, 5, 0x13, 0x14, 0x17, 0x18, 0x19,
+  ...Array.from({ length: 16 }, (_, i) => 0x20 + i),
+  ...Array.from({ length: 8 }, (_, i) => 8 + i),
+  ...Array.from({ length: 8 }, (_, i) => 0x70 + i)]);
 const STUB_BYTE = 0xF1;       // ICEBP -- not decoded, so the trace stops on it
 
 // --- the two memory managers a 1994 demo expects to find --------------------
@@ -576,18 +585,10 @@ const CON_COLS = 80, CON_ROWS = 25;
 // place, and it is what the hardware does.
 const VRAM_TEXT = 0xB8000;
 
-// The name a created file is remembered under. Same rules hostPath applies to
-// a lookup -- base name, no drive, no directory, case-folded -- so a program
-// that creates C:\TEMP\X.DAT and opens x.dat finds it.
 // A filename the way DOS matches it: case-folded, 0xFF/NBSP blanks dropped,
 // no trailing dot. See hostPath.
 function dosNameKey(name) {
   return String(name).toLowerCase().replace(/[ÿ ]/g, '').replace(/\.+$/, '');
-}
-
-function fileKey(name) {
-  const base = String(name || '').replace(/^[A-Za-z]:/, '').split(/[\\/]/).filter(Boolean).pop();
-  return base ? base.toLowerCase() : null;
 }
 
 // A DOS filespec as the 11-character NAME.EXT template FindFirst keeps in the
@@ -890,6 +891,7 @@ class Machine {
     // The keyboard as hardware: scancodes waiting to be delivered as IRQ1, and
     // the one port 60h reads right now. See keyboardIrq.
     this.kbQueue = [];
+    this.heldKeys = new Map();
     // --keys go on BOTH wires, for the reason pushKey gives: which one a
     // program listens on is not knowable from here. They used to go only into
     // the INT 16h queue above, and kbFill -- the only bridge to the hardware
@@ -917,8 +919,9 @@ class Machine {
     this.sound = opts.sound || 'full';
     // `pressed`/`released` are the per-button transition counts INT 33h AX=05h
     // and 06h hand out and clear; they are separate from `buttons`, which is
-    // the level right now.
-    this.mouse = { x: 160, y: 100, buttons: 0, dx: 0, dy: 0, pressed: [0, 0, 0], released: [0, 0, 0] };
+    // the level right now. `reads` counts AX=03h polls, so a scripted click can
+    // be held until the guest has actually looked at it (run-dos.js --click).
+    this.mouse = { x: 160, y: 100, buttons: 0, dx: 0, dy: 0, pressed: [0, 0, 0], released: [0, 0, 0], reads: 0 };
     // A freshly loaded .EXE owns every paragraph up to the ceiling, so the
     // free pool starts empty and fills when the program shrinks its own block.
     this.allocTop = DEFAULT_ALLOC_TOP;
@@ -939,6 +942,10 @@ class Machine {
     // Open files, and a record of what was asked for -- "which file could it
     // not find" is the first question when a demo renders an empty screen.
     this.fileRoot = opts.fileRoot || null;
+    this.currentDirectory = '';
+    this.directorySearches = new Map();
+    this.directorySearchIds = new Map();
+    this.directorySearchSerial = 0;
     this.files = new Map(); this.fileNext = 5;   // 0-4 are the standard handles
     this.filesOpened = []; this.filesMissed = []; this.filesCreated = [];
     this.bytesRead = 0;
@@ -952,6 +959,7 @@ class Machine {
     // EXEC: the parent contexts to return to, and the code the last child
     // exited with. `transfer` is how a service hands control somewhere else.
     this.execStack = []; this.lastExitCode = 0; this.transfer = null;
+    this.codeReloaded = false;
     // How the last child ended, in AH=4Dh's terms: 0 normal, 1 Ctrl-C, 2
     // critical error, 3 terminate-and-stay-resident. See AH=4Dh.
     this.lastExitType = 0;
@@ -977,6 +985,7 @@ class Machine {
     // Whether the guest's addresses still wrap at 1MB. They do until it takes
     // an extended-memory handle; see openBus.
     this.linFlat = false;
+    this.kbc = { output: 1, command: false, pending: null, reply: [] };
     this.vmExports = null;
     this.sliceCut = -1;         // see endSlice
     this.emsHandles = new Map(); this.emsNext = 1; this.emsMaps = 0;
@@ -1231,38 +1240,70 @@ class Machine {
   }
 
   // --- the file side of DOS ------------------------------------------------
-  // Every program here runs from the directory its data is in, so the whole of
-  // "the filesystem" is that one directory. Read-only on purpose: a sweep runs
-  // 199 programs unattended and none of them has any business writing to the
-  // corpus.
+  // fileRoot mounts C:\. Host files remain immutable; guest writes live in
+  // tempFiles, keyed by the entire C:-relative path (root keys stay compatible
+  // with existing shared tempFiles callers).
   guestPath(r) {
     const at = this.lin(r, 'ds', r.get('dx'));
     let s = '';
-    for (let i = at; i < this.mem.length && this.mem[i] && s.length < 128; i++) {
-      s += String.fromCharCode(this.mem[i]);
+    for (let i = 0; i < 128; i++) {
+      const b = this.guestRd(at + i);
+      if (!b) break;
+      s += String.fromCharCode(b);
     }
     return s;
   }
 
-  // DOS is case-insensitive and the corpus is not: the name in the binary is
-  // usually upper case and the file on disk usually is not, or the other way
-  // round in the same directory. Drive letters and directories are dropped --
-  // a demo that says C:\SOUND\FILE.DAT means the file next to it.
-  hostPath(name) {
-    if (!this.fileRoot || !name) return null;
-    const base = name.replace(/^[A-Za-z]:/, '').split(/[\\/]/).filter(Boolean).pop();
-    if (!base) return null;
-    if (this.dirCache === undefined) {
-      try { this.dirCache = fs.readdirSync(this.fileRoot); } catch { this.dirCache = []; }
+  resolvePath(name, directory = false) {
+    if (typeof name !== 'string' || !name || /^[\\/]{2}/.test(name)) return null;
+    const drive = /^([a-z]):/i.exec(name);
+    if (drive && drive[1].toUpperCase() !== 'C') return null;
+    const rest = drive ? name.slice(2) : name;
+    if (/[:*?\x00-\x1f]/.test(rest) || (!directory && /[\\/]$/.test(rest))) return null;
+    const parts = /^[\\/]/.test(rest) ? [] : this.currentDirectory.split('/').filter(Boolean);
+    for (const part of rest.split(/[\\/]+/)) {
+      if (!part || part === '.') continue;
+      if (part === '..') { parts.pop(); continue; } // DOS root is its own parent.
+      const key = dosNameKey(part);
+      if (!key) return null;
+      parts.push(key);
     }
-    const hit = this.dirCache.find(f => f.toLowerCase() === base.toLowerCase())
-      // Then as DOS would compare them. 0xFF is a blank in code page 437 and
-      // a legal filename byte, which is how alpha.exe's music file got the
-      // name "CRiSiS.ÿ": the extension was made to look like nothing. The
-      // unpacker that put the corpus on disk dropped it, leaving "crisis.",
-      // and DOS itself treats a trailing dot as no extension at all.
-      || this.dirCache.find(f => dosNameKey(f) === dosNameKey(base));
-    return hit ? `${this.fileRoot}/${hit}` : null;
+    return directory || parts.length ? parts.join('/') : null;
+  }
+
+  fileKey(name) { return this.resolvePath(name); }
+
+  // Resolve each component independently. Never fall back to a basename or
+  // traverse host symlinks: neither is part of the mounted DOS namespace.
+  hostKey(key) {
+    if (!this.fileRoot || key === null) return null;
+    let at = this.fileRoot;
+    for (const part of key.split('/').filter(Boolean)) {
+      let names;
+      try { names = fs.readdirSync(at); } catch { return null; }
+      const hit = names.find(f => f.toLowerCase() === part)
+        || names.find(f => dosNameKey(f) === part);
+      if (!hit) return null;
+      at += '/' + hit;
+      if (fs.lstatSync) {
+        try { if (fs.lstatSync(at).isSymbolicLink()) return null; } catch { return null; }
+      }
+    }
+    return at;
+  }
+
+  hostPath(name) { return this.hostKey(this.fileKey(name)); }
+
+  isDirectory(key) {
+    // An unmounted machine still has an empty virtual C: root for temp files.
+    if (key === '') return true;
+    const at = this.hostKey(key);
+    if (!at) return false;
+    try { return fs.statSync(at).isDirectory(); } catch { return false; }
+  }
+
+  parentExists(key) {
+    return key !== null && this.isDirectory(key.includes('/') ? key.slice(0, key.lastIndexOf('/')) : '');
   }
 
   // Where the DTA is: wherever AH=1Ah last put it, else the PSP's own at +80h,
@@ -1271,23 +1312,27 @@ class Machine {
     return this.dta || ((this.curPsp << 4) + 0x80);
   }
 
-  // Everything a directory search can find: the files beside the executable
-  // and the ones this run created, by name and size. The browser's fs shim
-  // has no statSync, so a size comes from reading the file when it must.
-  dirEntries() {
-    if (this.dirCache === undefined) {
-      try { this.dirCache = this.fileRoot ? fs.readdirSync(this.fileRoot) : []; } catch { this.dirCache = []; }
-    }
+  // Immediate children only, merging guest overlays with immutable host files.
+  dirEntries(directory = this.currentDirectory) {
     const out = [];
     const seen = new Set();
-    for (const [key, rec] of this.tempFiles) { out.push({ name: key.toUpperCase(), size: rec.len }); seen.add(key); }
-    for (const f of this.dirCache) {
-      if (seen.has(f.toLowerCase())) continue;
-      let size = 0;
-      try { size = fs.statSync(`${this.fileRoot}/${f}`).size; } catch {
-        try { size = fs.readFileSync(`${this.fileRoot}/${f}`).length; } catch { continue; }
-      }
-      out.push({ name: f.toUpperCase(), size });
+    const prefix = directory ? directory + '/' : '';
+    for (const [key, rec] of this.tempFiles) {
+      if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/')) continue;
+      const name = key.slice(prefix.length);
+      out.push({ name: name.toUpperCase(), size: rec.len, attributes: rec.attributes ?? 0x20 }); seen.add(name);
+    }
+    const host = this.hostKey(directory);
+    let names = [];
+    try { if (host) names = fs.readdirSync(host); } catch {}
+    for (const f of names) {
+      if (seen.has(dosNameKey(f))) continue;
+      const at = this.hostKey(prefix + dosNameKey(f));
+      if (!at) continue;
+      try {
+        const stat = fs.statSync(at);
+        out.push({ name: f.toUpperCase(), size: stat.isDirectory() ? 0 : stat.size, attributes: stat.isDirectory() ? 0x10 : 0x20 });
+      } catch { continue; }
     }
     return out;
   }
@@ -1298,25 +1343,30 @@ class Machine {
   // files" from FindNext) when nothing further fits.
   findNext(r, errNoMore) {
     const dta = this.dtaAddr();
+    const bytes = this.guestBytes(dta, 43);
     let pattern = '';
-    for (let i = 0; i < 11; i++) pattern += String.fromCharCode(this.mem[dta + 1 + i] || 0x20);
-    const entries = this.dirEntries();
-    let at = this.mem[dta + 0x0D] | (this.mem[dta + 0x0E] << 8);
+    for (let i = 0; i < 11; i++) pattern += String.fromCharCode(bytes[1 + i] || 0x20);
+    const id = (bytes[15] | bytes[16] << 8 | bytes[17] << 16 | bytes[18] << 24) >>> 0;
+    const directory = this.directorySearches.get(id);
+    const entries = directory === undefined ? [] : this.dirEntries(directory);
+    let at = bytes[0x0d] | (bytes[0x0e] << 8);
     for (; at < entries.length; at++) {
       const e = entries[at];
+      if ((e.attributes & 0x16) & ~bytes[12]) continue;
       if (!dosMatch(pattern, e.name)) continue;
-      this.mem[dta + 0x0D] = (at + 1) & 0xFF; this.mem[dta + 0x0E] = ((at + 1) >> 8) & 0xFF;
-      this.mem[dta + 0x15] = 0x20;                    // archive: a plain file
-      this.mem[dta + 0x16] = 0; this.mem[dta + 0x17] = 0;               // 00:00
-      this.mem[dta + 0x18] = 0x21; this.mem[dta + 0x19] = 0x1E;         // 1995-01-01
-      for (let i = 0; i < 4; i++) this.mem[dta + 0x1A + i] = (e.size >>> (8 * i)) & 0xFF;
+      bytes[0x0d] = (at + 1) & 0xff; bytes[0x0e] = (at + 1) >>> 8;
+      bytes[0x15] = e.attributes;
+      bytes[0x16] = 0; bytes[0x17] = 0;
+      bytes[0x18] = 0x21; bytes[0x19] = 0x1e;
+      for (let i = 0; i < 4; i++) bytes[0x1a + i] = e.size >>> (8 * i) & 0xff;
       const name = e.name.slice(0, 12);
-      for (let i = 0; i < 13; i++) this.mem[dta + 0x1E + i] = i < name.length ? name.charCodeAt(i) : 0;
+      for (let i = 0; i < 13; i++) bytes[0x1e + i] = i < name.length ? name.charCodeAt(i) : 0;
+      this.guestWrite(dta, bytes);
       r.set('ax', 0);
       r.setResultCf(false);
       return true;
     }
-    this.mem[dta + 0x0D] = at & 0xFF; this.mem[dta + 0x0E] = (at >> 8) & 0xFF;
+    this.guestWrite(dta + 0x0d, [at & 0xff, at >>> 8 & 0xff]);
     r.setResultCf(true); r.set('ax', errNoMore);
     return true;
   }
@@ -1342,7 +1392,7 @@ class Machine {
     // is found before the host directory: a demo that writes a config or a
     // decompressed temp file and reads it straight back has to see its own
     // bytes, and nothing here ever touches the real disk for writes.
-    const key = fileKey(name);
+    const key = this.fileKey(name);
     if (key && this.tempFiles.has(key)) {
       const rec = this.tempFiles.get(key);
       const h = this.fileNext++;
@@ -1355,7 +1405,7 @@ class Machine {
     let buf;
     try { buf = fs.readFileSync(p); } catch { this.filesMissed.push(name); return 0; }
     const h = this.fileNext++;
-    this.files.set(h, { buf, pos: 0, name });
+    this.files.set(h, { buf, pos: 0, name, key });
     this.filesOpened.push(name);
     return h;
   }
@@ -1364,7 +1414,7 @@ class Machine {
   // guest created earlier in this run, or one next to the executable. EXEC
   // needs it: the program it is asked to run is usually one this run produced.
   readWholeFile(name) {
-    const key = fileKey(name);
+    const key = this.fileKey(name);
     if (key && this.tempFiles.has(key)) {
       const rec = this.tempFiles.get(key);
       return Buffer.from(rec.data.subarray(0, rec.len));
@@ -1378,9 +1428,18 @@ class Machine {
   // directory is read-only as far as the emulator is concerned -- but it is a
   // real file to the guest: writeable, seekable, and re-openable by name.
   createFile(name) {
-    const key = fileKey(name);
-    if (!key) return 0;
-    const rec = { data: new Uint8Array(4096), len: 0 };
+    const key = this.fileKey(name);
+    if (!key || !this.parentExists(key) || this.isDirectory(key)) return 0;
+    // AH=3Ch may truncate an AH=5Ah file while another handle still exists.
+    // Keep its identity and attribute policy shared by all open handles.
+    const previous = this.tempFiles.get(key);
+    const rec = previous && previous.temporary ? previous : {};
+    rec.data = new Uint8Array(4096); rec.len = 0;
+    if (rec.temporary) {
+      for (const file of this.files.values()) {
+        if (file.rec === rec) file.buf = rec.data.subarray(0, 0);
+      }
+    }
     this.tempFiles.set(key, rec);
     const h = this.fileNext++;
     this.files.set(h, { buf: rec.data.subarray(0, 0), pos: 0, name, rec });
@@ -1391,6 +1450,7 @@ class Machine {
   // Write into a created file, growing it. `pos` is honoured, so a program that
   // seeks back to patch a header gets what it wrote there.
   writeFile(f, src, n) {
+    const source = this.vmExports && this.vmExports.get_cr0() < 0 ? this.guestBytes(src, n) : null;
     // A write into a file that came off the host disk copies it into the
     // in-memory file system first, and every later read of that name sees the
     // copy. Without this the write was simply dropped: ANGEL.EXE's SETUP.EXE
@@ -1402,7 +1462,7 @@ class Machine {
     if (!f.rec) {
       const rec = { data: Uint8Array.from(f.buf), len: f.buf.length };
       f.rec = rec;
-      this.tempFiles.set(fileKey(f.name), rec);
+      this.tempFiles.set(f.key || this.fileKey(f.name), rec);
       this.filesCreated.push(f.name);
     }
     const rec = f.rec;
@@ -1412,10 +1472,15 @@ class Machine {
       grown.set(rec.data.subarray(0, rec.len));
       rec.data = grown;
     }
-    for (let i = 0; i < n; i++) rec.data[f.pos + i] = this.mem[(src + i) & 0xFFFFF];
+    for (let i = 0; i < n; i++) rec.data[f.pos + i] = source ? source[i] : this.mem[(src + i) & 0xFFFFF];
     f.pos = end;
     if (end > rec.len) rec.len = end;
     f.buf = rec.data.subarray(0, rec.len);
+    if (rec.temporary) {
+      for (const handle of this.files.values()) {
+        if (handle.rec === rec) handle.buf = rec.data.subarray(0, rec.len);
+      }
+    }
   }
 
   // A number that changes exactly when the text page does, and does not change
@@ -2108,15 +2173,45 @@ class Machine {
     const ex = this.vmExports;
     if (ex && (ex.get_cr0() & 1)) {
       const at = ((ex[`get_${reg}b`]() >>> 0) + (off & 0xFFFF)) >>> 0;
+      if (ex.get_cr0() < 0) return at;
       return at < this.mem.length ? at : 0;
     }
     return (((r.get(reg) & 0xFFFF) << 4) + (off & 0xFFFF)) & 0xFFFFF;
   }
 
+  guestRd(linear) {
+    const e = this.vmExports;
+    if (e && e.get_cr0() < 0) return e.pg_read(linear >>> 0, 1,
+      e.get_vm86() || (e.get_cs() & 3) === 3 ? 1 : 0);
+    return this.mem[linear];
+  }
+
+  guestBytes(linear, n, realWrap = false) {
+    const bytes = new Uint8Array(n);
+    const wrap = realWrap && !(this.vmExports && this.vmExports.get_cr0() < 0);
+    for (let i = 0; i < n; i++) bytes[i] = this.guestRd(wrap ? (linear + i) & 0xfffff : linear + i);
+    return bytes;
+  }
+
+  guestWrite(linear, bytes, realWrap = false) {
+    const e = this.vmExports;
+    if (!(e && e.get_cr0() < 0)) {
+      if (realWrap) for (let i = 0; i < bytes.length; i++) this.mem[(linear + i) & 0xfffff] = bytes[i];
+      else this.mem.set(bytes, linear);
+      return;
+    }
+    const user = e.get_vm86() || (e.get_cs() & 3) === 3 ? 1 : 0;
+    const physical = new Uint32Array(bytes.length);
+    // Host services validate the complete buffer before changing files, CPU
+    // state or guest bytes; no contiguous-physical-buffer assumption survives.
+    for (let i = 0; i < bytes.length; i++) physical[i] = e.pg_probe((linear + i) >>> 0, 1, user);
+    for (let i = 0; i < bytes.length; i++) e.pg_phys_write(physical[i], bytes[i]);
+  }
+
   installIvt() {
     for (let v = 0; v < 256; v++) {
       const at = v * 4;
-      // Offset is 0x100 + the vector, not the vector itself: the run loop
+      // Host-service offset is 0x100 + the vector: the run loop
       // recovers the vector as `ip & 0xFF` either way, and this leaves the
       // first 256 bytes of the stub segment free for the driver signatures a
       // program reads out of a handler's own segment. That is how an expanded
@@ -2124,13 +2219,15 @@ class Machine {
       // ES:000A against "EMMXXXX0" -- and with the stubs at offset v those
       // eight bytes sat on top of the stubs for INT 0Ah through INT 11h,
       // INT 10h among them.
-      this.mem[at] = STUB_OFF + v;
-      this.mem[at + 1] = (STUB_OFF + v) >> 8;
+      const off = HOST_VECTORS.has(v) ? STUB_OFF + v : DEFAULT_IRET_OFF;
+      this.mem[at] = off & 0xFF;
+      this.mem[at + 1] = off >> 8;
       this.mem[at + 2] = STUB_SEG & 0xFF;
       this.mem[at + 3] = STUB_SEG >> 8;
       this.mem[(STUB_SEG << 4) + STUB_OFF + v] = STUB_BYTE;
     }
     const base = STUB_SEG << 4;
+    this.mem[base + DEFAULT_IRET_OFF] = 0xCF; // actual BIOS default IRET
     for (let i = 0; i < EMS_NAME.length; i++) this.mem[base + 0x0A + i] = EMS_NAME.charCodeAt(i);
 
     this.installRomFonts();
@@ -2250,10 +2347,9 @@ class Machine {
 
   // Has the guest taken a vector over, or is it still ours?
   //
-  // Every vector starts out pointing into the stub segment, so "not the stub
-  // segment" is exactly "the program installed its own handler". No bookkeeping
-  // in the INT 21h AH=25 path is needed, and a program that writes the IVT
-  // directly -- which several here do, since it is two stores -- is caught too.
+  // Compare the complete initialized far pointer, including the shared default
+  // IRET target. Direct IVT stores and guest hooks in the ROM segment are
+  // detected without bookkeeping in INT 21h AH=25.
   //
   // A protected-mode program's handler is an IDT gate rather than a vector
   // here, and consulting the IDT for these vectors was tried and reverted. It
@@ -2263,12 +2359,15 @@ class Machine {
   // gate at all of them whatever it thinks of hardware interrupts. Reading that
   // as "the guest hooked the timer" sent a double fault every tick, and cd2.exe,
   // daretro.exe and AMBIENT.EXE each lost a full screen of picture to a printed
-  // "Exception fault." Where a pmode program remaps its PIC to is not something
-  // we track. What CAN be read is whether the gate still says what it said when
-  // the extender built the table -- see pmHookedVector below.
+  // "Exception fault." A program that remaps its PIC out of that range is
+  // answered by where it sent it (pic.base, see timerVector); for one that
+  // leaves it at 08h, what CAN be read is whether the gate still says what it
+  // said when the extender built the table -- see pmHookedVector below.
   hookedVector(v) {
     const at = v << 2;
-    if ((this.mem[at + 2] | (this.mem[at + 3] << 8)) !== STUB_SEG) return true;
+    const expected = HOST_VECTORS.has(v) ? STUB_OFF + v : DEFAULT_IRET_OFF;
+    if ((this.mem[at + 2] | (this.mem[at + 3] << 8)) !== STUB_SEG
+        || (this.mem[at] | (this.mem[at + 1] << 8)) !== expected) return true;
     return this.pmHookedVector(v);
   }
 
@@ -2387,6 +2486,32 @@ class Machine {
     this.keys.push({ ah: scan & 0xFF, al: ascii & 0xFF });
     this.kbQueue.push(scan & 0x7F, (scan & 0x7F) | 0x80);
     this.syncKbBda();
+  }
+
+  // Physical transitions are separate from taps. Repeat is a BIOS keystroke
+  // and another hardware make, never an implicit release.
+  keyDown(scan, ascii, extended = false, repeat = false, bios = true) {
+    const id = `${extended ? 'e0:' : ''}${scan & 0x7F}`;
+    const held = this.heldKeys.has(id);
+    if (held && !repeat) return false;
+    if (!held) this.heldKeys.set(id, { scan: scan & 0x7F, extended });
+    if (bios) this.keys.push({ ah: scan & 0xFF, al: ascii & 0xFF });
+    if (extended) this.kbQueue.push(0xE0);
+    this.kbQueue.push(scan & 0x7F);
+    this.syncKbBda();
+    return true;
+  }
+
+  keyUp(scan, extended = false) {
+    const id = `${extended ? 'e0:' : ''}${scan & 0x7F}`;
+    if (!this.heldKeys.delete(id)) return false;
+    if (extended) this.kbQueue.push(0xE0);
+    this.kbQueue.push((scan & 0x7F) | 0x80);
+    return true;
+  }
+
+  releaseKeys() {
+    for (const k of this.heldKeys.values()) this.keyUp(k.scan, k.extended);
   }
 
   // The BIOS keyboard buffer, at 0040:001E, as a mirror of the INT 16h queue.
@@ -2869,7 +2994,22 @@ class Machine {
     this.vga.attrFlip = v;
   }
 
+  // A program that reprograms the master PIC has said where IRQ0 goes, and
+  // then the timer is that vector and nothing else. This is what the
+  // exception-number trap above could not see past: at 0x20 and up there is no
+  // CPU exception to mistake a gate for, so in protected mode a remapped IRQ0
+  // is delivered straight to the IDT like the Ultrasound's is. daretro.exe
+  // runs its own non-DPMI protected mode, sends ICW2=20h, points PIT channel 0
+  // at a one-shot and waits on a byte only its INT 20h handler sets -- with
+  // the tick offered at 08h and 1Ch only, it spun on that byte forever.
   timerVector() {
+    const base = this.pic.base[0];
+    if (base !== 0x08) {
+      if (base < 0x20 || (this.pic.imr[0] & 1)) return 0;
+      const ex = this.vmExports;
+      const pmode = ex && ex.get_cr0 && (ex.get_cr0() & 1) && !(ex.get_vm86 && ex.get_vm86());
+      return (pmode || this.hookedVector(base)) ? base : 0;
+    }
     if (this.hookedVector(0x08)) return 0x08;
     if (this.hookedVector(0x1C)) return 0x1C;
     return 0;
@@ -2945,10 +3085,15 @@ class Machine {
     if (port === 0x3CE) return this.vga.gcIndex;
     if (port === 0x3D4 || port === 0x3B4) return this.vga.crtcIndex;
     if (port === 0x3CC) return this.vga.misc;
+    // Writes are consumed synchronously, so IBF is clear. OBF describes an
+    // actual controller response or keyboard byte, without consuming either.
+    if (port === 0x64) return 0x04 | (this.kbc.command ? 8 : 0)
+      | (this.kbc.reply.length || this.kbFresh || this.kbQueue.length ? 1 : 0);
     // Keyboard data. A program with an INT 9 handler finds here what the IRQ
     // just delivered; one that polls the port with no handler at all -- BTW.EXE
     // makes zero INT 16h calls and hooks nothing -- drives the queue itself.
     if (port === 0x60) {
+      if (this.kbc.reply.length) return this.kbc.reply.shift();
       if (this.kbFresh) { this.kbFresh = false; return this.kbScan; }
       if (!this.kbQueue.length && (this.kbReads++ & 0xFFF) === 0) this.kbFill();
       if (this.kbQueue.length) this.kbScan = this.kbQueue.shift();
@@ -3045,6 +3190,23 @@ class Machine {
     if (w === 16 && this.sound !== 'none' && port === this.gus.base + 0x104) { this.gus.out(0x104, value, 16); return; }
     if (w === 16) { this.portOut_(port, value & 0xFF, 8); this.portOut_(port + 1, (value >> 8) & 0xFF, 8); return; }
     value &= 0xFF;
+    if (port === 0x64) {
+      // FF pulses no output bits: the documented controller no-op.
+      if (value !== 0xD0 && value !== 0xD1 && value !== 0xFF)
+        throw new Error('Unsupported 8042 controller command 0x' + value.toString(16));
+      this.kbc.command = true;
+      this.kbc.pending = value === 0xD1 ? 'output' : null;
+      if (value === 0xD0) this.kbc.reply.push(this.kbc.output);
+      return;
+    }
+    if (port === 0x60 && this.kbc.pending === 'output') {
+      if (!(value & 1)) throw new Error('Unsupported 8042 CPU reset request');
+      this.kbc.pending = null;
+      this.kbc.command = false;
+      this.kbc.output = value;
+      this.setA20(!!(value & 2));
+      return;
+    }
     // --- 8259 PICs ----------------------------------------------------------
     // ICW1 (bit 4 of a command-port write) opens an init sequence, during
     // which the next data-port writes are ICW2 (vector base), ICW3 unless
@@ -3637,7 +3799,8 @@ class Machine {
     }
     if (ah === 0x10 && al === 0x02) {       // set all 16 + overscan, from ES:DX
       const src = this.lin(r, 'es', r.get('dx'));
-      for (let i = 0; i < 17; i++) this.vga.attr[i] = this.mem[(src + i) & 0xFFFFF] & 0x3F;
+      const bytes = this.guestBytes(src, 17, true);
+      for (let i = 0; i < 17; i++) this.vga.attr[i] = bytes[i] & 0x3F;
       return true;
     }
     if (ah === 0x10 && al === 0x07) {       // read one palette register
@@ -3655,8 +3818,9 @@ class Machine {
     if (ah === 0x10 && al === 0x12) {       // set block of DAC registers
       const first = r.get('bx') & 0xFFFF, count = r.get('cx') & 0xFFFF;
       const src = this.lin(r, 'es', r.get('dx'));
+      const bytes = this.guestBytes(src, count * 3, true);
       this.dacWrites += count;
-      for (let i = 0; i < count * 3; i++) this.palette[(first * 3 + i) % 768] = this.mem[(src + i) & 0xFFFFF] & 0x3F;
+      for (let i = 0; i < count * 3; i++) this.palette[(first * 3 + i) % 768] = bytes[i] & 0x3F;
       return true;
     }
     if (ah === 0x10 && (al === 0x15 || al === 0x17)) {   // read DAC back
@@ -3671,9 +3835,11 @@ class Machine {
       }
       const first = r.get('bx') & 0xFFFF, count = r.get('cx') & 0xFFFF;
       const dst = this.lin(r, 'es', r.get('dx'));
+      const bytes = new Uint8Array(count * 3);
       for (let i = 0; i < count * 3; i++) {
-        this.mem[(dst + i) & 0xFFFFF] = this.palette[(first * 3 + i) % 768] & 0x3F;
+        bytes[i] = this.palette[(first * 3 + i) % 768] & 0x3F;
       }
+      this.guestWrite(dst, bytes, true);
       return true;
     }
     if (ah === 0x11) {                              // character generator
@@ -4040,7 +4206,7 @@ class Machine {
         const us = ((r.get('cx') & 0xFFFF) * 65536) + (r.get('dx') & 0xFFFF);
         this.setClock(this.pit.phase + us / US_PER_TICK);
         const at = this.lin(r, 'es', r.get('bx'));
-        this.mem[at] |= 0x80;
+        this.guestWrite(at, [this.guestRd(at) | 0x80]);
         r.setResultCf(false);
         return true;
       }
@@ -4169,6 +4335,7 @@ class Machine {
     // The environment block. DOS gives it to the program, so the program is
     // the owner: a program that frees its own environment (a TSR shrinking its
     // footprint does) is freeing a block it holds.
+    this.memBlocks.set(ENV_SEG, ENV_PARAS);
     this.mcbWrite(ENV_SEG, psp, ENV_PARAS);
     // DOS and its drivers: everything from the end of the environment to the
     // paragraph below the PSP. At the default load address that is 0x3F
@@ -4182,11 +4349,13 @@ class Machine {
     this.mcbSync();
   }
 
-  // Re-lay the part of the chain above the PSP. Called wherever the allocator
-  // moves a boundary, which is the only way any of these numbers change.
+  // Re-lay the arena, including the initial environment below the PSP. It is
+  // an ordinary allocation: AH=49h can free it and AH=48h can reuse its hole.
+  // Keep the intervening DOS-owned block out of that allocatable region.
   mcbSync() {
     const psp = this.pspSeg;
-    const items = [];
+    const sys = ENV_SEG + ENV_PARAS + 1;
+    const items = [{ seg: sys, size: psp - 1 - sys, own: MCB_SYSTEM }];
     for (const [seg, size] of this.memBlocks) items.push({ seg, size, own: this.mcbOwner(seg) });
     // A `memFree` entry is a raw region, header paragraph included; as a block
     // it is one paragraph smaller and owned by nobody.
@@ -4196,12 +4365,12 @@ class Machine {
     }
     items.sort((a, b) => a.seg - b.seg);
     const chain = [];
-    let cur = psp;
+    let cur = ENV_SEG;
     for (const it of items) {
-      if (it.seg - 1 < cur) continue;           // overlaps what is already laid; skip it
-      if (it.seg - 1 > cur) chain.push({ seg: cur, size: it.seg - 1 - cur, own: psp });
+      if (it.seg < cur) continue;               // data overlaps a prior block/header
+      if (it.seg > cur) chain.push({ seg: cur, size: it.seg - 1 - cur, own: psp });
       chain.push(it);
-      cur = it.seg + it.size;
+      cur = it.seg + it.size + 1; // next data segment follows the next MCB
     }
     if (cur < DEFAULT_ALLOC_TOP) chain.push({ seg: cur, size: DEFAULT_ALLOC_TOP - cur, own: psp });
     for (let i = 0; i < chain.length; i++) {
@@ -4348,42 +4517,56 @@ class Machine {
           // The first paragraph past what the child leaves resident. This,
           // not the parent's frontier, is what the next EXEC loads above: a
           // parent that never shrank its block has a frontier at the ceiling.
-          let top = keep;
-          if (keep) {
-            // AH=31h keeps DX paragraphs of the PSP block -- and every block
-            // the resident program took with AH=48h and never gave back. Those
-            // sit above `keep`, because the child was loaded at the parent's
-            // frontier, and they are the whole reason CATWALK.PLY goes
-            // resident: 0x3c0 paragraphs of S3M patterns at a21 and 64KB of
-            // samples at de2, both past its 0x635-paragraph image. With the
-            // frontier dropped to `keep` alone, EXEC put CATWALK.TMP at psp
-            // a20 and its unpacker wrote over the patterns; the player then
-            // read a speed of 0xAB out of unpacked code and advanced one row
-            // every 3.4 seconds (measured 2026-09-03 against DOSBox-X). The
-            // frontier goes above the highest held block and the gaps between
-            // them are free holes, which is what the MCB chain would say.
-            const held = [...this.memBlocks].filter(([s]) => s - 1 >= keep).sort((a, b) => a[0] - b[0]);
-            for (const [s, n] of held) top = Math.max(top, s + n);
-            this.allocTop = Math.max(parent.allocTop, top);
-            let cursor = keep;
-            for (const [s, n] of held) {
-              if (s - 1 > cursor) this.memRelease(cursor, s - 1 - cursor);
-              cursor = Math.max(cursor, s + n);
-            }
-          } else {
-            // AH=4Ch: the blocks the child owns go back, by MCB owner, the
-            // way the terminate-vector path below does it. Left in the map
-            // they would count as held on a later resident exit and hoist
-            // the frontier over memory nobody holds.
-            this.allocTop = parent.allocTop;
-            for (const s of [...this.memBlocks.keys()]) {
-              if (this.mcbOwner(s) !== leaving) continue;
-              const size = this.memBlocks.get(s);
-              this.memBlocks.delete(s);
-              if (size !== undefined) this.memReleaseBlock(s, size);
+          // Keep resident PSP images in the same owner-tracked arena as their
+          // environment and allocations. Otherwise an ancestor's later exit
+          // forgets this image even though it does not own it.
+          const released = [];
+          if (keep > leaving) {
+            this.memBlocks.set(leaving, keep - leaving);
+            this.mcbWrite(leaving, leaving, keep - leaving);
+          } else if (!keep) {
+            for (const seg of [...this.memBlocks.keys()]) {
+              if (this.mcbOwner(seg) === leaving) {
+                released.push({seg: seg - 1, size: this.memBlocks.get(seg) + 1});
+                this.memBlocks.delete(seg);
+              }
             }
           }
-          this.imageTop = Math.max(parent.imageTop, top);
+          const floor = parent.allocTop < DEFAULT_ALLOC_TOP
+            ? Math.max(parent.imageTop, parent.allocTop) : parent.imageTop;
+          const held = [...this.memBlocks].filter(([seg, size]) => seg + size > floor)
+            .sort((a, b) => a[0] - b[0]);
+          let top = Math.max(parent.imageTop, keep);
+          for (const [seg, size] of held) top = Math.max(top, seg + size);
+          this.allocTop = Math.max(parent.allocTop, top);
+          // Reconstruct only the returned child's region; retain older holes.
+          // Every gap excludes each surviving MCB as well as its data bytes.
+          const oldHoles = [...this.memFree, ...released].filter(block => block.seg < floor)
+            .map(block => ({seg: block.seg, size: Math.min(block.size, floor - block.seg)}));
+          // A surviving allocation may straddle the saved frontier. Preserve
+          // its lower part too; stale/coalesced holes must never include it.
+          this.memFree = [];
+          for (const hole of oldHoles) {
+            let pieces = [hole];
+            for (const [seg, size] of this.memBlocks) {
+              const lo = seg - 1, hi = seg + size;
+              pieces = pieces.flatMap(piece => {
+                const end = piece.seg + piece.size;
+                if (end <= lo || piece.seg >= hi) return [piece];
+                const out = [];
+                if (piece.seg < lo) out.push({seg: piece.seg, size: lo - piece.seg});
+                if (end > hi) out.push({seg: hi, size: end - hi});
+                return out;
+              });
+            }
+            for (const piece of pieces) this.memRelease(piece.seg, piece.size);
+          }
+          let cursor = floor;
+          for (const [seg, size] of held) {
+            if (seg - 1 > cursor) this.memRelease(cursor, seg - 1 - cursor);
+            cursor = Math.max(cursor, seg + size);
+          }
+          this.imageTop = top;
           this.memTrim();
           this.curPsp = parent.psp;
           this.log(`child exited ${code}${keep ? `, resident to ${keep.toString(16)}` : ''};`
@@ -4500,17 +4683,66 @@ class Machine {
         // ask DOS to run it. With this missing, CATWALK.EXE wrote its four
         // files and exited 0 with a black screen -- a complete run of a program
         // whose entire job is to start another one.
+        if (al === 0x03) {
+          // Load an overlay into caller-owned memory. Its two-word parameter
+          // block supplies a load segment and an independent relocation bias.
+          // This does not create a PSP/environment or transfer execution.
+          const pb = this.lin(r, 'es', r.get('bx'));
+          const loadSeg = this.guestRd(pb) | (this.guestRd(pb + 1) << 8);
+          const bias = this.guestRd(pb + 2) | (this.guestRd(pb + 3) << 8);
+          const img = this.readWholeFile(this.guestPath(r));
+          const fail = code => { r.set('ax', code); r.setResultCf(true); return true; };
+          if (!img) return fail(2);
+          if (!img.length) return fail(11);
+          const mz = (img[0] === 0x4D && img[1] === 0x5A)
+            || (img[0] === 0x5A && img[1] === 0x4D);
+          let image;
+          if (mz) {
+            if (img.length < 28) return fail(11);
+            const word = off => img[off] | (img[off + 1] << 8);
+            const last = word(2), pages = word(4), count = word(6);
+            const header = word(8) * 16, reloc = word(24);
+            const end = pages * 512 - (last ? 512 - last : 0);
+            if (!pages || last >= 512 || header < 28 || header > end
+                || end > img.length || reloc + count * 4 > header) return fail(11);
+            image = Uint8Array.from(img.subarray(header, end));
+            // Validate every relocation before publishing any guest byte.
+            const spots = [];
+            for (let i = 0; i < count; i++) {
+              const at = reloc + i * 4;
+              const spot = word(at) + word(at + 2) * 16;
+              if (spot + 1 >= image.length) return fail(11);
+              spots.push(spot);
+            }
+            for (const spot of spots) {
+              const value = (image[spot] | (image[spot + 1] << 8)) + bias;
+              image[spot] = value & 0xFF; image[spot + 1] = (value >>> 8) & 0xFF;
+            }
+          } else {
+            // A flat overlay starts at offset zero; there is no COM PSP.
+            image = img.subarray(0, 0xFFFE);
+          }
+          const at = loadSeg * 16;
+          if (at + image.length > Math.min(this.mem.length, 0x100000)) return fail(8);
+          this.guestWrite(at, image);
+          this.codeReloaded = true;
+          r.setResultCf(false);
+          return true;
+        }
         if (al !== 0x00 && al !== 0x01) { r.setResultCf(true); r.set('ax', 1); return true; }
 
         // The command tail comes out of the parameter block at ES:BX. Read
         // before the image, because for a shell invocation it is what names the
         // program actually being run.
         const pb = this.lin(r, 'es', r.get('bx'));
-        const tailOff = this.mem[pb + 2] | (this.mem[pb + 3] << 8);
-        const tailSeg = this.mem[pb + 4] | (this.mem[pb + 5] << 8);
+        const requestedEnv = this.guestRd(pb) | (this.guestRd(pb + 1) << 8);
+        const parentPspAt = this.curPsp << 4;
+        const sourceEnv = requestedEnv || (this.mem[parentPspAt + 0x2C]
+          | (this.mem[parentPspAt + 0x2D] << 8));
+        const tailOff = this.guestRd(pb + 2) | (this.guestRd(pb + 3) << 8);
+        const tailSeg = this.guestRd(pb + 4) | (this.guestRd(pb + 5) << 8);
         const tail = ((tailSeg << 4) + tailOff) & 0xFFFFF;
-        let tailStr = [...this.mem.subarray(tail + 1,
-          tail + 1 + Math.min(this.mem[tail] || 0, 127))]
+        let tailStr = [...this.guestBytes(tail + 1, Math.min(this.guestRd(tail) || 0, 127))]
           .map((c) => String.fromCharCode(c)).join('');
 
         let name = this.guestPath(r);
@@ -4562,10 +4794,67 @@ class Machine {
         // holding everything up to the ceiling is left as before: that is the
         // never-shrunk stub, and its allocation top says nothing about where
         // the child can go.
-        const pspSeg = this.allocTop < DEFAULT_ALLOC_TOP
+        const frontier = this.allocTop < DEFAULT_ALLOC_TOP
           ? Math.max(this.imageTop, this.allocTop) : this.imageTop;
-        if (pspSeg + 0x1000 > DEFAULT_ALLOC_TOP) { r.setResultCf(true); r.set('ax', 8); return true; }
+        // Clone only the variable strings; the trailing executable name belongs
+        // to the new process. Never rewrite the parent's environment in place.
+        const envAt = sourceEnv << 4;
+        const envEnd = Math.min(this.mem.length, envAt + 0x8000);
+        let end = envAt;
+        while (end + 1 < envEnd && !(this.mem[end] === 0 && this.mem[end + 1] === 0)) end++;
+        if (!sourceEnv || end + 1 >= envEnd) { r.setResultCf(true); r.set('ax', 10); return true; }
+        let childPath = name.replace(/\\/g, '/');
+        if (!/^[A-Za-z]:/.test(childPath)) childPath = 'C:' + (childPath.startsWith('/') ? '' : '/') + childPath;
+        childPath = childPath.replace(/\//g, '\\').toUpperCase();
+        const variables = this.mem.slice(envAt, end + 2);
+        const envBytes = variables.length + 2 + childPath.length + 1;
+        const envParas = Math.ceil(envBytes / 16);
+        
+        // Check the minimum image/BSS footprint before any guest memory write.
+        const mz = img[0] === 0x4D && img[1] === 0x5A || img[0] === 0x5A && img[1] === 0x4D;
+        if (mz && img.length < 28) { r.setResultCf(true); r.set('ax', 11); return true; }
+        const imageSize = mz ? img.readUInt16LE(4) * 512 - (img.readUInt16LE(2) ? 512 - img.readUInt16LE(2) : 0) - img.readUInt16LE(8) * 16 : Math.min(img.length, 0xFEFE);
+        const minParas = mz ? 0x10 + Math.ceil(imageSize / 16) + img.readUInt16LE(10) : 0x1000;
+        if (imageSize < 0) { r.setResultCf(true); r.set('ax', 8); return true; }
+        // allocTop is a high-water mark, not proof that memory above the
+        // parent's image is unoccupied. AH48 allocations in lower free holes
+        // remain live even when a held block pins that mark to the DOS ceiling.
+        // Find a complete environment + PSP/image gap before writing any byte.
+        const held = [...this.memBlocks].map(([seg, size]) => [seg - 1, seg + size])
+          .sort((a, b) => a[0] - b[0]);
+        let start = frontier, ceiling = DEFAULT_ALLOC_TOP, found = false;
+        const required = envParas + 2 + minParas;
+        for (const [lo, hi] of [...held, [DEFAULT_ALLOC_TOP, DEFAULT_ALLOC_TOP]]) {
+          if (hi <= start) continue;
+          if (lo - start >= required) { ceiling = lo; found = true; break; }
+          start = Math.max(start, hi);
+        }
+        if (!found) { r.setResultCf(true); r.set('ax', 8); return true; }
+        const childEnv = start + 1;
+        const pspSeg = childEnv + envParas + 1;
         const info = loadExe(this.mem, img, { loadSeg: pspSeg + 0x10, pspSeg });
+        // Max-allocation requests stop at the next held MCB, not at the global
+        // DOS ceiling. COM's minimum 64KiB span was checked above as well.
+        info.allocTop = Math.min(info.allocTop ?? DEFAULT_ALLOC_TOP, ceiling);
+        this.mem[(pspSeg << 4) + 2] = info.allocTop & 0xFF;
+        this.mem[(pspSeg << 4) + 3] = info.allocTop >>> 8;
+        const reservedEnd = al === 1 ? info.minTop : info.allocTop;
+        this.memFree = this.memFree.flatMap(b => {
+          const end = b.seg + b.size;
+          if (end <= start || b.seg >= reservedEnd) return [b];
+          const pieces = [];
+          if (b.seg < start) pieces.push({seg:b.seg, size:start-b.seg});
+          if (end > reservedEnd) pieces.push({seg:reservedEnd, size:end-reservedEnd});
+          return pieces;
+        });
+        const childEnvAt = childEnv << 4;
+        this.mem.fill(0, childEnvAt, childEnvAt + envParas * 16);
+        this.mem.set(variables, childEnvAt);
+        let envWrite = childEnvAt + variables.length;
+        this.mem[envWrite++] = 1; this.mem[envWrite++] = 0;
+        for (const c of childPath) this.mem[envWrite++] = c.charCodeAt(0);
+        this.memBlocks.set(childEnv, envParas);
+        this.mcbWrite(childEnv, pspSeg, envParas);
 
         // The tail into the child's PSP, from the string rather than straight
         // out of the parameter block: a shell redirect above rewrote it, and the
@@ -4579,13 +4868,21 @@ class Machine {
         this.mem[(pspSeg << 4) + 0x81 + n] = 0x0D;   // the tail's terminating CR
         this.mem[(pspSeg << 4) + 0x16] = this.curPsp & 0xFF;     // parent PSP
         this.mem[(pspSeg << 4) + 0x17] = (this.curPsp >> 8) & 0xFF;
-        this.mem[(pspSeg << 4) + 0x2C] = ENV_SEG & 0xFF;         // same environment
-        this.mem[(pspSeg << 4) + 0x2D] = (ENV_SEG >> 8) & 0xFF;
+        this.mem[(pspSeg << 4) + 0x2C] = childEnv & 0xFF;        // owned child environment
+        this.mem[(pspSeg << 4) + 0x2D] = (childEnv >> 8) & 0xFF;
         this.log(`exec ${name} (${img.length} bytes) at psp ${pspSeg.toString(16)},`
           + ` entry ${info.cs.toString(16)}:${info.ip.toString(16)},`
           + ` tail "${tailStr}"`);
 
         if (al === 0x01) {                       // load, do not execute
+          // No EXEC frame will retain this loaded image when its caller exits.
+          // Track its minimum live extent under the loaded PSP's ownership,
+          // just as a resident child image; AH49 can explicitly unload it.
+          this.memBlocks.set(pspSeg, info.minTop - pspSeg);
+          this.mcbWrite(pspSeg, pspSeg, info.minTop - pspSeg);
+          this.allocTop = Math.max(this.allocTop, info.allocTop);
+          this.imageTop = Math.max(this.imageTop, info.minTop);
+          this.memTrim();
           this.mem[pb + 0x0E] = info.sp & 0xFF; this.mem[pb + 0x0F] = (info.sp >> 8) & 0xFF;
           this.mem[pb + 0x10] = info.ss & 0xFF; this.mem[pb + 0x11] = (info.ss >> 8) & 0xFF;
           this.mem[pb + 0x12] = info.ip & 0xFF; this.mem[pb + 0x13] = (info.ip >> 8) & 0xFF;
@@ -4604,7 +4901,7 @@ class Machine {
           allocTop: this.allocTop, imageTop: this.imageTop, psp: this.curPsp,
         });
         this.curPsp = pspSeg;
-        this.allocTop = Math.min(DEFAULT_ALLOC_TOP, info.allocTop);
+        this.allocTop = Math.max(this.allocTop, info.allocTop);
         this.memTrim();
         this.imageTop = info.minTop;
         this.transfer = {
@@ -4630,7 +4927,10 @@ class Machine {
       }
       case 0x09: {                              // print $-terminated string
         let p = this.lin(r, 'ds', r.get('dx')), s = '';
-        while (this.mem[p] !== 0x24 && s.length < 4096) s += String.fromCharCode(this.mem[p++]);
+        while (s.length < 4096) {
+          const b = this.guestRd(p++); if (b === 0x24) break;
+          s += String.fromCharCode(b);
+        }
         this.log(`dos print: ${s}`);
         this.conPuts(s);
         return true;
@@ -4671,13 +4971,11 @@ class Machine {
       }
       case 0x0A: {                              // buffered input, DS:DX
         const at = this.lin(r, 'ds', r.get('dx'));
-        const max = this.mem[at];
+        const max = this.guestRd(at);
         const line = this.typedLine(max);
         if (line === null) { this.blockedOnKey = true; return true; }
         const body = line.replace(/\r\n$/, '');
-        this.mem[at + 1] = body.length;
-        for (let i = 0; i < body.length; i++) this.mem[at + 2 + i] = body.charCodeAt(i);
-        this.mem[at + 2 + body.length] = 0x0D;   // the CR stays in the buffer
+        this.guestWrite(at + 1, [body.length, ...Array.from(body, c => c.charCodeAt(0)), 0x0d]);
         this.conPuts(`${body}\r\n`);
         return true;
       }
@@ -4702,8 +5000,10 @@ class Machine {
         const src = this.lin(r, 'ds', r.get('dx'));
         const f = this.files.get(h);
         if (h === 1 || h === 2) {
-          for (let i = 0; i < n; i++) this.conPutc(this.mem[(src + i) & 0xFFFFF]);
+          const bytes = this.guestBytes(src, n, true);
+          for (const b of bytes) this.conPutc(b);
         } else if (f && !f.device) {
+          if (f.rec && f.rec.temporary && f.access === 0) { r.setResultCf(true); r.set('ax', 5); return true; }
           this.writeFile(f, src, n);
         }
         r.set('ax', n);
@@ -4748,16 +5048,17 @@ class Machine {
         let at = this.lin(r, 'ds', r.get('si'));
         const start = at;
         const fcb = this.lin(r, 'es', r.get('di'));
-        const ch = () => this.mem[at];
+        const ch = () => this.guestRd(at);
         if (opt & 1) while (ch() === 0x20 || ch() === 0x09) at++;
         let drive = 0;
-        if (this.mem[at + 1] === 0x3A) {                 // "C:"
-          const d = String.fromCharCode(this.mem[at]).toUpperCase();
+        if (this.guestRd(at + 1) === 0x3A) {                 // "C:"
+          const d = String.fromCharCode(this.guestRd(at)).toUpperCase();
           if (d < 'A' || d > 'Z') { r.set('ax', (r.get('ax') & 0xFF00) | 0xFF); return true; }
           drive = d.charCodeAt(0) - 64;
           at += 2;
         }
-        if (drive || !(opt & 2)) this.mem[fcb] = drive;
+        const fcbBytes = this.guestBytes(fcb, 12);
+        if (drive || !(opt & 2)) fcbBytes[0] = drive;
         // The name is 8 characters and the extension 3, both space-padded and
         // both stopping at a separator. "*" fills the rest of its field with
         // "?", which is what makes AL=1 mean "this one is a wildcard".
@@ -4768,18 +5069,19 @@ class Machine {
           let n = 0, star = false;
           const buf = new Uint8Array(len).fill(0x20);
           while (n < len && !SEP.has(ch())) {
-            const c = this.mem[at++];
+            const c = this.guestRd(at++);
             if (c === 0x2A) { star = true; break; }
             if (c === 0x3F) wild = true;
             buf[n++] = c >= 0x61 && c <= 0x7A ? c - 32 : c;
           }
           if (star) { buf.fill(0x3F, n); wild = true; while (!SEP.has(ch())) at++; }
           if (n === 0 && !star && (opt & blankBit)) return;
-          this.mem.set(buf, off);
+          fcbBytes.set(buf, off - fcb);
         };
         field(fcb + 1, 8, 4);
         if (ch() === 0x2E) { at++; field(fcb + 9, 3, 8); }
-        else if (!(opt & 8)) this.mem.fill(0x20, fcb + 9, fcb + 12);
+        else if (!(opt & 8)) fcbBytes.fill(0x20, 9, 12);
+        this.guestWrite(fcb, fcbBytes);
         r.set('si', (r.get('si') + (at - start)) & 0xFFFF);
         r.set('ax', (r.get('ax') & 0xFF00) | (wild ? 1 : 0));
         return true;
@@ -4824,10 +5126,20 @@ class Machine {
         r.setResultCf(false);
         return true;
       case 0x19: r.set('ax', (r.get('ax') & 0xFF00) | 2); return true;   // drive C:
-      case 0x0E: r.set('ax', (r.get('ax') & 0xFF00) | 3); return true;   // 3 drives
-      case 0x47: {                              // get current directory -> root
+      // C: is the only mounted drive. Unavailable selections leave it current.
+      // AL reports the highest possible drive plus one, not a mounted count.
+      case 0x0E: r.set('ax', (r.get('ax') & 0xFF00) | 3); return true;
+      case 0x3B: {                              // change current directory
+        const key = this.resolvePath(this.guestPath(r), true);
+        if (key === null || key.length > 63 || !this.isDirectory(key)) { r.setResultCf(true); r.set('ax', 3); return true; }
+        this.currentDirectory = key;
+        r.setResultCf(false); return true;
+      }
+      case 0x47: {                              // get current directory
+        const drive = r.get('dx') & 255;
+        if (drive !== 0 && drive !== 3) { r.setResultCf(true); r.set('ax', 15); return true; }
         const at = this.lin(r, 'ds', r.get('si'));
-        this.mem[at] = 0;
+        this.guestWrite(at, [...Array.from(this.currentDirectory.replace(/\//g, '\\').toUpperCase(), c => c.charCodeAt(0)), 0]);
         r.setResultCf(false);
         return true;
       }
@@ -4840,28 +5152,123 @@ class Machine {
       // pages and reads its data into them, and every one of those reads was
       // going nowhere.
       case 0x3D: {                              // open
-        const f = this.openFile(this.guestPath(r), 'r');
-        if (!f) { r.setResultCf(true); r.set('ax', 2); return true; }   // not found
+        const name = this.guestPath(r), rec = this.tempFiles.get(this.fileKey(name));
+        const access = al & 3;
+        if (rec && rec.temporary && (access > 2 || (rec.attributesActive && (rec.attributes & 1) && access !== 0))) {
+          r.setResultCf(true); r.set('ax', 5); return true;
+        }
+        const f = this.openFile(name, 'r');
+        if (f && rec && rec.temporary) this.files.get(f).access = access;
+        if (!f) {
+          const key = this.fileKey(name);
+          r.setResultCf(true); r.set('ax', !this.parentExists(key) ? 3 : this.isDirectory(key) ? 5 : 2); return true;
+        }
         r.set('ax', f);
         r.setResultCf(false);
         return true;
+      }
+      case 0x5A: {                              // create unique temporary file
+        const at = this.lin(r, 'ds', r.get('dx'));
+        const fail = code => { r.setResultCf(true); r.set('ax', code); return true; };
+        let directory = '';
+        for (let i = 0; i < 128; i++) {
+          const b = this.guestRd(at + i); if (!b) break;
+          directory += String.fromCharCode(b);
+        }
+        // Temporary files are created only in an existing mounted directory.
+        const dirKey = this.resolvePath(directory, true);
+        if (!/[\\/]$/.test(directory) || dirKey === null || !this.isDirectory(dirKey)
+          || this.guestRd(at + directory.length) !== 0) return fail(3);
+        const attr = r.get('cx') & 0xFFFF;
+        if (attr & ~0x27) return fail(5);
+        const end = at + directory.length + 9; // eight-character name and NUL
+        if ((!(this.vmExports && this.vmExports.get_cr0() < 0) && end > this.mem.length)
+          || (r.get('dx') & 0xFFFF) + directory.length + 9 > 0x10000) return fail(5);
+        if (this.fileNext > 0xFFFF) return fail(4);
+        let name;
+        for (let tries = 0; tries < 65536; tries++) {
+          this.tempSerial = (this.tempSerial || 0) + 1;
+          const suffix = ((this.ticks + this.tempSerial) >>> 0).toString(36).toUpperCase().padStart(8, '0');
+          const proposed = directory + suffix;
+          if (!this.tempFiles.has(this.fileKey(proposed)) && !this.hostPath(proposed)) { name = proposed; break; }
+        }
+        if (!name) return fail(5);
+        this.guestWrite(at, [...Array.from(name, c => c.charCodeAt(0)), 0]);
+        const handle = this.createFile(name);
+        if (!handle) return fail(5);
+        const file = this.files.get(handle);
+        file.access = 2; file.compatibility = true;
+        file.rec.temporary = true; file.rec.attributes = attr; file.rec.attributesActive = false;
+        r.set('ax', handle); r.setResultCf(false); return true;
       }
       case 0x3C: {                              // create/truncate
         // CATWALK.EXE creates a file, gets no handle back, and then writes to
         // the failed return value as though it were one -- 0x3C02, which INT 21h
         // AH=40h cheerfully accepted. It reads the result back, finds nothing it
         // wrote and exits 0 without drawing a frame.
-        const h = this.createFile(this.guestPath(r));
+        const name = this.guestPath(r), rec = this.tempFiles.get(this.fileKey(name));
+        if (rec && rec.temporary && rec.attributesActive && (rec.attributes & 1)) {
+          r.setResultCf(true); r.set('ax', 5); return true;
+        }
+        if (rec && rec.temporary && (r.get('cx') & ~0x27)) {
+          r.setResultCf(true); r.set('ax', 5); return true;
+        }
+        const h = this.createFile(name);
         if (!h) { r.setResultCf(true); r.set('ax', 3); return true; }   // path not found
+        if (rec && rec.temporary) {
+          const file = this.files.get(h);
+          file.access = 2; file.compatibility = true;
+          rec.attributes = r.get('cx') & 0xFFFF; rec.attributesActive = false;
+        }
         r.set('ax', h);
         r.setResultCf(false);
         return true;
       }
       case 0x41: {                              // delete
-        const key = fileKey(this.guestPath(r));
+        const key = this.fileKey(this.guestPath(r));
+        const rec = key && this.tempFiles.get(key);
+        if (rec && rec.temporary && rec.attributesActive && (rec.attributes & 1)) { r.setResultCf(true); r.set('ax', 5); return true; }
+        if (this.hostKey(key)) { r.setResultCf(true); r.set('ax', 5); return true; }
         if (key && this.tempFiles.delete(key)) { r.setResultCf(false); return true; }
-        // A file we never created is on the host side and stays there; the
-        // program is told it is gone, which is what it wants to hear.
+        // Missing files and immutable host files must not report deletion.
+        r.setResultCf(true); r.set('ax', this.parentExists(key) ? 2 : 3);
+        return true;
+      }
+      case 0x56: {                              // rename a closed guest-created file
+        const fail = code => { r.set('ax', code); r.setResultCf(true); return true; };
+        const readPath = (seg, off) => {
+          const at = this.lin(r, seg, r.get(off));
+          let name = '';
+          for (let i = 0; i < 128; i++) {
+            const b = this.guestRd(at + i);
+            if (!b) return name;
+            name += String.fromCharCode(b);
+          }
+          return null;
+        };
+        const source = readPath('ds', 'dx'), target = readPath('es', 'di');
+        // Resolve both full names before changing the in-memory namespace.
+        const parse = name => {
+          if (!name || /[*?]/.test(name) || /[\\/]$/.test(name)) return null;
+          const drive = /^([A-Za-z]):/.exec(name);
+          const rest = name.replace(/^[A-Za-z]:/, '').replace(/\//g, '\\');
+          const parts = rest.split('\\').filter(Boolean);
+          if (!parts.length || rest.includes(':')) return null;
+          return { drive: drive ? drive[1].toUpperCase() : 'C', key: this.fileKey(name) };
+        };
+        const from = parse(source), to = parse(target);
+        if (!from || !to) return fail(3);
+        if (from.drive !== to.drive) return fail(17);
+        if (from.drive !== 'C' || !from.key || !to.key || !this.parentExists(from.key) || !this.parentExists(to.key)) return fail(3);
+        const rec = this.tempFiles.get(from.key);
+        // Corpus files are read-only. A rename must never mutate the host or
+        // leave its old name still visible through hostPath's fallback.
+        if (!rec) return fail(this.hostPath(source) ? 5 : 2);
+        if (this.hostPath(source)) return fail(5);
+        if ((rec.attributes & 7) || [...this.files.values()].some(f => f.rec === rec)) return fail(5);
+        if (this.tempFiles.has(to.key) || this.hostPath(target)) return fail(5);
+        this.tempFiles.set(to.key, rec);
+        this.tempFiles.delete(from.key);
         r.setResultCf(false);
         return true;
       }
@@ -4873,6 +5280,8 @@ class Machine {
         return true;
       }
       case 0x3E: {                              // close
+        const closing = this.files.get(r.get('bx') & 0xFFFF);
+        if (closing && closing.rec && closing.rec.temporary) closing.rec.attributesActive = true;
         this.files.delete(r.get('bx') & 0xFFFF);
         r.setResultCf(false);
         return true;
@@ -4889,19 +5298,20 @@ class Machine {
           const line = this.typedLine(n);
           if (line === null) { this.blockedOnKey = true; r.set('ax', 0); return true; }
           const at0 = this.lin(r, 'ds', r.get('dx'));
-          for (let i = 0; i < line.length; i++) this.mem[at0 + i] = line.charCodeAt(i);
+          this.guestWrite(at0, Array.from(line, c => c.charCodeAt(0)));
           this.conPuts(line.replace(/\r\n$/, '\r\n'));
           r.set('ax', line.length);
           r.setResultCf(false);
           return true;
         }
         if (!f) { r.setResultCf(true); r.set('ax', 6); return true; }   // bad handle
+        if (f.rec && f.rec.temporary && f.access === 1) { r.setResultCf(true); r.set('ax', 5); return true; }
         const at = this.lin(r, 'ds', r.get('dx'));
         const got = Math.max(0, Math.min(n, f.buf.length - f.pos));
         // A read that would run off the end of the 1MB address space is a bug
         // in the guest, not something to wrap around silently.
         const room = Math.max(0, Math.min(got, this.mem.length - at));
-        this.mem.set(f.buf.subarray(f.pos, f.pos + room), at);
+        this.guestWrite(at, f.buf.subarray(f.pos, f.pos + (this.vmExports && this.vmExports.get_cr0() < 0 ? got : room)));
         f.pos += got;
         // Progress, for the stuck detector. A demo that unpacks a few hundred
         // assets out of its own datafile hands back at one address in its
@@ -4925,9 +5335,19 @@ class Machine {
         return true;
       }
       case 0x43: {                              // get/set file attributes
-        const p = this.hostPath(this.guestPath(r));
-        if (!p) { r.setResultCf(true); r.set('ax', 2); return true; }
-        r.set('cx', 0x20);                      // archive
+        const name = this.guestPath(r);
+        const rec = this.tempFiles.get(this.fileKey(name));
+        if (rec && rec.temporary) {
+          if (al === 0) r.set('cx', rec.attributes);
+          else if (al === 1 && !(r.get('cx') & ~0x27)) { rec.attributes = r.get('cx'); rec.attributesActive = true; }
+          else { r.setResultCf(true); r.set('ax', 5); return true; }
+          r.setResultCf(false); return true;
+        }
+        const key = this.resolvePath(name, true), directory = key !== null && this.isDirectory(key);
+        const p = this.hostKey(key);
+        if (!p && !rec && !directory) { r.setResultCf(true); r.set('ax', 2); return true; }
+        if (al !== 0) { r.setResultCf(true); r.set('ax', 5); return true; }
+        r.set('cx', directory ? 0x10 : 0x20);
         r.setResultCf(false);
         return true;
       }
@@ -5063,22 +5483,40 @@ class Machine {
         // out of an empty pool, and the demo printed "Not enough memory!" while
         // 636KB sat unclaimed.
         if (seg === this.curPsp) {
-          if (seg + want > DEFAULT_ALLOC_TOP) {
-            r.setResultCf(true); r.set('ax', 8); r.set('bx', DEFAULT_ALLOC_TOP - seg);
+          // The image is implicit in the arena, unlike AH=48h allocations.
+          // Its size is the current MCB, not the global high-water frontier:
+          // another allocation can sit above a hole immediately after it.
+          this.mcbSync();
+          const header = (seg - 1) << 4;
+          if (this.mem[header] !== 0x4D && this.mem[header] !== 0x5A) {
+            r.setResultCf(true); r.set('ax', 9);
             return true;
           }
-          this.allocTop = seg + want;
-          this.memTrim();
-          // Shrinking is also what makes room for a child: a loader stub that
-          // gives back everything above itself expects EXEC to load there.
-          // And a child goes above the block as RESIZED, whichever way that
-          // went against the image's minimum: ShellVT.EXE (RUNDEMO.EXE's
-          // resident MOD player) sizes itself to 283KB for its heap, then
-          // EXECs the demo -- and with only a shrink honoured here the demo
-          // was loaded at 184F:0, inside that heap, over the player's
-          // buffers, and the player jumped into data.
-          this.imageTop = seg + want;
+          const size = this.mem[header + 3] | (this.mem[header + 4] << 8);
+          const end = seg + size;
+          const gap = this.memFree.find(b => b.seg === end);
+          const maximum = size + (gap ? gap.size
+            : end === this.allocTop ? DEFAULT_ALLOC_TOP - end : 0);
+          // DOS joins adjacent free blocks even when an oversized request
+          // fails. BX then reports this block's achievable size, never space
+          // beyond a held neighbor or in another free hole.
+          const granted = Math.min(want, maximum);
+          if (granted < size) {
+            this.memRelease(seg + granted, size - granted);
+          } else if (granted > size) {
+            const extra = granted - size;
+            if (gap) {
+              if (extra === gap.size) this.memFree.splice(this.memFree.indexOf(gap), 1);
+              else { gap.seg += extra; gap.size -= extra; }
+            } else {
+              this.allocTop += extra;
+            }
+          }
+          this.imageTop = seg + granted;
           this.mcbSync();
+          r.setResultCf(want > maximum);
+          if (want > maximum) { r.set('ax', 8); r.set('bx', maximum); }
+          return true;
         }
         r.setResultCf(false);
         return true;
@@ -5103,7 +5541,7 @@ class Machine {
       case 0x2F:                                // get DTA -> ES:BX
         r.set('es', (this.dtaAddr() >> 4) & 0xFFFF); r.set('bx', this.dtaAddr() & 0xF);
         return true;
-      // FindFirst / FindNext over the directory the program was started in.
+      // FindFirst / FindNext over the requested directory.
       // ShellVT.EXE, the MOD-player shell RUNDEMO.EXE hands the demo to when
       // a Sound Blaster is chosen, locates `elysium.mod` this way -- and with
       // nothing here it opened "C:\" plus an empty name, printed "Error en el
@@ -5112,12 +5550,25 @@ class Machine {
       // moves the DTA between calls, or nests two searches, still works.
       case 0x4E: {
         const spec = this.guestPath(r);
-        const pat = dosPattern(fileKey(spec) || '');
+        const slash = Math.max(spec.lastIndexOf('/'), spec.lastIndexOf('\\'));
+        const prefix = slash >= 0 ? spec.slice(0, slash + 1) : /^[a-z]:/i.test(spec) ? spec.slice(0, 2) : '.';
+        const directory = this.resolvePath(prefix, true);
+        const basename = slash >= 0 ? spec.slice(slash + 1) : spec.replace(/^[a-z]:/i, '');
+        const pat = dosPattern(basename);
+        if (directory === null || !this.isDirectory(directory)) { r.setResultCf(true); r.set('ax', 3); return true; }
         if (!pat) { r.setResultCf(true); r.set('ax', 2); return true; }
         const dta = this.dtaAddr();
-        for (let i = 0; i < 11; i++) this.mem[dta + 1 + i] = pat.charCodeAt(i);
-        this.mem[dta + 0x0C] = r.get('cx') & 0xFF;
-        this.mem[dta + 0x0D] = 0; this.mem[dta + 0x0E] = 0;
+        this.guestWrite(dta + 1, [...Array.from(pat, c => c.charCodeAt(0)), r.get('cx') & 0xff, 0, 0]);
+        // Store a directory token in the reserved DTA bytes: copied/nested
+        // DTAs keep their own pattern/position even after chdir. Reuse tokens
+        // so repeated searches do not retain an unbounded list of snapshots.
+        let id = this.directorySearchIds.get(directory);
+        if (id === undefined) {
+          id = ++this.directorySearchSerial >>> 0;
+          this.directorySearchIds.set(directory, id);
+          this.directorySearches.set(id, directory);
+        }
+        this.guestWrite(dta + 15, [id & 255, id >>> 8 & 255, id >>> 16 & 255, id >>> 24]);
         return this.findNext(r, 2);
       }
       case 0x4F: return this.findNext(r, 0x12);
@@ -5179,12 +5630,17 @@ class Machine {
   // an address above 1MB is relying on that. The wrap is the default because it
   // is what an 8086 does and what the instruction gate's recorded vectors
   // expect; taking an XMS handle is the guest saying it is not on one.
-  openBus() {
-    if (this.linFlat) return;
-    this.linFlat = true;
+  setA20(enabled) {
+    this.linFlat = !!enabled;
+    this.kbc.output = (this.kbc.output & ~2) | (enabled ? 2 : 0);
     if (this.vmExports && this.vmExports.set_linmask) {
-      this.vmExports.set_linmask(isa.LIN_MASK_FLAT);
+      // A20 gating clears only address bit 20, not all extended address bits.
+      this.vmExports.set_linmask(enabled ? isa.LIN_MASK_FLAT : isa.LIN_MASK_FLAT & ~(1 << 20));
     }
+  }
+
+  openBus() {
+    this.setA20(true);
   }
 
   // Extended memory still unhanded-out, in KB. A method rather than a closure
@@ -5263,7 +5719,7 @@ class Machine {
   xmsMove(r) {
     const p = this.lin(r, 'ds', r.get('si'));
     const m = this.mem;
-    const u16 = (o) => m[p + o] | (m[p + o + 1] << 8);
+    const u16 = (o) => this.guestRd(p + o) | (this.guestRd(p + o + 1) << 8);
     const u32 = (o) => (u16(o) | (u16(o + 2) << 16)) >>> 0;
     const len = u32(0);
     // Both sides are plain linear addresses now that extended memory is part of
@@ -5425,6 +5881,7 @@ class Machine {
       case 0x00: r.set('ax', 0xFFFF); r.set('bx', 2); return true;   // present, 2 buttons
       case 0x01: case 0x02: return true;                             // show/hide cursor
       case 0x03:
+        this.mouse.reads++;
         r.set('bx', this.mouse.buttons);
         r.set('cx', this.mouse.x); r.set('dx', this.mouse.y);
         return true;
@@ -5458,10 +5915,10 @@ class Machine {
       case 0x15: r.set('bx', 8); return true;
       case 0x16: case 0x17: {
         const at = this.lin(r, 'es', r.get('dx'));
-        const w = (o, v) => { this.mem[at + o] = v & 0xFF; this.mem[at + o + 1] = (v >> 8) & 0xFF; };
+        const w = (o, v) => { this.guestWrite(at + o, [v & 0xff, v >>> 8 & 0xff]); };
         if (fn === 0x16) { w(0, this.mouse.x); w(2, this.mouse.y); w(4, this.mouse.buttons); w(6, 0); }
         else {
-          const rd = (o) => this.mem[at + o] | (this.mem[at + o + 1] << 8);
+          const rd = (o) => this.guestRd(at + o) | (this.guestRd(at + o + 1) << 8);
           this.mouse.x = rd(0); this.mouse.y = rd(2); this.mouse.buttons = rd(4);
         }
         return true;
@@ -5485,7 +5942,7 @@ class Machine {
 
 module.exports = {
   Machine, loadExe, vgaGeometry, parseKeys,
-  VGA_BASE, STUB_SEG, STUB_OFF, STUB_BYTE, LOAD_SEG, PSP_SEG,
+  VGA_BASE, STUB_SEG, STUB_OFF, STUB_BYTE, DEFAULT_IRET_OFF, HOST_VECTORS, LOAD_SEG, PSP_SEG,
   ENV_SEG, ENV_PARAS, LOL_SEG, LOL_OFF, MCB_FIRST, MCB_SYSTEM, DEFAULT_ALLOC_TOP,
 };
 

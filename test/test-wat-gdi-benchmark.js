@@ -63,7 +63,7 @@ function formatNumber(value) {
     wat.guest_write32(bmi + 8, -height);
     wat.guest_write16(bmi + 12, 1);
     wat.guest_write16(bmi + 14, 32);
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     const bitsGuest = wat.guest_read32(bitsOut) >>> 0;
     assert(bitmap && hdc && bitsGuest, 'benchmark DIB allocation failed');
@@ -113,7 +113,7 @@ function formatNumber(value) {
       run(count) {
         for (let i = 0; i < count; i++) {
           const y = i & 127;
-          wat.test_call_MoveToEx(target.hdc, 0, y);
+          wat.test_call_MoveToEx(target.hdc, 0, y, 0);
           wat.test_call_LineTo(target.hdc, 128, 127 - y);
         }
       },

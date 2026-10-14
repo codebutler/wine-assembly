@@ -25,10 +25,14 @@ async function compile() {
   return compileSrcWasm();
 }
 
-async function makeNode(wasm, wire, ip) {
+async function makeNode(wasm, wire, ip, opts = {}) {
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const imports = createHostImports({
     getMemory: () => memory.buffer, renderer: null, resourceJson: {}, vlanWire: wire,
+    // A test that needs to wait out a timeout passes its own clock.
+    guestNowMs: opts.guestNowMs,
+    // ...and one bounded by real time (a peer answering) passes a wall clock.
+    realNowMs: opts.realNowMs,
   });
   Object.assign(imports.host, {
     memory,
@@ -54,7 +58,12 @@ async function makeNode(wasm, wire, ip) {
     assert(p, 'guest_alloc failed');
     return p;
   };
-  assert.strictEqual(wat.test_call_WSAStartup(0x0101, alloc(400)) | 0, 0);
+  // A node is a Winsock program unless asked not to be: the idle-pump test
+  // needs one that has not started Winsock, since WSAStartup is exactly what
+  // turns the wire reader on.
+  if (opts.wsaStartup !== false) {
+    assert.strictEqual(wat.test_call_WSAStartup(0x0101, alloc(400)) | 0, 0);
+  }
 
   return {
     ip, wat, wire, memory, wa, alloc,

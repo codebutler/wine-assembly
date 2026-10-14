@@ -71,6 +71,8 @@ const path = require('path');
 const { fork } = require('child_process');
 const { PNG } = require('pngjs');
 const { ProcessHub } = require('../lib/vlan-wire');
+const { APPS } = require('../lib/apps');
+const { askServing } = require('./lan-serving');
 
 const ROOT = path.join(__dirname, '..');
 const EXE = path.join(ROOT, 'test', 'binaries', 'win98-16bit', 'MSHEARTS.EXE');
@@ -86,7 +88,11 @@ const arg = (name, dflt) => {
 const MILESTONE_MS = arg('milestone-timeout', 120) * 1000;
 const BUDGET_MS = arg('timeout', 300) * 1000;
 const DEADLINE = Date.now() + BUDGET_MS;
-const BATCHES = arg('batches', 5000000);
+// A cap, not a clock (see below): each side is killed when the checks end.
+// Idle Hearts now covers ~28,000 batches a second, so the old 5,000,000 ran
+// out about 175 s in -- around the end of the hand on a quiet box, before it
+// on a loaded one. The wall-clock budgets above are what bound the run.
+const BATCHES = arg('batches', 50000000);
 const TRACE_SIDES = (() => {
   const hit = process.argv.find(a => a === '--trace-win16' || a.startsWith('--trace-win16='));
   if (!hit) return new Set();
@@ -115,22 +121,26 @@ for (const f of fs.readdirSync(OUT)) {
   if (f.endsWith('.png')) fs.unlinkSync(path.join(OUT, f));
 }
 
-// Points on the welcome dialog, and on the "Locate dealer" box behind the
-// client's radio button. The same coordinates the single-process Hearts tests
-// use; each is the dialog's client origin plus the control's own position.
-const NAME_FIELD = '200:122';
-const DEALER_RADIO = '55:210';       // "I want to be dealer"
-const CONNECT_RADIO = '55:190';      // "I want to connect to another game"
-const OK_BUTTON = '319:92';
-const LOCATE_FIELD = '80:132';
-const LOCATE_OK = '284:90';
+// Controls on the welcome dialog, and on the "Locate dealer" box behind the
+// client's radio button, clicked by id (run.js `dlg-click`). They were screen
+// points once, and a dialog that moved or changed size -- the Win16 dialog
+// base units are not settled -- sent every click into the baize while both
+// sides sat at the welcome box.
+const NAME_FIELD = 'dlg-click:201';
+const DEALER_RADIO = 'dlg-click:203';     // "I want to be dealer"
+const CONNECT_RADIO = 'dlg-click:202';    // "I want to connect to another game"
+const OK_BUTTON = 'dlg-click:1';
+const LOCATE_FIELD = 'dlg-click:204';
+const LOCATE_OK = 'dlg-click:1';
 
 // Three cards in the hand along the bottom of the table, and the button in the
 // middle that passes them. A dealt hand is thirteen cards about twenty pixels
 // apart starting near x=170; any three will do, and the leftmost three are the
 // ones furthest from the overlapping fan.
 const CARDS = ['250:380', '320:380', '390:380'];
-const PASS_BUTTON = '320:298';
+// The Pass button spans about y=258..283 on today's table (measured off
+// dealer-passed.png); 298 was below it and every pass click fell on the baize.
+const PASS_BUTTON = '320:270';
 // Hearts opens with the two of clubs and refuses anything else -- "You must
 // lead the two of clubs" -- and the hand is sorted, so it is the leftmost card.
 const LOWEST_CARD = '200:380';
@@ -142,8 +152,8 @@ const ALONG_THE_HAND = ['200:380', '240:380', '280:380', '320:380', '360:380'];
 const shot = name => path.join(OUT, `${name}.png`);
 
 const DEALER_INPUT = [
-  `3000:click:${NAME_FIELD}`, '3500:keypress:68',
-  `4500:click:${DEALER_RADIO}`, `6000:click:${OK_BUTTON}`,
+  `3000:${NAME_FIELD}`, '3500:keypress:68',
+  `4500:${DEALER_RADIO}`, `6000:${OK_BUTTON}`,
   `${DEAL_AT}:png:${shot('dealer-waiting')}`,
   // Hold here until the harness has seen the client's conversation answered.
   // Batch numbers are a per-process clock and the two processes do not keep
@@ -186,11 +196,23 @@ const DEALER_INPUT = [
   `${DEAL_AT + 78000}:click:${PASS_BUTTON}`,
   `${DEAL_AT + 83000}:click:${PASS_BUTTON}`,
   `${DEAL_AT + 88000}:png:${shot('dealer-passed')}`,
-  // And the trick. The dealer plays nothing here -- the lead is the other
-  // player's -- so this only has to be looking at the table when the card
-  // arrives.
+  // And the trick. Whoever holds the two of clubs leads, and the deal is not
+  // the same from run to run: each side's batch clock keeps running while it
+  // is parked on wait-go, so the dealer deals at a tick count that depends on
+  // wall time. This seat is released together with the client and tries its
+  // lowest card once -- the lead if it holds the two, refused if it is not
+  // its turn, a legal club if an AI seat led -- then waits again until the
+  // client's card has arrived. Written for the client leading only, a deal
+  // that gave the two to the dealer left both humans waiting on each other:
+  // the client's click refused, the dealer never released to lead.
   `${DEAL_AT + 89000}:wait-go`,
   `${DEAL_AT + 90000}:click:${PASS_BUTTON}`,
+  `${DEAL_AT + 91000}:click:${LOWEST_CARD}`,
+  // Photographed right after that one try: when this seat led or followed an
+  // AI lead, its card is on the table now, and the trick may be complete and
+  // cleared by the time the client's card has come round.
+  `${DEAL_AT + 91500}:png:${shot('dealer-trick-early')}`,
+  `${DEAL_AT + 92000}:wait-go`,
   `${DEAL_AT + 100000}:png:${shot('dealer-trick')}`,
   // Follow suit. The lead was a club and the hand is sorted, so the leftmost
   // card is a club if this seat has one -- and Hearts refuses anything else,
@@ -208,9 +230,9 @@ const DEALER_INPUT = [
 ].join(',');
 
 const CLIENT_INPUT = [
-  `3000:click:${NAME_FIELD}`, '3500:keypress:67',
-  `4500:click:${CONNECT_RADIO}`, `6000:click:${OK_BUTTON}`,
-  `14000:click:${LOCATE_FIELD}`,
+  `3000:${NAME_FIELD}`, '3500:keypress:67',
+  `4500:${CONNECT_RADIO}`, `6000:${OK_BUTTON}`,
+  `14000:${LOCATE_FIELD}`,
   '15000:keypress:68', '15500:keypress:69', '16000:keypress:65', '16500:keypress:76',
   // Hold the "Locate dealer" OK until the dealer is actually sitting at its
   // table. Its service is registered before that, so the connect is answered
@@ -218,7 +240,7 @@ const CLIENT_INPUT = [
   // not ready, or the game is already in progress", which reads exactly like a
   // wire fault and is not one.
   '17000:wait-go',
-  `18000:click:${LOCATE_OK}`,
+  `18000:${LOCATE_OK}`,
   `25000:png:${shot('client-joined')}`,
   // Its own go, sent once the dealer's hand is on screen: the client cannot
   // photograph a deal that has not happened yet.
@@ -295,7 +317,9 @@ function spawn(label, ip, input, patterns) {
     // answers promptly; waiting for another emulator to be scheduled takes
     // very many more.
     '--vlan-max-waits=200000',
-  ], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    // Asked whether it is dealing, the way the page's host probe asks.
+    '--control-stdin',
+  ], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
   const state = { out: '', exited: false, label, seen: new Set(), carry: '', at: {},
                   lastNet: 0, net: [], pokes: 0, dialogs: 0 };
   // Streamed rather than kept: with --trace-win16 a side produces hundreds of
@@ -314,8 +338,11 @@ function spawn(label, ip, input, patterns) {
         // Counted, not flagged: a poke is how a player's move reaches the
         // other side, and seating the joining player is one too -- so "a poke
         // arrived" is true long before anybody plays a card. What the pass
-        // step waits on is one MORE than it had.
-        if (line.includes('.. arrived type6')) state.pokes++;
+        // step waits on is one MORE than it had. lib/vlan-wire.js names DDE
+        // frames; this used to match "type6", which silently became "DGRAM"
+        // when vln/1 named its own type 6, and both poke checks then waited
+        // out their whole milestone and failed with the pokes right there.
+        if (line.includes('.. arrived dde POKE')) state.pokes++;
       }
     }
     // The welcome box is the first dialog either side opens; a second one is
@@ -447,6 +474,11 @@ function table(file, x0 = 60, y0 = 30, x1 = 580, y1 = 440) {
   // through the last step of its own.
   const seated = await waitForFile(shot('dealer-waiting'));
   check('the dealer reached its table', seated, 'no screenshot was written');
+  // What marks the dealer's room as hosting, so a player opening Hearts is
+  // offered it: the registry's hostProbe, from its own DDE service table.
+  const probe = APPS.mshearts16.lan.hostProbe;
+  check('the dealer at its table reads as serving (lib/apps.js hostProbe)',
+    await askServing(dealer.child, probe).catch(() => false));
   go(client);
 
   // 1-3: the room carried the request and something came back. "Nothing was
@@ -465,6 +497,8 @@ function table(file, x0 = 60, y0 = 30, x1 = 580, y1 = 440) {
   // the app.
   const joined = await waitForFile(shot('client-joined'));
   check('the client reached a table', joined, 'no screenshot was written');
+  check('a seated player does not read as serving',
+    !(await askServing(client.child, probe).catch(() => true)));
 
   // 5: the hand. Both sides, because a dealer that deals to itself while the
   // client sits on an empty table is exactly the failure this test exists to
@@ -565,6 +599,8 @@ function table(file, x0 = 60, y0 = 30, x1 = 580, y1 = 440) {
   // side of the wire.
   const pokesBeforePlay = dealer.pokes;
   go(client);
+  // The dealer's first release: it leads if the two of clubs is its card.
+  go(dealer);
   const played = await (async () => {
     const limit = Math.min(Date.now() + MILESTONE_MS, DEADLINE);
     while (Date.now() < limit) {
@@ -580,11 +616,19 @@ function table(file, x0 = 60, y0 = 30, x1 = 580, y1 = 440) {
   const trickShots = await Promise.all([
     waitForFile(shot('dealer-trick')), waitForFile(shot('client-trick')),
   ]);
+  // The middle of the table is empty baize until somebody leads; a card there
+  // is the trick in progress. The dealer's side is read from either of its
+  // photographs: right after its own try (it led, or followed an AI lead) or
+  // after the client's card arrived (the client led). Which one shows the
+  // trick depends on the deal, and a completed trick is cleared from the table.
+  const middle = file => (fs.existsSync(file)
+    ? table(file, 250, 150, 400, 300) : { green: 0, white: 0 });
+  const bestMiddle = files => files.map(middle).reduce((a, b) => (b.white > a.white ? b : a));
   for (const [name, drawn] of [['dealer', trickShots[0]], ['client', trickShots[1]]]) {
     if (!drawn) { check(`the ${name} drew the trick`, false, 'no screenshot'); continue; }
-    // The middle of the table is empty baize until somebody leads; a card
-    // there is the trick in progress, and it is the same card on both screens.
-    const t = table(shot(`${name}-trick`), 250, 150, 400, 300);
+    const t = name === 'dealer'
+      ? bestMiddle([shot('dealer-trick-early'), shot('dealer-trick')])
+      : middle(shot('client-trick'));
     check(`the ${name} has a card on the table (${(t.white * 100).toFixed(0)}% of the middle)`,
       t.white > 0.05, JSON.stringify(t));
   }
@@ -596,7 +640,9 @@ function table(file, x0 = 60, y0 = 30, x1 = 580, y1 = 440) {
   const followed = await waitForFile(shot('dealer-followed'));
   check('the dealer followed the lead', followed, 'no screenshot');
   if (followed) {
-    const t = table(shot('dealer-followed'), 250, 150, 400, 300);
+    // When this seat played at its first release, the early photograph is the
+    // one with its card in front of it; the trick may be gone by now.
+    const t = bestMiddle([shot('dealer-followed'), shot('dealer-trick-early')]);
     check(`the trick is still in front of it (${(t.white * 100).toFixed(0)}% of the middle)`,
       t.white > 0.05, JSON.stringify(t));
   }

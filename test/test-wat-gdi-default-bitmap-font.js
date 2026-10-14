@@ -35,7 +35,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bitsOut = allocZero(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert(bitmap && hdc);
   wat.test_call_SelectObject(hdc, bitmap);
@@ -55,7 +55,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   assert.strictEqual(wat.test_call_GetTextExtentExPointA(
     hdc, text, 10, 0x7fffffff, 0, 0, size), 1);
   assert(wat.guest_read32(size) > 0 && wat.guest_read32(size + 4) === 16);
-  assert.strictEqual(wat.test_call_ExtTextOutA(hdc, 2, 16, 0, 0, text, 10), 1);
+  assert.strictEqual(wat.test_call_ExtTextOutA(hdc, 2, 16, 0, 0, text, 10, 0), 1);
   assert.strictEqual(wat.test_call_DrawTextA(hdc, text, 10, rect, 0x20), 16);
 
   assert.strictEqual(wat.test_call_SelectObject(hdc, 0x30021) >>> 0, 0x3001d);
@@ -65,7 +65,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   assert.strictEqual(wat.guest_read32(size + 4), 13, 'Win98 dialog font cell height');
   assert.strictEqual(wat.test_call_TextOutA(hdc, 2, 30, text, 10), 1);
 
-  const uiFont = wat.test_call_CreateFontW(-12, 400, 0, writeWide('MS Sans Serif')) >>> 0;
+  const uiFont = wat.test_call_CreateFontW(-12, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, writeWide('MS Sans Serif')) >>> 0;
   assert(uiFont && wat.test_gdi_bitmap_font_bound(uiFont),
     'MS Sans Serif should bind to its bundled Wine bitmap strike');
   assert.strictEqual(wat.test_call_SelectObject(hdc, uiFont) >>> 0, 0x30021);
@@ -89,7 +89,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   ];
   for (const expected of ladder) {
     const font = wat.test_call_CreateFontW(
-      expected.request, 400, 0, writeWide('MS Sans Serif')) >>> 0;
+      expected.request, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, writeWide('MS Sans Serif')) >>> 0;
     const strike = wat.test_gdi_bitmap_font_bound(font) >>> 0;
     assert(font && strike, `MS Sans Serif ${expected.request}px must bind`);
     assert.strictEqual(new DataView(memory.buffer).getUint32(strike + 20, true),
@@ -121,7 +121,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   for (const range of mappedRanges) {
     for (let request = range.first; request <= range.last; request++) {
       const font = wat.test_call_CreateFontW(
-        -request, 400, 0, writeWide('MS Sans Serif')) >>> 0;
+        -request, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, writeWide('MS Sans Serif')) >>> 0;
       const strike = wat.test_gdi_bitmap_font_bound(font) >>> 0;
       assert(font && strike, `MS Sans Serif -${request}px must bind`);
       assert.strictEqual(new DataView(memory.buffer).getUint32(strike + 20, true),
@@ -150,7 +150,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   // there to be no host-font path at all. A browser whose font fetch failed
   // gets Win98 bitmap text rather than whatever font the machine happens to
   // have, and text never simply vanishes.
-  const scalableFont = wat.test_call_CreateFontW(-12, 400, 0, writeWide('Arial')) >>> 0;
+  const scalableFont = wat.test_call_CreateFontW(-12, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, writeWide('Arial')) >>> 0;
   assert(scalableFont && !wat.test_gdi_bitmap_font_bound(scalableFont),
     'explicit scalable document faces should not be silently replaced');
   wat.test_call_SelectObject(hdc, scalableFont);

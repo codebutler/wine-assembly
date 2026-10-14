@@ -13,12 +13,12 @@
     (local.set $glyph_brush
       (select (i32.const 0x30012) (i32.const 0x30014) (local.get $disabled)))
     ;; Background fill + 3D edge (raised normally, sunken when pressed).
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (local.get $bx) (local.get $by)
             (i32.add (local.get $bx) (local.get $bw))
             (i32.add (local.get $by) (local.get $bh))
             (i32.const 0x30011))) ;; LTGRAY_BRUSH
-    (drop (call $host_gdi_draw_edge (local.get $hdc)
+    (drop (call $gdi_native_draw_edge (local.get $hdc)
             (local.get $bx) (local.get $by)
             (i32.add (local.get $bx) (local.get $bw))
             (i32.add (local.get $by) (local.get $bh))
@@ -40,13 +40,13 @@
         (then ;; horizontal: u→x, half→y
           (if (local.get $disabled)
             (then
-              (drop (call $host_gdi_fill_rect (local.get $hdc)
+              (drop (call $gdi_native_fill_rect (local.get $hdc)
                 (i32.add (i32.add (local.get $cx) (local.get $u)) (i32.const 1))
                 (i32.add (i32.sub (local.get $cy) (local.get $half)) (i32.const 1))
                 (i32.add (i32.add (local.get $cx) (local.get $u)) (i32.const 2))
                 (i32.add (i32.add (local.get $cy) (local.get $half)) (i32.const 2))
                 (i32.const 0x30010))))) ;; WHITE_BRUSH highlight
-          (drop (call $host_gdi_fill_rect (local.get $hdc)
+          (drop (call $gdi_native_fill_rect (local.get $hdc)
                   (i32.add (local.get $cx) (local.get $u))
                   (i32.sub (local.get $cy) (local.get $half))
                   (i32.add (i32.add (local.get $cx) (local.get $u)) (i32.const 1))
@@ -55,13 +55,13 @@
         (else ;; vertical: u→y, half→x
           (if (local.get $disabled)
             (then
-              (drop (call $host_gdi_fill_rect (local.get $hdc)
+              (drop (call $gdi_native_fill_rect (local.get $hdc)
                 (i32.add (i32.sub (local.get $cx) (local.get $half)) (i32.const 1))
                 (i32.add (i32.add (local.get $cy) (local.get $u)) (i32.const 1))
                 (i32.add (i32.add (local.get $cx) (local.get $half)) (i32.const 2))
                 (i32.add (i32.add (local.get $cy) (local.get $u)) (i32.const 2))
                 (i32.const 0x30010))))) ;; WHITE_BRUSH highlight
-          (drop (call $host_gdi_fill_rect (local.get $hdc)
+          (drop (call $gdi_native_fill_rect (local.get $hdc)
                   (i32.sub (local.get $cx) (local.get $half))
                   (i32.add (local.get $cy) (local.get $u))
                   (i32.add (i32.add (local.get $cx) (local.get $half)) (i32.const 1))
@@ -94,45 +94,45 @@
     (local $brush i32)
     (if (global.get $sb_track_brush_handle)
       (then (return (global.get $sb_track_brush_handle))))
-    (local.set $bmp (call $host_gdi_create_compat_bitmap
+    (local.set $bmp (call $gdi_native_create_compat_bitmap
       (i32.const 0) (i32.const 8) (i32.const 8) (i32.const 0)))
-    (local.set $dc (call $host_gdi_create_compat_dc (i32.const 0)))
+    (local.set $dc (call $gdi_native_create_compat_dc (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $bmp)) (i32.eqz (local.get $dc)))
       (then
-        (if (local.get $dc) (then (drop (call $host_gdi_delete_dc (local.get $dc)))))
+        (if (local.get $dc) (then (drop (call $gdi_native_delete_dc (local.get $dc)))))
         (if (local.get $bmp) (then (drop (call $gdi_object_delete_full (local.get $bmp)))))
         (return (i32.const 0x30011))))  ;; LTGRAY_BRUSH
-    (local.set $old (call $host_gdi_select_object (local.get $dc) (local.get $bmp)))
-    (drop (call $host_gdi_fill_rect (local.get $dc)
+    (local.set $old (call $gdi_native_select_object (local.get $dc) (local.get $bmp)))
+    (drop (call $gdi_native_fill_rect (local.get $dc)
       (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 8) (i32.const 0x30011)))
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.ge_u (local.get $y) (i32.const 8)))
       (local.set $x (i32.and (local.get $y) (i32.const 1)))
       (block $cols_done (loop $cols
         (br_if $cols_done (i32.ge_u (local.get $x) (i32.const 8)))
-        (drop (call $host_gdi_set_pixel (local.get $dc)
+        (drop (call $gdi_native_set_pixel (local.get $dc)
           (local.get $x) (local.get $y) (i32.const 0x00FFFFFF)))
         (local.set $x (i32.add (local.get $x) (i32.const 2)))
         (br $cols)))
       (local.set $y (i32.add (local.get $y) (i32.const 1)))
       (br $rows)))
-    (drop (call $host_gdi_select_object (local.get $dc) (local.get $old)))
-    (drop (call $host_gdi_delete_dc (local.get $dc)))
+    (drop (call $gdi_native_select_object (local.get $dc) (local.get $old)))
+    (drop (call $gdi_native_delete_dc (local.get $dc)))
     (local.set $brush (call $gdi_bitmap_wrap_pattern_brush (local.get $bmp) (i32.const 3)))
     (if (i32.eqz (local.get $brush)) (then (return (i32.const 0x30011))))
     (global.set $sb_track_brush_handle (local.get $brush))
     (local.get $brush))
 
   (func $paint_sb_track (param $hdc i32) (param $l i32) (param $t i32) (param $r i32) (param $b i32)
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
       (local.get $l) (local.get $t) (local.get $r) (local.get $b)
       (call $sb_track_brush))))
 
   (func $paint_sb_thumb (param $hdc i32) (param $l i32) (param $t i32) (param $r i32) (param $b i32)
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (local.get $l) (local.get $t) (local.get $r) (local.get $b)
             (i32.const 0x30011)))   ;; LTGRAY_BRUSH
-    (drop (call $host_gdi_draw_edge (local.get $hdc)
+    (drop (call $gdi_native_draw_edge (local.get $hdc)
             (local.get $l) (local.get $t) (local.get $r) (local.get $b)
             (i32.const 0x05) (i32.const 0x0F))))  ;; BDR_RAISED, BF_RECT
 
@@ -189,10 +189,18 @@
   ;;       drag_anchor_y (= row_y) and drag_anchor_top (= current top)
   ;;       at ListBoxState+28 / +32 so WM_MOUSEMOVE can recompute top
   ;;       from the cursor delta.
+  ;; Arrow length along the long axis. USER gives each arrow SM_CYVSCROLL
+  ;; (16) until the bar is too short for two of them plus a 4px minimum
+  ;; track; below that the two arrows split what is left, (len - 4) / 2 each.
+  ;; That is what makes a 24px SBS_VERT bar a spinner (SimCity 2000's budget
+  ;; window): two 10px arrows and no thumb. Returning 0 there left the
+  ;; control with nothing to draw and nothing to click.
   (func $scrollbar_arrow_size (param $long_dim i32) (result i32)
-    (if (result i32) (i32.lt_s (local.get $long_dim) (i32.const 36))
-      (then (i32.const 0))
-      (else (i32.const 16))))
+    (if (result i32) (i32.gt_s (local.get $long_dim) (i32.const 36))
+      (then (i32.const 16))
+      (else (if (result i32) (i32.gt_s (local.get $long_dim) (i32.const 4))
+        (then (i32.shr_u (i32.sub (local.get $long_dim) (i32.const 4)) (i32.const 1)))
+        (else (i32.const 0))))))
 
   (func $scrollbar_thumb_size (param $long_dim i32) (param $range i32) (result i32)
     (local $arrow i32) (local $track_len i32) (local $thumb_size i32)
@@ -203,7 +211,8 @@
         (select (i32.mul (local.get $arrow) (i32.const 2))
                 (i32.const 4)
                 (local.get $arrow))))
-    (if (i32.le_s (local.get $track_len) (i32.const 0)) (then (return (i32.const 0))))
+    ;; Under 6px of track USER draws no thumb at all (SCROLL_MIN_THUMB).
+    (if (i32.lt_s (local.get $track_len) (i32.const 6)) (then (return (i32.const 0))))
     (local.set $thumb_size (i32.div_u (local.get $track_len) (i32.add (local.get $range) (i32.const 1))))
     (if (i32.lt_u (local.get $thumb_size) (i32.const 16))
       (then (local.set $thumb_size (i32.const 16))))
@@ -250,7 +259,7 @@
   ;; Thumb length in pixels. total = smax - smin + 1 scroll units.
   (func $sb_page_thumb (param $track i32) (param $page i32) (param $total i32) (result i32)
     (local $thumb i32)
-    (if (i32.or (i32.le_s (local.get $track) (i32.const 0))
+    (if (i32.or (i32.lt_s (local.get $track) (i32.const 6))
                 (i32.le_s (local.get $total) (i32.const 0)))
       (then (return (i32.const 0))))
     (local.set $thumb
@@ -478,6 +487,37 @@
         (if (local.get $changed)
           (then (call $invalidate_hwnd (local.get $hwnd))))
         (return (i32.const 1))))
+
+    ;; WM_CREATE: SBS_LEFTALIGN/SBS_RIGHTALIGN (SBS_VERT) and
+    ;; SBS_TOPALIGN/SBS_BOTTOMALIGN (SBS_HORZ) share bits 2 and 4. They ask
+    ;; USER for the standard thickness along one edge of the rectangle the
+    ;; caller gave, so an app may create one 0x0 (or any size) and never
+    ;; move it again -- SimCity 2000 Net's chat log does exactly that, and
+    ;; without this its scroll bar stays 0 wide beside a text box laid out
+    ;; from the bar's rect. Wine and ReactOS both size it SM_CXVSCROLL+1.
+    (if (i32.eq (local.get $msg) (i32.const 0x0001))
+      (then
+        (local.set $style (i32.load offset=32 (call $g2w (local.get $lParam))))
+        (if (i32.and (i32.eqz (i32.and (local.get $style) (i32.const 0x18)))
+                     (i32.ne (i32.and (local.get $style) (i32.const 6)) (i32.const 0)))
+          (then
+            (local.set $mx (call $gl32 (i32.add (local.get $lParam) (i32.const 28))))
+            (local.set $my (call $gl32 (i32.add (local.get $lParam) (i32.const 24))))
+            (local.set $w (call $gl32 (i32.add (local.get $lParam) (i32.const 20))))
+            (local.set $h (call $gl32 (i32.add (local.get $lParam) (i32.const 16))))
+            (if (i32.and (local.get $style) (i32.const 1))
+              (then
+                (if (i32.and (local.get $style) (i32.const 4))
+                  (then (local.set $mx (i32.sub (i32.add (local.get $mx) (local.get $w)) (i32.const 17)))))
+                (local.set $w (i32.const 17)))
+              (else
+                (if (i32.and (local.get $style) (i32.const 4))
+                  (then (local.set $my (i32.sub (i32.add (local.get $my) (local.get $h)) (i32.const 17)))))
+                (local.set $h (i32.const 17))))
+            (drop (call $move_window_core (local.get $hwnd) (i32.const 0)
+              (local.get $mx) (local.get $my) (local.get $w) (local.get $h)
+              (i32.const 0x1c) (i32.const 0)))))
+        (return (i32.const 0))))
 
     ;; --- Mouse input: arrows, page regions, and thumb drag ---
     ;; WM_LBUTTONDOWN

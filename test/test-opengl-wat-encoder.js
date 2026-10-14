@@ -41,6 +41,10 @@ function submissionResult(bytes, memory, guestToWasm = pointer => pointer) {
     const output = view.getUint32(lastAt + Stream.HEADER_BYTES + 8, true);
     new DataView(memory.buffer).setUint32(guestToWasm(output) >>> 0, 0xAABBCCDD, true);
   }
+  if (opcode === 113 && memory) {
+    const output=view.getUint32(lastAt+Stream.HEADER_BYTES+12,true);
+    new DataView(memory.buffer).setFloat32(guestToWasm(output)>>>0,0.25,true);
+  }
   if (opcode === 12) return 0x504;
   if (opcode === 48) return 0xC001;
   if (opcode === 49) {
@@ -229,6 +233,20 @@ async function main() {
   const primitiveNames = ['points', 'lines', 'line-loop', 'line-strip', 'triangles',
     'triangle-strip', 'triangle-fan', 'quads', 'quad-strip', 'polygon'];
   const primitiveCounts = [3, 4, 4, 4, 6, 5, 5, 8, 6, 5];
+  parity('generic: texture vector copies survive mutation and query is a barrier', (gl,mem)=>{
+    const view=new DataView(mem.buffer),wa=translateGuest(DATA),out=translateGuest(DATA+64);
+    [0.25,0.5,0.75,1].forEach((v,i)=>view.setFloat32(wa+i*4,v,true));
+    gl.call(112,[0x0DE1,0x1004,DATA]);
+    new Uint8Array(mem.buffer,wa,16).fill(0);
+    view.setFloat32(wa,0x2900,true);
+    gl.call(112,[0x0DE1,0x2802,DATA]);
+    view.setFloat32(wa,0,true);
+    gl.call(112,[0x0DE0,0x1004,0xFFFFFFF0]);
+    gl.call(112,[0x0DE1,0xDEADBEEF,0xFFFFFFF0]);
+    view.setFloat32(out,-1,true);
+    gl.call(113,[0x0DE1,0x1004,DATA+64]);
+    assert.strictEqual(view.getFloat32(out,true),0.25,'query result visible before guest continues');
+  });
   for (const shade of [0x1D01, 0x1D00]) {
     for (let mode = 0; mode <= 9; mode++) {
       parity(`primitive: ${primitiveNames[mode]} ${shade === 0x1D00 ? 'flat' : 'smooth'}`, gl => {
@@ -273,8 +291,14 @@ async function main() {
     gl.call(23, [f32(0.2), f32(0.4), f32(0.6)]); point(4);
     gl.call(58, [DATA + 32]); point(5);
     gl.call(56, [0, 127, 255, 64]); point(6);
+    // glColor3ub: only the low byte of each widened word counts, and alpha
+    // returns to 1 after glColor4ub left it at 64/255.
+    gl.call(111, [0x1FF, 0x40, 0x80]); point(6.5);
     gl.call(95, [DATA]);
-    gl.call(107, [0x84C1, f32(0.375), f32(0.625)]);
+    gl.call(107, [0x84C1, f32(0.375), f32(0.625)]); point(6.75);
+    // glMultiTexCoord2fvARB: the same unit-1 coordinate read through a
+    // pointer (Soldier of Fortune's lightmap pass).
+    gl.call(117, [0x84C1, DATA]); point(6.875);
     gl.call(64, [DATA]);
     gl.call(76, [0xFFFFFFFF]);
     gl.call(25, [f32(0.9), f32(0.8), f32(0.7), f32(0.6)]); point(7);
@@ -284,6 +308,50 @@ async function main() {
     gl.call(97, [u32(-7), u32(9)]);
     gl.call(31, [DATA]);
     gl.call(22);
+    gl.call(11);
+  });
+
+  // glTexCoord4f/4fv and glMultiTexCoord4fARB/4fvARB: r and q ride in packed
+  // floats 15..18. Every two-component form puts them back to (0, 1), the
+  // attribute stack and context switches keep them, and 3/4-component arrays
+  // supply them (and DrawArrays restores the caller's afterwards).
+  parity('state: projective texture coordinates r and q on both units', (gl, mem) => {
+    const view = new DataView(mem.buffer);
+    const dataWa = translateGuest(DATA);
+    [0.25, 0.5, -1.5, 3].forEach((v, i) => view.setFloat32(dataWa + i * 4, v, true));
+    const point = value => {
+      gl.call(21, [0]); gl.call(30, [f32(value), f32(2), f32(3)]); gl.call(22);
+    };
+    gl.call(120, [f32(0.1), f32(0.2), f32(0.3), f32(2.5)]); point(1);
+    gl.call(121, [DATA]); point(2);
+    gl.call(122, [0x84C1, f32(1), f32(2), f32(-3), f32(4)]); point(3);
+    gl.call(123, [0x84C1, DATA]); point(4);
+    gl.call(122, [0x84C2, f32(9), f32(9), f32(9), f32(9)]); point(5);  // no unit 2
+    gl.call(76, [0xFFFFFFFF]);
+    gl.call(28, [f32(0.5), f32(0.5)]); point(6);              // r, q -> 0, 1
+    gl.call(107, [0x84C1, f32(0.5), f32(0.5)]); point(7);
+    gl.call(77); point(8);                                      // back to 4f state
+    gl.call(95, [DATA]); point(9);
+    gl.call(117, [0x84C1, DATA]); point(10);
+    gl.call(120, [f32(1), f32(1), f32(7), f32(-2)]);
+    assert.strictEqual(gl.call(51, [0x4321, 0xC001]), 1); point(11);   // fresh context: defaults
+    gl.call(121, [DATA]);
+    assert.strictEqual(gl.call(51, [0x1234, 0xC002]), 1); point(12);   // first context's q
+    assert.strictEqual(gl.call(51, [0x4321, 0xC001]), 1); point(13);
+    const vertex = DATA + 0x100, tex = DATA + 0x200;
+    for (let i = 0; i < 3; i++) {
+      [i, i + 1, 0].forEach((v, c) => view.setFloat32(translateGuest(vertex) + i * 12 + c * 4, v, true));
+      [i / 3, 0.5, i - 1, i + 1].forEach((v, c) => view.setFloat32(translateGuest(tex) + i * 16 + c * 4, v, true));
+    }
+    gl.call(88, [3, 0x1406, 12, vertex]);
+    gl.call(86, [0x8074]); gl.call(86, [0x8078]);
+    for (const size of [4, 3, 2]) {
+      gl.call(100, [size, 0x1406, 16, tex]);
+      gl.call(108, [0x0004, 0, 3]);
+    }
+    gl.call(106, [0x84C1]); gl.call(100, [4, 0x1406, 16, tex]); gl.call(86, [0x8078]);
+    gl.call(108, [0x0004, 0, 3]);
+    point(14);                                                  // caller's q restored
     gl.call(11);
   });
 
@@ -329,6 +397,10 @@ async function main() {
     });
     gl.call(88, [3, 0x140A, 32, vertex]);
     gl.call(102, [0x0004, 6, 0x1403, indices]);
+    // glDrawArrays: the same arrays walked from an offset first element, as a
+    // strip, plus the degenerate forms that must draw nothing.
+    gl.call(108, [0x0005, 1, 3]);
+    gl.call(108, [0x0004, 0, 0]);
     gl.call(11);
   });
 

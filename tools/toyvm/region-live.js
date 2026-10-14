@@ -181,11 +181,24 @@ class LiveJit {
       // appends to the same one; with both on, neither side may number its
       // handlers from zero. A standalone JIT gets its own.
       extras = null,
+      // `sep` (region-sep.js): compile only the region functions and write them
+      // into the RUNNING instance's handler table, instead of rebuilding the
+      // whole interpreter and swapping the guest onto it. Needs a running
+      // module built with `exportAll`.
+      sep = false,
+      // `continuous`: keep profiling after an install and add regions as the
+      // program moves on. A demo is a run of scenes, each with its own hot
+      // loop, and a JIT that profiles once installs the FIRST scene's loop and
+      // leaves every later one to the interpreter (DREAM: the 6-12M window
+      // picks a loop worth +19% over those 12M and nothing over 100M). Each
+      // window only goes to the backend when its hottest arena address is one
+      // no earlier window has already handled.
+      continuous = false,
       log = () => {},
     } = opts;
     Object.assign(this, {
       session, vm, machine, portIn, portOut, sampleAfter, profileFor, regions,
-      minShare, minOps, gateAt, gateIters, backend, repFast, cpu, build, log,
+      minShare, minOps, gateAt, gateIters, backend, repFast, cpu, build, log, sep, continuous,
       extras: extras || new (require('./extras').Extras)(),
     });
     this.phase = 'profiling';
@@ -200,6 +213,7 @@ class LiveJit {
     this.rtopRepaired = 0;
     this.rtopCut = 0;
     this.ms = {};                    // per-stage cost, milliseconds
+    this.buildMs = 0;                // every run() summed
     this.samples = new Map();        // arena address -> hits
     this.sampleLog = [];             // flat [dispatched, arena address, ...]
     this.dispatched = 0;
@@ -208,6 +222,24 @@ class LiveJit {
     this.guards = null;              // the installed regions' byte guards
     this.share = 0;
     this.gateRatio = null;
+    this.seenHot = new Set();        // continuous: hottest addresses already handled
+    this.windows = 0;                // continuous: profile windows closed
+    this.skipped = 0;                // ...of which nothing new was hot
+  }
+
+  // Is this window collecting samples? Once, before the first install; always,
+  // in continuous mode.
+  sampling() {
+    return this.phase === 'profiling'
+      || (this.continuous && (this.phase === 'installed' || this.phase === 'declined'));
+  }
+
+  // continuous: start the next profile window here.
+  rewindow() {
+    this.samples = new Map();
+    this.sampleLog = [];
+    this.sampleAfter = this.dispatched;
+    this.windows++;
   }
 
   // Chain this into DosSession's `afterSlice`. A budget-expiry return leaves
@@ -216,7 +248,7 @@ class LiveJit {
   // blind to exactly the hot loops that never end.
   sample({ left, dispatched }) {
     this.dispatched = dispatched;
-    if (this.phase !== 'profiling') return;
+    if (!this.sampling()) return;
     if (left >= 0 || dispatched < this.sampleAfter) return;
     const at = this.vm.raw('ip');
     this.samples.set(at, (this.samples.get(at) || 0) + 1);
@@ -256,6 +288,10 @@ class LiveJit {
       regs, machine,
       regions: this.regions, minShare: this.minShare, minOps: this.minOps,
       gateAt: this.gateAt, gateIters: this.gateIters,
+      // Heads already installed, which a continuous window must not pick again.
+      exclude: this.session.cache.regionAt ? [...this.session.cache.regionAt.keys()] : [],
+      // The running module's declarations, for the region module's imports.
+      sep: this.sep ? this.sepDecls() : null,
       // THE HANDLER TABLE'S TAIL AS IT STANDS. `--tree-fold` appends to the
       // same one (tools/toyvm/extras.js), so a module built with only THIS
       // side's regions would leave the fold's handlers out of the table and
@@ -265,6 +301,15 @@ class LiveJit {
       extrasBefore: this.extras.handlers.slice(),
       extrasEpoch: this.extras.epoch,
     };
+  }
+
+  // Parsed once per module text: the vm is never rebound in this mode.
+  sepDecls() {
+    if (!this.decls || this.declsOf !== this.vm.wat) {
+      this.decls = require('./region-sep').declsFromWat(this.vm.wat);
+      this.declsOf = this.vm.wat;
+    }
+    return this.decls;
   }
 
   // Has the guest rewritten any byte an installed region was compiled from?
@@ -309,10 +354,18 @@ class LiveJit {
     if (this.busy) return this.phase;
     if (this.phase === 'installed') {
       if (!this.guardsHold()) this.uninstall("the guest rewrote the region's own bytes");
-      return this.phase;
+      if (!this.continuous) return this.phase;
     }
-    if (this.phase !== 'profiling') return this.phase;
+    if (!this.sampling()) return this.phase;
     if (this.dispatched < this.sampleAfter + this.profileFor) return this.phase;
+    if (this.continuous) {
+      // The same scene as a window already handled costs nothing but the
+      // sampling: no bundle, no pick, no audit.
+      let top = -1, n = -1;
+      for (const [a, c] of this.samples) if (c > n) { top = a; n = c; }
+      if (top < 0 || this.seenHot.has(top)) { this.skipped++; this.rewindow(); return this.phase; }
+      this.seenHot.add(top);
+    }
     if (!this.samples.size) {
       // Nothing landed in a live block: a program can retire millions of
       // dispatches inside code the cache threw away underneath the samples.
@@ -332,7 +385,25 @@ class LiveJit {
     return this.phase;
   }
 
+  // The whole pipeline's time, every time it runs: the arm's build cost
+  // (tools/toyvm/arm-bench.js). Headless, run-dos.js awaits it between slices,
+  // so the guest is not running meanwhile and wall time is what it cost.
   async run() {
+    const t = now();
+    try { return await this.runPipeline(); } finally {
+      if (this.continuous) {
+        if (this.installedAt && this.installedAt.length) this.phase = 'installed';
+        this.rewindow();
+      }
+      // A worker prepares while the guest runs, so the wall time of the wait is
+      // not a cost; what the worker thread itself spent is, and it says so.
+      this.buildMs += this.backend.name === 'worker'
+        ? (now() - t) - (this.ms.prepare || 0) + (this.ms.workerCpu || 0)
+        : now() - t;
+    }
+  }
+
+  async runPipeline() {
     const t0 = now();
     const bundle = this.makeBundle();
     this.ms.bundle = now() - t0;
@@ -354,8 +425,9 @@ class LiveJit {
       + `${prepared.gate.ratio.toFixed(2)}x over ${this.gateIters} snapshot iterations`);
 
     const tInstall = now();
-    await this.install(prepared);
+    const installed = await this.install(prepared);
     this.ms.install = now() - tInstall;
+    if (installed === false) return;
     this.installs++;
     this.phase = 'installed';
     this.log(`[jit] installed ${prepared.picks.length} region(s) at `
@@ -370,6 +442,7 @@ class LiveJit {
   // complete.
   async install(prepared) {
     const vm = this.vm;
+    if (vm.exports.get_cr0?.() < 0) { this.declined = 'paged execution uses the interpreter'; return false; }
     const old = vm.exports;
     // THE TAIL MUST NOT HAVE MOVED UNDER THE PREPARED MODULE. `--tree-fold`
     // appends to the same handler table between slices, and this module was
@@ -387,60 +460,71 @@ class LiveJit {
     // `WebAssembly.compile` is asynchronous and browsers run it off the main
     // thread, so what the page loses here is the swap below; headless, where
     // nothing else is running, this line is the whole wait.
-    const tc = now();
-    const next = await makeVm(vm.variant, {
-      portIn: this.portIn, portOut: this.portOut, memory: vm.memory,
-      bytes: prepared.bytes,
-    });
-    this.ms.instantiate = now() - tc;
-    const ts = now();
-    carryState(old, next.exports);
-    // `--install-audit`: every zero-argument `get_`/`mget_`/`fget_` export the
-    // two instances share, compared after the carry. A global the carry does
-    // not know about is not a crash, it is a WRONG NUMBER LATER -- `idtb` and
-    // `attr_flip` were both found this way, by hand -- and the shape of the
-    // bug is always "the list in carryState is not the list emit.js emits".
-    // This asks the module instead of the list.
-    if (liveFlag('install-audit')) {
-      for (const k of Object.keys(next.exports)) {
-        if (!/^(get|mget|fget)_/.test(k) || typeof old[k] !== 'function') continue;
-        let a, b;
-        try { a = old[k](); b = next.exports[k](); } catch (e) { continue; }
-        if (a !== b) this.log(`[jit] install-audit: ${k} ${a} -> ${b}`);
+    // SEPARATE MODULE: the regions go into THIS instance's table and nothing
+    // is swapped, so there is no state to carry and no machine to re-point.
+    let ts;
+    if (prepared.sep) {
+      const tc = now();
+      require('./region-sep').installRegionModule(vm, prepared.bytes, prepared.picks);
+      this.ms.instantiate = now() - tc;
+      ts = now();
+    } else {
+      const tc = now();
+      const next = await makeVm(vm.variant, {
+        portIn: this.portIn, portOut: this.portOut, memory: vm.memory,
+        bytes: prepared.bytes,
+      });
+      this.ms.instantiate = now() - tc;
+      ts = now();
+      carryState(old, next.exports);
+      // `--install-audit`: every zero-argument `get_`/`mget_`/`fget_` export the
+      // two instances share, compared after the carry. A global the carry does
+      // not know about is not a crash, it is a WRONG NUMBER LATER -- `idtb` and
+      // `attr_flip` were both found this way, by hand -- and the shape of the
+      // bug is always "the list in carryState is not the list emit.js emits".
+      // This asks the module instead of the list.
+      if (liveFlag('install-audit')) {
+        for (const k of Object.keys(next.exports)) {
+          if (!/^(get|mget|fget)_/.test(k) || typeof old[k] !== 'function') continue;
+          let a, b;
+          try { a = old[k](); b = next.exports[k](); } catch (e) { continue; }
+          if (a !== b) this.log(`[jit] install-audit: ${k} ${a} -> ${b}`);
+        }
       }
-    }
-    vm.rebind(next);
-    // The machine caches the export table it pokes registers through, and the
-    // VGA period is programmed once per change -- both have to be told.
-    //
-    // `setVmExports`, NOT `setMemory`: the latter is the boot-time reset (it
-    // reinstalls the IVT, clears the text page and rewrites the BIOS data
-    // area), and calling it here took the guest's own interrupt handlers away
-    // at the install. That was the whole of the "stops making progress" class
-    // -- ACCIDENT, BRW, CONTAGIO and DRAGON -- and none of those four ever
-    // executed a single region op: with `--trap` (a region body of
-    // `unreachable`) each reproduced its divergence exactly and never trapped.
-    if (this.machine) this.machine.setVmExports(vm.exports);
-    if (vm.exports.set_rep_fast) vm.exports.set_rep_fast(this.repFast ? 1 : 0);
-    // THE CARD'S PROGRAMMING IS RE-APPLIED, NOT RE-DERIVED. `$vga_period`,
-    // `$vga_vb`, `$vga_line`, `$vga_hb` and `$vga_phase0` are five globals with
-    // no accessor pair, so `carryState` cannot reach them and the new instance
-    // starts on the module's defaults (26000/2340/57/11/0). This used to be
-    // handled by setting `session.vgaHz = 0`, which makes the next slice
-    // program the card AGAIN -- and that is not the same thing: the session
-    // only re-reads `vgaTiming()` when the refresh RATE changes, so a card
-    // whose line count moved under an unchanged rate is running on a `lines`
-    // the current call no longer reports, and the recompute would then hand
-    // the new instance a retrace geometry the old instance was not running on.
-    // No corpus program has been shown to depend on that difference -- on the
-    // measured corpus `vgaTiming()` returns what it returned -- so this is a
-    // narrowing, not a fix for a known divergence: it re-applies a number the
-    // host already has instead of asking for it again.
-    if (this.session.vgaPeriod && vm.exports.set_vga_period) {
-      vm.exports.set_vga_period(this.session.vgaPeriod, this.session.vgaLines);
-      if (old.get_vga_phase0 && vm.exports.set_vga_phase0) {
-        vm.exports.set_vga_phase0(old.get_vga_phase0());
+      vm.rebind(next);
+      // The machine caches the export table it pokes registers through, and the
+      // VGA period is programmed once per change -- both have to be told.
+      //
+      // `setVmExports`, NOT `setMemory`: the latter is the boot-time reset (it
+      // reinstalls the IVT, clears the text page and rewrites the BIOS data
+      // area), and calling it here took the guest's own interrupt handlers away
+      // at the install. That was the whole of the "stops making progress" class
+      // -- ACCIDENT, BRW, CONTAGIO and DRAGON -- and none of those four ever
+      // executed a single region op: with `--trap` (a region body of
+      // `unreachable`) each reproduced its divergence exactly and never trapped.
+      if (this.machine) this.machine.setVmExports(vm.exports);
+      if (vm.exports.set_rep_fast) vm.exports.set_rep_fast(this.repFast ? 1 : 0);
+      // THE CARD'S PROGRAMMING IS RE-APPLIED, NOT RE-DERIVED. `$vga_period`,
+      // `$vga_vb`, `$vga_line`, `$vga_hb` and `$vga_phase0` are five globals with
+      // no accessor pair, so `carryState` cannot reach them and the new instance
+      // starts on the module's defaults (26000/2340/57/11/0). This used to be
+      // handled by setting `session.vgaHz = 0`, which makes the next slice
+      // program the card AGAIN -- and that is not the same thing: the session
+      // only re-reads `vgaTiming()` when the refresh RATE changes, so a card
+      // whose line count moved under an unchanged rate is running on a `lines`
+      // the current call no longer reports, and the recompute would then hand
+      // the new instance a retrace geometry the old instance was not running on.
+      // No corpus program has been shown to depend on that difference -- on the
+      // measured corpus `vgaTiming()` returns what it returned -- so this is a
+      // narrowing, not a fix for a known divergence: it re-applies a number the
+      // host already has instead of asking for it again.
+      if (this.session.vgaPeriod && vm.exports.set_vga_period) {
+        vm.exports.set_vga_period(this.session.vgaPeriod, this.session.vgaLines);
+        if (old.get_vga_phase0 && vm.exports.set_vga_phase0) {
+          vm.exports.set_vga_phase0(old.get_vga_phase0());
+        }
       }
+
     }
 
     // The regions are part of the shared tail from here on: they were built at
@@ -451,9 +535,11 @@ class LiveJit {
         { base: prepared.picks[0].idx, n: prepared.extras.length, epoch: prepared.extrasEpoch });
     }
     const cache = this.session.cache;
-    cache.regionAt = new Map(prepared.picks.map(p => [p.key, p.idx]));
-    cache.regionSucc = new Map(prepared.picks.map(p => [p.key, p.succ]));
-    cache.regionBytes = new Map(prepared.picks.map(p => [p.key, p.guard]));
+    // continuous: the earlier regions stay; these join them.
+    const kept = (m) => (this.continuous && m ? [...m] : []);
+    cache.regionAt = new Map([...kept(cache.regionAt), ...prepared.picks.map(p => [p.key, p.idx])]);
+    cache.regionSucc = new Map([...kept(cache.regionSucc), ...prepared.picks.map(p => [p.key, p.succ])]);
+    cache.regionBytes = new Map([...kept(cache.regionBytes), ...prepared.picks.map(p => [p.key, p.guard])]);
     cache.regionCodeBits = !liveFlag('no-region-code-bits');
     // ONLY THE REGION'S OWN BYTES. This used to flush the whole cache, on the
     // argument that every block in the arena was compiled against the old
@@ -596,8 +682,9 @@ class LiveJit {
       + ` dropped, return stack ${rtop0} -> ${(narrow && !liveFlag('install-drop-rtop')) ? keep : 0}`
       + ` (${repaired} frame(s) re-pointed, ${unrepaired} not)`
       + `${narrow ? '' : ' (wide drop)'}`);
-    this.guards = this.guards0(prepared);
-    this.installedAt = prepared.picks.map(p => p.headIp);
+    this.guards = [...(this.continuous && this.guards ? this.guards : []), ...this.guards0(prepared)];
+    this.installedAt = [...(this.continuous && this.installedAt ? this.installedAt : []),
+      ...prepared.picks.map(p => p.headIp)];
     this.ms.swap = now() - ts;
   }
 
@@ -617,8 +704,8 @@ class LiveJit {
       phase: this.phase, declined: this.declined, installs: this.installs,
       drops: this.drops, share: this.share, gate: this.gateRatio,
       rtopRepaired: this.rtopRepaired, rtopCut: this.rtopCut,
-      at: this.installedAt, ms: { ...this.ms }, backend: this.backend.name,
-      samples: this.samples.size,
+      at: this.installedAt, ms: { ...this.ms }, buildMs: this.buildMs, backend: this.backend.name,
+      samples: this.samples.size, windows: this.windows, skipped: this.skipped,
     };
   }
 }
@@ -637,10 +724,12 @@ class LiveJit {
 // a deferred lazy-flag rule and retire it, so the arithmetic bits survive the
 // move. A raw copy of $flags would carry a word that had not been computed yet.
 function carryState(from, to) {
+  // Both instances may share the register-file memory. Snapshot BEFORE any
+  // selector setter re-resolves a descriptor and changes that shared cache.
+  const machineSnapshot = MACHINE_STATE.filter(g => from[`mget_${g}`] && to[`mset_${g}`])
+    .map(g => [g, from[`mget_${g}`]()]);
   const machine = () => {
-    for (const g of MACHINE_STATE) {
-      if (from[`mget_${g}`] && to[`mset_${g}`]) to[`mset_${g}`](from[`mget_${g}`]());
-    }
+    for (const [g, value] of machineSnapshot) to[`mset_${g}`](value);
   };
   // THE ORDER IS THE WHOLE OF THIS FUNCTION, AND IT USED TO BE WRONG.
   //

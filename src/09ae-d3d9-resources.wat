@@ -266,18 +266,6 @@
     (call $d3d9_shader_unbind (local.get $old))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
-  (func $handle_IDirect3DBuffer9_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
-  (func $handle_IDirect3DBuffer9_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
-  (func $handle_IDirect3DBuffer9_GetDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
   (func $handle_IDirect3DBuffer9_SetPriority (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirect3DTexture9_SetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
@@ -505,6 +493,14 @@
   ;; Immutable vertex declaration: resource header, then 8-byte elements incl.
   ;; D3DDECL_END. Device +1736 caches its vtable; +8 owns the current binding.
   (func $d3d9_declaration_create (param $device i32) (param $elements i32) (param $out i32)
+    (call $d3d9_declaration_create_mapped (local.get $device) (local.get $elements)
+      (local.get $out) (i32.const 0)))
+
+  ;; D3D8 declarations assign explicit v-registers. Keep their immutable map
+  ;; after the standard elements, rather than encoding private values in the
+  ;; public D3DVERTEXELEMENT9 fields. Ordinary D3D9 declarations have no tail.
+  (func $d3d9_declaration_create_mapped (param $device i32) (param $elements i32)
+      (param $out i32) (param $registers i32)
     (local $state i32) (local $src i32) (local $i i32) (local $element i32)
     (local $vtbl i32) (local $obj i32) (local $wa i32) (local $bytes i32) (local $j i32)
     (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
@@ -546,8 +542,16 @@
       (if (i32.gt_u (i32.load8_u offset=7 (local.get $element)) (i32.const 15)) (then
         (call $d3d9_decl_reject (i32.const 0x400) (local.get $element)) (return)))
       (local.set $j (i32.const 0))
+      (if (local.get $registers) (then
+        (if (i32.gt_u (i32.load8_u (i32.add (call $g2w (local.get $registers)) (local.get $i))) (i32.const 15))
+          (then (return)))))
       (block $unique (loop $previous
         (br_if $unique (i32.ge_u (local.get $j) (local.get $i)))
+        (if (local.get $registers) (then
+          (if (i32.eq
+            (i32.load8_u (i32.add (call $g2w (local.get $registers)) (local.get $i)))
+            (i32.load8_u (i32.add (call $g2w (local.get $registers)) (local.get $j))))
+            (then (return)))))
         (if (i32.eq (i32.load16_u offset=6 (local.get $element))
           (i32.load16_u offset=6 (i32.add (local.get $src) (i32.mul (local.get $j) (i32.const 8))))) (then
           (call $d3d9_decl_reject (i32.const 0x800) (local.get $element)) (return)))
@@ -562,17 +566,23 @@
       (call $gs32 (i32.add (local.get $state) (i32.const 1736)) (local.get $vtbl))))
     (if (i32.eqz (local.get $vtbl)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000e))
       (call $d3d9_decl_reject (i32.const 0x2000) (i32.const 0)) (return)))
-    (local.set $obj (call $heap_alloc (i32.add (local.get $bytes) (i32.const 24))))
+    (local.set $obj (call $heap_alloc (i32.add (local.get $bytes)
+      (select (i32.const 40) (i32.const 24) (i32.ne (local.get $registers) (i32.const 0))))))
     (if (i32.eqz (local.get $obj)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000e))
       (call $d3d9_decl_reject (i32.const 0x4000) (i32.const 0)) (return)))
     (local.set $wa (call $g2w (local.get $obj)))
     (i32.store (local.get $wa) (local.get $vtbl))
     (i32.store offset=4 (local.get $wa) (i32.const 1))
     (i32.store offset=8 (local.get $wa) (local.get $device))
-    (i32.store offset=12 (local.get $wa) (i32.const 0xd3d90002))
+    (i32.store offset=12 (local.get $wa)
+      (select (i32.const 0xd3d80002) (i32.const 0xd3d90002)
+        (i32.ne (local.get $registers) (i32.const 0))))
     (i32.store offset=16 (local.get $wa) (local.get $bytes))
     (i32.store offset=20 (local.get $wa) (i32.const 0))
     (memory.copy (i32.add (local.get $wa) (i32.const 24)) (local.get $src) (local.get $bytes))
+    (if (local.get $registers) (then
+      (memory.copy (i32.add (local.get $wa) (i32.add (i32.const 24) (local.get $bytes)))
+        (call $g2w (local.get $registers)) (i32.const 16))))
     (drop (call $d3d9_device_addref (local.get $device)))
     (call $gs32 (local.get $out) (local.get $obj)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
@@ -583,7 +593,9 @@
     (if (i32.eqz (local.get $state)) (then (return)))
     (if (local.get $declaration) (then
       (local.set $wa (call $g2w (local.get $declaration)))
-      (if (i32.ne (i32.load offset=12 (local.get $wa)) (i32.const 0xd3d90002)) (then (return)))
+      (if (i32.and
+        (i32.ne (i32.load offset=12 (local.get $wa)) (i32.const 0xd3d90002))
+        (i32.ne (i32.load offset=12 (local.get $wa)) (i32.const 0xd3d80002))) (then (return)))
       (if (i32.ne (i32.load offset=8 (local.get $wa)) (local.get $device)) (then (return)))
     ))
     (local.set $block (call $gl32 (i32.add (local.get $state) (i32.const 1740))))
@@ -596,18 +608,6 @@
     (call $gs32 (i32.add (local.get $state) (i32.const 8)) (local.get $declaration))
     (call $gs32 (i32.add (local.get $state) (i32.const 12)) (i32.const 0))
     (call $d3d9_shader_unbind (local.get $old)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
-
-  (func $handle_IDirect3DVertexDeclaration9_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
-  (func $handle_IDirect3DVertexDeclaration9_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
-  (func $handle_IDirect3DVertexDeclaration9_GetDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   (func $handle_IDirect3DVertexDeclaration9_GetDeclaration (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $bytes i32)
@@ -677,8 +677,6 @@
     (call $gs32 (local.get $out) (local.get $obj))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
-  (func $handle_IDirect3DQuery9_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IDirect3DQuery9_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.and (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 24))) (i32.const 9))
       (i32.and (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 4))) (i32.const 1))
@@ -686,8 +684,6 @@
       (drop (call $host_gpu_gl_call (i32.const 0x3000e) (call $g2w (local.get $arg0)) (local.get $arg0)))
       (call $gs32 (i32.add (local.get $arg0) (i32.const 36)) (i32.const 3))))
     (call $handle_IDirect3DShader9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-  (func $handle_IDirect3DQuery9_GetDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IDirect3DQuery9_GetType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $gl32 (i32.add (local.get $arg0) (i32.const 24))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
@@ -1650,18 +1646,6 @@
       (if (call $gl32 (i32.add (local.get $state) (i32.const 1740)))
         (then (call $crash_unimplemented (local.get $name)))))))
 
-  (func $handle_IDirect3DStateBlock9_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
-  (func $handle_IDirect3DStateBlock9_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
-  (func $handle_IDirect3DStateBlock9_GetDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirect3DShader9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
-
   (func $handle_IDirect3DStateBlock9_Capture (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3d9_stateblock_transfer (local.get $arg0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
@@ -1733,8 +1717,10 @@
     (if (i32.eq (local.get $format) (i32.const 50)) (then (return (i32.const 1))))
     (if (i32.or (i32.or (i32.eq (local.get $format) (i32.const 23))
                         (i32.eq (local.get $format) (i32.const 51)))
-                (i32.or (i32.eq (local.get $format) (i32.const 81))
-                        (i32.eq (local.get $format) (i32.const 26)))) (then (return (i32.const 2))))
+                (i32.or (i32.or (i32.eq (local.get $format) (i32.const 81))
+                                (i32.eq (local.get $format) (i32.const 26)))
+                        (i32.or (i32.eq (local.get $format) (i32.const 24))
+                                (i32.eq (local.get $format) (i32.const 25))))) (then (return (i32.const 2))))
     (if (i32.eq (local.get $format) (i32.const 20)) (then (return (i32.const 3))))
     (i32.const 4))
 
@@ -1761,8 +1747,10 @@
         (i32.or (i32.or (i32.eq (local.get $format) (i32.const 50))
                         (i32.eq (local.get $format) (i32.const 51)))
                 (i32.eq (local.get $format) (i32.const 26)))
-        (i32.or (i32.eq (local.get $format) (i32.const 62))
-                (i32.eq (local.get $format) (i32.const 81))))))
+        (i32.or (i32.or (i32.eq (local.get $format) (i32.const 62))
+                        (i32.eq (local.get $format) (i32.const 81)))
+                (i32.or (i32.eq (local.get $format) (i32.const 24))
+                        (i32.eq (local.get $format) (i32.const 25)))))))
 
   (func $d3d9_texture_pitch (param $width i32) (param $format i32) (result i32)
     (local $block i32)
@@ -1797,28 +1785,21 @@
     ;; Render-target textures share native storage identities with their surface
     ;; views. Autogen/depth textures and dynamic render targets remain gated.
     (if (i32.and (local.get $usage) (i32.const -514)) (then (return)))
-    ;; Colour storage is 32-bit and nothing else: $d3d9_texture_colors_init
-    ;; copies the texture's own format and mip pitch into the record at +28/+48,
-    ;; ensureColor refuses a pitch that is not width*4, and the sampler path
-    ;; insists the two agree. A 16-bit render target therefore cannot be stored
-    ;; as asked -- but refusing it is worse than widening it. B&W2 asks for
-    ;; exactly one 512x512 R5G6B5 render target in a whole land load (its other
-    ;; six are A8R8G8B8) and does not negotiate: 0xa9d4b0 pushes the format as
-    ;; an immediate, checks nothing, and calls GetSurfaceLevel on the NULL a
-    ;; refusal leaves behind. Widening is safe for a surface that is rendered
-    ;; into and sampled -- a 32-bit target cannot lose what a 16-bit one would
-    ;; have kept -- and is wrong only for one locked and written as raw 16-bit
-    ;; texels, which a render target is not.
+    ;; RGB565 render targets retain packed texture/alias storage on the
+    ;; software backend. Preserve historical widening on other backends: BW2
+    ;; dereferences a NULL texture if this previously accepted request fails.
+    ;; This fallback is not a claim of native RGB565 destination precision.
+    ;; A4R4G4B4 widening likewise remains a compatibility limitation.
     (if (i32.and (local.get $usage) (i32.const 1)) (then
-      (if (i32.eq (local.get $format) (i32.const 23))
+      (if (i32.and (i32.eq (local.get $format) (i32.const 23))
+        (i32.eqz (call $d3d9_rgb565_supported)))
         (then (local.set $format (i32.const 22))))
       (if (i32.eq (local.get $format) (i32.const 26))
         (then (local.set $format (i32.const 21))))))
     (if (i32.and (local.get $usage) (i32.const 1)) (then
       (if (local.get $pool) (then (return)))
       (if (i32.ne (local.get $usage) (i32.const 1)) (then (return)))
-      (if (i32.and (i32.ne (local.get $format) (i32.const 21))
-        (i32.ne (local.get $format) (i32.const 22))) (then (return)))))
+      (if (i32.eqz (call $d3d9_color_target_format (local.get $format))) (then (return)))))
     (local.set $w (local.get $width)) (local.set $h (local.get $height))
     (local.set $max (i32.const 1))
     (block $counted (loop $count
@@ -1848,6 +1829,10 @@
     (if (i32.eqz (local.get $obj)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E)) (return)))
     (local.set $wa (call $g2w (local.get $obj)))
     (call $zero_memory (local.get $wa) (local.get $bytes))
+    ;; This allocation may reuse a released texture's mip records: move the
+    ;; device's texture generation so the host re-checks its snapshots.
+    (local.set $state (i32.add (call $d3d9_program_state (local.get $device)) (i32.const 25596)))
+    (call $gs32 (local.get $state) (i32.add (call $gl32 (local.get $state)) (i32.const 1)))
     (local.set $vtbl (global.get $DX_VTBL_D3DTEX9))
     (if (i32.eq (local.get $kind) (i32.const 5)) (then
       (local.set $state (call $d3d9_program_state (local.get $device)))
@@ -1912,6 +1897,60 @@
       (i32.or (i32.ge_u (local.get $face) (i32.const 6)) (i32.ge_u (local.get $level) (local.get $levels))))
       (then (return (i32.const -1))))
     (i32.add (i32.mul (local.get $face) (local.get $levels)) (local.get $level)))
+
+  ;; SYSTEMMEM -> DEFAULT textures. Dirty rectangles are upload hints, not
+  ;; clipping bounds: copy the complete matching mip chain and advance each
+  ;; destination snapshot generation. Validate every level before any write.
+  (func $d3d9_texture_update (param $device i32) (param $source i32) (param $dest i32) (param $name_ptr i32)
+    (local $src i32) (local $dst i32) (local $sl i32) (local $dl i32)
+    (local $faces i32) (local $face i32) (local $level i32) (local $pass i32)
+    (local $sm i32) (local $dm i32) (local $i i32) (local $n i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
+    (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
+    (if (i32.or (i32.eqz (call $d3d9_texture_mip (local.get $source) (i32.const 0)))
+      (i32.eqz (call $d3d9_texture_mip (local.get $dest) (i32.const 0)))) (then (return)))
+    (local.set $src (call $g2w (local.get $source))) (local.set $dst (call $g2w (local.get $dest)))
+    (if (i32.or (i32.ne (i32.load offset=8 (local.get $src)) (local.get $device))
+      (i32.ne (i32.load offset=8 (local.get $dst)) (local.get $device))) (then (return)))
+    (if (i32.or (i32.ne (i32.load offset=44 (local.get $src)) (i32.const 2))
+      (i32.ne (i32.load offset=44 (local.get $dst)) (i32.const 0))) (then (return)))
+    (if (i32.or (i32.ne (i32.load offset=12 (local.get $src)) (i32.load offset=12 (local.get $dst)))
+      (i32.ne (i32.load offset=36 (local.get $src)) (i32.load offset=36 (local.get $dst)))) (then (return)))
+    (local.set $sl (i32.load offset=32 (local.get $src))) (local.set $dl (i32.load offset=32 (local.get $dst)))
+    (if (i32.lt_u (local.get $sl) (local.get $dl)) (then (return)))
+    ;; GPU-owned render-target texture storage needs a fenced upload, not a
+    ;; CPU shadow write. Keep that valid but unsupported path fail-fast.
+    (if (i32.load offset=56 (local.get $dst)) (then (call $crash_unimplemented (local.get $name_ptr)) (return)))
+    (local.set $faces (select (i32.const 6) (i32.const 1) (i32.eq (i32.load offset=12 (local.get $src)) (i32.const 5))))
+    (local.set $n (i32.mul (local.get $faces) (local.get $sl)))
+    (loop $source_locks
+      (if (i32.load offset=20 (call $d3d9_texture_mip (local.get $source) (local.get $i))) (then (return)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $source_locks (i32.lt_u (local.get $i) (local.get $n))))
+    (loop $passes
+      (local.set $face (i32.const 0))
+      (loop $faces_loop
+        (local.set $level (i32.const 0))
+        (loop $levels_loop
+          (local.set $sm (call $d3d9_texture_mip (local.get $source)
+            (i32.add (i32.mul (local.get $face) (local.get $sl)) (i32.add (i32.sub (local.get $sl) (local.get $dl)) (local.get $level)))))
+          (local.set $dm (call $d3d9_texture_mip (local.get $dest)
+            (i32.add (i32.mul (local.get $face) (local.get $dl)) (local.get $level))))
+          (if (i32.eqz (local.get $pass)) (then
+            (if (i32.load offset=20 (local.get $dm)) (then (return)))
+            (if (i32.or (i64.ne (i64.load (local.get $sm)) (i64.load (local.get $dm)))
+              (i64.ne (i64.load offset=8 (local.get $sm)) (i64.load offset=8 (local.get $dm)))) (then (return))))
+          (else
+            (memory.copy (call $g2w (i32.load offset=16 (local.get $dm)))
+              (call $g2w (i32.load offset=16 (local.get $sm))) (i32.load offset=12 (local.get $sm)))
+            (i32.store offset=28 (local.get $dm) (i32.add (i32.load offset=28 (local.get $dm)) (i32.const 1)))))
+          (local.set $level (i32.add (local.get $level) (i32.const 1)))
+          (br_if $levels_loop (i32.lt_u (local.get $level) (local.get $dl))))
+        (local.set $face (i32.add (local.get $face) (i32.const 1)))
+        (br_if $faces_loop (i32.lt_u (local.get $face) (local.get $faces))))
+      (local.set $pass (i32.add (local.get $pass) (i32.const 1)))
+      (br_if $passes (i32.lt_u (local.get $pass) (i32.const 2))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $d3d9_texture_lock (param $texture i32) (param $level i32) (param $out i32) (param $rect i32) (param $flags i32)
     (local $mip i32) (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)

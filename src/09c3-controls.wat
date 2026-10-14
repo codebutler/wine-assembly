@@ -327,12 +327,12 @@
     (field simple_text_ptr i32)    ;; +8  guest heap ptr, ANSI
     (field simple_text_len i32)    ;; +12
     (field simple_mode     i32)    ;; +16 BOOL
-    (field min_height      i32)    ;; +20 SB_SETMINHEIGHT
-    (field part_count      i32)    ;; +24 SB_SETPARTS count, 0 = never set (one pane)
-    (field part_edges      i32 32)) ;; +28 SB_SETPARTS right edges; ends at +156
-  ;; Byte offset of part_edges and the record size, for the indexed accessors.
-  (global $STATUSBAR_PART_EDGES i32 (i32.const 28))
-  (global $STATUSBAR_STATE_SIZE i32 (i32.const 156))
+    (field font            i32)    ;; +20 WM_SETFONT HFONT, 0 = status font
+    (field min_height      i32)    ;; +24 SB_SETMINHEIGHT
+    (field part_count      i32)    ;; +28 SB_SETPARTS count, 0 = never set (one pane)
+    (field part_edges      i32 32)) ;; +32 SB_SETPARTS right edges; ends at +160
+  ;; Byte offset of part_edges, for the indexed accessors.
+  (global $STATUSBAR_PART_EDGES i32 (i32.const 32))
   (global $STATUSBAR_MAX_PARTS  i32 (i32.const 32))
 
   ;; ---- ButtonState accessors ----
@@ -778,7 +778,7 @@
                 (local.set $brush (call $wnd_get_bg_brush (local.get $parent)))
                 (if (i32.eqz (local.get $brush))
                   (then (local.set $brush (i32.const 0x30011)))) ;; COLOR_3DFACE
-                (drop (call $host_gdi_fill_rect (local.get $hdc)
+                (drop (call $gdi_native_fill_rect (local.get $hdc)
                   (local.get $ox) (local.get $oy)
                   (i32.add (local.get $ox) (local.get $ow))
                   (i32.add (local.get $oy) (local.get $oh))
@@ -845,6 +845,10 @@
     (load.field.memarg StatusBarState simple_mode (local.get $sw)))
   (func $statusbar_set_simple_mode (param $sw ptr<StatusBarState>) (param $v i32)
     (store.field.memarg StatusBarState simple_mode (local.get $sw) (local.get $v)))
+  (func $statusbar_font (param $sw ptr<StatusBarState>) (result i32)
+    (load.field.memarg StatusBarState font (local.get $sw)))
+  (func $statusbar_set_font (param $sw ptr<StatusBarState>) (param $v i32)
+    (store.field.memarg StatusBarState font (local.get $sw) (local.get $v)))
 
   ;; Copy one status-bar string from a WASM address into state-owned guest
   ;; storage. Allocate before retiring the old string so an OOM leaves the
@@ -911,10 +915,10 @@
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (local.get $state) (then (return (local.get $state))))
     (if (i32.eqz (local.get $create)) (then (return (i32.const 0))))
-    (local.set $state (call $heap_alloc (global.get $STATUSBAR_STATE_SIZE)))
+    (local.set $state (call $heap_alloc (size-of StatusBarState)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
     (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
-    (memory.fill (local.get $sw) (i32.const 0) (global.get $STATUSBAR_STATE_SIZE))
+    (memory.fill (local.get $sw) (i32.const 0) (size-of StatusBarState))
     (call $wnd_set_state_ptr (local.get $hwnd) (local.get $state))
     (local.set $title_wa (call $title_table_get_ptr (local.get $hwnd)))
     (local.set $title_len (call $title_table_get_len (local.get $hwnd)))
@@ -1210,7 +1214,7 @@
     (local.set $hdc (i32.add (local.get $hwnd) (i32.const 0x40000)))
     ;; Only clear the chrome strip. Child pages paint into this common backing
     ;; surface too, and a late tab repaint must not erase their topic tree.
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
       (i32.const 0) (i32.const 0) (local.get $w) (i32.const 21) (i32.const 0x30011)))
     ;; Clear only the page-frame band that no visible page dialog owns. This
     ;; is the strip WinRAR exposes after switching Settings pages.
@@ -1218,17 +1222,17 @@
       (call $tab_native_page_top (local.get $hwnd) (local.get $h)))
     (if (i32.gt_s (local.get $page_top) (i32.const 21))
       (then
-        (drop (call $host_gdi_fill_rect (local.get $hdc)
+        (drop (call $gdi_native_fill_rect (local.get $hdc)
           (i32.const 2) (i32.const 21) (i32.sub (local.get $w) (i32.const 2))
           (local.get $page_top) (i32.const 0x30011)))))
     ;; Native Win98 tabs use a 20px row and merge the selected tab into the
     ;; raised page frame beneath it.
-    (drop (call $host_gdi_draw_edge (local.get $hdc)
+    (drop (call $gdi_native_draw_edge (local.get $hdc)
       (i32.const 0) (i32.const 19) (local.get $w) (local.get $h)
       (i32.const 0x05) (i32.const 0x0F)))
-    (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
-    (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 1)))
-    (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0)))
+    (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
+    (drop (call $gdi_native_set_bk_mode (local.get $hdc) (i32.const 1)))
+    (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0)))
     (local.set $i (i32.const 0))
     (local.set $left (i32.const 0))
     (block $done (loop $tabs
@@ -1240,22 +1244,22 @@
         (i32.add (i32.mul (local.get $len) (i32.const 5)) (i32.const 16))))
       (local.set $top (select (i32.const 0) (i32.const 2)
         (i32.eq (local.get $i) (local.get $selected))))
-      (drop (call $host_gdi_fill_rect (local.get $hdc)
+      (drop (call $gdi_native_fill_rect (local.get $hdc)
         (local.get $left) (local.get $top) (local.get $right) (i32.const 20)
         (i32.const 0x30011)))
-      (drop (call $host_gdi_draw_edge (local.get $hdc)
+      (drop (call $gdi_native_draw_edge (local.get $hdc)
         (local.get $left) (local.get $top) (local.get $right) (i32.const 20)
         (i32.const 0x05) (i32.const 0x07))) ;; BF_LEFT|TOP|RIGHT
       (if (i32.eq (local.get $i) (local.get $selected))
         (then
           ;; Erase the page's top edge under the selected tab.
-          (drop (call $host_gdi_fill_rect (local.get $hdc)
+          (drop (call $gdi_native_fill_rect (local.get $hdc)
             (i32.add (local.get $left) (i32.const 2)) (i32.const 18)
             (i32.sub (local.get $right) (i32.const 2)) (i32.const 21)
             (i32.const 0x30011)))))
       (if (local.get $len)
         (then
-          (drop (call $host_gdi_text_out (local.get $hdc)
+          (drop (call $gdi_native_text_out (local.get $hdc)
             (i32.add (local.get $left) (i32.const 8))
             (i32.add (local.get $top) (i32.const 3))
             (i32.add (local.get $rec) (i32.const 1)) (local.get $len) (i32.const 0)))))
@@ -1580,6 +1584,14 @@
         ;; A supplied DC is a drawing request, not a BeginPaint transaction.
         (if (i32.eqz (local.get $wParam))
           (then
+            ;; MDICLIENT has no painter of its own: USER's procedure hands
+            ;; WM_PAINT to DefWindowProc, whose BeginPaint sends WM_ERASEBKGND
+            ;; back through the window's current procedure. Applications that
+            ;; subclass the client draw their backdrop from that erase --
+            ;; SimCity 2000's MFC frame paints its title artwork there, and
+            ;; clearing the erase bit unsent left its launcher on bare grey.
+            (if (i32.eq (local.get $class) (i32.const 33))
+              (then (call $defwndproc_paint_erase (local.get $hwnd))))
             (drop (call $paint_seed_child_paints (local.get $hwnd)))
             (call $paint_flag_clear_hwnd (local.get $hwnd))
             (call $update_clear_hwnd (local.get $hwnd))
@@ -1685,6 +1697,10 @@
     ;; Class 33 = USER's preregistered MDICLIENT window.
     (if (i32.eq (local.get $class) (i32.const 33))
       (then (return (call $mdiclient_wndproc
+        (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
+    ;; Class 34 = COMCTL32 SysAnimate32 (09c3-wndprocs6-animate.wat).
+    (if (i32.eq (local.get $class) (i32.const 34))
+      (then (return (call $animate_wndproc
         (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; Other classes: return 0 (DefWindowProc)
     (i32.const 0)

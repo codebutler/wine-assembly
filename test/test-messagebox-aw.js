@@ -24,6 +24,16 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $modal_dlg_hwnd))
 
+  (func (export "test_MessageBoxExA") (param $text i32) (param $caption i32) (param $type i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00120000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
+    (call $handle_MessageBoxExA (i32.const 0) (local.get $text) (local.get $caption)
+      (local.get $type) (i32.const 0x0409) (i32.const 0))
+    (global.get $modal_dlg_hwnd))
+
+  (func (export "test_lookup_api_id") (param $name_wa i32) (result i32)
+    (call $lookup_api_id (local.get $name_wa)))
+
   (func (export "test_MessageBox_done")
     (call $modal_done (i32.const 1)))
 `;
@@ -86,7 +96,21 @@ const extraWat = String.raw`
     'MessageBoxA and MessageBoxW register the same dialog shape');
   e.test_MessageBox_done();
 
-  console.log('PASS  MessageBoxA/W share one modal implementation');
+  // MessageBoxExA is MessageBoxA plus a caption language. Starlancer's packed
+  // lancer.exe resolves it by name through GetProcAddress and exits before its
+  // entry point when that returns NULL, so the name must be in the table too.
+  const exName = allocA('MessageBoxExA');
+  assert.notStrictEqual(e.test_lookup_api_id(e.guest_to_wasm(exName) >>> 0) & 0xFFFF, 0xFFFF,
+    'MessageBoxExA resolves by name (GetProcAddress)');
+  observed = null;
+  const exHwnd = e.test_MessageBoxExA(allocA('Ex body'), allocA('Ex caption'), 0x30) >>> 0;
+  assert(exHwnd, 'MessageBoxExA creates the same modal dialog');
+  assert.deepStrictEqual(observed,
+    { owner: 0, text: 'Ex body', caption: 'Ex caption', type: 0x30 },
+    'MessageBoxExA passes text, caption and style through and ignores the language id');
+  e.test_MessageBox_done();
+
+  console.log('PASS  MessageBoxA/W/ExA share one modal implementation');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

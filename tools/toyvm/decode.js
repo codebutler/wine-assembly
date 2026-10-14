@@ -266,6 +266,10 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
   // a write plus a backward branch as a decryptor and stops trusting the code
   // ahead of it -- a bulk store does the same job with no branch at all.
   let bulkWrite = false;
+  // Whether this instruction loads SS (MOV SS / POP SS). compile.js reads it
+  // for the interrupt shadow after STI: see IFEN_STI_MOVSS there. LSS is not
+  // one -- the SDM's shadow rule names MOV SS and POP SS only.
+  let ssLoad = false;
 
   // The 386 ModRM: rm=100 means a SIB byte follows, rm=101 with mod=00 is a
   // bare disp32, and mod=10's displacement is four bytes rather than two.
@@ -370,6 +374,9 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
   const relW = () => (opsize === 32 ? imm32() : (() => {
     const d = imm16(); return d & 0x8000 ? d - 0x10000 : d;
   })());
+  // Taken near branches use operand size; instruction fetch/fallthrough keeps
+  // its separate EIP width, including D=0 descriptors with high offsets.
+  const nearIp = v => opsize === 16 ? v & 0xFFFF : v >>> 0;
   const sx8toW = (v) => (opsize === 32 ? ((v & 0x80 ? v - 0x100 : v) | 0) : sx8to16(v));
 
   // The ALU group and MOV share these five operand shapes exactly, so emitting
@@ -488,7 +495,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
       }
       const d = imm8();
       const fall = wip(start + n);
-      const target = wip(fall + (d & 0x80 ? d - 0x100 : d));
+      const target = nearIp(fall + (d & 0x80 ? d - 0x100 : d));
       words.push(H[`j${CC_NAMES[op & 15]}`], 0, target, 0, fall);
       fixups.push({ index: words.length - 4, ip: target },
         { index: words.length - 2, ip: fall });
@@ -509,7 +516,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
 
     case 0xEB: {   // JMP rel8
       const d = imm8();
-      const target = wip(wip(start + n) + (d & 0x80 ? d - 0x100 : d));
+      const target = nearIp(wip(start + n) + (d & 0x80 ? d - 0x100 : d));
       words.push(H.jmp, 0, target);
       fixups.push({ index: words.length - 2, ip: target });
       endsBlock = true;
@@ -518,7 +525,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
 
     case 0xE9: {   // JMP rel16, or rel32 at a 32-bit operand size
       const d = relW();
-      const target = wip(wip(start + n) + d);
+      const target = nearIp(wip(start + n) + d);
       words.push(H.jmp, 0, target);
       fixups.push({ index: words.length - 2, ip: target });
       endsBlock = true;
@@ -548,6 +555,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
       const m = modrm();
       const sr = cpuLevel >= 386 ? (m.reg & 7) : (m.reg & 3);
       if (sr > 5) return null;
+      if (op === 0x8E && sr === 2) ssLoad = true;
       const [rf, mf] = op === 0x8C ? ['mov_r_sr', 'mov_m_sr'] : ['mov_sr_r', 'mov_sr_m'];
       if (m.isReg) words.push(H[rf], (m.rm & 7) | (sr << 4));
       else {
@@ -593,8 +601,8 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
     // --- CALL / RET ---------------------------------------------------------
     case 0xE8: {
       const d = relW();
-      const ret = wip(start + n);
-      const target = wip(ret + d);
+      const ret = nearIp(start + n);
+      const target = nearIp(ret + d);
       // [arenaTarget][guestTarget][retIp][arenaRet]. The return point is a
       // fixup like the target is, so the compiler compiles it and the shadow
       // stack gets a real address to resume at.
@@ -771,7 +779,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
     case 0xC4: case 0xC5: {
       const m = modrm();
       if (m.isReg) return null;   // undefined encoding
-      words.push(H[op === 0xC4 ? 'les' : 'lds'], packEa(m), m.disp);
+      words.push(H[(op === 0xC4 ? 'les' : 'lds') + (opsize === 32 ? '32' : '')], packEa(m), m.disp);
       break;
     }
 
@@ -782,7 +790,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
       if (op2 >= 0x80 && op2 <= 0x8F) {          // Jcc rel16 / rel32
         const d = relW();
         const fall = wip(start + n);
-        const target = wip(fall + d);
+        const target = nearIp(fall + d);
         words.push(H[`j${CC_NAMES[op2 & 15]}`], 0, target, 0, fall);
         fixups.push({ index: words.length - 4, ip: target },
           { index: words.length - 2, ip: fall });
@@ -861,10 +869,14 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
         else words.push(H[`imul2_rm${opsize}`], packEa(m), m.disp);
         break;
       }
-      // LFS/LGS: LES and LDS with the two segment registers the 386 added.
-      if (op2 === 0xB4 || op2 === 0xB5) {
+      // LSS/LFS/LGS: LES and LDS with SS and the two segment registers the
+      // 386 added. LSS is how a program restores a saved SS:SP in one
+      // instruction -- CLX's DOPE.EXE exits through `cs: lss sp,[0x226]`, and
+      // refusing it parked the demo on that address forever.
+      if (op2 === 0xB2 || op2 === 0xB4 || op2 === 0xB5) {
         const m = modrm(); if (m.isReg) return null;
-        words.push(H[op2 === 0xB4 ? 'lfs' : 'lgs'], packEa(m), m.disp);
+        const nm = op2 === 0xB2 ? 'lss' : op2 === 0xB4 ? 'lfs' : 'lgs';
+        words.push(H[nm + (opsize === 32 ? '32' : '')], packEa(m), m.disp);
         break;
       }
       // INVD and WBINVD (486). There are no caches here to invalidate or write
@@ -952,6 +964,10 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
         if (!m.isReg) return null;
         words.push(op2 === 0x20 ? H.mov_r_cr : H.mov_cr_r,
           (m.rm & 7) | ((m.reg & 7) << 4));
+        if (op2 === 0x22) {
+          words.push(wip(start + n));
+          endsBlock = m.reg === 3;
+        }
         break;
       }
       return null;
@@ -1101,6 +1117,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
       else if ((op & 0xE7) === 0x06) {
         words.push(opsize === 32 ? H.push_seg32 : H.push_seg, (op >> 3) & 3);
       } else if ((op & 0xE7) === 0x07 && op !== 0x0F) {
+        if (((op >> 3) & 3) === 2) ssLoad = true;
         words.push(opsize === 32 ? H.pop_seg32 : H.pop_seg, (op >> 3) & 3);
       }
       // XCHG AX, r16. 0x90 is XCHG AX,AX, which is NOP -- emitted as NOP so the
@@ -1147,7 +1164,12 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
     endsBlock = true;
   }
 
-  return { words, nextIp: wip(start + n), length: n, fixups, endsBlock, writesMem, bulkWrite, operands };
+  // `sti` marks the one instruction whose interrupt shadow compile.js has to
+  // lay out (the eligible boundary is after the NEXT instruction, not after
+  // this one); see IFEN in compile.js. Not endsBlock: the block ends one
+  // instruction later.
+  return { words, nextIp: wip(start + n), length: n, fixups, endsBlock, writesMem, bulkWrite, operands,
+    sti: op === 0xFB, ssLoad };
 }
 
 // How many instruction bytes each operand kind is read from, and the word

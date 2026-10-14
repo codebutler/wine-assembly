@@ -35,7 +35,7 @@ const MMSYSERR_INVALPARAM = 11;
 
 const extraWat = String.raw`
   (func (export "twa_selector") (result i32)
-    (global.set $win16_next_seg (i32.const 1))
+    (call $win16_next_seg_set (i32.const 1))
     (call $win16_index_to_sel (call $win16_alloc_segment)))
 
   (func (export "twa_seg_base") (param $sel i32) (result i32)
@@ -77,10 +77,22 @@ const extraWat = String.raw`
   (func (export "twa_set_gs") (param $sel i32) (call $win16_set_sreg (i32.const 5) (local.get $sel)))
   (func (export "twa_gs_base") (result i32) (call $seg16_base (i32.const 5)))
   (func (export "twa_gs_value") (result i32) (call $seg16_value (i32.const 5)))
+  (func (export "twa_mci") (param $esp i32) (param $sel i32)
+        (param $dev i32) (param $msg i32) (param $flags i32) (param $off i32) (result i32)
+    (call $twa_frame (local.get $esp) (local.get $sel) (local.get $off) (local.get $sel)
+      (i32.and (local.get $flags) (i32.const 0xFFFF))
+      (i32.shr_u (local.get $flags) (i32.const 16)))
+    (call $gs16 (i32.add (local.get $esp) (i32.const 12)) (local.get $msg))
+    (call $gs16 (i32.add (local.get $esp) (i32.const 14)) (local.get $dev))
+    (drop (call $win16_mmsystem (i32.const 701)))
+    (i32.or (i32.load offset=0 (global.get $reg_base))
+      (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))
 `;
 
 (async () => {
-  const { exports: wat, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const mciOpens = [];
+  const { exports: wat, memory } = await bootRenderHarness({ extraWat, fonts: 'none',
+    extraHostOverrides: { mci_open: (...args) => { mciOpens.push(args); return 101; } } });
   const dv = new DataView(memory.buffer);
 
   const sel = wat.twa_selector() >>> 0;
@@ -148,4 +160,30 @@ const extraWat = String.raw`
   assert.strictEqual(wat.twa_gs_base() >>> 0, base, 'GS resolves to its segment base');
   assert.strictEqual(wat.twa_gs_value() >>> 0, sel, 'reading GS back answers what was written');
   console.log('PASS  GS is loadable and addressable in a 16-bit task');
+
+  // Far strings in MCI_OPEN need translation, but resource IDs do not.
+  // The reserved word and all caller-owned pointers must survive the call.
+  const openWa = wat.twa_g2w(base + 0x400);
+  const far = off => ((sel << 16) | off) >>> 0;
+  const setupOpen = (type, element, alias) => {
+    dv.setUint32(openWa, 0, true);
+    dv.setUint16(openWa + 4, 0x1234, true);
+    dv.setUint16(openWa + 6, 0xBEEF, true);
+    dv.setUint32(openWa + 8, type, true);
+    dv.setUint32(openWa + 12, element, true);
+    dv.setUint32(openWa + 16, alias, true);
+  };
+  setupOpen(far(0x500), far(0x600), far(0x700));
+  const original = new Uint8Array(memory.buffer, openWa, 20).slice();
+  assert.strictEqual(wat.twa_mci(esp, sel, 0, 0x803, 0x2600, 0x400), 0);
+  assert.deepStrictEqual(mciOpens.pop(), [wat.twa_g2w(base + 0x500), wat.twa_g2w(base + 0x600), 0x2600]);
+  assert(dv.getUint16(openWa + 4, true) > 0, 'MCI_OPEN returns a device ID');
+  const returned = new Uint8Array(memory.buffer, openWa, 20).slice();
+  returned[4] = original[4]; returned[5] = original[5];
+  assert.deepStrictEqual(returned, original, 'only the WORD device ID may change');
+  setupOpen(0x20B, far(0x600), 0xFFFF0000);
+  assert.strictEqual(wat.twa_mci(esp, sel, 0, 0x803, 0x3200, 0x400), 0);
+  assert.deepStrictEqual(mciOpens.pop(), [0x20B, wat.twa_g2w(base + 0x600), 0x3200],
+    'TYPE_ID stays an integer and an unflagged alias is not dereferenced');
+  console.log('PASS  Win16 MCI_OPEN marshals far strings and preserves its caller block');
 })();

@@ -38,10 +38,15 @@ const required = {
   },
 };
 
+// lib/apps.js stamps generated sizes onto files[] (167583257), turning a plain
+// path into {url, size}; a hand-written entry may also be {url, vfsPath}.
+const fileUrl = file => (typeof file === 'string' ? file : file.url);
+
 for (const [id, want] of Object.entries(required)) {
   const app = APPS[id];
   assert(app, `${id} is registered`);
-  const files = new Set((app.files || []).map(file => path.basename(file)));
+  const files = new Set((app.files || []).map(file =>
+    path.basename(typeof file === 'string' ? file : (file.vfsPath || file.url))));
   for (const name of want.files) assert(files.has(name), `${id} mounts ${name}`);
   assert.deepStrictEqual(app.win16Modules || [], want.modules, `${id} runtime modules`);
 }
@@ -62,7 +67,7 @@ if (fs.existsSync(corpus)) {
   assert.strictEqual(exes.length, 31, 'installed WEP1-WEP4 corpus contains 31 executables');
 
   for (const [id, app] of entries) {
-    for (const rel of [app.exe, ...(app.files || [])]) {
+    for (const rel of [app.exe, ...(app.files || []).map(fileUrl)]) {
       assert(fs.existsSync(path.join(ROOT, rel)), `${id} asset exists: ${rel}`);
     }
   }
@@ -83,7 +88,18 @@ if (fs.existsSync(corpus)) {
     path.join(ROOT, 'tools', 'wep32-compare.js'),
     '--dir=test/binaries/wep16', '--batches=150', '--batch-size=20000',
   ], { cwd: ROOT, encoding: 'utf8', timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
-  assert.match(sweep, /31\/31 draw a screen/, 'all 31 installed executables render a screen');
+  // Fuji Golf's first screen on a fresh VFS is its own first-run prompt to
+  // copy FUJIGOLF.DAT into the Windows directory (the WEP3 installer put it
+  // there); test-win16-wep3-gameplay accepts that prompt deliberately. Every
+  // other executable must draw its own screen.
+  const verdicts = new Map([...sweep.matchAll(/running (\S+) \.\.\. (\w+)/g)]
+    .map(m => [m[1], m[2]]));
+  assert.strictEqual(verdicts.size, 31, `sweep reported ${verdicts.size} of 31 executables`);
+  for (const [name, verdict] of verdicts) {
+    const want = name === 'WEP3-FUJIGOLF' ? 'SPLASH' : 'OK';
+    assert.strictEqual(verdict, want, `${name} sweep verdict`);
+  }
+  assert.match(sweep, /30\/31 draw a screen/, '30 executables draw a screen, Fuji Golf prompts first');
   assert.doesNotMatch(sweep, /\b(?:CRASH|ERRORBOX|BLANK|NOWINDOW|NORUNTIME)\b/,
     'the complete sweep has no failed verdict');
 }

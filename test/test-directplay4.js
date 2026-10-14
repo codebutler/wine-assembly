@@ -5,6 +5,13 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const apis = require('../src/api_table.json');
+for (const [name, handler] of [
+  ['IDirectPlay3_AddRef', 'dx_com_addref'],
+  ['IDirectPlayLobby2_AddRef', 'dx_com_addref'],
+  ['IDirectPlayLobby2_Release', 'dx_com_release_basic'],
+]) assert.strictEqual(apis.find(api => api.name === name).handler, handler);
+assert(!apis.find(api => api.name === 'IDirectPlay3_Release').handler,
+  'DirectPlay Release retains its owned-session/message teardown');
 const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_object") (result i32)
@@ -24,7 +31,9 @@ const extraWat = String.raw`
 `;
 
 (async () => {
-  const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const { exports: e, memory, hostCtx } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const regSets = [];
+  hostCtx.onRegistryValueChanged = change => regSets.push(change);
   const exe = fs.readFileSync(path.join(__dirname, 'binaries', 'notepad.exe'));
   new Uint8Array(memory.buffer).set(exe, e.get_staging());
   assert(e.load_pe(exe.length) > 0);
@@ -48,11 +57,19 @@ const extraWat = String.raw`
     assert.strictEqual(e.get_esp() >>> 0, stack + (api.nargs + 1) * 4, api.name);
     return e.get_eax() >>> 0;
   };
+  const checkRefs = (object, initial) => {
+    assert.strictEqual(call(object, 1), initial + 1, 'generated AddRef increments');
+    assert.strictEqual(call(object, 1), initial + 2, 'second AddRef increments');
+    assert.strictEqual(call(object, 2), initial + 1, 'non-final Release balances');
+    assert.strictEqual(call(object, 2), initial, 'original references remain');
+  };
+  checkRefs(owner, 1);
   const parent = read(owner);
   assert.strictEqual(call(owner, 0, iid, out), 0);
   assert.strictEqual(read(out), owner);
   const table = read(owner);
   assert.notStrictEqual(table, parent);
+  checkRefs(owner, 2);
   for (let slot = 0; slot < 47; slot++) assert.strictEqual(read(table + slot * 4), read(parent + slot * 4));
   const tail = ['GetGroupOwner', 'SetGroupOwner', 'SendEx', 'GetMessageQueue', 'CancelMessage', 'CancelPriority'];
   tail.forEach((name, i) => assert.strictEqual(apis[read(read(table + (47 + i) * 4) + 4)].name, `IDirectPlay4_${name}`));
@@ -112,10 +129,26 @@ const extraWat = String.raw`
   assert(e.test_enqueue(owner, p1, p2, data, 4, 0, 0));
   assert.strictEqual(call(owner, 51, 0, 0), 0);
   assert.strictEqual(e.test_query(owner, 0, 0, 0, 0), 0);
+  // GUARANTEED|ASYNC|NOSENDCOMPLETEMSG (Darkstone's every send): no completion
+  // message is owed, so it is delivered now and answers DPERR_PENDING
+  // (E_PENDING) with a message ID -- not DPERR_CONNECTIONLOST 0x88770168,
+  // which Darkstone takes as "SESSIONLOST".
+  assert.strictEqual(call(owner, 50, p1, p2, 2, out, bytes), 0);
+  const queuedBefore = read(out);
+  e.guest_write32(out, 0);
+  assert.strictEqual(call(owner, 49, p1, p2, 0x601, data, 4, 0, 0, 0, out), 0x8000000a);
+  const asyncId = read(out);
+  assert.notStrictEqual(asyncId, 0, 'async SendEx publishes a message ID');
+  assert.strictEqual(call(owner, 49, p1, p2, 0x601, data, 4, 0, 0, 0, 0), 0x8000000a, 'lpdwMsgID is optional');
+  assert.strictEqual(call(owner, 49, p1, p2, 0x601, data, 4, 0, 0, 0, out), 0x8000000a);
+  assert.notStrictEqual(read(out), asyncId, 'each async send gets its own ID');
+  assert.strictEqual(call(owner, 50, p1, p2, 2, out, bytes), 0);
+  assert.strictEqual(read(out), queuedBefore + 3, 'async sends reach the recipient queue');
   assert.strictEqual(call(owner, 2), 1);
   assert.strictEqual(call(owner, 2), 0);
   assert.strictEqual(call(other, 2), 0);
   const lobby = e.test_lobby() >>> 0;
+  checkRefs(lobby, 1);
   const oldLobby = read(lobby);
   [0x2db72491, 0x11d1652c, 0x0000a8a7, 0xfcab03f8].forEach((v, i) => e.guest_write32(iid + i * 4, v));
   assert.strictEqual(call(lobby, 0, iid, 0), 0x80004003);
@@ -124,13 +157,21 @@ const extraWat = String.raw`
   assert.strictEqual(read(out), lobby);
   const lobbyTable = read(lobby);
   assert.notStrictEqual(lobbyTable, oldLobby);
+  checkRefs(lobby, 2);
   for (let slot = 0; slot < 15; slot++) assert.strictEqual(read(lobbyTable + slot * 4), read(oldLobby + slot * 4));
   ['ConnectEx', 'RegisterApplication', 'UnregisterApplication', 'WaitForConnectionSettings'].forEach((name, i) =>
     assert.strictEqual(apis[read(read(lobbyTable + (15 + i) * 4) + 4)].name, `IDirectPlayLobby3_${name}`));
   assert.strictEqual(e.test_sync_lobby() >>> 0, lobbyTable);
   e.guest_write32(iid, 0x2db72490);
-  assert.strictEqual(call(lobby, 0, iid, out), 0x80004002, 'Unicode Lobby3 remains unsupported');
-  assert.strictEqual(read(out), 0);
+  assert.strictEqual(call(lobby, 0, iid, out), 0, 'Unicode Lobby3 is the same identity');
+  assert.strictEqual(read(out), lobby);
+  assert.notStrictEqual(read(lobby), lobbyTable, 'Unicode Lobby3 gets its own W vtable');
+  assert.strictEqual(call(lobby, 2), 2);
+  e.guest_write32(iid, 0x2db72491);
+  assert.strictEqual(call(lobby, 0, iid, out), 0);
+  assert.strictEqual(read(lobby), lobbyTable, 'an ANSI query restores the ANSI vtable');
+  assert.strictEqual(call(lobby, 2), 2);
+  e.guest_write32(iid, 0x2db72490);
   e.guest_write32(out, 0xfeedface);
   assert.strictEqual(call(lobby, 15, 0, iid, out, 0), 0x80004001);
   assert.strictEqual(read(out), 0, 'ConnectEx cannot fabricate a connected object');
@@ -139,17 +180,31 @@ const extraWat = String.raw`
   assert.strictEqual(call(lobby, 15, 0, iid, out, lobby), 0x80040110);
   const desc = alloc(52);
   e.guest_write32(desc, 52);
-  for (const [slot, arg] of [[16, desc], [17, iid]]) {
-    assert.strictEqual(call(lobby, slot, 0, arg), 0x80004001);
-    assert.strictEqual(call(lobby, slot, 1, arg), 0x88770078);
-    assert.strictEqual(call(lobby, slot, 0, 0), 0x80070057);
-  }
+  assert.strictEqual(call(lobby, 16, 0, desc), 0x80070057, 'RegisterApplication needs an application name');
+  assert.strictEqual(call(lobby, 16, 1, desc), 0x88770078);
+  assert.strictEqual(call(lobby, 16, 0, 0), 0x80070057);
+  const putA = text => { const p = alloc(text.length + 1); [...text, '\0'].forEach((c, i) => e.guest_write8(p + i, c.charCodeAt(0))); return p; };
+  e.guest_write32(desc + 8, putA('Revolt'));
+  [0x6bb78285, 0x11d271df, 0x780c6cb4, 0x4008c10c].forEach((v, i) => e.guest_write32(desc + 12 + i * 4, v));
+  e.guest_write32(desc + 28, putA('revolt.exe'));
+  e.guest_write32(desc + 36, putA('C:\\'));
+  assert.strictEqual(call(lobby, 16, 0, desc), 0, 'RegisterApplication publishes the lobby entry');
+  const regValues = Object.fromEntries(regSets.map(c => [c.path + '\\' + c.name, c.data]));
+  const appKey = 'HKLM\\Software\\Microsoft\\DirectPlay\\Applications\\Revolt\\';
+  assert.deepStrictEqual(regValues, {
+    [appKey + 'Guid']: '{6BB78285-71DF-11D2-B46C-0C780CC10840}',
+    [appKey + 'File']: 'revolt.exe',
+    [appKey + 'Path']: 'C:\\',
+  }, 'NULL descriptor strings are not written');
+  assert.strictEqual(call(lobby, 17, 0, iid), 0x80004001);
+  assert.strictEqual(call(lobby, 17, 1, iid), 0x88770078);
+  assert.strictEqual(call(lobby, 17, 0, 0), 0x80070057);
   assert.strictEqual(call(lobby, 18, 0), 0x80004001);
   assert.strictEqual(call(lobby, 18, 1), 0x80004001);
   assert.strictEqual(call(lobby, 18, 2), 0x88770078);
   assert.strictEqual(call(lobby, 2), 1);
   assert.strictEqual(call(lobby, 2), 0);
-  console.log('PASS Lobby3A 19-slot generated ABI, same identity, worker registry, and explicit unsupported operations');
+  console.log('PASS Lobby3A 19-slot generated ABI, same identity, worker registry, and RegisterApplication registry entry, and explicit unsupported operations');
   console.log('PASS DirectPlay4 53-slot generated ABI, local SendEx, queue/cancel contracts, and explicit unsupported modes');
 })().catch(error => {
   console.error(error.stack || error);

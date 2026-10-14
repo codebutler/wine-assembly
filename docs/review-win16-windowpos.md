@@ -3037,3 +3037,38 @@ adjacent menu suites and the isolated full build pass; rebuilt wVis with
 the helper disabled now passes and visibly opens Rendering Options. The
 production helper remains pending command/check-state and modal-lifetime
 validation; this does not close the broader input/menu review.
+
+CheckMenuItem now also reaches dynamic and detached LoadMenu trees before
+tracking, rather than ignoring them while scanning attached windows. Compiled
+tests cover nested commands, exact positions, previous-state returns and
+unrelated-menu isolation; old code fails the new test. Rebuilt wVis visibly
+shows Slower Fade and Blur checked. A further Clear click/reopen probe leaves
+those checks unchanged, so command selection is explicitly unverified despite
+the existing visualization/submenu browser assertions passing. The legacy
+attached-resource scope, live tracking-snapshot mutation, dynamic GetMenuState
+and popup modal lifetime remain open; details are in the binary notes.
+
+The missing Clear selection was traced to browser desktop forwarding: a
+cascade outside its app's window rectangle lost its mousedown to an HTML
+icon. The DOM bridge now honors the live open-menu context before desktop
+hit testing for mouse and touch. Unit tests (with an old-code negative) and
+the real wVis rerun confirm delivery; Clear becomes checked on reopening.
+Slower Fade remains checked as well, exposing a separate stale detached-menu
+state/lifetime issue rather than proving the complete round trip correct.
+
+The stale check was the detached cache surviving tagged DestroyMenu. The
+handler now unlinks that cached alias and recursively destroys its MNUD tree;
+direct root destruction also unlinks the alias. The 24-check regression
+passes and old code fails six checks. The rebuilt browser select/reopen
+assertions now pass: Clear becomes checked, Slower Fade clears, Blur remains
+checked. A separate wide-item string-release test fails identically with
+pre-fix menu code and is recorded, not counted as a pass. Early return from
+TrackPopupMenu and non-unique tagged LoadMenu identity remain unresolved.
+
+Removed the wVis-specific renderer helper and release interception, plus the
+now-unused WAT synthetic-menu-opening export. The permanent browser test
+selects Clear via real browser input and checks fresh state after reopening;
+it passes on the rebuilt isolated artifact without a helper-disabling patch.
+Main input/Worker/touch tests and isolated compiled menu/activation tests
+pass. This closes that app-specific shortcut, not the remaining generic
+modal tracking, menu identity, scope and cascade-depth issues.

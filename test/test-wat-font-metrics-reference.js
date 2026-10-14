@@ -114,7 +114,7 @@ const PER_SIZE = process.argv.includes('--per-size');
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bitsOut = allocZero(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert(bitmap && hdc, 'metric DC must exist');
   wat.test_call_SelectObject(hdc, bitmap);
@@ -149,7 +149,7 @@ const PER_SIZE = process.argv.includes('--per-size');
       // A height the reference itself did not resolve to this face proves
       // nothing about our mapping of it.
       if (want.actualFace !== face.name) continue;
-      const font = wat.test_call_CreateFontW(Number(request), 400, 0, faceName) >>> 0;
+      const font = wat.test_call_CreateFontW(Number(request), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, faceName) >>> 0;
       if (!font) continue;
       wat.test_call_SelectObject(hdc, font);
       sizes += 1;

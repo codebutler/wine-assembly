@@ -15,7 +15,7 @@
   ;; It is `size-of` == 96 == $GDI_DC_STATE_STRIDE that ties the two together.
   (layout GdiDcState
     (field handle           i32)   ;; +0   the HDC this slot is for; 0 == free
-    (field pen              i32)   ;; +4   OBJ_PEN, $host_gdi_get_current_object(1)
+    (field pen              i32)   ;; +4   OBJ_PEN, $gdi_native_get_current_object(1)
     (field brush            i32)   ;; +8   OBJ_BRUSH, ..._get_current_object(2)
     (field cur_pos_x        i32)   ;; +12  MoveToEx/LineTo current position
     (field cur_pos_y        i32)   ;; +16
@@ -294,30 +294,41 @@
     (memory.copy (local.get $dst) (local.get $entry) (i32.const 24))
     (i32.const 1))
 
-  (func $gdi_gamma_ramp_set (param $hdc i32) (param $src i32) (result i32)
-    (local $guest i32)
-    (if (i32.or (i32.eqz (local.get $src))
-          (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0))))
-      (then (return (i32.const 0))))
-    (if (i32.eqz (global.get $gdi_gamma_ramp_guest))
+  ;; The display gamma ramp, one per process: SetDeviceGammaRamp and
+  ;; IDirectDrawGammaControl::SetGammaRamp both change it, and the host applies
+  ;; it when it presents a DirectDraw primary (gammaLut in lib/dib.js). It
+  ;; lives on the guest heap, found through $SHARED_COUNTERS (+24 generation,
+  ;; +28 the ramp's guest address, 0 until one is set) rather than an instance
+  ;; global, so a ramp set on a worker thread is the one the main thread
+  ;; presents with. The generation lets the host rebuild its lookup tables
+  ;; only when the ramp changes.
+  ;; Returns 0 when the ramp's storage cannot be allocated.
+  (func $gamma_ramp_store (param $src i32) (result i32)
+    (local $guest i32) (local $won i32)
+    (local.set $guest (i32.atomic.load offset=28 (global.get $SHARED_COUNTERS)))
+    (if (i32.eqz (local.get $guest))
       (then
         (local.set $guest (call $heap_alloc (i32.const 1536)))
         (if (i32.eqz (local.get $guest)) (then (return (i32.const 0))))
-        (global.set $gdi_gamma_ramp_guest (local.get $guest))))
-    (memory.copy (call $g2w (global.get $gdi_gamma_ramp_guest))
-      (local.get $src) (i32.const 1536))
+        ;; Two threads setting a first ramp at once: keep whichever landed.
+        (local.set $won (i32.atomic.rmw.cmpxchg offset=28 (global.get $SHARED_COUNTERS)
+          (i32.const 0) (local.get $guest)))
+        (if (local.get $won)
+          (then
+            (call $heap_free (local.get $guest))
+            (local.set $guest (local.get $won))))))
+    (memory.copy (call $g2w (local.get $guest)) (local.get $src) (i32.const 1536))
+    (drop (i32.atomic.rmw.add offset=24 (global.get $SHARED_COUNTERS) (i32.const 1)))
     (i32.const 1))
 
-  (func $gdi_gamma_ramp_get (param $hdc i32) (param $dst i32) (result i32)
-    (local $channel i32) (local $index i32)
-    (if (i32.or (i32.eqz (local.get $dst))
-          (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0))))
-      (then (return (i32.const 0))))
-    (if (global.get $gdi_gamma_ramp_guest)
+  (func $gamma_ramp_load (param $dst i32)
+    (local $channel i32) (local $index i32) (local $guest i32)
+    (local.set $guest (i32.atomic.load offset=28 (global.get $SHARED_COUNTERS)))
+    (if (local.get $guest)
       (then
-        (memory.copy (local.get $dst) (call $g2w (global.get $gdi_gamma_ramp_guest))
-          (i32.const 1536))
-        (return (i32.const 1))))
+        (memory.copy (local.get $dst) (call $g2w (local.get $guest)) (i32.const 1536))
+        (return)))
+    ;; Never set: the identity ramp, value * 257 per entry.
     (block $channels_done (loop $channels
       (br_if $channels_done (i32.ge_u (local.get $channel) (i32.const 3)))
       (local.set $index (i32.const 0))
@@ -330,7 +341,29 @@
         (local.set $index (i32.add (local.get $index) (i32.const 1)))
         (br $entries)))
       (local.set $channel (i32.add (local.get $channel) (i32.const 1)))
-      (br $channels)))
+      (br $channels))))
+
+  ;; For the host's presenter: the ramp's address once one was set, else 0
+  ;; (identity, nothing to apply), and its generation.
+  (func (export "gamma_ramp_wa") (result i32)
+    (local $guest i32)
+    (local.set $guest (i32.atomic.load offset=28 (global.get $SHARED_COUNTERS)))
+    (if (result i32) (local.get $guest)
+      (then (call $g2w (local.get $guest))) (else (i32.const 0))))
+  (func (export "gamma_ramp_gen") (result i32)
+    (i32.atomic.load offset=24 (global.get $SHARED_COUNTERS)))
+
+  (func $gdi_gamma_ramp_set (param $hdc i32) (param $src i32) (result i32)
+    (if (i32.or (i32.eqz (local.get $src))
+          (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0))))
+      (then (return (i32.const 0))))
+    (call $gamma_ramp_store (local.get $src)))
+
+  (func $gdi_gamma_ramp_get (param $hdc i32) (param $dst i32) (result i32)
+    (if (i32.or (i32.eqz (local.get $dst))
+          (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0))))
+      (then (return (i32.const 0))))
+    (call $gamma_ramp_load (local.get $dst))
     (i32.const 1))
 
   (func $gdi_pixel_format_write (param $dst i32) (param $bytes i32)
@@ -377,13 +410,20 @@
     (i32.const 1))
 
   (func $gdi_pixel_format_set (param $hdc i32) (param $format i32)
-        (param $pfd i32) (result i32)
+        (param $pfd i32) (result i32) ;; ppfd is metafile metadata, not a selection request (NWN passes NULL).
     (if (i32.or (i32.ne (local.get $format) (i32.const 1))
-          (i32.eqz (call $gdi_pixel_format_choose (local.get $hdc) (local.get $pfd))))
+          (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0))))
       (then (return (i32.const 0))))
+    ;; A window takes one pixel format for life, but setting the format it
+    ;; already has succeeds (Wine: only a different format is refused).
+    ;; Warcraft III sets format 1, creates and deletes a probe context, then
+    ;; sets format 1 again on the same window and creates its real context
+    ;; only if that returns TRUE; refusing it left the game with no GL
+    ;; context and not one draw. Format 1 is the only one we describe, so an
+    ;; already-set DC holds exactly the format being asked for.
     (if (i32.ne (call $gdi_dc_meta_get (local.get $hdc) (i32.const 16)
           (i32.const 0)) (i32.const 0))
-      (then (return (i32.const 0))))
+      (then (return (i32.const 1))))
     (drop (call $gdi_dc_meta_set (local.get $hdc) (i32.const 16)
       (i32.const 1) (i32.const 0)))
     (i32.const 1))
@@ -950,6 +990,18 @@
         (i32.store offset=8 (local.get $dest) (load.field.memarg GdiBrush hatch (local.get $record)))))
     (local.get $required))
 
+  ;; DC handles are numbered 0x00310001..0x0040FFFF and the counter wraps
+  ;; inside that band. The band's top is where GDI object handles begin
+  ;; ($gdi_next_object_handle, 0x00410001), and a DC must never carry a
+  ;; number some live pen, brush or font already answers to: $gdi_object_record
+  ;; and $gdi_dc_state_entry would both claim it, and a Win16 task's handle map
+  ;; hands the DC the font's own 16-bit handle and drops it again at
+  ;; ReleaseDC. Civilization II asks for 1-3 DCs per batch, so an unwrapped
+  ;; counter walked into its startup fonts after about a million DCs and every
+  ;; dialog from then on drew its caption empty in the system font. Reuse is
+  ;; safe because the scan below still skips a number whose DC is live.
+  (global $GDI_DC_HANDLE_FIRST i32 (i32.const 0x00310001))
+  (global $GDI_DC_HANDLE_LIMIT i32 (i32.const 0x00410000))
   (func $gdi_dc_alloc (result i32)
     (local $handle i32) (local $attempts i32)
     ;; DC records are process-shared as well. A worker's stale counter must not
@@ -958,6 +1010,9 @@
       (if (i32.ge_u (local.get $attempts) (global.get $GDI_DC_STATE_COUNT))
         (then (return (i32.const 0))))
       (local.set $handle (global.get $gdi_next_dc_handle))
+      (if (i32.or (i32.lt_u (local.get $handle) (global.get $GDI_DC_HANDLE_FIRST))
+                  (i32.ge_u (local.get $handle) (global.get $GDI_DC_HANDLE_LIMIT)))
+        (then (local.set $handle (global.get $GDI_DC_HANDLE_FIRST))))
       (global.set $gdi_next_dc_handle
         (i32.add (local.get $handle) (i32.const 1)))
       (if (i32.eqz (call $gdi_dc_state_entry (local.get $handle) (i32.const 0)))
@@ -1074,7 +1129,7 @@
     ;; Headless printer DCs have no renderer to attach to; canonical storage is
     ;; still valid and text can use its presentation cache.
     (drop (call $host_gdi_surface_attach (local.get $bitmap) (i32.const -1)))
-    (drop (call $host_gdi_surface_upload (local.get $bitmap)
+    (drop (call $gdi_write_surface_upload (local.get $bitmap)
       (i32.const 0) (i32.const 0) (local.get $width) (local.get $height)))
     (i32.const 1))
 
@@ -1136,7 +1191,7 @@
         (br $cols)))
       (local.set $py (i32.add (local.get $py) (i32.const 1)))
       (br $rows)))
-    (drop (call $host_gdi_surface_upload (local.get $bitmap)
+    (drop (call $gdi_write_surface_upload (local.get $bitmap)
       (local.get $l) (local.get $t)
       (local.get $r) (local.get $b))))
 
@@ -1185,7 +1240,7 @@
     (if (i32.or (i32.eqz (local.get $bits)) (i32.eqz (local.get $bytes)))
       (then (return (i32.const 0))))
     (memory.fill (local.get $bits) (i32.const 0xFF) (local.get $bytes))
-    (drop (call $host_gdi_surface_upload (global.get $printer_bitmap)
+    (drop (call $gdi_write_surface_upload (global.get $printer_bitmap)
       (i32.const 0) (i32.const 0) (i32.const 2400) (i32.const 3150)))
     (i32.const 1))
 
@@ -1415,7 +1470,7 @@
   (func $gdi_window_surface_ensure (param $hwnd i32) (result i32)
     (local $owner i32) (local $p i32) (local $wh i32) (local $w i32) (local $h i32)
     (local $size64 i64) (local $bits_ga i32) (local $bits i32) (local $id i32)
-    (local $had_surface i32)
+    (local $had_surface i32) (local $bpp i32) (local $stride i32) (local $palette i32)
     (local.set $owner (call $wnd_top_level (local.get $hwnd)))
     (if (i32.eqz (local.get $owner)) (then (local.set $owner (local.get $hwnd))))
     (if (i32.eqz (local.get $owner)) (then (return (i32.const 0))))
@@ -1434,8 +1489,9 @@
     (local.set $p (call $gdi_window_surface_record (local.get $owner) (i32.const 1)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
     (local.set $id (i32.load offset=4 (local.get $p)))
-    (if (i32.and (i32.eq (i32.load offset=8 (local.get $p)) (local.get $w))
-          (i32.eq (i32.load offset=12 (local.get $p)) (local.get $h)))
+    (local.set $bpp (call $gdi_window_bpp))
+    (if (i32.and (i32.eq (i32.load offset=24 (local.get $p)) (local.get $bpp)) (i32.and (i32.eq (i32.load offset=8 (local.get $p)) (local.get $w))
+          (i32.eq (i32.load offset=12 (local.get $p)) (local.get $h))))
       (then
         ;; Acquiring a DC is not itself a presentation boundary. In
         ;; particular, fullscreen DirectDraw games may probe GetDC(hwnd)
@@ -1459,22 +1515,29 @@
       (then
         (drop (call $host_gdi_surface_delete (local.get $id)))
         (call $dib_free_wasm (local.get $had_surface))))
-    (local.set $size64 (i64.mul
-      (i64.mul (i64.extend_i32_u (local.get $w)) (i64.extend_i32_u (local.get $h)))
-      (i64.const 4)))
+    (local.set $stride (i32.and (i32.add (i32.mul (local.get $w)
+      (i32.shr_u (local.get $bpp) (i32.const 3))) (i32.const 3)) (i32.const -4)))
+    (local.set $size64 (i64.mul (i64.extend_i32_u (local.get $stride)) (i64.extend_i32_u (local.get $h))))
+    (if (i32.eq (local.get $bpp) (i32.const 8))
+      (then (local.set $palette (call $gdi_system_palette))
+        (if (i32.eqz (local.get $palette)) (then (return (i32.const 0))))))
     (if (i64.gt_u (local.get $size64) (i64.extend_i32_u (global.get $DIB_BACKING_BASE_SIZE)))
       (then (return (i32.const 0))))
     (local.set $bits_ga (call $dib_alloc (i32.wrap_i64 (local.get $size64))))
     (if (i32.eqz (local.get $bits_ga)) (then (return (i32.const 0))))
     (local.set $bits (call $g2w (local.get $bits_ga)))
+    ;; COLOR_BTNFACE is static physical slot 7 in the indexed desktop.
+    (if (i32.eq (local.get $bpp) (i32.const 8))
+      (then (memory.fill (local.get $bits) (i32.const 7) (i32.wrap_i64 (local.get $size64)))))
     (i32.store offset=8 (local.get $p) (local.get $w))
     (i32.store offset=12 (local.get $p) (local.get $h))
     (i32.store offset=16 (local.get $p) (local.get $bits))
-    (i32.store offset=20 (local.get $p) (i32.mul (local.get $w) (i32.const 4)))
+    (i32.store offset=20 (local.get $p) (local.get $stride))
+    (i32.store offset=24 (local.get $p) (local.get $bpp))
     (if (i32.eqz (call $host_gdi_surface_create
-          (local.get $id) (local.get $w) (local.get $h) (i32.const 32)
+          (local.get $id) (local.get $w) (local.get $h) (local.get $bpp)
           (local.get $bits) (i32.load offset=20 (local.get $p)) (i32.const 1)
-          (i32.const 0) (i32.const 0)
+          (local.get $palette) (select (i32.const 256) (i32.const 0) (i32.ne (local.get $palette) (i32.const 0)))
           (i32.const 0) (i32.const 0) (i32.const 0)))
       (then
         (call $dib_free_wasm (local.get $bits))
@@ -1559,8 +1622,30 @@
       (then (return (i32.const 0))))
     (local.get $entry))
 
+  ;; GDI's view of a 16bpp DirectDraw surface uses the layout the surface was
+  ;; created with ($channel 0/1/2 = R/G/B). Re-Volt makes A1R5G5B5 texture
+  ;; pages and fills them by StretchBlt-ing LoadImage bitmaps through GetDC;
+  ;; fixed 5-6-5 masks wrote 565 texels that every sampler then read as 1555,
+  ;; so grey went purple, wood went green and green's low bits turned into
+  ;; rainbow speckle. As on Windows, GDI leaves 1555/4444 alpha bits clear.
+  (func $gdi_dx_channel_mask (param $entry i32) (param $channel i32) (result i32)
+    (local $fmt i32)
+    (local.set $fmt (call $dx_surf_fmt_get (local.get $entry)))
+    (if (i32.or (i32.eq (local.get $fmt) (i32.const 2)) (i32.eq (local.get $fmt) (i32.const 3)))
+      (then (return (select (i32.const 0x001F)
+        (select (i32.const 0x7C00) (i32.const 0x03E0) (i32.eqz (local.get $channel)))
+        (i32.eq (local.get $channel) (i32.const 2))))))
+    (if (i32.eq (local.get $fmt) (i32.const 4))
+      (then (return (select (i32.const 0x000F)
+        (select (i32.const 0x0F00) (i32.const 0x00F0) (i32.eqz (local.get $channel)))
+        (i32.eq (local.get $channel) (i32.const 2))))))
+    (select (i32.const 0x001F)
+      (select (i32.const 0xF800) (i32.const 0x07E0) (i32.eqz (local.get $channel)))
+      (i32.eq (local.get $channel) (i32.const 2))))
+
   (func $gdi_dx_dc_bind (param $hdc i32) (result i32)
     (local $entry i32) (local $bpp i32) (local $palette i32) (local $count i32)
+    (local $is16 i32)
     (local.set $entry (call $gdi_dx_surface_entry (local.get $hdc)))
     (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
     (if (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 1)))
@@ -1568,8 +1653,9 @@
     (local.set $bpp (i32.load16_u offset=16 (local.get $entry)))
     (if (i32.le_u (local.get $bpp) (i32.const 8))
       (then
-        (local.set $palette (call $dx_primary_pal_get))
+        (local.set $palette (call $dx_present_pal_get))
         (if (local.get $palette) (then (local.set $count (i32.const 256))))))
+    (local.set $is16 (i32.eq (local.get $bpp) (i32.const 16)))
     (call $host_gdi_surface_create
       (local.get $hdc)
       (i32.load16_u offset=12 (local.get $entry))
@@ -1578,12 +1664,9 @@
       (i32.load offset=20 (local.get $entry))
       (i32.load16_u offset=18 (local.get $entry))
       (i32.const 1) (local.get $palette) (local.get $count)
-      (select (i32.const 0xF800) (i32.const 0)
-        (i32.eq (local.get $bpp) (i32.const 16)))
-      (select (i32.const 0x07E0) (i32.const 0)
-        (i32.eq (local.get $bpp) (i32.const 16)))
-      (select (i32.const 0x001F) (i32.const 0)
-        (i32.eq (local.get $bpp) (i32.const 16)))))
+      (select (call $gdi_dx_channel_mask (local.get $entry) (i32.const 0)) (i32.const 0) (local.get $is16))
+      (select (call $gdi_dx_channel_mask (local.get $entry) (i32.const 1)) (i32.const 0) (local.get $is16))
+      (select (call $gdi_dx_channel_mask (local.get $entry) (i32.const 2)) (i32.const 0) (local.get $is16))))
 
   (func $gdi_dx_dc_release (param $hdc i32)
     (call $gdi_dc_clip_release (local.get $hdc))
@@ -1641,34 +1724,34 @@
     (call $gdi_dc_state_release (local.get $hdc))
     (i32.const 1))
 
-  (func $host_gdi_set_text_color (param $hdc i32) (param $color i32) (result i32)
+  (func $gdi_native_set_text_color (param $hdc i32) (param $color i32) (result i32)
     (call $gdi_dc_set_field (local.get $hdc) (i32.const 20)
       (local.get $color) (i32.const 0)))
-  (func $host_gdi_get_text_color (param $hdc i32) (result i32)
+  (func $gdi_native_get_text_color (param $hdc i32) (result i32)
     (call $gdi_dc_get_field (local.get $hdc) (i32.const 20) (i32.const 0)))
-  (func $host_gdi_set_bk_color (param $hdc i32) (param $color i32) (result i32)
+  (func $gdi_native_set_bk_color (param $hdc i32) (param $color i32) (result i32)
     (call $gdi_dc_set_field (local.get $hdc) (i32.const 24)
       (local.get $color) (i32.const 0xFFFFFF)))
-  (func $host_gdi_get_bk_color (param $hdc i32) (result i32)
+  (func $gdi_native_get_bk_color (param $hdc i32) (result i32)
     (call $gdi_dc_get_field (local.get $hdc) (i32.const 24) (i32.const 0xFFFFFF)))
-  (func $host_gdi_set_bk_mode (param $hdc i32) (param $mode i32) (result i32)
+  (func $gdi_native_set_bk_mode (param $hdc i32) (param $mode i32) (result i32)
     (if (i32.or (i32.eq (local.get $mode) (i32.const 1))
           (i32.eq (local.get $mode) (i32.const 2)))
       (then (return (call $gdi_dc_set_field (local.get $hdc) (i32.const 28)
         (local.get $mode) (i32.const 2)))))
     (i32.const 0))
-  (func $host_gdi_get_bk_mode (param $hdc i32) (result i32)
+  (func $gdi_native_get_bk_mode (param $hdc i32) (result i32)
     (call $gdi_dc_get_field (local.get $hdc) (i32.const 28) (i32.const 2)))
-  (func $host_gdi_set_text_align (param $hdc i32) (param $align i32) (result i32)
+  (func $gdi_native_set_text_align (param $hdc i32) (param $align i32) (result i32)
     (call $gdi_dc_set_field (local.get $hdc) (i32.const 32) (local.get $align) (i32.const 0)))
-  (func $host_gdi_get_text_align (param $hdc i32) (result i32)
+  (func $gdi_native_get_text_align (param $hdc i32) (result i32)
     (call $gdi_dc_get_field (local.get $hdc) (i32.const 32) (i32.const 0)))
 
   ;; Every text call now ends in the strike rasterizer. A negative result means
   ;; no strike could be selected at all — no DC, or the bundled MS Sans Serif
   ;; .FON failed to load — and with no host font path left underneath, the
   ;; honest answer to "draw this" is that nothing was drawn.
-  (func $host_gdi_text_out (param $hdc i32) (param $x i32) (param $y i32)
+  (func $gdi_native_text_out (param $hdc i32) (param $x i32) (param $y i32)
         (param $text i32) (param $count i32) (param $wide i32) (result i32)
     (local $bitmap_result i32)
     (local.set $bitmap_result (call $gdi_bitmap_text_out
@@ -1847,7 +1930,7 @@
                 (local.get $run_start) (local.get $wide)))
             (local.get $run_count) (local.get $wide)))
           (if (local.get $draw)
-            (then (drop (call $host_gdi_text_out
+            (then (drop (call $gdi_native_text_out
               (local.get $hdc) (local.get $cursor) (local.get $y)
               (i32.add (local.get $text)
                 (select (i32.shl (local.get $run_start) (i32.const 1))
@@ -1899,7 +1982,7 @@
           (local.get $y) (i32.const 0)))))
     (i32.or (i32.and (i32.sub (local.get $cursor) (local.get $x)) (i32.const 0xFFFF))
       (i32.shl (i32.and (local.get $height) (i32.const 0xFFFF)) (i32.const 16))))
-  (func $host_gdi_ext_text_out (param $hdc i32) (param $x i32) (param $y i32)
+  (func $gdi_native_ext_text_out (param $hdc i32) (param $x i32) (param $y i32)
         (param $options i32) (param $rect i32) (param $text i32) (param $count i32)
         (param $dx_array i32) (param $wide i32) (result i32)
     (local $bitmap_result i32)
@@ -1909,7 +1992,7 @@
       (local.get $count) (local.get $dx_array) (local.get $wide)))
     (select (local.get $bitmap_result) (i32.const 0)
       (i32.ge_s (local.get $bitmap_result) (i32.const 0))))
-  (func $host_gdi_draw_text (param $hdc i32) (param $text i32) (param $count i32)
+  (func $gdi_native_draw_text (param $hdc i32) (param $text i32) (param $count i32)
         (param $rect i32) (param $format i32) (param $wide i32) (result i32)
     (call $gdi_bitmap_draw_text
       (local.get $hdc) (local.get $text) (local.get $count)
@@ -1966,7 +2049,7 @@
             (local.set $width (i32.load offset=8 (local.get $surface)))
             (local.set $height (i32.load offset=12 (local.get $surface)))
             (local.set $stride (i32.load offset=20 (local.get $surface)))
-            (local.set $bpp (i32.const 32))
+            (local.set $bpp (i32.load offset=24 (local.get $surface)))
             (local.set $top_down (i32.const 1))
             (local.set $surface_id (i32.load offset=4 (local.get $surface)))
             (if (i32.lt_s (local.get $binding) (i32.const 0))

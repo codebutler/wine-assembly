@@ -35,6 +35,24 @@ function check(label, fn) {
 (async () => {
   const harness = await bootRenderHarness({
     extraWat: `
+    (func (export "test_get_menu_state")
+        (param $h i32) (param $item i32) (param $flags i32) (result i32)
+      (call $handle_GetMenuState (local.get $h) (local.get $item)
+        (local.get $flags) (i32.const 0) (i32.const 0) (i32.const 0))
+      (i32.load (global.get $reg_base)))
+    (func (export "test_check_menu")
+        (param $h i32) (param $item i32) (param $flags i32) (result i32)
+      (call $handle_CheckMenuItem (local.get $h) (local.get $item)
+        (local.get $flags) (i32.const 0) (i32.const 0) (i32.const 0))
+      (i32.load (global.get $reg_base)))
+    (func (export "test_detached_alias") (param $id i32) (param $h i32)
+      (local $node i32) (local $w i32)
+      (local.set $node (call $heap_alloc (i32.const 12)))
+      (local.set $w (call $g2w (local.get $node)))
+      (i32.store (local.get $w) (global.get $detached_menus))
+      (i32.store offset=4 (local.get $w) (local.get $id))
+      (i32.store offset=8 (local.get $w) (local.get $h))
+      (global.set $detached_menus (local.get $node)))
     (func (export "test_dc_exists") (param $hdc i32) (result i32)
       (i32.ne (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0))
         (i32.const 0)))
@@ -172,6 +190,66 @@ function check(label, fn) {
     assert.strictEqual(wat.menu_child_flags(0, 0, 1) & 1, 1);
     assert.strictEqual(wat.menu_child_flags(0, 0, 2) & 8, 8);
     assert.strictEqual(label(2), '', 'owner-draw data must never become text');
+  });
+
+  check('CheckMenuItem updates only the requested dynamic tree before tracking', () => {
+    const root = wat.test_call_CreatePopupMenu() >>> 0;
+    const child = wat.test_call_CreatePopupMenu() >>> 0;
+    const other = wat.test_call_CreatePopupMenu() >>> 0;
+    wat.test_call_AppendMenuA(child, 0, 301, strA('Clear'));
+    wat.test_call_AppendMenuA(child, 0, 301, strA('Duplicate'));
+    wat.test_call_AppendMenuA(root, 0x10, child, strA('Rendering Options'));
+    wat.test_call_AppendMenuA(other, 0, 301, strA('Unrelated'));
+    assert.strictEqual(wat.test_check_menu(root, 301, 8), 0);
+    assert.strictEqual(wat.test_check_menu(root, 301, 8), 8);
+    assert.strictEqual(wat.test_check_menu(child, 1, 0x400), 0,
+      'by-command must not check every duplicate id');
+    assert.strictEqual(wat.test_check_menu(other, 0, 0x400), 0,
+      'same command id in an unrelated menu must remain unchecked');
+    assert.strictEqual(wat.test_check_menu(root, 999, 8), -1);
+    assert.strictEqual(wat.test_check_menu(child, 99, 0x408), -1);
+    assert.strictEqual(wat.test_check_menu(root, 0, 0x408), 0,
+      'a popup row can be checked by position');
+    assert.strictEqual(wat.menu_track_popup_open(root, 0, 40, 40, 0), 1);
+    assert.strictEqual(wat.menu_child_flags(0, 0, 0) & 4, 4);
+    assert.strictEqual(wat.menu_subchild_flags(0, 0, 0, 0) & 4, 4);
+    assert.strictEqual(wat.menu_subchild_flags(0, 0, 0, 1) & 4, 0);
+    assert.strictEqual(wat.test_check_menu(root, 301, 0), 8);
+    assert.strictEqual(wat.menu_track_popup_open(root, 0, 40, 40, 0), 1);
+    assert.strictEqual(wat.menu_subchild_flags(0, 0, 0, 0) & 4, 0);
+    // LoadMenu's detached tagged alias must reach the same canonical tree.
+    // This seeds the resolver cache; resource parsing is tested separately.
+    wat.test_detached_alias(101, root);
+    assert.strictEqual(wat.test_check_menu(0xbe0065, 301, 8), 0);
+    assert.strictEqual(wat.test_check_menu(root, 301, 0), 8);
+  });
+
+  check('GetMenuState queries canonical dynamic and detached trees without tracking', () => {
+    const root = wat.test_call_CreatePopupMenu() >>> 0;
+    const child = wat.test_call_CreatePopupMenu() >>> 0;
+    const other = wat.test_call_CreatePopupMenu() >>> 0;
+    wat.test_call_AppendMenuA(child, 8, 401, strA('Checked'));
+    wat.test_call_AppendMenuA(child, 0, 401, strA('Duplicate'));
+    wat.test_call_AppendMenuA(child, 0x100, 402, 0x12345678);
+    wat.test_call_AppendMenuA(root, 0x18, child, strA('Submenu'));
+    wat.test_call_AppendMenuA(root, MF_SEPARATOR, 0, 0);
+    wat.test_call_AppendMenuA(other, 0, 401, strA('Unrelated'));
+    const state = (h, item, flags = 0) => wat.test_get_menu_state(h, item, flags);
+    assert.strictEqual(state(root, 401), 8, 'recursive first command match');
+    assert.strictEqual(state(child, 1, 0x400), 0, 'exact position; no private text-ownership bit');
+    assert.strictEqual(state(other, 401), 0, 'unrelated menus remain isolated');
+    assert.strictEqual(state(root, 0, 0x400), 0x318, 'popup count in high byte, flags in low byte');
+    assert.strictEqual(state(root, 1, 0x400), MF_SEPARATOR);
+    assert.strictEqual(state(root, 402), 0x100, 'owner-draw flag survives');
+    assert.strictEqual(state(root, 999), -1);
+    assert.strictEqual(state(root, 99, 0x400), -1);
+    assert.strictEqual(state(root, -1, 0x400), -1);
+    assert.strictEqual(state(root, child), -1, 'a submenu handle is not a command id');
+    wat.test_detached_alias(102, root);
+    assert.strictEqual(state(0xbe0066, 401), 8);
+    assert.strictEqual(state(0xbe0066, 0, 0x400), 0x318);
+    assert.strictEqual(wat.test_check_menu(root, 401, 0), 8);
+    assert.strictEqual(state(0xbe0066, 401), 0, 'queries observe later mutations');
   });
 
   console.log(`test-menu-popup-text: ${passed} checks ok`);

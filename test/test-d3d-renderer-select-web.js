@@ -6,12 +6,8 @@
 // it, and the bridge a new instance creates must carry whatever it says at
 // launch time.
 //
-// It carries DX2-7 immediate mode too, which is the part worth pinning: the
-// default must keep D3DIM on the WAT rasterizer (docs/d3dim-gl-sweep-2026-09-19.md
-// left eleven of sixteen apps without a single triangle drawn, so the executor
-// has coverage rather than evidence), "WebGL +DX7" is the only option that
-// turns it on, and a URL that sets the two halves to a combination the
-// dropdown has no option for must say so instead of misreporting one it has.
+// WebGL is the default for every supported version. Software is the only
+// alternate UI mode; legacy URL spellings must not split the two backends.
 
 const assert = require('assert');
 const path = require('path');
@@ -22,8 +18,11 @@ const { compileSrcWasm } = require('./compile-src');
 const root = path.join(__dirname, '..');
 
 (async () => {
-  const wasm = compileSrcWasm();
-  const server = await startStaticServer({ root, cacheControl: 'no-cache',
+  const wasm = compileSrcWasm((file, source) => file === '13-exports.wat'
+    ? source + '\n(func (export "test_lazy_enabled") (result i32) (global.get $d3dim_lazy_on))\n' : source);
+  const server = await startStaticServer({ root, cacheControl: 'no-cache', crossOriginIsolated: true,
+    allowedRealRoots: ['test/binaries', 'fonts'].map(dir => path.join(root, dir)),
+    rewritePath: pathname => pathname.startsWith('/binaries/') ? '/test' + pathname : pathname,
     handleRequest(request, response) {
       if (!request.url.startsWith('/build/wine-assembly.wasm')) return false;
       response.writeHead(200, { 'Content-Type': 'application/wasm', 'Content-Length': wasm.length });
@@ -54,38 +53,45 @@ const root = path.join(__dirname, '..');
   }));
   try {
     const plain = await open('?debug');
+    assert.strictEqual(await plain.page.$eval('#d3d-renderer-select', s => s.parentElement.childNodes[0].textContent.trim()), 'GPU:');
     assert.deepStrictEqual(await selected(plain.page), { select: 'webgl', renderer: 'webgl' },
       'the toolbar defaults to the WebGL backend');
     assert.deepStrictEqual(await bothHalves(plain.page), {
-      select: 'webgl', renderer: 'webgl', d3dim: false,
-      options: ['webgl', 'webgl-all', 'software'],
-    }, 'the default leaves DX2-7 on the WAT rasterizer, and offers no fourth option');
+      select: 'webgl', renderer: 'webgl', d3dim: true,
+      options: ['webgl', 'software'],
+    }, 'WebGL defaults on for both generations with only two options');
 
-    // One control, both generations: picking WebGL +DX7 moves immediate mode
-    // as well, and going back to plain WebGL puts it back.
-    await plain.page.evaluate(() => setD3DRenderer('webgl-all'));
+    await plain.page.evaluate(() => setD3DRenderer('software'));
     assert.deepStrictEqual(await bothHalves(plain.page), {
-      select: 'webgl-all', renderer: 'webgl', d3dim: true,
-      options: ['webgl', 'webgl-all', 'software'],
-    }, 'WebGL +DX7 turns the D3DIM executor on without touching the D3D8/9 half');
+      select: 'software', renderer: 'software', d3dim: false,
+      options: ['webgl', 'software'],
+    });
     await plain.page.evaluate(() => setD3DRenderer('webgl'));
-    assert.strictEqual((await bothHalves(plain.page)).d3dim, false,
-      'going back to WebGL turns the D3DIM executor off again');
+    assert.strictEqual((await bothHalves(plain.page)).d3dim, true,
+      'WebGL enables legacy Direct3D too');
 
-    await plain.page.evaluate(() => {
+    await plain.page.evaluate(async () => {
       setD3DRenderer('software');
       document.getElementById('app-select').value = 'calc';
-      launchApp();
+      await launchApp();
     });
     await plain.page.waitForFunction(() => typeof runningApps !== 'undefined' &&
       runningApps[0] && runningApps[0].wine.running && runningApps[0].wine.hostCtx &&
       runningApps[0].wine.hostCtx.d3d9Bridge, { timeout: 120000 });
     const bridge = await plain.page.evaluate(() => {
       const b = runningApps[0].wine.hostCtx.d3d9Bridge;
+      const ctx = runningApps[0].wine.hostCtx;
+      if (ctx.glideBackend !== 'software') throw new Error('Glide ignored shared GPU choice');
+      if (ctx.glideBridge && ctx.glideBridge.options.backend !== 'software') throw new Error('Glide bridge ignored shared GPU choice');
       return { backend: b.backend, asyncSoftware: b.asyncSoftware };
     });
     assert.deepStrictEqual(bridge, { backend: 'software', asyncSoftware: true },
-      'a launch after choosing Software gets the software bridge on the render Worker');
+      'Software selects the CPU bridge on the shared render worker');
+    assert.strictEqual(await plain.page.evaluate(() => runningApps[0].wine.guestWorker.callExport('test_lazy_enabled')), 0,
+      'software worker remains eager');
+    await plain.page.evaluate(() => setLazySync(true));
+    assert.strictEqual(await plain.page.evaluate(() => runningApps[0].wine.guestWorker.callExport('test_lazy_enabled')), 0,
+      'live toggle cannot enable lazy synchronization for software');
     assert.deepStrictEqual(plain.errors, [], 'no page errors');
     await plain.page.close();
 
@@ -94,26 +100,39 @@ const root = path.join(__dirname, '..');
       '?d3d9-renderer seeds the select');
     await seeded.page.close();
 
-    // The two parameters still set each half on their own, and the select
-    // reports whatever they left rather than its own idea of a default.
-    const gpu = await open('?debug&d3dim-gpu');
-    assert.deepStrictEqual(await bothHalves(gpu.page), {
-      select: 'webgl-all', renderer: 'webgl', d3dim: true,
-      options: ['webgl', 'webgl-all', 'software'],
-    }, '?d3dim-gpu alone reads back as WebGL +DX7');
-    assert.deepStrictEqual(gpu.errors, [], 'no page errors');
-    await gpu.page.close();
+    for (const disabled of [false, true]) {
+      const lazyPage = await open('?debug' + (disabled ? '&no-lazy-sync' : ''));
+      assert.strictEqual(await lazyPage.page.$eval('#lazy-sync-toggle', e => e.checked), !disabled);
+      await lazyPage.page.evaluate(async () => {
+        await setThreads(true);
+        document.getElementById('app-select').value = 'calc';
+        await launchApp();
+      });
+      const enabled = () => lazyPage.page.evaluate(() => runningApps[0].wine.guestWorker.callExport('test_lazy_enabled'));
+      assert.strictEqual(await enabled(), disabled ? 0 : 1, 'shared WebGL honors default and URL opt-out');
+      await lazyPage.page.evaluate(() => setLazySync(false));
+      assert.strictEqual(await enabled(), 0, 'live opt-out reaches guest instance');
+      await lazyPage.page.evaluate(() => setLazySync(true));
+      assert.strictEqual(await enabled(), 1, 'live re-enable reaches guest instance');
+      assert.deepStrictEqual(lazyPage.errors, []);
+      await lazyPage.page.close();
+    }
 
-    // Software D3D8/9 with the D3DIM executor on is a real combination the
-    // three options cannot express. It has to be visible, not rounded to a
-    // neighbour: reporting it as "software" would claim the executor is off.
-    const mixed = await open('?debug&d3d9-renderer=software&d3dim-gpu');
-    assert.deepStrictEqual(await bothHalves(mixed.page), {
-      select: 'mixed', renderer: 'software', d3dim: true,
-      options: ['webgl', 'webgl-all', 'software', 'mixed'],
-    }, 'a combination the dropdown has no option for gets one rather than being misreported');
-    assert.deepStrictEqual(mixed.errors, [], 'no page errors');
-    await mixed.page.close();
+    for (const [query, expected] of [
+      ['?debug&d3dim-gpu', 'webgl'],
+      ['?debug&d3dim-gpu=0', 'software'],
+      ['?debug&d3d9-renderer=software&d3dim-gpu', 'software'],
+      ['?debug&d3d-renderer=software', 'software'],
+      ['?debug&d3d-renderer=webgl&d3d9-renderer=software', 'webgl'],
+    ]) {
+      const seeded = await open(query);
+      assert.deepStrictEqual(await bothHalves(seeded.page), {
+        select: expected, renderer: expected, d3dim: expected === 'webgl',
+        options: ['webgl', 'software'],
+      }, query + ' selects one consistent mode');
+      assert.deepStrictEqual(seeded.errors, []);
+      await seeded.page.close();
+    }
 
     console.log('PASS  one D3D select steers both Direct3D generations for the next launch');
   } finally {

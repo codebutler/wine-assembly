@@ -272,6 +272,14 @@ const extraWat = String.raw`
     'GetForegroundWindow reads renderer-wide state rather than this process main HWND');
   assert.strictEqual(finalEsp(packed), stack + 4,
     'zero-argument GetForegroundWindow pops its return address');
+  // Nothing foreground is not NULL on a real desktop: the shell owns it.
+  // Moorhuhn 2's fmod hands this to IDirectSound::SetCooperativeLevel before
+  // creating a window, and NULL failed DirectSound init (a silent game).
+  foreground = 0;
+  packed = e.test_get_foreground(stack);
+  assert.strictEqual(result(packed), 0x10000,
+    'GetForegroundWindow falls back to the desktop when no window is foreground');
+  foreground = externalForeground;
   packed = e.test_set_active(first, stack);
   assert.strictEqual(result(packed), 0,
     'first successful SetActiveWindow returns the previous NULL active window');
@@ -750,6 +758,8 @@ const extraWat = String.raw`
     e.test_focus_api(focusA, stack);
     e.test_mouse_clear_nc();
     resetRecords(); hostCalls.length = 0;
+    let inputClock = 1000;
+    r._inputNowMs = () => inputClock;
     r.handleMouseDown(40, 60, button);
     r.handleMouseUp(40, 60, button);
     assert.deepStrictEqual(r.inputQueue.map(event => event.msg), [0x84, down, up],
@@ -773,6 +783,12 @@ const extraWat = String.raw`
     assert.strictEqual(records().filter(event => event.msg === 0x21).length, 1);
     assert.strictEqual(records().find(event => event.msg === 0x21).lParam, (down << 16) | 1,
       'activation query identifies the actual initiating button');
+    // Since 37ff2f8d a release is never handed over in the pump that took its
+    // press: the guest's next, empty poll ends that pump, then 30 ms of
+    // input-clock time (renderer._inputNowMs) must pass.
+    assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, up, up), 0,
+      'the queued release waits out the pump that took its press');
+    inputClock += 30;
     assert.strictEqual(e.test_mouse_pump(mouseMsg, stack, 1, 1, up, up), 1,
       'even an eaten down retains its queued release');
   }

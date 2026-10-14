@@ -216,7 +216,7 @@
         (local.set $swap (i32.add (local.get $top) (i32.const 1)))
         (local.set $top (i32.add (local.get $bottom) (i32.const 1)))
         (local.set $bottom (local.get $swap))))
-    (drop (call $host_gdi_surface_upload
+    (drop (call $gdi_write_surface_upload
       (i32.load offset=68 (local.get $desc)) (local.get $left) (local.get $top)
       (local.get $right) (local.get $bottom))))
 
@@ -258,15 +258,13 @@
           (i32.and (i32.ne (i32.load offset=56 (local.get $desc)) (i32.const 0))
             (i32.ne (i32.load offset=60 (local.get $desc)) (i32.const 0)))))
       (i32.and
+        (i32.or (i32.eq (i32.load offset=16 (local.get $desc)) (i32.const 8))
         (i32.or (i32.eq (i32.load offset=16 (local.get $desc)) (i32.const 16))
           (i32.or (i32.eq (i32.load offset=16 (local.get $desc)) (i32.const 24))
-            (i32.eq (i32.load offset=16 (local.get $desc)) (i32.const 32))))
+            (i32.eq (i32.load offset=16 (local.get $desc)) (i32.const 32)))))
         (i32.ge_u (i32.load offset=12 (local.get $desc))
           (i32.mul (i32.load offset=4 (local.get $desc))
-            (select (i32.const 2)
-              (select (i32.const 3) (i32.const 4)
-                (i32.eq (i32.load offset=16 (local.get $desc)) (i32.const 24)))
-              (i32.eq (i32.load offset=16 (local.get $desc)) (i32.const 16))))))))
+            (i32.shr_u (i32.load offset=16 (local.get $desc)) (i32.const 3)))))))
 
   ;; ---- row-band span filling ------------------------------------------
   ;; A DC clip is one of three things: absent, one rectangle, or a real
@@ -3523,7 +3521,7 @@
           (local.set $y0 (i32.add (local.get $y0) (local.get $sy)))))
       (br $pixels)))
     (if (local.get $wrote)
-      (then (drop (call $host_gdi_surface_upload (i32.load offset=68 (local.get $desc))
+      (then (drop (call $gdi_write_surface_upload (i32.load offset=68 (local.get $desc))
         (local.get $min_x) (local.get $min_y)
         (i32.add (local.get $max_x) (i32.const 1))
         (i32.add (local.get $max_y) (i32.const 1))))))
@@ -4095,7 +4093,7 @@
           (i32.ge_u (i32.load offset=68 (local.get $desc)) (i32.const 0x00200000))
           (i32.lt_u (i32.load offset=68 (local.get $desc)) (i32.const 0x00300000)))
       (then
-        (local.set $palette (call $dx_primary_pal_get))
+        (local.set $palette (call $dx_present_pal_get))
         (if (i32.and (i32.ne (local.get $palette) (i32.const 0))
               (i32.lt_u (local.get $index) (i32.const 256)))
           (then
@@ -4104,6 +4102,9 @@
             (return (i32.or (i32.load8_u offset=2 (local.get $p))
               (i32.or (i32.shl (i32.load8_u offset=1 (local.get $p)) (i32.const 8))
                 (i32.shl (i32.load8_u (local.get $p)) (i32.const 16)))))))))
+    (local.set $palette (call $gdi_window_palette (i32.load offset=68 (local.get $desc))))
+    (if (i32.and (i32.ne (local.get $palette) (i32.const 0)) (i32.lt_u (local.get $index) (i32.const 256)))
+      (then (return (i32.load (i32.add (local.get $palette) (i32.shl (local.get $index) (i32.const 2)))))))
     (local.set $record (call $gdi_object_record (i32.load offset=68 (local.get $desc))))
     (if (local.get $record)
       (then
@@ -4156,12 +4157,14 @@
           (i32.ge_u (i32.load offset=68 (local.get $desc)) (i32.const 0x00200000))
           (i32.lt_u (i32.load offset=68 (local.get $desc)) (i32.const 0x00300000)))
       (then
-        (local.set $palette (call $dx_primary_pal_get))
+        (local.set $palette (call $dx_present_pal_get))
         (if (local.get $palette)
           (then
             (global.set $gdi_pal_count (i32.const 256))
             (global.set $gdi_pal_dx (i32.const 1))
             (return (local.get $palette))))))
+    (local.set $palette (call $gdi_window_palette (i32.load offset=68 (local.get $desc))))
+    (if (local.get $palette) (then (global.set $gdi_pal_count (i32.const 256)) (return (local.get $palette))))
     (local.set $record (call $gdi_object_record (i32.load offset=68 (local.get $desc))))
     (if (local.get $record)
       (then
@@ -4257,8 +4260,9 @@
     (local.set $color (i32.and (local.get $color) (i32.const 0xFFFFFF)))
     (local.set $bpp (i32.load offset=16 (local.get $desc)))
     (local.set $count (i32.shl (i32.const 1) (local.get $bpp)))
-    (if (i32.and (i32.ne (i32.load offset=24 (local.get $desc)) (i32.const 0))
-          (i32.ne (i32.load offset=28 (local.get $desc)) (i32.const 0)))
+    (if (i32.and (i32.eqz (i32.load offset=68 (local.get $desc)))
+          (i32.and (i32.ne (i32.load offset=24 (local.get $desc)) (i32.const 0))
+            (i32.ne (i32.load offset=28 (local.get $desc)) (i32.const 0))))
       (then
         (if (i32.lt_u (i32.load offset=28 (local.get $desc)) (local.get $count))
           (then (local.set $count (i32.load offset=28 (local.get $desc)))))))
@@ -4376,7 +4380,8 @@
   ;; starts at 0x00410001 (01-header) and only ever increments -- and
   ;; $gdi_object_adopt, the sole way a record enters the table, has exactly one
   ;; production caller ($gdi_object_alloc itself). A DirectDraw id thus always
-  ;; misses the table and always reaches the RGB565 branch below.
+  ;; misses the table and always reaches the DirectDraw branch below, which
+  ;; uses the surface's own 16bpp layout ($gdi_dx_channel_mask).
   ;; test/test-gdi-handle-space-disjoint.js pins that invariant, so lowering
   ;; the handle base into the DirectDraw range fails a test rather than
   ;; silently turning a primary surface into somebody's bitmap.
@@ -4404,10 +4409,14 @@
           (i32.eq (local.get $channel) (i32.const 2))))))
     (if (i32.and (i32.ge_u (local.get $surface) (i32.const 0x00200000))
           (i32.lt_u (local.get $surface) (i32.const 0x00300000)))
-      (then (return (select (i32.const 0x001F)
-        (select (i32.const 0xF800) (i32.const 0x07E0)
-          (i32.eq (local.get $channel) (i32.const 0)))
-        (i32.eq (local.get $channel) (i32.const 2))))))
+      (then
+        (local.set $record (call $gdi_dx_surface_entry (local.get $surface)))
+        (if (local.get $record)
+          (then (return (call $gdi_dx_channel_mask (local.get $record) (local.get $channel)))))
+        (return (select (i32.const 0x001F)
+          (select (i32.const 0xF800) (i32.const 0x07E0)
+            (i32.eq (local.get $channel) (i32.const 0)))
+          (i32.eq (local.get $channel) (i32.const 2))))))
     (i32.load (i32.add (global.get $GDI_RGB555_MASKS)
       (i32.shl (local.get $channel) (i32.const 2)))))
 
@@ -5185,6 +5194,23 @@
       (br $rows)))
     (i32.const 1))
 
+  (global $GDI_LOGICAL_DIB_TAG i32 (i32.const 0x00620001))
+  (func $gdi_raster_logical_copy (param $dst i32) (param $x i32) (param $y i32)
+      (param $src i32) (param $sx i32) (param $sy i32) (result i32)
+    (local $index i32)
+    (if (i32.eqz (local.get $src)) (then (return (i32.const 0))))
+    (if (i32.or (i32.ne (i32.load offset=68 (local.get $src)) (global.get $GDI_LOGICAL_DIB_TAG))
+          (i32.ne (i32.load offset=16 (local.get $dst)) (i32.const 8)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gdi_raster_palette_base (local.get $dst)) (call $gdi_system_palette))
+      (then (return (i32.const 0))))
+    (local.set $index (call $gdi_raster_read_index (local.get $src) (local.get $sx) (local.get $sy)))
+    (if (i32.ge_u (local.get $index) (i32.load offset=28 (local.get $src)))
+      (then (return (i32.const 0))))
+    (call $gdi_raster_write_index (local.get $dst) (local.get $x) (local.get $y)
+      (i32.load8_u offset=3 (i32.add (i32.load offset=24 (local.get $src))
+        (i32.shl (local.get $index) (i32.const 2))))))
+
   (func $gdi_raster_stretch_blt_fast32 (param $hdc i32)
         (param $dst i32) (param $dx i32) (param $dy i32)
         (param $dw i32) (param $dh i32) (param $src i32) (param $sx i32) (param $sy i32)
@@ -5198,6 +5224,8 @@
     (local.set $system_clip (call $gdi_raster_system_clip_record (local.get $hdc)))
     (if (i32.ne (local.get $rop3) (i32.const 0xCC)) (then (return (i32.const -1))))
     (if (i32.eqz (local.get $src)) (then (return (i32.const -1))))
+    (if (i32.eq (i32.load offset=68 (local.get $src)) (global.get $GDI_LOGICAL_DIB_TAG))
+      (then (return (i32.const -1))))
     ;; 8bpp on both sides sharing one colour table is the DirectDraw case:
     ;; dx_donuts GetDCs its 8bpp back buffer once a frame and StretchBlts a
     ;; palettised bitmap onto it. Through the generic loop that is six calls a
@@ -5556,6 +5584,10 @@
               (call $gdi_raster_clip_visible_row
                 (local.get $hdc) (local.get $dst) (local.get $tx) (local.get $ty)))
           (then
+            (if (i32.eq (local.get $rop3) (i32.const 0xCC))
+              (then (if (call $gdi_raster_logical_copy (local.get $dst) (local.get $tx) (local.get $ty)
+                  (local.get $src) (local.get $ux) (local.get $uy))
+                (then (local.set $x (i32.add (local.get $x) (i32.const 1))) (br $cols)))))
             (local.set $d (call $gdi_raster_read (local.get $dst) (local.get $tx) (local.get $ty)))
             (local.set $pixel_pattern (local.get $pattern))
             (if (local.get $brush)
@@ -5595,6 +5627,176 @@
       (then (call $dib_free_wasm (local.get $snapshot))))
     (i32.const 1))
 
+
+  ;; Clamp a device-space clip edge to an offset in a blit. Wide arithmetic
+  ;; avoids overflow for legal regions with extreme signed coordinates.
+  (func $gdi_blt_clip_offset (param $edge i32) (param $origin i32)
+        (param $dest i32) (param $extent i32) (result i32)
+    (local $v i64)
+    (local.set $v (i64.sub
+      (i64.add (i64.extend_i32_s (local.get $edge))
+        (i64.extend_i32_s (local.get $origin)))
+      (i64.extend_i32_s (local.get $dest))))
+    (if (i64.le_s (local.get $v) (i64.const 0)) (then (return (i32.const 0))))
+    (if (i64.ge_s (local.get $v) (i64.extend_i32_u (local.get $extent)))
+      (then (return (local.get $extent))))
+    (i32.wrap_i64 (local.get $v)))
+
+  ;; After the single-rectangle fast path declines, intersect canonical clip
+  ;; rectangles once, then reuse its tight XRGB row loop on each intersection.
+  ;; Only separate backing ranges qualify: aliasing keeps the original
+  ;; direction-aware per-pixel traversal, including differing row layouts.
+  (global $gdi_bitblt_band_hits (mut i32) (i32.const 0))
+  (func $gdi_raster_bitblt_bands32 (param $hdc i32)
+        (param $dst i32) (param $dx i32) (param $dy i32)
+        (param $w i32) (param $h i32) (param $src i32)
+        (param $sx i32) (param $sy i32) (result i32)
+    (local $app i32) (local $system i32) (local $size i32)
+    (local $ox i32) (local $oy i32) (local $ai i32) (local $si i32)
+    (local $ac i32) (local $sc i32) (local $bound i32)
+    (local $x0 i32) (local $x1 i32) (local $y0 i32) (local $y1 i32)
+    (local $ax0 i32) (local $ax1 i32) (local $ay0 i32) (local $ay1 i32)
+    (local $bx0 i32) (local $bx1 i32) (local $by0 i32) (local $by1 i32)
+    ;; Match fast32's arithmetic domain before offsetting any coordinates.
+    (if (i32.or (i32.gt_u (local.get $w) (i32.const 65535))
+                (i32.gt_u (local.get $h) (i32.const 65535)))
+      (then (return (i32.const -1))))
+    (if (i32.or (i32.lt_s (local.get $dx) (i32.const -1073741823))
+                (i32.gt_s (local.get $dx) (i32.const 1073676288)))
+      (then (return (i32.const -1))))
+    (if (i32.or (i32.lt_s (local.get $dy) (i32.const -1073741823))
+                (i32.gt_s (local.get $dy) (i32.const 1073676288)))
+      (then (return (i32.const -1))))
+    (if (i32.or (i32.lt_s (local.get $sx) (i32.const -1073741823))
+                (i32.gt_s (local.get $sx) (i32.const 1073676288)))
+      (then (return (i32.const -1))))
+    (if (i32.or (i32.lt_s (local.get $sy) (i32.const -1073741823))
+                (i32.gt_s (local.get $sy) (i32.const 1073676288)))
+      (then (return (i32.const -1))))
+    (if (i32.or (i32.le_s (i32.load offset=12 (local.get $dst)) (i32.const 0))
+                (i32.le_s (i32.load offset=12 (local.get $src)) (i32.const 0)))
+      (then (return (i32.const -1))))
+    (if (i32.and
+      (i64.lt_u (i64.extend_i32_u (i32.load (local.get $dst)))
+        (i64.add (i64.extend_i32_u (i32.load (local.get $src)))
+          (i64.mul (i64.extend_i32_u (i32.load offset=12 (local.get $src)))
+                   (i64.extend_i32_u (i32.load offset=8 (local.get $src))))))
+      (i64.lt_u (i64.extend_i32_u (i32.load (local.get $src)))
+        (i64.add (i64.extend_i32_u (i32.load (local.get $dst)))
+          (i64.mul (i64.extend_i32_u (i32.load offset=12 (local.get $dst)))
+                   (i64.extend_i32_u (i32.load offset=8 (local.get $dst)))))))
+      (then (return (i32.const -1))))
+    (local.set $app (call $gdi_raster_app_clip_operand (local.get $hdc)))
+    (local.set $system (call $gdi_raster_system_clip_operand (local.get $hdc)))
+    (if (i32.or (i32.eqz (local.get $app)) (i32.eqz (local.get $system)))
+      (then (return (i32.const 1))))
+    (local.set $ox (i32.load offset=72 (local.get $dst)))
+    (local.set $oy (i32.load offset=76 (local.get $dst)))
+    (local.set $x1 (local.get $w))
+    (local.set $y1 (local.get $h))
+    (local.set $size (call $gdi_dc_target_size (local.get $hdc)))
+    (if (local.get $size) (then
+      (local.set $x0 (call $gdi_blt_clip_offset
+        (i32.const 0)
+        (local.get $ox) (local.get $dx) (local.get $w)))
+      (local.set $y0 (call $gdi_blt_clip_offset
+        (i32.const 0)
+        (local.get $oy) (local.get $dy) (local.get $h)))
+      (local.set $x1 (call $gdi_blt_clip_offset
+        (i32.and (local.get $size) (i32.const 65535))
+        (local.get $ox) (local.get $dx) (local.get $w)))
+      (local.set $y1 (call $gdi_blt_clip_offset
+        (i32.shr_u (local.get $size) (i32.const 16))
+        (local.get $oy) (local.get $dy) (local.get $h)))
+    ))
+    (local.set $ac (call $gdi_clip_operand_count (local.get $app)))
+    (local.set $sc (call $gdi_clip_operand_count (local.get $system)))
+    (global.set $gdi_bitblt_band_hits
+      (i32.add (global.get $gdi_bitblt_band_hits) (i32.const 1)))
+    (block $adone (loop $arects
+      (br_if $adone (i32.ge_u (local.get $ai) (local.get $ac)))
+      (local.set $ax0 (local.get $x0))
+      (local.set $ay0 (local.get $y0))
+      (local.set $ax1 (local.get $x1))
+      (local.set $ay1 (local.get $y1))
+
+      (if (i32.ne (local.get $app) (i32.const 1)) (then
+      (local.set $bound (call $gdi_blt_clip_offset
+        (call $gdi_clip_operand_field (local.get $app) (local.get $ai)
+          (i32.const 0) (i32.const 0))
+        (local.get $ox) (local.get $dx) (local.get $w)))
+      (if (i32.gt_s (local.get $bound) (local.get $ax0))
+        (then (local.set $ax0 (local.get $bound))))
+      (local.set $bound (call $gdi_blt_clip_offset
+        (call $gdi_clip_operand_field (local.get $app) (local.get $ai)
+          (i32.const 1) (i32.const 0))
+        (local.get $oy) (local.get $dy) (local.get $h)))
+      (if (i32.gt_s (local.get $bound) (local.get $ay0))
+        (then (local.set $ay0 (local.get $bound))))
+      (local.set $bound (call $gdi_blt_clip_offset
+        (call $gdi_clip_operand_field (local.get $app) (local.get $ai)
+          (i32.const 2) (i32.const 0))
+        (local.get $ox) (local.get $dx) (local.get $w)))
+      (if (i32.lt_s (local.get $bound) (local.get $ax1))
+        (then (local.set $ax1 (local.get $bound))))
+      (local.set $bound (call $gdi_blt_clip_offset
+        (call $gdi_clip_operand_field (local.get $app) (local.get $ai)
+          (i32.const 3) (i32.const 0))
+        (local.get $oy) (local.get $dy) (local.get $h)))
+      (if (i32.lt_s (local.get $bound) (local.get $ay1))
+        (then (local.set $ay1 (local.get $bound))))
+      ))
+      (local.set $si (i32.const 0))
+      (block $sdone (loop $srects
+        (br_if $sdone (i32.ge_u (local.get $si) (local.get $sc)))
+        (local.set $bx0 (local.get $ax0))
+        (local.set $by0 (local.get $ay0))
+        (local.set $bx1 (local.get $ax1))
+        (local.set $by1 (local.get $ay1))
+          (if (i32.ne (local.get $system) (i32.const 1)) (then
+          (local.set $bound (call $gdi_blt_clip_offset
+            (call $gdi_clip_operand_field (local.get $system) (local.get $si)
+              (i32.const 0) (i32.const 0))
+            (local.get $ox) (local.get $dx) (local.get $w)))
+          (if (i32.gt_s (local.get $bound) (local.get $bx0))
+            (then (local.set $bx0 (local.get $bound))))
+          (local.set $bound (call $gdi_blt_clip_offset
+            (call $gdi_clip_operand_field (local.get $system) (local.get $si)
+              (i32.const 1) (i32.const 0))
+            (local.get $oy) (local.get $dy) (local.get $h)))
+          (if (i32.gt_s (local.get $bound) (local.get $by0))
+            (then (local.set $by0 (local.get $bound))))
+          (local.set $bound (call $gdi_blt_clip_offset
+            (call $gdi_clip_operand_field (local.get $system) (local.get $si)
+              (i32.const 2) (i32.const 0))
+            (local.get $ox) (local.get $dx) (local.get $w)))
+          (if (i32.lt_s (local.get $bound) (local.get $bx1))
+            (then (local.set $bx1 (local.get $bound))))
+          (local.set $bound (call $gdi_blt_clip_offset
+            (call $gdi_clip_operand_field (local.get $system) (local.get $si)
+              (i32.const 3) (i32.const 0))
+            (local.get $oy) (local.get $dy) (local.get $h)))
+          (if (i32.lt_s (local.get $bound) (local.get $by1))
+            (then (local.set $by1 (local.get $bound))))
+          ))
+        (if (i32.and (i32.lt_s (local.get $bx0) (local.get $bx1))
+                     (i32.lt_s (local.get $by0) (local.get $by1))) (then
+          ;; hdc=0 suppresses a second clip lookup; target bounds were
+          ;; intersected above. fast32 still clips to both surface bounds.
+          (drop (call $gdi_raster_bitblt_fast32 (i32.const 0) (local.get $dst)
+            (i32.add (local.get $dx) (local.get $bx0))
+            (i32.add (local.get $dy) (local.get $by0))
+            (i32.sub (local.get $bx1) (local.get $bx0))
+            (i32.sub (local.get $by1) (local.get $by0)) (local.get $src)
+            (i32.add (local.get $sx) (local.get $bx0))
+            (i32.add (local.get $sy) (local.get $by0))
+            (i32.const 0) (i32.const 0) (i32.const 0xCC)))))
+        (local.set $si (i32.add (local.get $si) (i32.const 1)))
+        (br $srects)))
+      (local.set $ai (i32.add (local.get $ai) (i32.const 1)))
+      (br $arects)))
+    (i32.const 1))
+
   ;; Equal-size copy with memmove traversal for overlapping canonical bytes.
   (func $gdi_raster_bitblt (param $hdc i32) (param $src_hdc i32)
         (param $dst i32) (param $dx i32) (param $dy i32)
@@ -5605,6 +5807,7 @@
     (local $brush i32) (local $sample i32) (local $pixel_pattern i32) (local $fast i32)
     (local $source_background i32) (local $mono_key i32)
     (local $source_index i32) (local $dest_index i32)
+    (local $copy32 i32) (local $copy_index i32) (local $dp i32) (local $sp i32)
     (if (i32.or (i32.eqz (call $gdi_raster_surface_valid (local.get $dst)))
           (i32.or (i32.le_s (local.get $w) (i32.const 0)) (i32.le_s (local.get $h) (i32.const 0))))
       (then (return (i32.const 0))))
@@ -5629,6 +5832,22 @@
           (i32.and (i32.eq (local.get $dy) (local.get $sy)) (i32.gt_s (local.get $dx) (local.get $sx)))))
       (then (local.set $step (i32.const -1)) (local.set $start (i32.const 1))))
     (local.set $rop3 (i32.and (i32.shr_u (local.get $rop) (i32.const 16)) (i32.const 0xFF)))
+    ;; Complex clips and overlapping surfaces still use this traversal. A
+    ;; 32-bit SRCCOPY needs neither a destination read nor RGB conversion:
+    ;; keep those pixels in their stored BGR order, clearing the reserved byte
+    ;; exactly as gdi_raster_write does. Other depths/ROPs retain the converter.
+    (local.set $copy32 (i32.and
+      (i32.eq (local.get $rop3) (i32.const 0xCC))
+      (i32.and (i32.ne (local.get $src) (i32.const 0))
+        (i32.and (i32.eq (i32.load offset=16 (local.get $src)) (i32.const 32))
+          (i32.eq (i32.load offset=16 (local.get $dst)) (i32.const 32))))))
+    (if (i32.and (i32.eq (local.get $rop3) (i32.const 0xCC))
+          (i32.and (i32.ne (local.get $src) (i32.const 0))
+            (i32.and (i32.eq (i32.load offset=16 (local.get $src)) (i32.const 8))
+              (i32.eq (i32.load offset=16 (local.get $dst)) (i32.const 8)))))
+      (then (local.set $copy_index (call $gdi_raster_palettes_match (local.get $dst) (local.get $src)))))
+    (if (i32.eq (i32.load offset=68 (local.get $src)) (global.get $GDI_LOGICAL_DIB_TAG))
+      (then (local.set $copy_index (i32.const 0))))
     (if (i32.and (i32.ne (local.get $hdc) (i32.const 0))
           (call $gdi_rop3_uses_pattern (local.get $rop3)))
       (then
@@ -5652,8 +5871,15 @@
       (local.get $w) (local.get $h) (local.get $src) (local.get $sx) (local.get $sy)
       (local.get $pattern) (local.get $brush) (local.get $rop3)))
     (if (i32.ge_s (local.get $fast) (i32.const 0)) (then (return (local.get $fast))))
-    ;; Priced here rather than at each decline site, because this is the one
-    ;; place that knows the blit went generic AND still has its extent. The
+    (if (local.get $copy32)
+      (then
+        (local.set $fast (call $gdi_raster_bitblt_bands32
+          (local.get $hdc) (local.get $dst) (local.get $dx) (local.get $dy)
+          (local.get $w) (local.get $h) (local.get $src) (local.get $sx) (local.get $sy)))
+        (if (i32.ge_s (local.get $fast) (i32.const 0)) (then (return (local.get $fast))))))
+    ;; Priced after both fast paths: the single-rectangle decline histogram
+    ;; also includes blits rescued by the band path. Only this fallback still
+    ;; scans the requested extent pixel by pixel. The
     ;; product wraps for an absurd extent; this is a diagnostic counter, and a
     ;; blit that large has already been refused on its own merits upstream.
     (global.set $gdi_bitblt_decline_px (i32.add (global.get $gdi_bitblt_decline_px)
@@ -5670,13 +5896,37 @@
         (br_if $cols_done (i32.or (i32.lt_s (local.get $x) (i32.const 0))
           (i32.ge_s (local.get $x) (local.get $w))))
         (if (i32.and
-              (i32.ne (call $gdi_raster_pixel_ptr (local.get $dst)
+              (i32.ne (local.tee $dp (call $gdi_raster_pixel_ptr (local.get $dst)
                 (i32.add (local.get $dx) (local.get $x))
-                (i32.add (local.get $dy) (local.get $y))) (i32.const 0))
+                (i32.add (local.get $dy) (local.get $y)))) (i32.const 0))
               (call $gdi_raster_clip_visible_row (local.get $hdc) (local.get $dst)
                 (i32.add (local.get $dx) (local.get $x))
                 (i32.add (local.get $dy) (local.get $y))))
           (then
+            (if (local.get $copy32)
+              (then
+                (local.set $sp (call $gdi_raster_pixel_ptr (local.get $src)
+                  (i32.add (local.get $sx) (local.get $x))
+                  (i32.add (local.get $sy) (local.get $y))))
+                (if (local.get $sp)
+                  (then (i32.store (local.get $dp)
+                    (i32.and (i32.load (local.get $sp)) (i32.const 0xFFFFFF)))))
+                (local.set $x (i32.add (local.get $x) (local.get $step)))
+                (br $cols)))
+            (if (local.get $copy_index)
+              (then
+                (local.set $source_index (call $gdi_raster_read_index (local.get $src)
+                  (i32.add (local.get $sx) (local.get $x)) (i32.add (local.get $sy) (local.get $y))))
+                (if (i32.ge_s (local.get $source_index) (i32.const 0))
+                  (then (drop (call $gdi_raster_write_index (local.get $dst)
+                    (i32.add (local.get $dx) (local.get $x)) (i32.add (local.get $dy) (local.get $y))
+                    (local.get $source_index)))))
+                (local.set $x (i32.add (local.get $x) (local.get $step))) (br $cols)))
+            (if (i32.eq (local.get $rop3) (i32.const 0xCC))
+              (then (if (call $gdi_raster_logical_copy (local.get $dst)
+                  (i32.add (local.get $dx) (local.get $x)) (i32.add (local.get $dy) (local.get $y))
+                  (local.get $src) (i32.add (local.get $sx) (local.get $x)) (i32.add (local.get $sy) (local.get $y)))
+                (then (local.set $x (i32.add (local.get $x) (local.get $step))) (br $cols)))))
             ;; A DDB's raster-op domain is its stored device pixels. Keep the
             ;; palette indexes intact for a self SRCINVERT instead of expanding
             ;; them to RGB and quantizing the XOR result back to the palette.
@@ -5873,7 +6123,8 @@
           (local.get $hdc) (local.get $desc) (local.get $x) (local.get $y)))
       (then (return (i32.const -1))))
     (local.set $result (call $gdi_raster_set_pixel
-      (local.get $desc) (local.get $x) (local.get $y) (local.get $color)))
+      (local.get $desc) (local.get $x) (local.get $y)
+      (call $gdi_dc_resolve_colorref (local.get $hdc) (local.get $color))))
     (if (i32.ne (local.get $result) (i32.const -1))
       (then (call $gdi_geometry_present (local.get $hdc) (local.get $desc)
         (local.get $x) (local.get $y)
@@ -6259,6 +6510,7 @@
   (func (export "test_gdi_apply_rop3") (param i32 i32 i32 i32) (result i32)
     (call $gdi_apply_rop3 (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
   (func (export "test_gdi_fast_reset")
+    (global.set $gdi_bitblt_band_hits (i32.const 0))
     (global.set $gdi_fast_span_hits (i32.const 0))
     (global.set $gdi_fast_bitblt_hits (i32.const 0))
     (global.set $gdi_fast_stretch_hits (i32.const 0))
@@ -6277,6 +6529,8 @@
     (i32.load (i32.add (global.get $GDI_BITBLT_DECLINE)
       (i32.shl (local.get 0) (i32.const 2)))))
   (func (export "test_gdi_fast_count") (param i32) (result i32)
+    (if (i32.eq (local.get 0) (i32.const 10))
+      (then (return (global.get $gdi_bitblt_band_hits))))
     (if (i32.eq (local.get 0) (i32.const 0))
       (then (return (global.get $gdi_fast_span_hits))))
     (if (i32.eq (local.get 0) (i32.const 1))
@@ -6293,8 +6547,8 @@
       (then (return (global.get $gdi_slow_span_clip))))
     (if (i32.eq (local.get 0) (i32.const 8))
       (then (return (global.get $gdi_band_span_hits))))
-    ;; 9 is the only one of these that prices the BITBLT fast path: everything
-    ;; above it counts spans, which a declined blit never becomes.
+    ;; 9 counts requested pixels reaching the per-pixel BitBlt fallback;
+    ;; 10 above counts calls rescued by canonical clip-band intersections.
     (if (i32.eq (local.get 0) (i32.const 9))
       (then (return (global.get $gdi_bitblt_decline_px))))
     (global.get $gdi_slow_span_rop))
@@ -6453,8 +6707,14 @@
       (i32.store (i32.add (global.get $GDI_PALETTE_RESOLVE)
           (i32.shl (local.get $i) (i32.const 2)))
         (call $gdi_raster_swap_rb (local.get $color)))
+      (if (i32.eq (call $gdi_display_bpp) (i32.const 8))
+        (then (i32.store8 offset=3 (i32.add (global.get $GDI_PALETTE_RESOLVE)
+            (i32.shl (local.get $i) (i32.const 2)))
+          (call $gdi_realized_palette_index (local.get $palette) (local.get $index)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $resolve)))
+    (if (i32.eq (call $gdi_display_bpp) (i32.const 8))
+      (then (i32.store offset=68 (local.get $desc) (global.get $GDI_LOGICAL_DIB_TAG))))
     (i32.store offset=24 (local.get $desc) (global.get $GDI_PALETTE_RESOLVE))
     (i32.const 1))
 
@@ -6789,6 +7049,10 @@
       (local.set $x (i32.const 0))
       (block $cols_done (loop $cols
         (br_if $cols_done (i32.ge_u (local.get $x) (local.get $width)))
+        (if (call $gdi_raster_logical_copy (local.get $dst) (local.get $x)
+              (i32.add (local.get $dst_top) (local.get $y)) (local.get $src) (local.get $x)
+              (i32.add (local.get $src_top) (local.get $y)))
+          (then (local.set $x (i32.add (local.get $x) (i32.const 1))) (br $cols)))
         (local.set $color (call $gdi_raster_read
           (local.get $src) (local.get $x)
           (i32.add (local.get $src_top) (local.get $y))))
@@ -6800,7 +7064,7 @@
         (br $cols)))
       (local.set $y (i32.add (local.get $y) (i32.const 1)))
       (br $rows)))
-    (drop (call $host_gdi_surface_upload (i32.load offset=68 (local.get $dst))
+    (drop (call $gdi_write_surface_upload (i32.load offset=68 (local.get $dst))
       (i32.const 0) (local.get $dst_top)
       (local.get $width) (local.get $dst_bottom)))
     (local.get $lines))
@@ -6855,7 +7119,7 @@
       (local.get $colors) (i32.shl (local.get $count) (i32.const 2)))
     ;; Palette changes recolor every indexed pixel, even though the pixel bytes
     ;; themselves are unchanged.
-    (drop (call $host_gdi_surface_upload (i32.load offset=40 (local.get $record))
+    (drop (call $gdi_write_surface_upload (i32.load offset=40 (local.get $record))
       (i32.const 0) (i32.const 0)
       (i32.load offset=8 (local.get $record))
       (i32.load offset=12 (local.get $record))))
@@ -7427,3 +7691,22 @@
     (i32.store offset=24 (local.get $record) (i32.const 0))
     (i32.store offset=28 (local.get $record) (i32.const 0))
     (i32.const 1))
+
+  ;; Native writers notify before the asynchronous presentation import. Doing
+  ;; this only on the host would publish too late for the next Worker draw.
+  ;; DirectDraw's presentation-only uploads do not call this wrapper.
+  (func $gdi_write_surface_upload (param $id i32) (param $left i32) (param $top i32)
+      (param $right i32) (param $bottom i32) (result i32)
+    (local $record i32) (local $slot i32)
+    (local.set $slot (i32.sub (local.get $id) (i32.const 0x200000)))
+    (if (i32.lt_u (local.get $slot) (global.get $DX_MAX))
+      (then (call $dx_surf_note_write
+        (i32.add (global.get $DX_OBJECTS) (i32.shl (local.get $slot) (i32.const 5)))))
+      (else
+        (local.set $record (call $gdi_object_record (local.get $id)))
+        (if (call $gdi_bitmap_record_valid (local.get $record)) (then
+          (call $page_watch_write (load.field.memarg GdiBitmap bits (local.get $record))
+            (i32.mul (load.field.memarg GdiBitmap stride (local.get $record))
+              (load.field.memarg GdiBitmap height (local.get $record))))))))
+    (call $host_gdi_surface_upload (local.get $id) (local.get $left) (local.get $top)
+      (local.get $right) (local.get $bottom)))

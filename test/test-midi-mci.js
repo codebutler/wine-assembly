@@ -314,6 +314,10 @@ try {
 
   const statusPtr = 0x200;
   const statusView = new DataView(mem.buffer);
+  statusView.setUint32(statusPtr + 8, 0x4003, true); // MCI_SEQ_STATUS_PORT
+  assert.strictEqual(imports.host.mci_command(id, 0x0814, 0x100, statusPtr), 0);
+  assert.strictEqual(statusView.getUint32(statusPtr + 4, true), 0xFFFFFFFF,
+    'the sequencer reports MIDI_MAPPER for its default synth output');
   statusView.setUint32(statusPtr + 8, 1, true); // MCI_STATUS_LENGTH
   assert.strictEqual(imports.host.mci_command(id, 0x0814, 0, statusPtr), 0);
   assert.strictEqual(statusView.getUint32(statusPtr + 4, true), 500);

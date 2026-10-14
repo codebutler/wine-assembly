@@ -16,6 +16,16 @@ const RegionMap = require('../lib/region-map.generated.js');
 const ROOT = path.join(__dirname, '..');
 const oleSource = fs.readFileSync(path.join(ROOT, 'src', '09a7b-ole.wat'), 'utf8');
 const hasOleHandler = name => new RegExp(`\\(func \\$handle_${name}\\b`).test(oleSource);
+const embeddedStaticInterfaces = ['IPersistStorage', 'IOleCache', 'IViewObject'];
+for (const iface of embeddedStaticInterfaces) {
+  for (const method of ['AddRef', 'Release']) {
+    const name = `${iface}_${method}`;
+    assert.strictEqual(apiTable.find(api => api.name === name)?.handler,
+      `ole_static_interface_${method.toLowerCase()}`,
+      `${name} must retain the shared root-adjusting static-object path`);
+    assert(!hasOleHandler(name), `${name} must not regain a duplicate wrapper`);
+  }
+}
 const enumSkipApis = ['IEnumMoniker_Skip', 'IEnumString_Skip', 'IEnumFORMATETC_Skip'];
 for (const name of enumSkipApis) {
   assert.strictEqual(apiTable.find(api => api.name === name)?.handler, 'ole_enum_skip',
@@ -166,6 +176,69 @@ async function main() {
     dv.setUint32(thunkWa + 4, savedId, true);
     return result;
   }
+
+  for (const [iface, offset] of [['IPersistStorage', 12], ['IOleCache', 52], ['IViewObject', 56]]) {
+    const root = e.test_ole_create_static_handler(0) >>> 0;
+    assert(root, `${iface} fixture must allocate`);
+    const embedded = root + offset;
+    const qiOut = alloc(4);
+    for (const id of [0, 0x112, 0x10a, 0x10c, 0x11e, 0x10d, 0x127, 0x10e]) {
+      const forged = writeComIid(id);
+      for (let byte = 4; byte < 16; byte++) {
+        const addr = wa(forged) + byte;
+        const old = dv.getUint8(addr);
+        dv.setUint8(addr, old ^ 1);
+        write(qiOut, 0x12345678);
+        assert.strictEqual(callMethod(embedded, 0, forged, qiOut), 0x80004002,
+          `${iface} must reject forged IID ${id.toString(16)} byte ${byte}`);
+        assert.strictEqual(read(qiOut), 0);
+        assert.strictEqual(read(root + 4), 1);
+        assert.strictEqual(read(root + 164), 0, 'invalid IID must not allocate a data-object face');
+        dv.setUint8(addr, old);
+      }
+    }
+    const linkIid = writeComIid(0x11d);
+    for (const face of [root, embedded]) {
+      write(qiOut, 0x12345678);
+      assert.strictEqual(callMethod(face, 0, linkIid, qiOut), 0x80004002,
+        `${iface} must reject IOleLink rather than return a view vtable`);
+      assert.strictEqual(read(qiOut), 0);
+      assert.strictEqual(read(root + 4), 1, 'rejected QI must not AddRef');
+      assert.strictEqual(callMethod(face, 0, writeComIid(0x127), qiOut), 0);
+      assert.strictEqual(read(qiOut), root + 56, 'real IViewObject2 keeps its view identity');
+      assert.strictEqual(callMethod(read(qiOut), 2), 1);
+    }
+    assert.strictEqual(callMethod(embedded, 1), 2, `${iface} AddRef returns root count`);
+    assert.strictEqual(read(root + 4), 2, `${iface} increments the controlling object`);
+    assert.strictEqual(callMethod(embedded, 2), 1, `${iface} Release balances AddRef`);
+    assert.strictEqual(read(root + 4), 1);
+    assert.strictEqual(callMethod(embedded, 2), 0, `${iface} final Release uses static teardown`);
+  }
+
+  const commonClsid = alloc(16);
+  write(commonClsid, 0xf9043c85);
+  write(commonClsid + 4, 0x101af6f2);
+  write(commonClsid + 8, 0x00082ba5);
+  write(commonClsid + 12, 0x0b3d3000);
+  const commonRoot = e.test_ole_create_static_handler(commonClsid) >>> 0;
+  const commonOut = alloc(4);
+  for (const words of [[0x7fd52380, 0x101b4e07, 0x00082dae, 0x13c72e2b],
+    [0x20400, 0, 0xc0, 0x46000000]]) {
+    const iid = alloc(16);
+    words.forEach((v, i) => write(iid + i * 4, v));
+    assert.strictEqual(callMethod(commonRoot, 0, iid, commonOut), 0);
+    assert.strictEqual(callMethod(read(commonOut), 2), 1);
+    for (let byte = 4; byte < 16; byte++) {
+      const addr = wa(iid) + byte, old = dv.getUint8(addr);
+      dv.setUint8(addr, old ^ 1);
+      write(commonOut, 0x12345678);
+      assert.strictEqual(callMethod(commonRoot, 0, iid, commonOut), 0x80004002);
+      assert.strictEqual(read(commonOut), 0);
+      assert.strictEqual(read(commonRoot + 4), 1);
+      dv.setUint8(addr, old);
+    }
+  }
+  assert.strictEqual(callMethod(commonRoot, 2), 0);
 
   function createMoniker(text) {
     const out = alloc(4);

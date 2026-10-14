@@ -285,10 +285,13 @@
       (br $scan)))
     (i32.const 0))
 
-  ;; First slot whose period has elapsed, or 0. Refreshes $tick_count, so the
-  ;; caller does not have to.
+  ;; First CALLBACK slot whose period has elapsed, or 0. Refreshes
+  ;; $tick_count, so the caller does not have to. A due TIME_CALLBACK_EVENT_SET
+  ;; or _PULSE timer is served here instead, by whichever path polls first:
+  ;; its lpTimeProc is an event handle that winmm signals, not a function any
+  ;; of the three callback paths may call.
   (func $mm_timer_due_slot (result i32)
-    (local $i i32) (local $slot i32)
+    (local $i i32) (local $slot i32) (local $kind i32) (local $event i32)
     (global.set $tick_count (call $host_get_ticks))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MM_TIMER_MAX)))
@@ -298,7 +301,15 @@
           (if (i32.ge_u
                 (i32.sub (global.get $tick_count) (i32.load offset=16 (local.get $slot)))
                 (i32.load offset=4 (local.get $slot)))
-            (then (return (local.get $slot))))))
+            (then
+              (local.set $kind (i32.and (i32.load offset=20 (local.get $slot)) (i32.const 0x30)))
+              (if (i32.eqz (local.get $kind)) (then (return (local.get $slot))))
+              (local.set $event (i32.load offset=8 (local.get $slot)))
+              (call $mm_timer_consume_slot (local.get $slot))
+              (if (call $host_set_event (local.get $event))
+                (then
+                  (if (i32.and (local.get $kind) (i32.const 0x20)) ;; _PULSE
+                    (then (drop (call $host_reset_event (local.get $event)))))))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.const 0))
@@ -306,8 +317,121 @@
   ;; Charge one period to a due slot, retiring it if it was a one-shot.
   (func $mm_timer_consume_slot (param $slot i32)
     (call $mm_timer_consume_due_tick (local.get $slot))
-    (if (i32.load offset=20 (local.get $slot))
+    (if (i32.and (i32.load offset=20 (local.get $slot)) (i32.const 1))
       (then (i32.store (local.get $slot) (i32.const 0)))))
+
+  ;; Milliseconds until the earliest multimedia timer is due: 0 when one is
+  ;; already due, -1 when there is no timer at all. The host shortens its run
+  ;; quantum to this, so a 5ms timer is served at its deadline instead of at
+  ;; the end of whatever slice happened to be running.
+  (func $mm_timer_ms_until_due (result i32)
+    (local $i i32) (local $slot i32) (local $left i32) (local $best i32)
+    (local $elapsed i32) (local $interval i32)
+    (local.set $best (i32.const -1))
+    (global.set $tick_count (call $host_get_ticks))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $MM_TIMER_MAX)))
+      (local.set $slot (call $mm_timer_slot (local.get $i)))
+      (if (i32.load (local.get $slot))
+        (then
+          (local.set $elapsed
+            (i32.sub (global.get $tick_count) (i32.load offset=16 (local.get $slot))))
+          (local.set $interval (i32.load offset=4 (local.get $slot)))
+          (local.set $left
+            (if (result i32) (i32.ge_u (local.get $elapsed) (local.get $interval))
+              (then (i32.const 0))
+              (else (i32.sub (local.get $interval) (local.get $elapsed)))))
+          (if (i32.or (i32.lt_s (local.get $best) (i32.const 0))
+                      (i32.lt_u (local.get $left) (local.get $best)))
+            (then (local.set $best (local.get $left))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $best))
+
+  ;; 1 once the winmm timer thread exists: from then on it alone runs
+  ;; timeSetEvent callbacks, and the main-thread paths (the MM_TIMER
+  ;; pseudo-message and fire_mm_timer's injection) stand down.
+  (func $mm_timer_thread_owned (result i32)
+    (i32.ne (i32.atomic.load offset=4 (global.get $MM_TIMER_THREAD)) (i32.const 0)))
+
+  ;; Start the winmm timer thread on the first timeSetEvent when the host chose
+  ;; that mode. On Windows the callbacks run on a time-critical thread of
+  ;; winmm's own, preempting whatever the application's threads are doing;
+  ;; run on the caller's thread they inherit its id, its SEH chain and its
+  ;; held critical sections, and only run when that thread pumps or is
+  ;; interrupted between slices.
+  (func $mm_timer_thread_ensure
+    (local $thunk i32) (local $handle i32)
+    (if (i32.ne (i32.load (global.get $MM_TIMER_THREAD)) (i32.const 1)) (then (return)))
+    (if (call $mm_timer_thread_owned) (then (return)))
+    (local.set $thunk (call $com_cont_thunk (i32.const 0xCACA003B)))
+    (i32.store offset=8 (global.get $MM_TIMER_THREAD) (local.get $thunk))
+    (i32.store offset=12 (global.get $MM_TIMER_THREAD) (i32.const 0))
+    ;; host_create_thread(start, param, stack, flags, lpThreadId wasm, creator)
+    (local.set $handle (call $host_create_thread
+      (local.get $thunk) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+      (global.get $current_thread_id)))
+    (i32.atomic.store offset=4 (global.get $MM_TIMER_THREAD) (local.get $handle)))
+
+  ;; 0xCACA003B: one turn of the winmm timer thread. The thread starts here and
+  ;; every callback returns here. Call the first due timer, or sleep until the
+  ;; next one is due. The loop ESP is pinned, so a callback declared with the
+  ;; wrong convention cannot walk the stack away.
+  (func $mm_timer_thread_step
+    (local $slot i32) (local $esp i32) (local $thunk i32) (local $wait i32)
+    (local $id i32) (local $dwuser i32) (local $cb i32)
+    (local.set $thunk (i32.load offset=8 (global.get $MM_TIMER_THREAD)))
+    (local.set $esp (i32.load offset=12 (global.get $MM_TIMER_THREAD)))
+    (if (i32.eqz (local.get $esp))
+      (then
+        (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+        (i32.store offset=12 (global.get $MM_TIMER_THREAD) (local.get $esp))))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp))
+    (global.set $steps (i32.const 0))
+    (local.set $slot (call $mm_timer_due_slot))
+    (if (local.get $slot)
+      (then
+        (local.set $id (i32.load (local.get $slot)))
+        (local.set $dwuser (i32.load offset=12 (local.get $slot)))
+        (local.set $cb (i32.load offset=8 (local.get $slot)))
+        (call $mm_timer_consume_slot (local.get $slot))
+        ;; TimeProc(uTimerID, uMsg=0, dwUser, dw1=0, dw2=0), stdcall.
+        (call $io_apc_push (i32.const 0))
+        (call $io_apc_push (i32.const 0))
+        (call $io_apc_push (local.get $dwuser))
+        (call $io_apc_push (i32.const 0))
+        (call $io_apc_push (local.get $id))
+        (call $io_apc_push (local.get $thunk))
+        (global.set $eip (local.get $cb))
+        (return)))
+    ;; Nothing due: Sleep until the next deadline, re-entering here. With no
+    ;; timer at all the thread idles in 50ms sleeps, as winmm's does.
+    (local.set $wait (call $mm_timer_ms_until_due))
+    (if (i32.le_s (local.get $wait) (i32.const 0))
+      (then (local.set $wait
+        (if (result i32) (i32.lt_s (local.get $wait) (i32.const 0))
+          (then (i32.const 50)) (else (i32.const 1))))))
+    ;; Re-entering the same thunk: opt out of the run loop's auto-pop.
+    (global.set $eip (local.get $thunk))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $sleep_yielded (i32.const 1))
+    (global.set $sleep_timeout (local.get $wait)))
+
+  ;; Consume one due WM_TIMER period at table entry $addr ($elapsed ms since
+  ;; its last_tick, already >= the interval) without moving its phase to the
+  ;; delivery time; the WM_TIMER twin of $mm_timer_consume_due_tick. A zero
+  ;; interval has no phase to keep.
+  (func $timer_consume_due_tick (param $addr i32) (param $elapsed i32)
+    (local $interval i32)
+    (local.set $interval (i32.load offset=8 (local.get $addr)))
+    (if (i32.eqz (local.get $interval))
+      (then (i32.store offset=12 (local.get $addr) (global.get $tick_count)))
+      (else
+        (i32.store offset=12 (local.get $addr)
+          (i32.add (i32.load offset=12 (local.get $addr))
+            (i32.mul (i32.div_u (local.get $elapsed) (local.get $interval))
+                     (local.get $interval)))))))
 
   ;; $timer_check_due(msg_ptr, consume) — scan timer table, fill MSG with first due timer, return 1 if found
   ;; $consume: 1 = update last_tick (PM_REMOVE/GetMessage), 0 = peek only (PM_NOREMOVE)
@@ -339,9 +463,15 @@
             (local.set $elapsed (i32.sub (global.get $tick_count) (i32.load (i32.add (local.get $addr) (i32.const 12)))))
             (if (i32.ge_u (local.get $elapsed) (i32.load (i32.add (local.get $addr) (i32.const 8))))
               (then
-                ;; Timer is due — only update last_tick if consuming
+                ;; Timer is due — only advance last_tick if consuming. It
+                ;; advances by whole intervals, not to the delivery time:
+                ;; USER's timer stays on its own period, so a 1000ms timer
+                ;; noticed 150ms late is next due 850ms later, not 1000ms.
+                ;; Restarting from delivery lost up to 40% of ticks at the
+                ;; CLI's 200ms batches (sol16's clock read 13 after 20s).
+                ;; Missed periods still coalesce into this one WM_TIMER.
                 (if (local.get $consume)
-                  (then (i32.store (i32.add (local.get $addr) (i32.const 12)) (global.get $tick_count))))
+                  (then (call $timer_consume_due_tick (local.get $addr) (local.get $elapsed))))
                 ;; A null msg_ptr only asks whether a timer is due. A buffer
                 ;; takes a whole 28-byte MSG, time and point included.
                 (if (local.get $msg_ptr) (then
@@ -372,7 +502,9 @@
     )
     (call $lock_wnd_release)
     (if (local.get $found) (then (return (i32.const 1))))
-    ;; Check multimedia timers (timeSetEvent)
+    ;; Check multimedia timers (timeSetEvent) -- unless the winmm timer
+    ;; thread owns them, in which case no application thread delivers them.
+    (if (call $mm_timer_thread_owned) (then (return (i32.const 0))))
     (local.set $addr (call $mm_timer_due_slot))
     (if (local.get $addr)
       (then
@@ -420,6 +552,14 @@
   ;; Source metadata is private to USER, not a bit stolen from guest messages.
   ;; One dword per ring slot, 16 queues of 64 slots. Moved under LOCK_WND.
   (global $user_queue_input_flags (mut i32) (i32.const 0))
+  ;; Slot flag bits: 1 = hardware input (published as $user_queue_input_flags),
+  ;; 2 = produced by WAT menu tracking ($menu_post). The raw word and the
+  ;; retrieved hwnd/msg are kept for $shared_post_queue_peek_tid's filter.
+  (global $USER_QUEUE_FLAG_INPUT i32 (i32.const 1))
+  (global $USER_QUEUE_FLAG_MENU i32 (i32.const 2))
+  (global $user_queue_raw_flags (mut i32) (i32.const 0))
+  (global $user_queue_raw_hwnd (mut i32) (i32.const 0))
+  (global $user_queue_raw_msg (mut i32) (i32.const 0))
   (func $thread_msg_input_flags_addr (param $tid i32) (param $queue i32) (param $slot i32) (result i32)
     (i32.add (global.get $THREAD_MSG_INPUT_FLAGS)
       (i32.add (i32.mul (i32.sub (local.get $tid) (i32.const 1)) (i32.const 256))
@@ -566,7 +706,54 @@
   ;; Scan both the fixed shared ring and its overflow list with PeekMessage's
   ;; filters. Queue mutation stays under LOCK_WND; timestamp/point synthesis
   ;; happens after release because it calls the host clock.
+  ;; Windows discards input aimed at a disabled window. Menu tracking here is
+  ;; asynchronous to the guest, so its WM_COMMAND/WM_INITMENU* can outlive the
+  ;; moment the owner was enabled; a modal loop that disabled the owner must
+  ;; not receive them. Walks WS_CHILD parents so an MDI child's system-menu
+  ;; command is judged by its frame.
+  (func $menu_post_target_disabled (param $hwnd i32) (result i32)
+    (local $style i32) (local $depth i32)
+    (block $done (loop $walk
+      (br_if $done (i32.eqz (local.get $hwnd)))
+      (br_if $done (i32.ge_u (local.get $depth) (i32.const 64)))
+      (br_if $done (i32.eq (call $wnd_table_find (local.get $hwnd)) (i32.const -1)))
+      (local.set $style (call $wnd_get_style (local.get $hwnd)))
+      (if (call $ctrl_style_disabled (local.get $style))
+        (then (return (i32.const 1))))
+      (br_if $done (i32.eqz (i32.and (local.get $style) (i32.const 0x40000000))))
+      (local.set $hwnd (call $wnd_get_parent (local.get $hwnd)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
+    (i32.const 0))
+
+  ;; PeekMessage's queue retrieval, minus stale menu output (see above). A
+  ;; discarded message is removed even by a PM_NOREMOVE peek, since no later
+  ;; retrieval may see it either; the narrow removal filter (its own hwnd and
+  ;; msg) cannot match an earlier entry, which would have matched first.
   (func $shared_post_queue_peek_tid
+        (param $tid i32) (param $msg_ptr i32) (param $hwnd_filter i32)
+        (param $msg_min i32) (param $msg_max i32) (param $remove i32)
+        (result i32)
+    (loop $retry
+      (if (i32.eqz (call $shared_post_queue_peek_tid_raw
+            (local.get $tid) (local.get $msg_ptr) (local.get $hwnd_filter)
+            (local.get $msg_min) (local.get $msg_max) (local.get $remove)))
+        (then (return (i32.const 0))))
+      (if (i32.eqz (i32.and (global.get $user_queue_raw_flags)
+                            (global.get $USER_QUEUE_FLAG_MENU)))
+        (then (return (i32.const 1))))
+      (if (i32.eqz (call $menu_post_target_disabled (global.get $user_queue_raw_hwnd)))
+        (then (return (i32.const 1))))
+      (if (i32.eqz (local.get $remove))
+        (then
+          (drop (call $shared_post_queue_peek_tid_raw
+            (local.get $tid) (i32.const 0) (global.get $user_queue_raw_hwnd)
+            (global.get $user_queue_raw_msg) (global.get $user_queue_raw_msg)
+            (i32.const 1)))))
+      (br $retry))
+    (i32.const 0))
+
+  (func $shared_post_queue_peek_tid_raw
         (param $tid i32) (param $msg_ptr i32) (param $hwnd_filter i32)
         (param $msg_min i32) (param $msg_max i32) (param $remove i32)
         (result i32)
@@ -737,7 +924,11 @@
     (call $lock_wnd_release)
     (if (local.get $free_node) (then (call $heap_free (local.get $free_node))))
     (if (local.get $free_state) (then (call $heap_free (local.get $free_state))))
-    (global.set $user_queue_input_flags (local.get $flags))
+    (global.set $user_queue_raw_flags (local.get $flags))
+    (global.set $user_queue_raw_hwnd (local.get $hwnd))
+    (global.set $user_queue_raw_msg (local.get $msg))
+    (global.set $user_queue_input_flags
+      (i32.and (local.get $flags) (global.get $USER_QUEUE_FLAG_INPUT)))
     ;; A null pointer is an internal USER probe: publish only the four fields
     ;; its caller needs in instance-private globals. Full guest MSG writes also
     ;; synthesize time/pt; they must receive a real 28-byte output buffer.

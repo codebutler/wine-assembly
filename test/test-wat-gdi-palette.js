@@ -63,7 +63,10 @@ const RegionMap = require('../lib/region-map.generated.js');
   function makeSurface32(width, height) {
     const bmi = makeBmi(width, -height, 32, []);
     const out = wat.guest_alloc(4) >>> 0;
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, out) >>> 0;
+    assert.strictEqual(wat.test_call_CreateDIBSection.length, 6);
+    const savedEsp = wat.get_esp();
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, out, 0, 0) >>> 0;
+    assert.strictEqual(wat.get_esp(), savedEsp, 'DIB adapter restores ESP');
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert(bitmap && hdc);
     assert.strictEqual(wat.test_call_SelectObject(hdc, bitmap) >>> 0, 0x30007);
@@ -89,20 +92,20 @@ const RegionMap = require('../lib/region-map.generated.js');
     const dcA = wat.test_call_CreateCompatibleDC(0) >>> 0;
     const dcB = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert.strictEqual(wat.test_call_GetCurrentObject(dcA, 5) >>> 0, 0x3001F);
-    assert.strictEqual(wat.test_call_SelectPalette(dcA, a) >>> 0, 0x3001F);
-    assert.strictEqual(wat.test_call_SelectPalette(dcB, b) >>> 0, 0x3001F);
+    assert.strictEqual(wat.test_call_SelectPalette(dcA, a, 0) >>> 0, 0x3001F);
+    assert.strictEqual(wat.test_call_SelectPalette(dcB, b, 0) >>> 0, 0x3001F);
     assert.strictEqual(wat.test_gdi_dc_aux_set(dcA, 28, 6, 0), 0,
       'text justification break count remains independent palette state');
     assert.strictEqual(wat.test_call_GetCurrentObject(dcA, 5) >>> 0, a);
     assert.strictEqual(wat.test_call_GetCurrentObject(dcB, 5) >>> 0, b);
     assert.strictEqual(wat.test_call_RealizePalette(dcA), 2);
     assert.strictEqual(wat.test_call_RealizePalette(dcB), 3);
-    assert.strictEqual(wat.test_call_SelectPalette(dcA, 0x3001F) >>> 0, a);
+    assert.strictEqual(wat.test_call_SelectPalette(dcA, 0x3001F, 0) >>> 0, a);
     assert.strictEqual(wat.test_call_GetCurrentObject(dcB, 5) >>> 0, b,
       'changing one DC must not alter another DC palette');
     const saved = wat.test_call_SaveDC(dcB);
     assert.strictEqual(saved, 1);
-    assert.strictEqual(wat.test_call_SelectPalette(dcB, 0x3001F) >>> 0, b);
+    assert.strictEqual(wat.test_call_SelectPalette(dcB, 0x3001F, 0) >>> 0, b);
     assert.strictEqual(wat.test_call_RestoreDC(dcB, -1), 1);
     assert.strictEqual(wat.test_call_GetCurrentObject(dcB, 5) >>> 0, b,
       'RestoreDC must restore the selected logical palette');
@@ -127,10 +130,10 @@ const RegionMap = require('../lib/region-map.generated.js');
   check('DIB_PAL_COLORS bitmap creation owns resolved RGBQUADs', () => {
     const palette = createPalette([0x00112233, 0x00A0B0C0]);
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
-    assert.strictEqual(wat.test_call_SelectPalette(hdc, palette) >>> 0, 0x3001F);
+    assert.strictEqual(wat.test_call_SelectPalette(hdc, palette, 0) >>> 0, 0x3001F);
     const bmi = makeBmi(2, -1, 8, [1, 0], 1);
     const out = wat.guest_alloc(4) >>> 0;
-    const bitmap = wat.test_call_CreateDIBSectionUsage(hdc, bmi, 1, out) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(hdc, bmi, 1, out, 0, 0) >>> 0;
     assert(bitmap);
     const storage = wat.test_gdi_bitmap_storage(bitmap) >>> 0;
     assert.deepStrictEqual([...bytes.slice(storage + 4, storage + 12)], [
@@ -149,12 +152,12 @@ const RegionMap = require('../lib/region-map.generated.js');
       i === 0 ? 0x00112233 : (i === 235 ? 0x00A0B0C0 : i));
     const palette = createPalette(colors);
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
-    assert.strictEqual(wat.test_call_SelectPalette(hdc, palette) >>> 0, 0x3001F);
+    assert.strictEqual(wat.test_call_SelectPalette(hdc, palette, 0) >>> 0, 0x3001F);
 
     const indexes = Array.from({ length: 256 }, (_, i) => i);
     const bmi = makeBmi(4, -1, 8, indexes, 1);
     const out = wat.guest_alloc(4) >>> 0;
-    const bitmap = wat.test_call_CreateDIBSectionUsage(hdc, bmi, 1, out) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(hdc, bmi, 1, out, 0, 0) >>> 0;
     assert(bitmap, 'a 256-slot identity table must accept a 236-entry palette');
     const storage = wat.test_gdi_bitmap_storage(bitmap) >>> 0;
     assert.deepStrictEqual([...bytes.slice(storage + 4, storage + 8)],
@@ -167,7 +170,7 @@ const RegionMap = require('../lib/region-map.generated.js');
       [0, 0, 0, 0], 'the final missing identity slot also resolves to black');
 
     const surface = makeSurface32(4, 1);
-    wat.test_call_SelectPalette(surface.hdc, palette);
+    wat.test_call_SelectPalette(surface.hdc, palette, 0);
     const bits = wat.guest_alloc(4) >>> 0;
     bytes.set([0, 235, 236, 255], wa(bits));
     assert.strictEqual(wat.test_gdi_stretch_dibits(
@@ -185,7 +188,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   check('SetDIBColorTable recolors indexed pixels without changing their bits', () => {
     const bmi = makeBmi(1, -1, 8, [0x00000000, 0x00FFFFFF]);
     const out = wat.guest_alloc(4) >>> 0;
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, out) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, out, 0, 0) >>> 0;
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     wat.test_call_SelectObject(hdc, bitmap);
     const storage = wat.test_gdi_bitmap_storage(bitmap) >>> 0;
@@ -202,7 +205,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   check('transient DIB_PAL_COLORS operations use the selected DC palette', () => {
     const palette = createPalette([0x000000FF, 0x0000FF00]); // red, green
     const surface = makeSurface32(2, 1);
-    wat.test_call_SelectPalette(surface.hdc, palette);
+    wat.test_call_SelectPalette(surface.hdc, palette, 0);
     const bmi = makeBmi(2, -1, 8, [0, 1], 1);
     const bits = wat.guest_alloc(4) >>> 0;
     bytes.set([0, 1, 0, 0], wa(bits));
@@ -232,8 +235,8 @@ const RegionMap = require('../lib/region-map.generated.js');
     const brush = wat.test_call_CreateDIBPatternBrushPt(packed, 1) >>> 0;
     const dcA = wat.test_call_CreateCompatibleDC(0) >>> 0;
     const dcB = wat.test_call_CreateCompatibleDC(0) >>> 0;
-    wat.test_call_SelectPalette(dcA, paletteA);
-    wat.test_call_SelectPalette(dcB, paletteB);
+    wat.test_call_SelectPalette(dcA, paletteA, 0);
+    wat.test_call_SelectPalette(dcB, paletteB, 0);
     assert.strictEqual(wat.test_gdi_brush_sample(dcA, brush, 0, 0) >>> 0, 0x000000FF);
     assert.strictEqual(wat.test_gdi_brush_sample(dcA, brush, 1, 0) >>> 0, 0x0000FF00);
     assert.strictEqual(wat.test_gdi_brush_sample(dcB, brush, 0, 0) >>> 0, 0x00FF0000);
@@ -243,12 +246,12 @@ const RegionMap = require('../lib/region-map.generated.js');
   check('GetDIBits emits WORD logical-palette indexes for DIB_PAL_COLORS', () => {
     const sourceBmi = makeBmi(2, -1, 8, [0x000000FF, 0x0000FF00]);
     const sourceOut = wat.guest_alloc(4) >>> 0;
-    const bitmap = wat.test_call_CreateDIBSection(0, sourceBmi, sourceOut) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, sourceBmi, 0, sourceOut, 0, 0) >>> 0;
     const storage = wat.test_gdi_bitmap_storage(bitmap) >>> 0;
     bytes.set([0, 1, 0, 0], storage);
     const palette = createPalette([0x000000FF, 0x0000FF00]);
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
-    wat.test_call_SelectPalette(hdc, palette);
+    wat.test_call_SelectPalette(hdc, palette, 0);
     const outBmi = makeBmi(2, -1, 8, [0, 0], 1);
     const outBits = wat.guest_alloc(4) >>> 0;
     assert.strictEqual(wat.test_gdi_get_dibits(
@@ -264,6 +267,21 @@ const RegionMap = require('../lib/region-map.generated.js');
     assert.strictEqual(wat.test_call_GetPaletteEntries(palette, 0, 0, 0), 256);
     assert.strictEqual(readEntries(palette, 0, 1).values[0], 0);
     assert.strictEqual(readEntries(palette, 215, 1).values[0], 0x00FFFFFF);
+  });
+
+  check('GetObject on a palette answers its WORD entry count', () => {
+    // MFC's CPalette::GetEntryCount is GetObject(hpal, sizeof(WORD), &n).
+    // Answering 0 left Monster Truck Madness 2 remapping its shell bitmaps
+    // against an empty palette, which drew them in garbage (pink) colours.
+    const palette = createPalette([0x000000FF, 0x0000FF00, 0x00FF0000]);
+    const out = wat.guest_alloc(4) >>> 0;
+    wat.guest_write32(out, 0xAAAAAAAA);
+    assert.strictEqual(wat.test_call_GetObjectA(palette, 2, out), 2);
+    assert.strictEqual(wat.guest_read32(out) >>> 0, 0xAAAA0003, 'one WORD written');
+    assert.strictEqual(wat.test_call_GetObjectA(palette, 0, 0), 2, 'NULL buffer asks for the size');
+    assert.strictEqual(wat.test_call_GetObjectA(palette, 1, out), 0, 'a buffer too small for the WORD');
+    assert.strictEqual(wat.test_call_GetObjectA(0x3001F, 2, out), 2);
+    assert.strictEqual(wat.guest_read32(out) & 0xFFFF, 20, 'DEFAULT_PALETTE has the 20 static colours');
   });
 
   console.log(`\n${passed}/${passed} checks passed`);

@@ -158,11 +158,13 @@ function writeFloat(wat, addr, value) {
   assert(device, 'device was not created');
   const rtDib = wat.test_v3vb_dib(rt) >>> 0;
 
-  wat.guest_write32(vpDesc, 80);
+  wat.guest_write32(vpDesc, 44); // sizeof(D3DVIEWPORT)
   wat.guest_write32(vpDesc + 4, 0);
   wat.guest_write32(vpDesc + 8, 0);
   wat.guest_write32(vpDesc + 12, RT);
   wat.guest_write32(vpDesc + 16, RT);
+  writeFloat(wat, vpDesc + 20, RT / 2);
+  writeFloat(wat, vpDesc + 24, RT / 2);
   assert(wat.test_v3vb_viewport(device, vpDesc), 'viewport was not created');
 
   // D3DVERTEXBUFFERDESC: dwSize, dwCaps, dwFVF, dwNumVertices.

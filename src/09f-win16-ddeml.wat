@@ -54,6 +54,20 @@
     (i32.add (call $win16_dde_base)
              (i32.add (i32.const 0x9140) (i32.mul (local.get $i) (i32.const 4)))))
 
+  ;; Is any instance offering a service -- Hearts' dealer at its table? The
+  ;; shell asks this to mark a room hosting (hostProbe protocol 'serving').
+  ;; Asking over the wire instead would reach the dealer's XTYP_CONNECT
+  ;; callback, which is Hearts deciding whether to seat a player.
+  (func (export "dde_serving") (result i32)
+    (local $i i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 8)))
+      (if (i32.load (call $win16_dde_service_slot (local.get $i)))
+        (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   ;; 8 conversations of {used, inst, peer_tag, peer_conv, is_server, topic}.
   ;; The topic is kept because a later transaction on this conversation has to
   ;; tell the application which one it is about: XTYP_REQUEST hands the callback
@@ -265,7 +279,8 @@
     (i32.add (call $win16_dde_base)
              (i32.add (i32.const 0xD300) (i32.mul (local.get $i) (i32.const 16)))))
 
-  (global $WIN16_DDE_CB i32 (i32.const 0xFF80))
+  ;; 0xFF80 belongs to WIN16_CONT_CREATE_SIZE; both use WIN16_THUNK_SEL.
+  (global $WIN16_DDE_CB i32 (i32.const 0xFF84))
   (global $win16_dde_cb_ret (mut i32) (i32.const 0))    ;; far return of the pump call
   (global $win16_dde_cb_msg (mut i32) (i32.const 0))    ;; the MSG it was filling
   (global $win16_dde_cb_item (mut i32) (i32.const -1))  ;; question being asked
@@ -328,6 +343,9 @@
       (local.get $conv) (local.get $hsz1) (local.get $hsz2) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0)))
 
+  ;; Consumes hdata: accepted callbacks release it when they finish; a full
+  ;; queue releases it here. Non-data notifications pass zero. POKE, EXECUTE
+  ;; and ADVDATA transfer freshly allocated blocks, never borrowed app handles.
   (func $win16_dde_ask_push_data (param $type i32) (param $inst i32) (param $conv i32)
                                  (param $hsz1 i32) (param $hsz2 i32) (param $hdata i32)
                                  (param $fmt i32) (param $dw1 i32) (param $dw2 i32)
@@ -398,6 +416,7 @@
           (return (i32.const 1))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
+    (call $win16_dde_data_free (local.get $hdata))
     (i32.const 0))
 
   ;; The oldest unanswered question whose instance has a callback to ask, or -1.
@@ -814,15 +833,74 @@
     (call $host_net_frame_send (local.get $wa)
       (i32.add (global.get $DDE_HDR) (local.get $len))))
 
+  ;; Bytes through the first NUL, or zero if the received extent has no NUL.
+  ;; Unlike str_len, this cannot accept a terminator in stale receive storage.
+  (func $win16_dde_frame_string_end (param $wa i32) (param $n i32) (result i32)
+    (local $i i32)
+    (block $missing (loop $scan
+      (br_if $missing (i32.ge_u (local.get $i) (local.get $n)))
+      (if (i32.eqz (i32.load8_u (i32.add (local.get $wa) (local.get $i))))
+        (then (return (i32.add (local.get $i) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Validate the private room protocol before any allocation or state change.
+  ;; n is the received byte count, not the capacity of the reusable buffer.
+  (func $win16_dde_frame_valid (param $wa i32) (param $n i32) (result i32)
+    (local $size i32) (local $len i32) (local $type i32) (local $end i32)
+    (local.set $size (i32.shl (memory.size) (i32.const 16)))
+    (if (i32.gt_u (local.get $wa) (local.get $size)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $n) (i32.sub (local.get $size) (local.get $wa)))
+      (then (return (i32.const 0))))
+    (if (i32.lt_u (local.get $n) (global.get $DDE_HDR)) (then (return (i32.const 0))))
+    (if (i32.ne (i32.load (local.get $wa)) (global.get $DDE_MAGIC))
+      (then (return (i32.const 0))))
+    (local.set $len (i32.load offset=20 (local.get $wa)))
+    (if (i32.or (i32.gt_u (local.get $len) (global.get $DDE_MAX_PAYLOAD))
+                 (i32.gt_u (local.get $len) (i32.sub (local.get $n) (global.get $DDE_HDR))))
+      (then (return (i32.const 0))))
+    (local.set $type (i32.load offset=4 (local.get $wa)))
+    (if (i32.or (i32.lt_u (local.get $type) (i32.const 1))
+                 (i32.gt_u (local.get $type) (i32.const 10)))
+      (then (return (i32.const 0))))
+    (if (i32.eq (local.get $type) (i32.const 9))
+      (then (return (i32.ge_u (local.get $len) (i32.const 4)))))
+    ;; Connect has two names. Request/POKE/ADVSTART/ADVDATA have one;
+    ;; EXECUTE has a command string, with no 128-byte name-reader limit.
+    (if (i32.or (i32.eq (local.get $type) (i32.const 1))
+        (i32.or (i32.eq (local.get $type) (i32.const 4))
+        (i32.or (i32.eq (local.get $type) (i32.const 6))
+        (i32.or (i32.eq (local.get $type) (i32.const 7))
+        (i32.or (i32.eq (local.get $type) (i32.const 8))
+                (i32.eq (local.get $type) (i32.const 10)))))))
+      (then
+        (local.set $wa (i32.add (local.get $wa) (global.get $DDE_HDR)))
+        (local.set $end (call $win16_dde_frame_string_end (local.get $wa) (local.get $len)))
+        (if (i32.eqz (local.get $end)) (then (return (i32.const 0))))
+        (if (i32.eq (local.get $type) (i32.const 7)) (then (return (i32.const 1))))
+        (if (i32.gt_u (local.get $end) (i32.const 129)) (then (return (i32.const 0))))
+        (if (i32.eq (local.get $type) (i32.const 1))
+          (then
+            (local.set $end (call $win16_dde_frame_string_end
+              (i32.add (local.get $wa) (local.get $end))
+              (i32.sub (local.get $len) (local.get $end))))
+            (return (i32.and (i32.ne (local.get $end) (i32.const 0))
+                             (i32.le_u (local.get $end) (i32.const 129))))))))
+    (i32.const 1))
+
   ;; Apply one inbound DDE frame. Always consumes it: unlike a socket frame
   ;; there is no per-connection ring that can be full, so nothing here can
   ;; ask for the frame to be left on the wire.
   (func $win16_dde_deliver (param $wa i32) (param $n i32)
     (local $type i32)
+    (local $hdata i32)
+    (local $item i32)
     (local $tag i32) (local $src_conv i32) (local $dst_conv i32)
     (local $i i32) (local $slot i32) (local $conv i32) (local $svc i32)
     (local $want i32) (local $wild i32) (local $topic_wa i32)
-    (if (i32.lt_u (local.get $n) (global.get $DDE_HDR)) (then (return)))
+    (if (i32.eqz (call $win16_dde_frame_valid (local.get $wa) (local.get $n)))
+      (then (return)))
     (local.set $type     (i32.load offset=4  (local.get $wa)))
     (local.set $tag      (i32.load offset=8  (local.get $wa)))
     (local.set $src_conv (i32.load offset=12 (local.get $wa)))
@@ -972,8 +1050,22 @@
         ;; A poke and an advise start name an item and then, for a poke, carry
         ;; its bytes after it. An execute carries only the command string.
         (local.set $want (i32.add (local.get $wa) (global.get $DDE_HDR)))
-        (local.set $i (i32.add (call $win16_dde_str_len (local.get $want))
-                               (i32.const 1)))
+        ;; EXECUTE carries the command in hdata, not a string handle. Its
+        ;; command has no item-name prefix and hsz2 is unused.
+        (if (i32.eq (local.get $type) (i32.const 7))
+          (then
+            (local.set $hdata (call $win16_dde_data_take
+              (local.get $want) (i32.load offset=20 (local.get $wa)))))
+          (else
+            (local.set $item (call $win16_dde_hsz_intern_wa (local.get $want)))
+            (local.set $i (i32.add (call $win16_dde_str_len (local.get $want))
+                                   (i32.const 1)))
+            ;; Allocation must be conditional, not an eager select operand.
+            (if (i32.eq (local.get $type) (i32.const 6))
+              (then
+                (local.set $hdata (call $win16_dde_data_take
+                  (i32.add (local.get $want) (local.get $i))
+                  (i32.sub (i32.load offset=20 (local.get $wa)) (local.get $i))))))))
         (drop (call $win16_dde_ask_push_data
           (select (global.get $XTYP_POKE)
             (select (global.get $XTYP_EXECUTE) (global.get $XTYP_ADVSTART)
@@ -981,13 +1073,8 @@
             (i32.eq (local.get $type) (i32.const 6)))
           (i32.load offset=4 (local.get $slot)) (local.get $conv)
           (i32.load offset=20 (local.get $slot))
-          (call $win16_dde_hsz_intern_wa (local.get $want))
-          (select
-            (call $win16_dde_data_take
-              (i32.add (local.get $want) (local.get $i))
-              (i32.sub (i32.load offset=20 (local.get $wa)) (local.get $i)))
-            (i32.const 0)
-            (i32.eq (local.get $type) (i32.const 6)))
+          (local.get $item)
+          (local.get $hdata)
           (i32.load offset=24 (local.get $wa)) (i32.const 0) (i32.const 0)))
         (return)))
 
@@ -1158,19 +1245,14 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0x4007))            ;; DMLERR_LOW_MEMORY
         (call $win16_api_return (i32.const 16))
         (return)))
-    ;; A monitor is a DDE spy: it serves nothing and expects to be told about
-    ;; every transaction in the system through XTYP_MONITOR. None of that is
-    ;; delivered here, and an instance that registered happily and then saw
-    ;; nothing would be the worst of both — a debugging tool silently
-    ;; reporting that nothing is happening. Refusing outright is the honest
-    ;; answer, and DMLERR_DLL_USAGE is the one Windows uses for a class this
-    ;; DLL will not serve.
-    (if (i32.and (call $win16_arg32 (i32.const 2)) (global.get $APPCLASS_MONITOR))
-      (then
-        (call $win16_dde_set_error (i32.const 0x4004))   ;; DMLERR_DLL_USAGE
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0x4004))
-        (call $win16_api_return (i32.const 16))
-        (return)))
+    ;; APPCLASS_MONITOR (bit 0) is accepted, as Windows' DDEML accepts it.
+    ;; Sierra's Win 3.x SETUP passes afCmd = 0xFFFFFFFF -- every flag at once,
+    ;; monitor included -- treats any non-zero answer as fatal, and then goes
+    ;; on to talk to Program Manager as an ordinary client; refusing the class
+    ;; with DMLERR_DLL_USAGE stopped Betrayal in Antara's installer at "System
+    ;; Error: DdeInitialize returned 4004". What a monitor is promised beyond
+    ;; that, an XTYP_MONITOR callback for every transaction in the system, is
+    ;; not delivered here; the afCmd kept at +8 says it was asked for.
     (local.set $slot (call $win16_dde_inst (local.get $i)))
     (i32.store (local.get $slot) (i32.const 1))
     (global.set $win16_dde_users
@@ -1247,6 +1329,13 @@
                      (i32.sub (local.get $inst) (i32.const 1)))
           (select (i32.const 0) (local.get $hsz)
                   (i32.eq (local.get $cmd) (i32.const 2))))))
+    ;; Registering a service is Hearts' dealer taking its seat: the first
+    ;; moment it needs the room, the way socket() is for a Winsock game. It
+    ;; is asked without waiting (why 6, src/01-header.wat): a dealer has no
+    ;; answer to wait for, and the room it opens is the one players find.
+    (if (i32.and (i32.ne (local.get $hsz) (i32.const 0))
+                 (i32.ne (i32.and (local.get $cmd) (i32.const 1)) (i32.const 0)))
+      (then (drop (call $host_net_link_open (i32.const 6)))))
     (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_dde_set_error (i32.const 0))
@@ -1336,6 +1425,23 @@
     ;; has no way to tell which of its games the data belongs to.
     (i32.store offset=20 (call $win16_dde_conv_slot
       (i32.sub (local.get $conv) (i32.const 1))) (local.get $topic))
+    ;; A connect is a player looking for a dealer: the moment it needs the
+    ;; room (why 7). A host still asking the person which room answers 0, and
+    ;; the request waits in the pending slot (+60 unsent, +64 service, +68
+    ;; topic) for $win16_dde_pump_step to send once there is a room to hear it.
+    (i32.store offset=64 (local.get $pend) (local.get $svc))
+    (i32.store offset=68 (local.get $pend) (local.get $topic))
+    (i32.store offset=60 (local.get $pend) (i32.const 1))
+    (if (call $host_net_link_open (i32.const 7))
+      (then
+        (i32.store offset=60 (local.get $pend) (i32.const 0))
+        (call $win16_dde_send_connect (local.get $conv) (local.get $svc) (local.get $topic))))
+
+    (call $win16_dde_park (i32.const 16)))
+
+  ;; A connect request on the wire: the service and topic names.
+  (func $win16_dde_send_connect (param $conv i32) (param $svc i32) (param $topic i32)
+    (local $wa i32) (local $len i32)
     (local.set $wa (call $win16_dde_frame_wa))
     (if (local.get $wa)
       (then
@@ -1344,9 +1450,7 @@
         (local.set $len (call $win16_dde_put_hsz
           (local.get $wa) (local.get $len) (local.get $topic)))
         (drop (call $win16_dde_emit (i32.const 1) (local.get $conv) (i32.const 0)
-          (i32.sub (local.get $len) (global.get $DDE_HDR))))))
-
-    (call $win16_dde_park (i32.const 16)))
+          (i32.sub (local.get $len) (global.get $DDE_HDR)))))))
 
   ;; Take the call apart the way the modal message box does: remember the far
   ;; return, drop the whole frame, and park EIP on a slot the run loop will
@@ -1397,6 +1501,21 @@
     (local.set $pend (call $win16_dde_pending_slot))
     (call $win16_dde_pump)
     (local.set $conv (i32.load offset=8 (local.get $pend)))
+    ;; A connect still waiting for the room: the person is choosing one, and
+    ;; that is not the far side failing to answer, so the clock does not run.
+    (if (i32.and
+          (i32.eq (i32.load offset=16 (local.get $pend)) (global.get $DDE_WAIT_CONNECT))
+          (i32.ne (i32.load offset=60 (local.get $pend)) (i32.const 0)))
+      (then
+        (i32.store offset=4 (local.get $pend) (call $host_real_time_ms))
+        (if (call $host_net_link_open (i32.const 7))
+          (then
+            (i32.store offset=60 (local.get $pend) (i32.const 0))
+            (call $win16_dde_send_connect (local.get $conv)
+              (i32.load offset=64 (local.get $pend)) (i32.load offset=68 (local.get $pend)))))
+        (global.set $yield_reason (i32.const 8))
+        (global.set $yield_flag (i32.const 1))
+        (return (i32.const 1))))
     (if (i32.load offset=12 (local.get $pend))
       (then
         (i32.store (local.get $pend) (i32.const 0))
@@ -1484,16 +1603,9 @@
   ;;   HSZ hszItem, UINT wFmt, UINT wType, DWORD dwTimeout, LPDWORD pdwResult)
   ;;   -> HDDEDATA in DX:AX.
   ;;
-  ;; Nothing carries a transaction yet — that needs the server's own callback,
-  ;; since the data being asked for lives in the application and nowhere else.
-  ;;
-  ;; Which error it fails with is not a detail. Now that a conversation can
-  ;; really be established, answering DMLERR_NO_CONV_ESTABLISHED on a live
-  ;; conversation would be the emulator telling the app something untrue about
-  ;; its own state. A live conversation whose transaction nobody served is
-  ;; DMLERR_NOTPROCESSED, which is exactly what a server that ignores the
-  ;; transaction produces on Windows; only a handle naming no conversation
-  ;; gets the other error.
+  ;; Transactions are queued across the room for the server's callback.
+  ;; A rejected transaction and a nonexistent conversation are different:
+  ;; only the latter gets DMLERR_NO_CONV_ESTABLISHED.
   (func $win16_DdeClientTransaction
     (local $result i32) (local $conv i32) (local $live i32) (local $wtype i32)
     (local $item i32) (local $pend i32) (local $wa i32) (local $len i32)
@@ -1533,6 +1645,18 @@
         (call $win16_api_return (i32.const 28))
         (return)))
 
+    ;; Do not truncate an EXECUTE command into a different command. The wire
+    ;; currently has one bounded payload; larger commands (including the
+    ;; not-yet-supported cbData=-1 handle form) cannot be transported here.
+    (if (i32.and (i32.eq (local.get $frame) (i32.const 7))
+                 (i32.gt_u (call $win16_arg32 (i32.const 10)) (global.get $DDE_MAX_PAYLOAD)))
+      (then
+        (call $win16_dde_set_error (i32.const 0x4007)) ;; DMLERR_LOW_MEMORY
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (call $win16_api_return (i32.const 28))
+        (return)))
+
     ;; TIMEOUT_ASYNC: start it and get out of the way. The caller is told the
     ;; transaction id and carries on; the answer reaches its callback later as
     ;; XTYP_XACT_COMPLETE. Blocking such a caller instead is not a slower
@@ -1569,10 +1693,12 @@
           (select (call $win16_far_to_guest
                     (call $win16_arg16 (i32.const 13)) (call $win16_arg16 (i32.const 12)))
                   (i32.const 0)
-                  (i32.eq (local.get $frame) (i32.const 6))))
+                  (i32.or (i32.eq (local.get $frame) (i32.const 6))
+                          (i32.eq (local.get $frame) (i32.const 7)))))
         (i32.store offset=44 (local.get $pend)
           (select (call $win16_arg32 (i32.const 10)) (i32.const 0)
-                  (i32.eq (local.get $frame) (i32.const 6))))
+                  (i32.or (i32.eq (local.get $frame) (i32.const 6))
+                          (i32.eq (local.get $frame) (i32.const 7)))))
         (i32.store offset=52 (local.get $pend) (call $win16_arg16 (i32.const 5)))
         (i32.store offset=56 (local.get $pend) (global.get $win16_dde_xid))
         (call $win16_dde_send_xact (local.get $pend))
@@ -1622,10 +1748,12 @@
       (select (call $win16_far_to_guest
                 (call $win16_arg16 (i32.const 13)) (call $win16_arg16 (i32.const 12)))
               (i32.const 0)
-              (i32.eq (local.get $frame) (i32.const 6))))
+              (i32.or (i32.eq (local.get $frame) (i32.const 6))
+                      (i32.eq (local.get $frame) (i32.const 7)))))
     (i32.store offset=44 (local.get $pend)
       (select (call $win16_arg32 (i32.const 10)) (i32.const 0)
-              (i32.eq (local.get $frame) (i32.const 6))))
+              (i32.or (i32.eq (local.get $frame) (i32.const 6))
+                      (i32.eq (local.get $frame) (i32.const 7)))))
     (i32.store offset=48 (local.get $pend) (call $host_real_time_ms))
     ;; The caller's wFmt, kept with everything else needed to send this again.
     (i32.store offset=52 (local.get $pend) (call $win16_arg16 (i32.const 5)))
@@ -1642,11 +1770,15 @@
     (local.set $wa (call $win16_dde_frame_wa))
     (if (local.get $wa)
       (then
-        (local.set $len (call $win16_dde_put_hsz
-          (local.get $wa) (global.get $DDE_HDR) (i32.load offset=36 (local.get $pend))))
+        (local.set $len (global.get $DDE_HDR))
+        (if (i32.ne (local.get $frame) (i32.const 7))
+          (then (local.set $len (call $win16_dde_put_hsz
+            (local.get $wa) (local.get $len) (i32.load offset=36 (local.get $pend))))))
         ;; A poke carries the caller's bytes after the item name; a request or
-        ;; an advise start names the item and nothing else.
-        (if (i32.eq (local.get $frame) (i32.const 6))
+        ;; an advise start names the item and nothing else. EXECUTE carries
+        ;; only command bytes, including the caller-supplied terminator.
+        (if (i32.or (i32.eq (local.get $frame) (i32.const 6))
+                    (i32.eq (local.get $frame) (i32.const 7)))
           (then
             (local.set $cb (i32.load offset=44 (local.get $pend)))
             (if (i32.gt_u (i32.add (local.get $len) (local.get $cb))

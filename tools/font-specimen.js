@@ -100,7 +100,7 @@ try { ({ PNG } = require('pngjs')); } catch (_) {
     wat.guest_write16(bmi + 12, 1);
     wat.guest_write16(bmi + 14, 32);
     const bitsOut = allocZero(4);
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     wat.test_call_SelectObject(hdc, bitmap);
     wat.test_call_PatBlt(hdc, 0, 0, width, height, 0x00FF0062); // WHITENESS
@@ -119,7 +119,7 @@ try { ({ PNG } = require('pngjs')); } catch (_) {
 
     if (face) {
       const font = wat.test_call_CreateFontW(
-        -size, weight, italic, allocFaceW(face)) >>> 0;
+        -size, 0, 0, 0, weight, italic, 0, 0, 0, 0, 0, 0, 0, allocFaceW(face)) >>> 0;
       wat.test_call_SelectObject(hdc, font);
       wat.test_call_TextOutA(hdc, LABEL_WIDTH, 2, allocStr(text), text.length);
     }

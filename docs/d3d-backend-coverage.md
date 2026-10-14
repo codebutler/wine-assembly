@@ -177,6 +177,33 @@ about its own arms; it is measuring something narrower than its table reads as.
    1.59% at tol=32 against a bit-identical null band.** Both arms show the Wild
    Demo playfield, so this is a fidelity difference, not a coverage one.
 
+## Addendum 2026-09-22: three "blocked/blank" rows are stale
+
+The **software** arm only (no `--headless-gl`), 120000 batches, `--dx-surfaces`
+to pick the surface, after `8b227b5c` made execute-buffer triangles back-face
+culled. The GPU arm of each is *not* re-measured here.
+
+| app | this doc's row | software arm today |
+|---|---|---|
+| `dx_flip3dtl` | blank, black + yellow text overlay | **draws** — the textured flipping Win95 95/blue panels, HUD reads `FPS 00 Frame 16889 (HAL)` |
+| `dx_globe` | blocked, `D3DRMERR_BADFILE` modal then STUCK | **draws** — lit textured sphere, no modal |
+| `dx_viewer` | blocked, `D3DRMERR_BADFILE` modal then STUCK | **draws** — two lit quads, no modal |
+
+The `.x` loader gap those two were blocked on has since been closed (see
+`docs/re-notes/dx-sdk-d3drm-samples.md`), so item 3 under "What the sweep got
+wrong" is itself now out of date.
+
+`dx_flip3dtl` is the interesting one, because this doc had already narrowed it
+correctly — "the executor *is* drawing, so the loss is between the render target
+and the primary". It was neither: the triangles reached the primary all along
+and were **black**, because a back face shades to black by construction and
+nothing culled it. A one-colour frame and a two-colour frame both read as "no
+geometry arrives", which is exactly the blind spot item 1 warns about.
+
+Read `colors=` from `--dx-surfaces` with care on these: it samples a fixed
+1850-point grid over the whole surface, so `dx_globe`'s healthy lit sphere
+reports `colors=29 nonZero=38/1850` purely because the sphere is small.
+
 ## Blocked, and why
 
 - **dx_globe, dx_viewer** — `D3DRMERR_BADFILE` on `sphere3.x` / `camera.x`.
@@ -213,3 +240,45 @@ about its own arms; it is measuring something narrower than its table reads as.
 - Diff a textured 3D frame at `--tolerance=32` and always alongside that app's
   own null band. At tolerance 0, MW3's software arm differs from *itself* by
   33%.
+
+## Addendum 2026-09-22 (late): Pawn plays on software; the GL rows
+
+- **pawn on `--d3d9-renderer=software` no longer crashes.** The repro above
+  (same `--input` route, `--max-batches=20000`) makes the e2-e4 drag, the
+  engine answers e7-e5, and both moves carry the yellow last-move outline —
+  the same picture the GPU arm gave. A capture at batch 8800 can catch the
+  reply mid-animation, with a black block over e7/e6; by 12000 it has landed.
+  The row is **gameplay / gameplay**.
+- The OpenGL half now has a software arm too (`--gl-renderer=software`,
+  `src/09a8g-gl-raster.wat`). Gameplay on it, measured this date: Half-Life
+  Uplink (corridor), Quake II `demo1`, SimGolf (course + clubhouse), plus the
+  Warcraft III menu and PTCT's scene. Commands are in each app's re-notes.
+- UT2004 on the software D3D9 arm could not be judged on this laptop: at load
+  14 it managed 154k batches in 330s and had drawn nothing yet. The splash
+  result in `docs/re-notes/unreal-family-demos.md` came from the quiet bench box.
+
+## Addendum 2026-09-23: the last three "blank" SDK rows
+
+Each was a separate D3DIM bug. None of them involved the render target or the
+primary, which is where the "Blocked, and why" list above had guessed.
+
+| app | cause | fix |
+|---|---|---|
+| `dx_twist` | `D3DOP_MATRIXMULTIPLY` names handles, so `dest` can also be a source. Twist accumulates `dest = dest * step`, and `$mat4_mul` stored rows while it was still reading them, so the rotation shrank each frame until the object was a one-pixel sliver | `ede28ab8` |
+| `dx_boids` | the same aliased multiply | `ede28ab8` |
+| `dx_tunnel` | (a) execute-buffer triangles crossing the eye plane were clipped in screen space, which turns the walls into stretched shards. (b) d3dapp releases any texture whose surface does not report `DDSCAPS_VIDEOMEMORY`, and an unplaced surface never reported it, so the walls drew untextured | (a) `bdd20a78`, homogeneous `$d3dim_clip_tl_polygon`. (b) a `CreateSurface` caps change in `09a8`, landing after the `gdi_native_*` rename |
+
+`test/test-d3dim-sdk-twist-tunnel.js` guards all three on the composited canvas.
+It checks the lit-pixel count for Twist, and the colour count plus the yellow
+hazard-stripe count for Tunnel. Measured on Tunnel: textured and clipped gives
+95 colours / 5393 yellow, screen-space shards 20 / 99, texture dropped 5 / 0.
+The execute-buffer path is WAT and shared by both arms, so each fix applies to
+software and GPU alike.
+
+Also fixed on the software D3D9 arm (`321a6193`): a lit draw whose declaration
+has no `NORMAL` was refused with "lighting requires one FLOAT3/4 NORMAL".
+D3D9, and our WebGL arm, read the missing normal as zero, so only ambient and
+emissive remain. Morrowind issued 41,194 such draws on its route, and its
+canvas stayed on the first loading frame. With the fix it draws the loading
+screens through "Loading Interior". The world was not re-measured, because the
+route runs for many minutes.

@@ -5,15 +5,16 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
-const http = require('http');
+const { startStaticServer } = require('./static-server');
 const path = require('path');
 const puppeteer = require('puppeteer');
 const { PNG } = require('pngjs');
 
 const ROOT = path.join(__dirname, '..');
+// The June 1997 public demo, installed by tools/install-atomic-bomberman-demo.js.
 const GAME = path.join(ROOT, 'test/binaries/win98-games-a-d',
-  'Aotmic BOMBMAN demo-SW/BMANDEMO');
-const EXE = path.join(GAME, '_BOMB.EXE');
+  'Atomic Bomberman Demo-archive/installed');
+const EXE = path.join(GAME, 'BM95DEMO.EXE');
 const CHROME = process.env.CHROME ||
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const OUT = process.env.ATOMIC_BOMBERMAN_CAPTURE_DIR ||
@@ -24,44 +25,8 @@ function sha256(filename) {
   return crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
 }
 
-function mimeType(filename) {
-  if (filename.endsWith('.html')) return 'text/html';
-  if (filename.endsWith('.js')) return 'text/javascript';
-  if (filename.endsWith('.css')) return 'text/css';
-  if (filename.endsWith('.json')) return 'application/json';
-  if (filename.endsWith('.wasm')) return 'application/wasm';
-  if (filename.endsWith('.png')) return 'image/png';
-  return 'application/octet-stream';
-}
-
 function startServer() {
-  const root = fs.realpathSync(ROOT);
-  const server = http.createServer((req, res) => {
-    let pathname;
-    try { pathname = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname); }
-    catch (_) { res.writeHead(400); res.end('bad url'); return; }
-    if (pathname === '/') pathname = '/index.html';
-    const filename = path.normalize(path.join(root, pathname));
-    if (filename !== root && !filename.startsWith(root + path.sep)) {
-      res.writeHead(403); res.end('forbidden'); return;
-    }
-    fs.readFile(filename, (error, data) => {
-      if (error) {
-        res.writeHead(error.code === 'ENOENT' ? 404 : 500);
-        res.end(error.code || 'read error');
-        return;
-      }
-      res.writeHead(200, {
-        'Content-Type': mimeType(filename),
-        'Cache-Control': 'no-store',
-      });
-      res.end(data);
-    });
-  });
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
+  return startStaticServer({ root: ROOT });
 }
 
 function readFrame(filename) {
@@ -153,15 +118,11 @@ async function main() {
     return;
   }
   if (!fs.existsSync(EXE)) {
-    console.log('SKIP Atomic Bomberman gameplay: local A-D demo tree is absent');
+    console.log('SKIP Atomic Bomberman gameplay: the June demo is not installed (tools/install-atomic-bomberman-demo.js)');
     return;
   }
   assert.strictEqual(sha256(EXE),
-    '0ff14a352d6626660ceb66ea0e6743cd33c457e754cfd5705120bacae0530638');
-  assert.strictEqual(sha256(path.join(GAME, 'LEVELS.DAT')),
-    '7f647eb426f93799e190b5697bec20c81d350cc5cc23b0adc9a29e2d814ad796');
-  assert.strictEqual(sha256(path.join(GAME, 'README.BM')),
-    '8cf26bf5541592dae04769eb3e50a90b506214dd1941ab84b15f445faadf3433');
+    '6133d5aa74df524373501028548fa3e9b28798c118bfa379dc3ad3afba1eba71');
 
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
@@ -189,7 +150,7 @@ async function main() {
     await page.waitForFunction('typeof launchApp === "function"', { timeout: 60000 });
     await page.evaluate(async () => {
       stopAllApps();
-      document.getElementById('app-select').value = 'atomic_bomberman_demo';
+      document.getElementById('app-select').value = 'atomic_bomberman_june_demo';
       await launchApp();
     });
     await page.waitForFunction(

@@ -69,7 +69,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bitsOut = allocZero(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert(bitmap && hdc);
   wat.test_call_SelectObject(hdc, bitmap);
@@ -77,7 +77,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   const face = allocZero(32);
   [...'Compat'].forEach((character, index) =>
     wat.guest_write16(face + index * 2, character.charCodeAt(0)));
-  const font = wat.test_call_CreateFontW(-8, 400, 0, face) >>> 0;
+  const font = wat.test_call_CreateFontW(-8, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, face) >>> 0;
   assert(font);
   wat.test_call_SelectObject(hdc, font);
   assert(wat.test_gdi_bitmap_font_selected(hdc));
@@ -181,7 +181,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   clear();
   const beforePairedPath = bytes.slice(wa(dibBits), wa(dibBits) + width * height * 4);
   assert.strictEqual(wat.test_call_BeginPath(hdc), 1);
-  assert.strictEqual(wat.test_call_ExtTextOutAWithDx(
+  assert.strictEqual(wat.test_call_ExtTextOutA(
     hdc, 0, 0, 0x2000, 0, textAA, 2, paired), 1);
   assert.strictEqual(wat.test_call_EndPath(hdc), 1);
   assert.deepStrictEqual(bytes.slice(wa(dibBits), wa(dibBits) + width * height * 4),
@@ -192,7 +192,7 @@ const RegionMap = require('../lib/region-map.generated.js');
     'the second glyph path must honor its paired X/Y advance');
   assert.strictEqual(wat.test_call_AbortPath(hdc), 1);
   clear();
-  assert.strictEqual(wat.test_call_ExtTextOutAWithDx(
+  assert.strictEqual(wat.test_call_ExtTextOutA(
     hdc, 0, 0, 0x2000, 0, textAA, 2, paired), 1);
   assert.strictEqual(pixel(3, 3), 0, 'ETO_PDY must render the first glyph at the origin');
   assert.strictEqual(pixel(15, 3), 0xffffff, 'ETO_PDY must not leave the second glyph on the first baseline');
@@ -201,7 +201,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   wat.test_gdi_dc_set_field(hdc, 32, 1, 0); // TA_LEFT | TA_TOP | TA_UPDATECP
   wat.test_gdi_current_pos_set(hdc, 4, 20);
   clear();
-  assert.strictEqual(wat.test_call_ExtTextOutAWithDx(
+  assert.strictEqual(wat.test_call_ExtTextOutA(
     hdc, 70, 40, 0x2000, 0, textAA, 2, paired), 1);
   assert.strictEqual(pixel(5, 21), 0, 'TA_UPDATECP must ignore the explicit ExtTextOut origin');
   assert.strictEqual(pixel(71, 41), 0xffffff);
@@ -213,7 +213,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   const arialFace = allocZero(32);
   [...'Arial'].forEach((character, index) =>
     wat.guest_write16(arialFace + index * 2, character.charCodeAt(0)));
-  const scalable = wat.test_call_CreateFontW(-13, 400, 0, arialFace) >>> 0;
+  const scalable = wat.test_call_CreateFontW(-13, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, arialFace) >>> 0;
   assert(scalable);
   assert.notStrictEqual(wat.test_call_SelectObject(hdc, scalable) | 0, -1);
   // Arial used to resolve to nothing here and fall through to Canvas. It now
@@ -246,7 +246,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   clear();
   const beforeScalableDx = bytes.slice(wa(dibBits), wa(dibBits) + width * height * 4);
   assert.strictEqual(wat.test_call_BeginPath(hdc), 1);
-  assert.strictEqual(wat.test_call_ExtTextOutAWithDx(
+  assert.strictEqual(wat.test_call_ExtTextOutA(
     hdc, 2, 2, 0x2000, 0, textAA, 2, paired), 1);
   assert.strictEqual(wat.test_call_EndPath(hdc), 1);
   assert.deepStrictEqual(bytes.slice(wa(dibBits), wa(dibBits) + width * height * 4),
@@ -257,7 +257,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   assert.strictEqual(wat.test_call_AbortPath(hdc), 1);
 
   clear();
-  assert.strictEqual(wat.test_call_ExtTextOutAWithDx(
+  assert.strictEqual(wat.test_call_ExtTextOutA(
     hdc, 2, 2, 0x2000, 0, textAA, 2, paired), 1);
   const scalableDxPixels = [];
   for (let y = 0; y < 30; y++) {
@@ -331,7 +331,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   wat.test_gdi_dc_set_field(hdc, 32, 1, 0); // TA_LEFT | TA_TOP | TA_UPDATECP
   wat.test_gdi_current_pos_set(hdc, 4, 20);
   assert.strictEqual(wat.test_call_BeginPath(hdc), 1);
-  assert.strictEqual(wat.test_call_ExtTextOutAWithDx(
+  assert.strictEqual(wat.test_call_ExtTextOutA(
     hdc, 70, 40, 0x2000, 0, textAA, 2, paired), 1);
   assert.strictEqual(wat.test_call_EndPath(hdc), 1);
   assert.strictEqual(wat.test_gdi_dc_get_field(hdc, 12, 0), 28,

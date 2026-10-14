@@ -33,10 +33,14 @@ const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'test', 'output', 'win16-solitaire');
 const EXE = path.join(ROOT, 'test', 'binaries', 'win98-16bit', 'SOL.EXE');
 
-// The tableau as this deal lays it out. Column 1 holds a single face-up card at
-// the top left of the row; column 3's card sits three columns over.
+// The tableau as this deal lays it out. The shuffle follows the pinned guest
+// clock, so the deal moves when startup timing does; the current one is
+// AD AH 5D 6H 3S KH 3C (since Win16 ShowWindow sends the first WM_SIZE
+// synchronously). Column 1's ace of diamonds goes legally onto the first, empty
+// foundation; the double-click then flies column 2's ace of hearts to another.
 const COL1 = { x: 65, y: 200 };
-const COL3 = { x: 238, y: 212 };
+const FOUNDATION1 = { x: 318, y: 115 };
+const COL2 = { x: 155, y: 215 };
 
 let pass = 0;
 function check(name, cond, detail) {
@@ -102,8 +106,8 @@ function main() {
   // have anywhere to go for LineDDA to be called.
   const log2 = run(`7000:mousedown:${COL1.x}:${COL1.y},` +
     `7200:mousemove:120:205,7400:mousemove:180:210,` +
-    `7600:mousemove:${COL3.x}:${COL3.y},7800:mouseup:${COL3.x}:${COL3.y},` +
-    `11000:png:${moved},11500:dblclick:${COL3.x}:${COL3.y},` +
+    `7600:mousemove:${FOUNDATION1.x}:${FOUNDATION1.y},7800:mouseup:${FOUNDATION1.x}:${FOUNDATION1.y},` +
+    `11000:png:${moved},11500:dblclick:${COL2.x}:${COL2.y},` +
     `13500:png:${dbl}`, 14000);
   check('the drag did not crash', !/CRASH|UNIMPLEMENTED API/.test(log2));
   const after = columns(moved);

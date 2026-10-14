@@ -3,7 +3,37 @@
 Test binary provenance is recorded below; most fixtures come from publicly
 archived software on archive.org.
 
+## Need for Speed Windows demos
+
+Local candidate fixtures (original demo executables, no binary patches):
+
+| App | Archive | SHA-1 |
+| --- | --- | --- |
+| `nfs2_demo` | [nfs2demo.exe](https://www.classicdosgames.com/files/games/electronicarts/nfs2demo.exe) | `3618d9c4070794e5cee4629a85c5e874e006db84` |
+| `nfs2se_glide_demo` | [nfs2sea.zip](https://www.classicdosgames.com/files/games/electronicarts/nfs2sea.zip), extracted to `build/nfs2se-demo` with manifest `build/nfs2se-browser.json` | |
+| `nfs3_demo` | [nfs03demo.zip](https://archive.org/download/need-for-speed-demo-coll-windows/nfs03demo.zip) | `c3f247d051cd347e2f0515d71d8e387f00a6f373` |
+
+Reproduce with `node tools/fetch-candidate-corpus.js --id=need-for-speed-2-demo`
+and `--id=need-for-speed-3-demo`. The manifest preserves the complete asset trees.
+NFS II is the original software/DirectDraw demo, not the Glide Special Edition.
+NFS III is the September 1998 final demo. Its `install.win` is reproduced from
+the original bundled InstallShield installer's output (English, local install);
+the recipe writes its relative data paths, CRLF lines, and DOS EOF byte.
+The demos' packaging grants no public redistribution right either way. Publishing
+them on the live site as EA's promotional demos is the owner's decision
+(2026-09-30); `tools/deploy-berrry.js` ships only the files each browser manifest
+names.
+
 ## Windows 98 Demo/Shareware Games A-D
+
+October 8, 2026: the original `Age of Wonders2 demo-SW.exe` is pinned at
+101,537,511 bytes, SHA-256
+`1244f0114965d011d1e28b97e207db15c902d124ebb25af8a6c97748beb73dc0`.
+Its unchanged ZIP payload (1,063 files, 197,002,538 bytes) is extracted by
+`tools/extract-age-of-wonders2-demo.js` into `Age of Wonders2 demo-SW/extracted/`.
+This is separate from Age of Wonders I; no installed state or redistribution
+grant is asserted. See `docs/re-notes/age-of-wonders2-demo.md` for hashes,
+registered launch, reviewed main menu, and the unqualified gameplay limit.
 
 **`win98-games-a-d/`** — complete A-through-D collection of Windows game
 demos and shareware, including both already-installed game trees and standalone
@@ -386,18 +416,50 @@ resolves every asset directory through its `Paths` values rather than through
 its own directory. Registered as the local candidate `simcity2000_demo`; it
 reaches gameplay (`node test/run.js --app=simcity2000_demo`).
 
-**Not redistributable.** `README.TXT` and `NOD.TXT` on the media are marketing
-copy — product description, Maxis support phone number, BBS, "Run Setup.exe" —
-and carry no redistribution grant of any kind. The compilation's own
-`LICENSE.TXT` (Nodtronics Pty Ltd) grants only a single-system license and
-clause 2.2 forbids separating component parts; 2.4 allows a whole-product
-transfer only when no copy is retained. Nothing there can grant rights to
-somebody else's game anyway. This is a promotional
-interactive demo of Maxis/EA property obtained from a third-party compilation
-CD, which is not an authoritative license source, so it does **not** qualify as
-freely-copyable shareware the way the StarCraft and Diablo demos do. It stays a
-localhost-only candidate: the installed tree is ignored by git and must not be
-committed, deployed to the live site, or rehosted.
+**Standalone source.** The same package circulated on its own as Maxis's
+demo: `https://archive.org/details/sc295dmo` ("Sim City 2000 interactive
+demo", 1996), `sc295dmo.zip` MD5 `bc54d11e15498c3b470faa1f78d11fc7`. Its
+setup files are byte-identical to the CD's `STRATEGY/SCITY2K/` copy (checked
+2026-09-24): `DATA.Z` `ed88a4f7a24782b6bbfd2a278ef98e2a`, `SETUP.EXE`
+`530160ba607047f14f2eee3bb1b62b96`, `_INST32I.EX_`
+`1c156bc4e7906137528934576b5286c2`, `SETUP.INS`
+`394d5c10ff254a421008431d4ef039ac`. So the installed tree is Maxis's
+distribution, not something only the compilation carries.
+
+**Terms and the publishing decision.** Neither package states redistribution
+terms either way: `README.TXT` is marketing copy with Maxis's support number
+and BBS. (The compilation's `LICENSE.TXT` covers the compilation, not Maxis's
+game.) The demo itself is built to be handed around to sell the full game: its
+own notice (`data/text_usa.dat`) reads "This is a demonstration copy of
+SimCity 2000. Many features of the game have been disabled including Loading,
+Saving, Scenarios, and Disasters. In addition, after 25 minutes, your city will
+be consumed by disasters and after 30 minutes, you will be returned to the
+startup menu. The real version of SimCity 2000 ... is available at your local
+software store or directly from Maxis". On 2026-09-24 the project owner
+decided to publish it on that footing, as a promotional demo, unmodified. The
+deploy ships exactly the files its manifest mounts; the installed tree is still
+ignored by git.
+
+## Moorhuhn (`candidates/moorhuhn/`)
+
+Source: `https://archive.org/details/moorhuhn_1__2_with_addins`, packages
+`MH1_Retail.7z` (SHA-1 `fa7c7fd33cbdfb1d91fb34fb5e0210b16ee308e5`) and
+`MH1_exe.7z` (SHA-1 `9e772e0d57210ca6c1744b4ce77dd8732f984976`), recorded in
+`test/candidate-corpus/manifest.json` and the directory's
+`.candidate-source.json`. The published copy is exactly two files, both dated
+2000-05-02: `Moorhuhn.exe` (282,624 bytes, MD5
+`fd2fc430dda49dac7b8a4a027cdd2f33`) and `MOORHUHN.DAT` (2,405,699 bytes, MD5
+`331b638f478917a3b766758ff18f2565`), the pair the registry's
+`.wine-assembly-browser.json` mounts.
+
+**Terms and the publishing decision.** Die Original Moorhuhn Jagd was made by
+Art Department/Phenomedia in 1999 as a Johnnie Walker promotion and given away
+free; it spread by being copied, which was the point of it. Its files state no
+redistribution terms either way. On 2026-09-28 the project owner decided to
+publish it on the desktop on that footing, unmodified. Only these two files
+ship; Moorhuhn 2, Winter-Edition, 3, Tennis, the puzzles, the Best Of extras and
+Gallinelle remain local-only candidates, and the files are still ignored by
+git.
 
 ## Candidate corpus (`candidates/`)
 
@@ -543,3 +605,36 @@ curl -fL -o /tmp/aardbei_ptct.zip \
   https://archive.scene.org/pub/demos/groups/aardbei/aardbei_ptct.zip
 unzip -j /tmp/aardbei_ptct.zip PTCT.exe -d binaries/demoscene/ptct
 ```
+
+## Free editions of Visual Basic and Delphi (32-bit)
+
+Vendor-sanctioned free editions, under `candidates/` (gitignored). Fetched 2026-09-22;
+SHA-1s match the Internet Archive metadata.
+
+| Dir | Edition | Source item / file | SHA-1 |
+|---|---|---|---|
+| `vb5-cce/` | VB 5.0 Control Creation Edition (free download, builds OCX only) | `vb5ccein` / `vb5ccein.exe` | `afaf3e9a0234f08e51fd234e10037c62c6b80f34` |
+| `vb6-working-model/cd/` | VB 6.0 Working Model (book CD, no EXE compile) | `visual-basic-6-working-model-edition` / `VB6_WME.zip` | `61cd4e43754ebb7137e287604644005ce611680d` |
+| `delphi6-personal/cd/` | Delphi 6 Personal, from Czech *Computer* 23/2001 cover CD | `computer200123cd` / `Computer_2001-23_cd.bin` | `94e0d3b6e236fdd3ebaa48221fb87668140b7c68` |
+| `delphi7-personal/cd/` | Delphi 7 Personal, from UK *PCW* Jan 2003 cover CD | `personal-computer-world-2003-01` / `PCWJAN03.iso` | `42ff4e29952141c77f6b827cdfc10237bd9d09e0` |
+
+Do **not** use `VB6_WME_TO_FULL.reg` from the same VB6 item — it converts the
+Working Model into the retail product. Both Delphi editions require a serial and
+authorization key from Borland's (defunct) free registration; neither disc prints one.
+
+The Delphi 6 disc is a raw MODE1/2352 image; convert and extract with:
+
+```bash
+node tools/cue-bin-to-iso.js downloads/Computer_2001-23_cd.cue
+7z x -o'test/binaries/candidates/delphi6-personal/cd' downloads/Computer_2001-23_cd.iso 'Delphi 6 Personal Edition'
+7z x -o'test/binaries/candidates/delphi7-personal/cd' downloads/PCWJAN03.iso software/delphi7personal
+unzip -d test/binaries/candidates/vb6-working-model/cd downloads/VB6_WME.zip
+```
+
+## Dungeons of Dredmor Steam beta (local only)
+
+Community-uploaded Windows Steam2 depot 98811 revision 8, dated 2011-12-27 by the uploader; not a verified demo or redistribution grant. [Archive item](https://archive.org/details/dungeons-of-dredmor-beta-98811-steam2-builds), [exact 147,086,215-byte package](https://archive.org/download/dungeons-of-dredmor-beta-98811-steam2-builds/98811_8.7z). SHA-1: 7b32f7689a7ab31e48fc253da435968c99455109; SHA-256: 191ac33d78863dbbe7ef62f0f30711ecaef6d3690d15a9a7623de99acecdcd9a. All 6,572 regular files were statically extracted; original EXE and Steam DLL remain unmodified. Fetch with --id=dungeons-of-dredmor; local experimental app dungeons_of_dredmor. Startup/gameplay/audio/FPS untested. [Detailed provenance](../../docs/re-notes/dungeons-of-dredmor.md).
+
+## Dungeons of Dredmor archived Steam release (separate local variant)
+
+Public-game depot98801 revision17 restored from [Archive.org Steam2 torrent](https://archive.org/download/steam2-dump/steam2.torrent), torrent SHA-256 d2ec7dc41b15995ec36d16a35e15bccd4694f7d50e5c0cfa4ef997fc17943fd8. Exact SHA-matched head blob catalog date2012-08-29.18blobs+16DATs verified;6270files/252942500bytes extracted. Original Windows EXE SHA-256 50260373b54d6451683b2f175c9e3ae7f773ea9f0814baaf48e7f42e953ce1fc. Separate candidate dungeons-of-dredmor-release and app dungeons_of_dredmor_release; beta98811 unchanged. Proprietary release, not demo or public deployment. [Full provenance](../../docs/re-notes/dungeons-of-dredmor-release.md).

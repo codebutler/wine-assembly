@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 
-// Blobby Volley between two browsers, introduced by the lobby and joined over
-// WebRTC -- the path two people on two devices take.
+// Blobby Volley between two browsers, introduced by the server list and
+// joined over WebRTC -- the path two people on two devices take.
 //
 //   node test/test-web-blobby-rtc.js [--timeout=420] [--headful] [--keep]
 //
 // test-web-blobby-lan.js is the same match on one tab's LoopbackSegment. This
 // one puts each player in its own browser context (its own cookie, so its own
-// signaling user), has one of them pick the other in the lobby, and plays over
-// the data channel lib/vlan-rtc.js sets up. A failure here alone is the RTC
-// wire's or the lobby's; one that also fails in the tab test is DirectPlay's.
+// signaling user): the host goes online and opens a session, the probe marks
+// the room serving, the guest opening the game picks it from the list at
+// launch and is walked into the session by lan.join.inGame, and they play
+// over the data channel lib/vlan-rtc.js sets up. A failure here alone is the RTC wire's
+// or the room's; one that also fails in the tab test is DirectPlay's.
 
 'use strict';
 
@@ -83,7 +85,7 @@ const HOST_SETUP = [
 
 const wireOf = () => {
   const w = runningApps[0] && runningApps[0].wine.vlanWire;
-  return w ? { sent: w.sentFrames, recv: w.recvFrames } : null;
+  return w ? { address: w.address, sent: w.sentFrames, recv: w.recvFrames } : null;
 };
 
 // The game's largest visible window, off its own back-canvas; `lit` is the
@@ -251,22 +253,19 @@ const blobsAt = (band) => {
       return { label, page, problems, cdp, ctx };
     };
 
+    // The guest opens the game only once the host is serving, which is the
+    // moment the list at launch has something to show.
     const host = await open('host');
-    const guest = await open('guest');
 
     const started = ({ page, label }) => H.until(page, `${label}: never booted`,
       () => runningApps.length > 0, null, MILESTONE_MS);
-    check('both browsers booted Blobby straight into the game',
-      !!(await started(host)) && !!(await started(guest)));
+    check('the host booted Blobby straight into the game', !!(await started(host)));
 
-    const lobbyUp = ({ page }) => page.evaluate(
-      () => document.querySelectorAll('.vln-lobby').length > 0);
-    check('neither browser was asked anything before the game needed the room',
-      !(await lobbyUp(host)) && !(await lobbyUp(guest)));
+    const cardUp = ({ page }) => page.evaluate(
+      () => !!document.getElementById('wine-lan-card'));
+    check('with nobody hosting, nothing was asked before the game needed the room',
+      !(await cardUp(host)));
 
-    // Each side walks its own copy into network play; that call is what opens
-    // the lobby, and it parks until the lobby answers.
-    //
     // Waiting a flat MENU_MS here is what made this test flaky: the key script
     // below walks the menu by position, so a DOWN that lands before the menu
     // is drawn is simply lost, the side never reaches NETZWERKSPIEL, its
@@ -288,8 +287,8 @@ const blobsAt = (band) => {
         + ` (${colours || 0} colours)`);
       return colours;
     };
-    check('both browsers reached the main menu before any key was sent',
-      !!(await menuUp(host)) && !!(await menuUp(guest)));
+    check('the host reached the main menu before any key was sent',
+      !!(await menuUp(host)));
     await H.sleep(MENU_MS);
     await snap(host, 'host-menu');
     // --host-setup walks EINSTELLUNGEN first and is now only for a profile
@@ -300,79 +299,62 @@ const blobsAt = (band) => {
       await keys(host.page, HOST_SETUP);
       await snap(host, 'host-settings');
     }
-    // NETZWERKSPIEL is one down from the top of an untouched main menu; ESC
-    // out of the settings screen instead leaves EINSTELLUNGEN selected, two up.
+
+    // ---- the host goes online, then hosts ---------------------------------
+    //
+    // SPIEL BEGINNEN! is the game's own DirectPlay Open to create, and a
+    // host is asked nothing: the page goes online and the share card offers
+    // the page link, so the card is the first observable proof that the key
+    // script landed where it was aimed. NETZWERKSPIEL is one down from the
+    // top of an untouched main menu; ESC out of the settings screen instead
+    // leaves EINSTELLUNGEN selected, two up.
     const toNetwork = flag('host-setup') ? [UP, UP] : [DOWN];
     await keys(host.page, [...toNetwork, ENTER, ENTER, DOWN, DOWN, ENTER]);
-    await keys(guest.page, [DOWN, ENTER, DOWN, ENTER, DOWN, DOWN, ENTER]);
-
-    // The lobby opening is the guest's own DirectPlay call asking for a room,
-    // so it is the first observable proof that the key script above landed
-    // where it was aimed. Gating on it here separates navigation from
-    // discovery at the moment each fails, rather than letting both arrive as
-    // one "no peer" a minute later.
-    const lobbyOpen = ({ page, label }) => H.until(page, `${label}: no lobby`,
-      () => document.querySelectorAll('.vln-lobby').length > 0, null, 60000);
-    const bothAsked = !!(await lobbyOpen(host)) && !!(await lobbyOpen(guest));
-    if (!bothAsked) for (const side of [host, guest]) await snap(side, `${side.label}-no-lobby`);
-    check('both browsers asked for a room (the key script reached NETZWERKSPIEL)',
-      bothAsked);
-    // Nothing below can pass without a lobby, and each of those checks would
-    // spend its own timeout proving it. Stop here with the cause named.
-    if (!bothAsked) throw new Error('no lobby to discover in; see the -no-lobby captures');
-
-    const peerRows = ({ page }) => page.evaluate(
-      () => document.querySelectorAll('.vln-peer').length);
-    for (let i = 0; i < 60 && !(await peerRows(host) && await peerRows(guest)); i++) {
-      await H.sleep(1000);
-    }
-    const sawEachOther = (await peerRows(host)) === 1 && (await peerRows(guest)) === 1;
-    if (!sawEachOther) {
-      // "Saw the other" failing on its own cannot say WHICH bug this is: a
-      // lobby that never opened means the fixed key script landed on the
-      // wrong menu entry, and a lobby that opened empty means discovery or
-      // signaling. Those are opposite, and the only snapshot taken so far is
-      // from before the navigation, so it shows a healthy main menu either
-      // way. Photograph both pages here and say which state they are in.
-      //
-      // The rows alone still leave three causes standing, so ask the page for
-      // the state underneath them: who the signaling service thinks this tab
-      // is, and who has published under the key both tabs derive from the
-      // executable name. That separates "the two tabs are the same user"
-      // (peers() excludes self by userId, so each would see nobody and the
-      // dev server's own identity log is suppressed by quiet:true here) from
-      // "one of them never published" and from "both published and the
-      // records were filtered", which look identical from the DOM.
-      for (const side of [host, guest]) {
-        await snap(side, `${side.label}-no-peers`);
-        const who = await side.page.evaluate(async () => {
-          try {
-            const sig = new VlanRtc.SignalingClient('');
-            const me = await sig.whoami();
-            const key = await VlanRtc.signalKeyFor(
-              VlanRtc.scopeFor({ exe: 'volley.exe' }), null);
-            const list = await sig.publishers(key);
-            return { me: me && me.id, users: ((list && list.users) || []).map(u => u.userId) };
-          } catch (e) { return { error: String(e) }; }
-        });
-        console.log(`  ${side.label}: lobby open=${await lobbyUp(side.page)}`
-          + `  peer rows=${await peerRows(side)}`
-          + `  i am=${String(who.me).slice(0, 8)}`
-          + `  published=[${(who.users || []).map(u => String(u).slice(0, 8)).join(' ')}]`
-          + (who.error ? `  probe failed: ${who.error}` : ''));
-      }
-    }
-    check('each browser saw the other in the lobby', sawEachOther);
-    // Clicking a peer that is not there throws an unhandled TypeError and
-    // buries the diagnosis above in a stack trace.
-    if (!sawEachOther) throw new Error('no peer to invite; see the -no-peers captures');
-
-    // Only one side clicks; the other connects on the invite.
-    await host.page.evaluate(() => document.querySelector('.vln-peer button').click());
+    const share = await H.until(host.page, 'host: no share card', () => {
+      const url = document.querySelector('#wine-lan-share .wine-lan-share-url');
+      return url && !document.getElementById('wine-lan-card') ? url.value : null;
+    }, null, 60000);
+    if (!share) await snap(host, 'host-no-card');
+    check(`hosting went online without a question and offered the page link (${share})`,
+      !!share && /[?&]room=/.test(share)
+      && share === await host.page.evaluate(() => location.href));
+    if (!share) throw new Error('no share card on the host; see host-no-card.png');
     const wired = ({ page, label }) => H.until(page, `${label}: never got a wire`,
       () => runningApps.length > 0 && !!runningApps[0].wine.vlanWire, null, MILESTONE_MS);
-    check('the inviting browser connected', !!(await wired(host)));
-    check('the invited browser connected without clicking', !!(await wired(guest)));
+    check('the host went online as the room owner (10.0.0.1)',
+      !!(await wired(host)) && (await host.page.evaluate(wireOf)).address === '10.0.0.1');
+    await host.page.evaluate(() =>
+      [...document.querySelectorAll('#wine-lan-share button')]
+        .find(b => b.textContent === 'OK').click());
+    // Its own Open was parked while the card was up; now it returns, the
+    // session opens, and the probe finds it serving.
+    const hostChip = await H.until(host.page, 'host: never showed it was hosting', () => {
+      const chip = document.getElementById('wine-lan-chip');
+      const t = chip ? chip.textContent : '';
+      return /hosting/.test(t) ? t : null;
+    }, null, MILESTONE_MS);
+    check(`the probe saw the host's DirectPlay session (${hostChip})`, !!hostChip);
+
+    // ---- the guest opens the game and is shown the list at launch -----------
+    const guest = await open('guest');
+    const rows = await H.until(guest.page, 'guest: the host never appeared in its list', () => {
+      const r = [...document.querySelectorAll('#wine-lan-card .wine-lan-room')];
+      return r.length ? r.map(x => x.textContent) : null;
+    }, null, 60000);
+    if (!rows) await snap(guest, 'guest-no-list');
+    check(`the guest's list at launch shows the host's session (${rows && rows.join(' | ')})`,
+      !!rows && rows.length === 1 && /\d\/\d/.test(rows[0]));
+    if (!rows) throw new Error('nothing to join; see guest-no-list.png');
+    await guest.page.evaluate(() =>
+      document.querySelector('#wine-lan-card .wine-lan-room button').click());
+    check('Join put the guest in the host\'s room (10.0.0.2)',
+      !!(await wired(guest)) && (await guest.page.evaluate(wireOf)).address === '10.0.0.2');
+    check('the guest booted Blobby after joining', !!(await started(guest)));
+    // Joined at launch, so lan.join.inGame (why 5) waits for the main menu,
+    // walks NETZWERKSPIEL -> ALS GAST SPIELEN... -> SPIELE SUCHEN, and picks
+    // the session once the host answers. No key is pressed for it from here.
+    const pageUrl = await guest.page.evaluate(() => location.search);
+    check(`its page address names the room (${pageUrl})`, /[?&]room=/.test(pageUrl));
     await H.sleep(3000);
     await snap(host, 'host-waiting');
 
@@ -381,9 +363,12 @@ const blobsAt = (band) => {
       null, MILESTONE_MS);
     check('the guest\'s search was answered over the data channel', !!found,
       JSON.stringify(await guest.page.evaluate(wireOf)));
-    await H.sleep(3000);
+    const picked = await H.until(guest.page, 'guest: the page never joined the game', () => {
+      const chip = document.getElementById('wine-lan-chip');
+      return chip && /in .*'s game/.test(chip.textContent) ? chip.textContent : null;
+    }, null, MILESTONE_MS);
+    check(`the page picked the host's session from the game's list itself (${picked})`, !!picked);
     await snap(guest, 'guest-found');
-    await keys(guest.page, [UP, ENTER]);
 
     await H.sleep(8000);
     const a = [await host.page.evaluate(wireOf), await guest.page.evaluate(wireOf)];
@@ -520,14 +505,54 @@ const blobsAt = (band) => {
     // clean case the game itself could notice.
     const guestProblems = [...guest.problems];
     await guest.ctx.close();
-    const banner = await host.page.waitForFunction(() => {
-      const el = document.getElementById('wine-lan-notice');
-      if (!el || el.style.display === 'none') return null;
-      return el.querySelector('.wine-lan-notice-text').textContent;
-    }, { timeout: 30000, polling: 500 }).then(h => h.jsonValue(), () => null);
+    const over = await host.page.waitForFunction(() => {
+      const el = document.querySelector('#wine-lan-card.wine-lan-over');
+      if (!el) return null;
+      return {
+        title: el.querySelector('.wine-lan-over-title').textContent,
+        choices: [...el.querySelectorAll('button')].map(b => b.dataset.choice),
+      };
+    }, { timeout: 60000, polling: 500 }).then(h => h.jsonValue(), () => null);
     check('the host is told the other player disconnected',
-      !!banner && /disconnect/i.test(banner), String(banner));
+      !!over && /disconnect|left/i.test(over.title), JSON.stringify(over));
+    check('and is offered to wait, host again, find another game or quit',
+      !!over && ['stay', 'host', 'find', 'quit'].every(c => over.choices.includes(c)),
+      JSON.stringify(over));
     await snap(host, 'host-peer-gone');
+
+    // ---- "Host a new game": the page, not the game, gets it back online -----
+    //
+    // The old match is serving to nobody, and nothing in the game will leave
+    // it. The card boots Blobby again in a room of its own, and lan.host.inGame
+    // walks the fresh game's menus to SPIEL BEGINNEN!; the probe seeing a
+    // DirectPlay session again is the proof it got there.
+    const firstWine = await host.page.evaluate(() => {
+      window.__firstWine = runningApps[0] && runningApps[0].wine;
+      document.querySelector('#wine-lan-card.wine-lan-over button[data-choice="host"]').click();
+      return !!window.__firstWine;
+    });
+    const rebooted = await H.until(host.page, 'host: never started over', () =>
+      runningApps.length === 1 && runningApps[0].wine !== window.__firstWine
+      && !!runningApps[0].wine.vlanWire, null, MILESTONE_MS);
+    check('Host a new game started the game over in a new room',
+      firstWine && !!rebooted && (await host.page.evaluate(wireOf)).address === '10.0.0.1');
+    const reshared = await H.until(host.page, 'host: no share card after starting over', () =>
+      !!document.querySelector('#wine-lan-share .wine-lan-share-url'), null, 60000);
+    check('the new room offers its link to share', !!reshared);
+    await host.page.evaluate(() => {
+      const ok = [...document.querySelectorAll('#wine-lan-share button')].find(b => b.textContent === 'OK');
+      if (ok) ok.click();
+    });
+    const walked = await H.until(host.page, 'host: the host recipe never finished', () =>
+      /is hosting a new game/.test(document.getElementById('log').textContent), null, MILESTONE_MS);
+    check('lan.host.inGame walked the fresh game into hosting', !!walked);
+    const rehosted = await H.until(host.page, 'host: the probe never saw the new session', () => {
+      const chip = document.getElementById('wine-lan-chip');
+      const t = chip ? chip.textContent : '';
+      return /hosting/.test(t) ? t : null;
+    }, null, MILESTONE_MS);
+    check(`the probe saw the new DirectPlay session (${rehosted})`, !!rehosted);
+    await snap(host, 'host-rehosted');
 
     const problems = [...host.problems, ...guestProblems];
     check('neither page reported an error', problems.length === 0, problems.join(' | '));

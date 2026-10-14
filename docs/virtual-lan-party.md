@@ -1010,6 +1010,83 @@ The host leaving closes the room. Host migration is deferred because moving
 the peer switch is easy compared with moving the authoritative
 `lwwinsrv.exe` process and its live connections.
 
+### When a peer disappears (implemented 2026-09-22)
+
+A closed tab sends no FIN, so the guest has to be told. The host injects a
+`GONE` frame (vln/1 type 7) into the process's own inbox — it is never sent on
+the wire — whose source address is the departed seat, or `255.255.255.255`
+for "every remote address at once":
+
+| Who notices | What is injected |
+|---|---|
+| owner, a member's link closes (`StarOwnerWire.removeLink`) | `GONE` for that seat |
+| member, the owner's link closes (`joinAsMember`) | `GONE` for everyone |
+| a point-to-point `RtcWire` is lost | `GONE` for everyone |
+| `ProcessHub`, a child process exits | `vln-gone` to every other child |
+
+WAT resets every wire socket to that address: an established stream reports
+`WSAECONNRESET` (a parked `recv` returns), a connect still in flight reports
+`WSAETIMEDOUT`, and asynchronous sockets get `FD_CLOSE`/`FD_CONNECT` with that
+error. DirectPlay drops the player, and a client whose session host went gets
+`DPSYS_SESSIONLOST`.
+
+Two failures that used to hang are closed too. A `SYN` for a seat nobody holds
+is answered at once by the owner with an `RST` (`WSAECONNREFUSED`), and a
+connect nobody answers at all fails with `WSAETIMEDOUT` after 20 s of guest
+clock (`$VSOCK_CONNECT_TIMEOUT_MS`, checked on every pump, with an `RST` sent
+so a late `SYNACK` finds nothing).
+
+### A stale offer never blocks the door (implemented 2026-09-22)
+
+An offer outlives its author: a tab closed while waiting for an answer leaves
+it in the owner's inbox, and only its author could withdraw it. Answering one
+used to wait for a data channel with no bound, so the owner's admission loop
+hung and every later joiner waited behind it. Now `Network.accept` answers
+each offer once (keyed by its SDP, which is fresh per attempt), runs answers
+side by side, gives each 20 s (`ANSWER_ESTABLISH_MS`) to open its channel,
+and releases the seat a failed answer had reserved. A connection that opens
+after the `accept` call that answered it returned is queued for the next one.
+
+### Stream flow control (implemented 2026-09-22)
+
+A stream frame that does not fit its socket's receive ring cannot be dropped,
+and it used to wait at the head of the wire — so one connection whose reader
+was busy stalled every other connection, DirectPlay and every datagram behind
+it, while the sender kept sending until the host's inbox bound threw.
+
+Now a sender never has more in flight than the far ring is guaranteed to
+take (`VSOCK_WINDOW`, 16 KB, the size of every stream ring). Each DATA frame
+is charged `max(length, 64)` against it, so the frames in flight are bounded
+too (256 per connection). The receiver returns the charge in `WINDOW` frames
+(vln/1 type 8, a 4-byte credit payload): the overhead as soon as the frame is
+in the ring, the bytes once the guest has read them, batched to 4 KB. A
+sender at zero window blocks, or fails with `WSAEWOULDBLOCK`, is not
+writable in `select`, and gets `FD_WRITE` when credit returns. A DATA frame
+therefore always fits its ring and never holds up the wire; the host's
+inbox throws for a stream frame only past 20,000 frames, which the window
+makes unreachable for an honest sender.
+
+### Datagrams on an unordered channel (implemented 2026-09-22)
+
+Over WebRTC a lost packet on the reliable `vln` channel holds up every frame
+behind it while SCTP retransmits it, and for a UDP game that retransmission
+is worthless: the game has already sent a newer copy. So once `vln` is open
+the offering side adds a second channel, `vln-dg` (`ordered: false,
+maxRetransmits: 0`), to the same peer connection. `RtcWire.send` puts vln/1
+`DGRAM` frames on it when it is open, and everything else (streams, control,
+DirectPlay) stays on `vln`. A full `vln-dg` (256 KB buffered) drops the
+datagram and still reports it sent, as UDP does, so `sendto` never blocks.
+
+It is opened late on purpose: an answerer built before it resolves on the
+first channel it is offered and takes that as the stream, which is still
+`vln`. Losing `vln-dg` is not losing the peer; datagrams fall back to `vln`.
+A star room needs no change, because the owner forwards through
+`link.send`, which chooses the channel again per frame.
+
+DirectPlay `DATA` is not moved: dpl/1 does not yet carry whether the guest
+asked for `DPSEND_GUARANTEED`, and treating a guaranteed send as droppable
+would lose game state.
+
 ## Observability
 
 Diagnostics must explain transport behavior without logging payloads.
@@ -1424,12 +1501,26 @@ simultaneous owners settle by the higher userId stepping down. The owner's
 guest answering the app's `lan.hostProbe` marks the room *hosting* in presence,
 which is what the Join card shows: at launch ("Join alex / Not now"), at the
 first `socket()` ("Join / Play offline"), and as a toast over a running game.
-Apps without `lan.room: 'auto'` (Blobby, Liquid War) keep the lobby.
+Apps without `lan.room: 'auto'` (Liquid War) keep the lobby; Blobby moved to
+the room on 2026-09-21 (below).
 
 **Invite links.** `?app=ID&room=OWNER_USERID` names the room to join. There is
 no Invite button (one under the chip sat on top of the game's own UI): while a
 page is in a room, `history.replaceState` writes that link into the page's own
-address, owner and members alike, so sharing the page *is* the invite. The
+address, owner and members alike, so sharing the page *is* the invite. The 🌐
+chip's menu also has Copy invite link.
+
+**The 🌐 chip** (2026-10-01) is a session chip (`lib/session-chips.js`, shared
+with the agent and recording chips), in place of the old fading corner toast.
+It sits in the taskbar tray on the desktop and floats top right over the game
+otherwise, left of the exit-fullscreen button. An event (joined, left,
+hosting) is held in its text and then it settles to a summary (`Blobby Volley ·
+2 players`, `in sam's room`); its menu lists the seats and the last few events
+and has Copy invite link and Leave/Close room, keep playing. Leaving closes the
+room and stops the join offers but leaves the game running offline. The element
+keeps the toast's id, `#wine-lan-chip`, and its event text, which the
+two-browser tests read; `test/test-web-lan-chip.js` drives the chip itself
+with a stand-in room. The
 parameter is removed again when the room closes or the game quits; other
 parameters such as `?debug` are kept. A link is the person's answer already,
 so it shows no card. If the owner is
@@ -1441,11 +1532,113 @@ only for the app the link names.
 **The server list (2026-09-21).** Opening a `room: 'auto'` game while
 anybody's room is serving shows every such room: one row per owner (their
 name and the probe's status line, e.g. `noname demo1 1/4`), each with its own
-Join, plus **Continue offline**. The list re-reads presence every 3 s while it
+Join, plus **Play offline**. The list re-reads presence every 3 s while it
 is open, so servers that start or stop while somebody is looking come and go.
-The same list comes back when the game first goes online, this time with
-**Play offline** and **Start my own room**. The latter is `openRoom({ownRoom})`:
+The same list comes back when the game first goes online. A plain `socket()`
+(why 1) cannot say whether it serves or joins, so that card adds **Start my own
+room**, which is `openRoom({ownRoom})`:
 a second room beside the listed ones, with no joining and no step-down. The
 step-down only settles two claims made on an *empty* channel at the same
 moment. With nobody serving, nothing is shown and going online joins or opens
-a room silently, as before.
+a room silently, as before. A DirectPlay Open to create (why 2) is never asked:
+it goes online at once (a room of its own when others are serving) and shows
+the **share card**, `#wine-lan-share`: "You are hosting …", the page URL in a
+read-only field, and **Share link** (the phone's share sheet) or **Copy link**.
+The page URL is the invitation, and until this card nothing on screen said so.
+
+**DirectPlay games: Blobby Volley (2026-09-21).** The probe also speaks dpl/1
+(`hostProbe: { protocol: 'dplay' }`). It asks with the provider's own
+`ENUM_REQ` from seat .254, and only a machine with an open session answers
+(`$dpn_state == 1` in `src/09d4-dplay-net.wat`). The `ENUM_REPLY` session record
+labels the row: its name and players, e.g. `game 40 1/2`.
+`test/test-blobby-host-probe.js` runs this against the real game: a host
+answers, and a copy searching with its own broadcast `ENUM_REQ`s never does.
+
+Two things keep Blobby's one-keyboard game undisturbed:
+
+- The list appears at launch (and as a mid-game toast) only when someone is
+  hosting. With nobody hosting, the game starts on its own keyboard and the card
+  waits until NETZWERKSPIEL makes the game's own DirectPlay call ask for a room.
+  An invite link still joins at launch.
+- `join.inGame` finishes the join from inside the game. `net_link_open(why)`
+  tells the page which networked act asked for the room: 1 `socket()`, 2
+  DirectPlay Open to host, 3 Open to join, 4 EnumSessions. A searcher (4) that
+  picks a row is already on SPIELE SUCHEN's session list, so the recipe waits
+  for the host's reply (`heard()`), then presses Up Enter to take the session.
+  A row picked from the launch-time list is `why` 5: the recipe waits for
+  the main menu (the window gets past 64 colours once it fades in), walks
+  NETZWERKSPIEL → ALS GAST SPIELEN… → SPIELE SUCHEN itself, and then takes
+  the session the same way.
+  Any other `why` falls back to `join.hint` in the chip (`pick NETZWERKSPIEL →
+  ALS GAST SPIELEN… → SPIELE SUCHEN`). DirectPlay's own broadcast finds the
+  session, so nobody types an address. The same recipe hook serves Quake's
+  mid-game toast (`why` 0), where the recipe types `connect` into the console.
+
+**Signing in (2026-09-21).** A 401 from the signaling API used to end in a
+notice with only an OK. Now two moments show a sign-in card
+(`#wine-lan-signin`, **Play offline** / **Sign in**): opening a room link
+signed out (the card says you were invited, and nothing launches behind it),
+and the game going online signed out (the game waits in its network call).
+Launching signed out without a link asks nothing. **Sign in** goes to
+`/api/auth/login?return=<this page's full URL>`. The page URL names the app and
+the room, so coming back to it carries on from where it stopped. From
+berrry-server's source (`src/backend-api/controllers.js` loginTrampoline,
+`src/users/controllers.js`, `src/subdomain-handler.js`): `return` must be
+**absolute**, because berrry.app's `/login` runs `new URL(return)`. After
+sign-in and consent the user lands on `return` plus `?token=…`, and the app's
+own server turns that into the `app_token` cookie and 302s to the same URL
+without `token`, keeping `app` and `room`. With no `return` it falls back to
+the Referer, then the app root. That fallback is also why the URL is kept in
+sessionStorage, where `resumeAfterSignIn()` in index.html goes on to it.
+`tools/dev-server.js --require-login` copies that hop: 401 until a one-button
+stand-in login returns with `?token=dev`, which becomes a cookie and a clean
+redirect. Public records stay readable signed out. `test/test-web-lan-signin.js`
+drives an invited link through sign-in and back, Play offline, and the
+root-return fallback.
+
+**Rooms are public records, so signed-out pages see them (2026-09-21).**
+`GET /api/public-data/users/:key` and `GET /api/public-data/:userId/:key`
+need no session on Berrry, so `peekNetwork` no longer gives up on the 401
+from `/api/auth/user`: it reads presence anyway and reports `signedOut`, and
+`VlanRoom.hostedRooms()` carries that as a non-enumerable `rooms.signedOut`.
+A signed-out page therefore shows the same server list (with a line saying
+joining asks you to sign in, and no **Start my own room**), the room link
+card names who invited you, and the mid-game toast reads **Sign in to join**.
+Joining from any of them goes to the login with `return` set to that room's
+link (`signInToJoin`), and the page that comes back is an ordinary room link,
+signed in. Only publishing — hosting, joining, the offer/answer — needs the
+account.
+
+**Berrry's real record shapes, and why the LAN could not have worked live.**
+Read from berrry-server (`src/backend-api/controllers.js`,
+`public-data-controllers.js`), against what the client and the dev server
+had assumed:
+
+| call | Berrry answers | we assumed |
+|---|---|---|
+| `GET /api/auth/user` | `{id: <integer>, email, username, display_name}` | string id, `name` |
+| `POST /api/data/:key?visibility=public` | upsert; the value | (we used PUT) |
+| `PUT /api/data/:key` | **404 for a key never written**; the value | upsert |
+| `GET /api/data/:key` | the stored value, no envelope | `{value, updatedAt}` |
+| `GET /api/public-data/users/:key` | bare array `[{userId, email, updatedAt, value}]`, newest first | `{users: [...]}` |
+| `GET /api/public-data/:userId/:key` | the stored value, no envelope | `{value, updatedAt}` |
+| `DELETE /api/data/:key` | `{success: true}` | — |
+
+So on the live site presence was never created (PUT 404), the publisher list
+was never parsed, and reads were unwrapped. `SignalingClient` in
+`lib/vlan-rtc.js` now publishes with POST, accepts either list shape,
+normalizes ids to strings (a `?room=` is a string), and takes `updatedAt`
+and the value from the list row itself (`recordOf`), which also saves one
+read per peer per poll. `tools/dev-server.js` now answers with Berrry's
+shapes and integer ids, so a regression shows up in `test/test-dev-server.js`
+and every vlan test instead of only on the live site. Not yet verified
+against berrry.app itself.
+
+**Privacy note.** Berrry's public list returns each publisher's **email**
+with the row. Our UI never shows it (names come from our own presence
+record), but anyone can fetch the list for a game's presence key and read
+the emails of everyone who has played it online. That is a Berrry-side
+behaviour worth raising with its owner before rooms go public.
+
+When an owner's last member drops, the page shows a notice rather than the
+brief chip, because most games keep serving to nobody without saying so.

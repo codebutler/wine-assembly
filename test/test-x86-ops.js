@@ -48,9 +48,13 @@ async function main() {
 
   function le32(v) { return [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF]; }
 
-  // Each test gets a unique code address to avoid block cache collisions
+  // Each test gets a unique code address to avoid block cache collisions.
+  // Test data lives at +0x8000..+0x9FFF (scratch, sseA...), so code steps over
+  // that window: once enough tests existed, the next one's code landed on the
+  // scratch buffers and a later setMem rewrote it mid-suite.
   let codeOffset = 0;
   function runCode(bytes, setup) {
+    if (0x1000 + codeOffset >= 0x8000 && 0x1000 + codeOffset < 0xA000) codeOffset = 0xA000 - 0x1000;
     const codeAddr = imageBase + 0x1000 + codeOffset;
     codeOffset += 256;
     const wa = g2w(codeAddr);
@@ -182,6 +186,23 @@ async function main() {
 
   runCode([0x66, 0x06, 0x66, 0x07, 0x8B, 0xC4]); // push es; pop es; mov eax,esp
   test('16-bit PUSH/POP ES preserves stack width', e.get_eax(), imageBase + 0xD00000);
+
+  // PCI configuration mechanism #1 (3Dfx's fxPCI scan, NFS II SE setup):
+  // a dword out to 0xCF8 selects a register, 0xCFC..0xCFF read it back.
+  const pciRead = (addr, inBytes, port = 0xCFC) => {
+    runCode([0x66, 0xBA, 0xF8, 0x0C, 0xB8, ...le32(addr), 0xEF,   // mov dx,0xcf8; mov eax,addr; out dx,eax
+      0x66, 0xBA, port & 0xFF, port >> 8, ...inBytes]);           // mov dx,port; in ...
+    return e.get_eax() >>> 0;
+  };
+  test('PCI 0:0.0 is the 440BX host bridge', pciRead(0x80000000, [0xED]), 0x71908086);
+  test('PCI 0:7.0 is the PIIX4 ISA bridge', pciRead(0x80003800, [0xED]), 0x71108086);
+  test('PCI 0:0.0 class is host bridge', pciRead(0x80000008, [0xED]), 0x06000003);
+  test('PCI empty slot reads all ones', pciRead(0x80000800, [0xED]), 0xFFFFFFFF);
+  test('PCI bus 1 is empty', pciRead(0x80010000, [0xED]), 0xFFFFFFFF);
+  test('PCI disabled address reads all ones', pciRead(0x00000000, [0xED]), 0xFFFFFFFF);
+  test('PCI byte read at 0xCFE is the device id low byte',
+    pciRead(0x80000000, [0x31, 0xC0, 0xEC], 0xCFE), 0x90);                // xor eax,eax; in al,dx
+  test('PCI address register reads back', pciRead(0x80003808, [0xED], 0xCF8), 0x80003808);
 
   // Delphi/VCL uses x87 FILD/FISTP qword pairs as a memcpy fast path. The
   // integer payload is often a string chunk, so preserving raw bytes matters.
@@ -381,6 +402,52 @@ async function main() {
   test('FSIN sets C2 for an out-of-range argument', sinOutOfRange.c2, 0x0400);
   testFloat('FSIN leaves ST(0) alone when out of range',
     sinOutOfRange.st0, 9223372036854775808.0, 1e4);
+
+  // ================================================================
+  // IMUL r, r/m (0F AF) — every form continues its block
+  // ================================================================
+  // IMUL has no control flow, so the decoder keeps going after it. Each case
+  // runs instructions after the IMUL that read its result and its CF/OF, so a
+  // form that stopped the block, or lost state across a block that no longer
+  // stops, would show here.
+  const imulFlagsTail = [0x8D, 0x58, 0x01, 0x0F, 0x90, 0xC2, 0x0F, 0x92, 0xC6]; // lea ebx,[eax+1]; seto dl; setc dh
+  runCode([0x31, 0xD2, 0x0F, 0xAF, 0xC1, ...imulFlagsTail], () => { e.set_eax(7); e.set_ecx(6); });
+  test('IMUL eax,ecx result', e.get_eax(), 42);
+  test('IMUL eax,ecx then lea in the same block', e.get_ebx(), 43);
+  test('IMUL eax,ecx no overflow clears OF/CF', e.get_edx(), 0);
+  runCode([0x31, 0xD2, 0x0F, 0xAF, 0xC1, ...imulFlagsTail], () => { e.set_eax(0x10000); e.set_ecx(0x10000); });
+  test('IMUL eax,ecx overflow truncates', e.get_eax(), 0);
+  test('IMUL eax,ecx overflow sets OF and CF', e.get_edx(), 0x0101);
+
+  setMem(scratch + 4, -3 >>> 0);
+  runCode([0x0F, 0xAF, 0x43, 0x04, 0x05, ...le32(100)], () => { e.set_eax(5); e.set_ebx(scratch); });
+  test('IMUL eax,[ebx+4] then add', e.get_eax(), 85);
+  setMem(scratchA, 9);
+  runCode([0x0F, 0xAF, 0x05, ...le32(scratchA), 0x40], () => e.set_eax(11));
+  test('IMUL eax,[abs] then inc', e.get_eax(), 100);
+  runCode([0x0F, 0xAF, 0x04, 0x8E, 0x83, 0xC0, 0x02], () => { e.set_eax(4); e.set_esi(scratch); e.set_ecx(1); });
+  test('IMUL eax,[esi+ecx*4] then add', e.get_eax(), -10 >>> 0);
+
+  runCode([0x66, 0x0F, 0xAF, 0xC1, 0x8D, 0x58, 0x01], () => { e.set_eax(0xABCD0007); e.set_ecx(0x1234FFFE); });
+  test('IMUL ax,cx keeps the high half', e.get_eax(), 0xABCDFFF2);
+  test('IMUL ax,cx then lea', e.get_ebx(), 0xABCDFFF3);
+  runCode([0x66, 0x0F, 0xAF, 0x43, 0x04, 0x40], () => { e.set_eax(0x11110005); e.set_ebx(scratch); });
+  test('IMUL ax,[ebx+4] then inc', e.get_eax(), 0x1111FFF2);
+  runCode([0x66, 0x0F, 0xAF, 0x05, ...le32(scratchA), 0x40], () => e.set_eax(0x2222000B));
+  test('IMUL ax,[abs] then inc', e.get_eax(), 0x22220064);
+
+  // A loop whose body holds an IMUL is now one block that branches to itself.
+  //   xor eax,eax; mov ecx,5
+  //   top: mov edx,ecx; imul edx,[ebx]; add eax,edx; dec ecx; jnz top
+  setMem(scratch, 3);
+  const imulLoop = runCode([
+    0x31, 0xC0, 0xB9, ...le32(5),
+    0x89, 0xCA, 0x0F, 0xAF, 0x13, 0x01, 0xD0, 0x49, 0x75, 0xF6,
+  ], () => e.set_ebx(scratch));
+  test('IMUL self-loop sums 3*(5+4+3+2+1)', e.get_eax(), 45);
+  setMem(scratch, 4);
+  rerunCachedCode(imulLoop, () => e.set_ebx(scratch));
+  test('IMUL self-loop from the cached block rereads memory', e.get_eax(), 60);
 
   // ================================================================
   // MUL dword [mem] — unsigned 32×32→64 multiply
@@ -830,6 +897,14 @@ async function main() {
     tsc2hi > tsc1hi || (tsc2hi === tsc1hi && tsc2 > tsc1), true);
   test('rdtsc is non-zero', tsc1 !== 0 || tsc1hi !== 0, true);
 
+  // mov r32, CRn: Win9x emulates the ring-3 read. Tomb Raider III's CPU probe
+  // reads CR4 right after CPUID and tests TSD (bit 2) and PCE (bit 8).
+  // mov eax,cr4; mov ebx,cr0; mov esi,cr4 (rm=6 picks the destination).
+  runCode([0x0F, 0x20, 0xE0, 0x0F, 0x20, 0xC3, 0x0F, 0x20, 0xE6]);
+  test('mov eax,cr4 = PSE, TSD and PCE clear', e.get_eax() >>> 0, 0x10);
+  test('mov ebx,cr0 = PG|WP|NE|ET|MP|PE', e.get_ebx() >>> 0, 0x80010033);
+  test('mov esi,cr4 writes the ModRM rm register', e.get_esi() >>> 0, 0x10);
+
   // cpuid leaf 0 → "GenuineIntel" in EBX/EDX/ECX.
   runCode([0x31, 0xC0, 0x0F, 0xA2]);
   test('cpuid leaf 0 EBX = "Genu"', e.get_ebx() >>> 0, 0x756E6547);
@@ -904,8 +979,78 @@ async function main() {
   ]);
   testBytes('MOVSS absolute load/store changes only the low lane',
     bytesAt(sseOut, 4), sseBytesB.slice(0, 4));
-  testBytes('MOVSS preserves the destination upper 96 bits',
-    bytesAt(sseOut + 20, 12), sseBytesA.slice(4));
+  // The LOAD form zeroes bits 127:32 (Intel SDM, MOVSS: "DEST[127:32] <- 0"
+  // when the source is m32); only register-to-register MOVSS preserves them.
+  testBytes('MOVSS from memory zeroes the destination upper 96 bits',
+    bytesAt(sseOut + 20, 12), new Array(12).fill(0));
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x10, 0x0d, ...le32(sseB),       // movups xmm1,[sseB]
+    0xf3, 0x0f, 0x10, 0xc1,                // movss xmm0,xmm1
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  testBytes('register MOVSS preserves the destination upper 96 bits',
+    bytesAt(sseOut, 16), [...sseBytesB.slice(0, 4), ...sseBytesA.slice(4)]);
+
+  // A 16-byte operand straddling a page boundary takes the lane-by-lane path
+  // in $gl128/$gs128; a same-page one takes the single v128 access.
+  const sseEdge = imageBase + 0x400FF8; // clear of the code area and the stack
+  setBytes(sseEdge, sseBytesA);
+  setBytes(sseEdge + 0x20, new Array(16).fill(0));
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseEdge),    // movups xmm0,[sseEdge]   (crosses 0x..B000)
+    0x0f, 0x11, 0x05, ...le32(sseEdge + 0x20), // movups [sseEdge+0x20],xmm0
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  testBytes('page-crossing MOVUPS load reads all 16 bytes',
+    bytesAt(sseOut, 16), sseBytesA);
+  testBytes('MOVUPS store after a page-crossing load writes all 16 bytes',
+    bytesAt(sseEdge + 0x20, 16), sseBytesA);
+
+  // Scalar ops on [reg+disp] take the packed _ro handlers (disp in the
+  // operand word); a displacement past signed 24 bits and [esp+disp8] with a
+  // SIB byte are checked alongside.
+  const sseR = sseEdge + 0x100;
+  const f32le = (...v) => [...new Uint8Array(new Float32Array(v).buffer)];
+  setBytes(sseR, f32le(2, 3, 5, 8, 2));
+  setBytes(sseR + 0x20, new Array(0x40).fill(0xcc));
+  const d32 = v => le32(v >>> 0);
+  runCode([
+    0xbe, ...le32(sseR + 0x100),                 // mov esi,sseR+0x100
+    0xf3, 0x0f, 0x10, 0x86, ...d32(-0x100),      // movss xmm0,[esi-0x100]  2
+    0xf3, 0x0f, 0x58, 0x86, ...d32(-0xfc),       // addss xmm0,[esi-0xfc]   +3 = 5
+    0xf3, 0x0f, 0x59, 0x86, ...d32(-0xf8),       // mulss xmm0,[esi-0xf8]   *5 = 25
+    0xf3, 0x0f, 0x5c, 0x86, ...d32(-0xf4),       // subss xmm0,[esi-0xf4]   -8 = 17
+    0xf3, 0x0f, 0x5e, 0x86, ...d32(-0xf0),       // divss xmm0,[esi-0xf0]   /2 = 8.5
+    0xf3, 0x0f, 0x11, 0x86, ...d32(-0xe0),       // movss [esi-0xe0],xmm0   -> sseR+0x20
+    0x31, 0xc0, 0x31, 0xc9,                      // xor eax,eax / xor ecx,ecx
+    0x0f, 0x2f, 0x86, ...d32(-0xfc),             // comiss xmm0,[esi-0xfc]  8.5 > 3
+    0x0f, 0x97, 0xc0,                            // seta al
+    0x0f, 0x2f, 0x86, ...d32(-0xe0),             // comiss xmm0,[esi-0xe0]  8.5 == 8.5
+    0x0f, 0x94, 0xc1,                            // sete cl
+    0xa2, ...le32(sseR + 0x24),                  // mov [sseR+0x24],al
+    0x88, 0x0d, ...le32(sseR + 0x25),            // mov [sseR+0x25],cl
+    0xbf, ...le32(sseR - 0x01000000),            // mov edi,sseR-0x1000000
+    0xf3, 0x0f, 0x10, 0x8f, ...le32(0x01000004), // movss xmm1,[edi+0x1000004]  3 (generic path)
+    0xf3, 0x0f, 0x11, 0x8f, ...le32(0x01000028), // movss [edi+0x1000028],xmm1
+    0xf3, 0x0f, 0x11, 0x44, 0x24, 0xf8,          // movss [esp-8],xmm0
+    0xf3, 0x0f, 0x10, 0x54, 0x24, 0xf8,          // movss xmm2,[esp-8]
+    0xf3, 0x0f, 0x11, 0x96, ...d32(-0xd4),       // movss [esi-0xd4],xmm2  -> sseR+0x2c
+    0x0f, 0x10, 0x1d, ...le32(sseA),             // movups xmm3,[sseA]
+    0xf3, 0x0f, 0x10, 0x9e, ...d32(-0xd0),       // movss xmm3,[esi-0xd0] -> 0xcc bytes
+    0x0f, 0x11, 0x1d, ...le32(sseR + 0x40),      // movups [sseR+0x40],xmm3
+  ]);
+  testBytes('[reg+disp] MOVSS/ADDSS/MULSS/SUBSS/DIVSS chain stores 8.5',
+    bytesAt(sseR + 0x20, 4), f32le(8.5));
+  testBytes('[reg+disp] COMISS sets above and equal',
+    bytesAt(sseR + 0x24, 2), [1, 1]);
+  testBytes('MOVSS with a >24-bit displacement keeps the generic path',
+    bytesAt(sseR + 0x28, 4), f32le(3));
+  testBytes('MOVSS through [esp-8] round-trips',
+    bytesAt(sseR + 0x2c, 4), f32le(8.5));
+  testBytes('[reg+disp] MOVSS load zeroes the upper 96 bits',
+    bytesAt(sseR + 0x40, 16), [0xcc, 0xcc, 0xcc, 0xcc, ...new Array(12).fill(0)]);
 
   runCode([
     0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
@@ -1143,6 +1288,150 @@ async function main() {
   ], () => { e.set_ebx(0x0000ABCD); });
   test('push bx / pop bx leaves ESP where it started', e.get_eax(), spTop);
   test('push bx / pop bx round-trips the value', e.get_ebx() & 0xFFFF, 0xABCD);
+
+  // ================================================================
+  // Stack runs: 07-decoder.wat $try_emit_stack_run -> 05-alu.wat 472-475.
+  // Every case runs twice at ONE code address -- fused, then with
+  // set_stack_fusion(0) (which clears decoded code) -- and must leave
+  // identical registers and stack bytes. The handler histogram proves the
+  // fused arm really ran the fused handler and the other arm never did.
+  // ================================================================
+  {
+    const REGS = ['eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'];
+    const HB = e.get_handler_hist_base();
+    const hits = (fn) => dv.getUint32(HB + fn * 4, true);
+    const FUSED = [472, 473, 474, 475];
+    const stackTop = imageBase + 0xD00000;
+    const snap = (lo, len) => {
+      const regs = REGS.map(r => e['get_' + r]() >>> 0);
+      return { regs, stack: bytesAt(lo, len), fused: FUSED.map(hits), eip: e.get_eip() >>> 0 };
+    };
+    // opts: { expect: [handler idx...], esp: start ESP, lo/len: bytes to compare }
+    function stackCase(name, bytes, opts = {}) {
+      const esp0 = opts.esp || stackTop;
+      const lo = opts.lo || (esp0 - 0x80), len = opts.len || 0x88;
+      const setup = () => {
+        for (let i = 0; i < len; i += 4) setMem(lo + i, (0xA5A50000 | i) >>> 0);
+        e.set_esp(esp0); setMem(esp0, 0);
+        e.set_eax(0x11111111); e.set_ecx(0x22222222); e.set_edx(0x33333333); e.set_ebx(0x44444444);
+        e.set_ebp(0x55555555); e.set_esi(0x66666666); e.set_edi(0x77777777);
+        if (opts.setup) opts.setup();
+      };
+      e.set_stack_fusion(1);
+      e.reset_handler_hist(); e.set_handler_hist_enabled(1);
+      const addr = runCode(bytes, setup);
+      e.set_handler_hist_enabled(0);
+      const a = snap(lo, len);
+      e.set_stack_fusion(0);
+      e.reset_handler_hist(); e.set_handler_hist_enabled(1);
+      rerunCachedCode(addr, setup);
+      e.set_handler_hist_enabled(0);
+      const b = snap(lo, len);
+      e.set_stack_fusion(1);
+      REGS.forEach((r, i) => test(`${name}: ${r} fused == unfused`, a.regs[i], b.regs[i]));
+      testBytes(`${name}: stack bytes fused == unfused`, a.stack, b.stack);
+      test(`${name}: returned`, a.eip, 0);
+      for (const fn of opts.expect || []) {
+        const got = a.fused[FUSED.indexOf(fn)];
+        if (got > 0) pass++; else { console.log(`  FAIL ${name}: handler ${fn} never ran fused`); fail++; }
+      }
+      if (b.fused.some(n => n > 0)) { console.log(`  FAIL ${name}: unfused arm ran a stack-run handler ${b.fused}`); fail++; } else pass++;
+      return { a, b, addr };
+    }
+
+    // push run, pop run into different registers, pop run + ret
+    let r = stackCase('push x4 / pop x4 + ret', [
+      0x50, 0x51, 0x52, 0x53,       // push eax..ebx
+      0x5E, 0x5F, 0x5D, 0x5B,       // pop esi; pop edi; pop ebp; pop ebx  (+ appended ret)
+    ], { expect: [472, 475] });
+    test('push x4 / pop x4: esi got ebx', r.a.regs[6], 0x44444444);
+    test('push x4 / pop x4: ebx got eax', r.a.regs[3], 0x11111111);
+
+    // prologue: push ebp; mov ebp,esp; push imm32; push imm8; push esi -- then
+    // read the slots back through EBP, and the epilogue mov esp,ebp; pop ebp; ret
+    r = stackCase('prologue run with mov ebp,esp and immediates', [
+      0x55, 0x8B, 0xEC,             // push ebp; mov ebp,esp
+      0x68, ...le32(0x12345678),    // push 0x12345678
+      0x6A, 0xFB,                   // push -5
+      0x56,                         // push esi
+      0x8B, 0x45, 0xFC,             // mov eax,[ebp-4]
+      0x8B, 0x4D, 0xF8,             // mov ecx,[ebp-8]
+      0x8B, 0x55, 0xF4,             // mov edx,[ebp-12]
+      0x8B, 0xE5, 0x5D,             // mov esp,ebp; pop ebp  (+ ret)
+    ], { expect: [472, 475] });
+    test('prologue run: imm32 slot', r.a.regs[0], 0x12345678);
+    test('prologue run: imm8 sign-extended', r.a.regs[1], 0xFFFFFFFB);
+    test('prologue run: esi slot', r.a.regs[2], 0x66666666);
+    test('prologue run: ebp restored', r.a.regs[5], 0x55555555);
+
+    // PUSH ESP inside a run pushes ESP from before that push
+    r = stackCase('push esp inside a run', [
+      0x50, 0x54, 0x51,             // push eax; push esp; push ecx
+      0x5A, 0x5B, 0x59,             // pop edx; pop ebx; pop ecx
+    ], { expect: [472, 475] });
+    test('push esp inside a run: value', r.a.regs[3], stackTop - 4);
+
+    // push run + call rel32 into a callee that ends in pop + ret imm16
+    r = stackCase('push run + call, pop run + ret imm', [
+      0x6A, 0x07,                   // 0:  push 7
+      0x68, ...le32(0x100),         // 2:  push 0x100
+      0xE8, ...le32(4),             // 7:  call +4 -> 16
+      0x89, 0xC7,                   // 12: mov edi,eax
+      0xEB, 0x11,                   // 14: jmp short 33 (the appended ret)
+      0x56, 0x53,                   // 16: push esi; push ebx
+      0x8B, 0x74, 0x24, 0x0C,       // 18: mov esi,[esp+12]
+      0x03, 0x74, 0x24, 0x10,       // 22: add esi,[esp+16]
+      0x89, 0xF0,                   // 26: mov eax,esi
+      0x5B, 0x5E,                   // 28: pop ebx; pop esi
+      0xC2, 0x08, 0x00,             // 30: ret 8   (ends at 33)
+    ], { expect: [472, 474, 475] });
+    test('push run + call: callee summed its two args', r.a.regs[7], 0x107);
+    test('push run + call: ret 8 popped the args', r.a.regs[4], stackTop + 4);
+
+    // A run whose slots cross a page boundary takes the per-slot path.
+    const pageEdge = imageBase + 0xCFF000;
+    r = stackCase('push/pop run across a page boundary', [
+      0x50, 0x51, 0x52, 0x53, 0x56,
+      0x5F, 0x5D, 0x5B, 0x5A, 0x59,
+    ], { esp: pageEdge + 8, expect: [472, 475] });
+    test('page-crossing run: edi got esi', r.a.regs[7], 0x66666666);
+
+    // SMC: a push run that rewrites decoded code must retire it. Decode
+    // `mov eax,1; ret` at X, then push `mov eax,2; ret` over it and run X again.
+    const smcAddr = runCode([0xB8, ...le32(1)]);
+    test('stack-run SMC: original code', e.get_eax(), 1);
+    runCode([
+      0x89, 0xE3,                               // mov ebx,esp
+      0xBC, ...le32(smcAddr + 8),               // mov esp,X+8
+      0x68, ...le32(0x9090C300),                // push: X+4 = 00 C3 90 90
+      0x68, ...le32(0x000002B8),                // push: X+0 = B8 02 00 00
+      0x89, 0xDC,                               // mov esp,ebx
+    ]);
+    rerunCachedCode(smcAddr);
+    test('stack-run SMC: rewritten code runs', e.get_eax(), 2);
+  }
+
+  // ================================================================
+  // 16.16 fixed-point idioms (Aliens versus Predator's DIV_FIXED/MUL_FIXED)
+  // ================================================================
+  {
+    // DIV_FIXED: cdq; rol eax,16; mov dx,ax; xor ax,ax; idiv ebx -- the
+    // 16-bit writes must leave the upper halves of EDX/EAX alone, so the
+    // dividend is the sign-extended (a << 16).
+    const fixDiv = (a, b) => Number((BigInt(a | 0) << 16n) / BigInt(b | 0)) | 0;
+    for (const [a, b] of [[0x30000, 0x20000], [-0x30000, 0x20000], [-5, 0x10000], [0x12345, -0x777], [-0x7fff, -3]]) {
+      runCode([0x99, 0xC1, 0xC0, 0x10, 0x66, 0x89, 0xC2, 0x66, 0x31, 0xC0, 0xF7, 0xFB],
+        () => { e.set_eax(a >>> 0); e.set_ebx(b >>> 0); });
+      test(`DIV_FIXED ${a}/${b}`, e.get_eax(), fixDiv(a, b));
+    }
+    // MUL_FIXED: imul edx; shrd eax,edx,16.
+    const fixMul = (a, b) => Number((BigInt(a | 0) * BigInt(b | 0)) >> 16n) | 0;
+    for (const [a, b] of [[0x30000, 0x20000], [-0x30000, 0x20000], [-5, 0x8000], [0x7fffffff, -0x10001]]) {
+      runCode([0xF7, 0xEA, 0x0F, 0xAC, 0xD0, 0x10],
+        () => { e.set_eax(a >>> 0); e.set_edx(b >>> 0); });
+      test(`MUL_FIXED ${a}*${b}`, e.get_eax(), fixMul(a, b));
+    }
+  }
 
   // ================================================================
   // Summary

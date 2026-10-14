@@ -55,12 +55,12 @@ typedef enum {
   CHARSET_OEM
 } CharacterSet;
 
-static void die(const char *message) {
+static _Noreturn void die(const char *message) {
   fprintf(stderr, "gen-bitmap-fon: %s\n", message);
   exit(1);
 }
 
-static void die_ft(const char *operation, FT_Error error) {
+static _Noreturn void die_ft(const char *operation, FT_Error error) {
   fprintf(stderr, "gen-bitmap-fon: %s failed (FreeType error %d)\n",
           operation, error);
   exit(1);
@@ -91,6 +91,7 @@ static void resize_zero(Buffer *buffer, size_t length) {
 
 static size_t append(Buffer *buffer, const void *data, size_t length) {
   size_t offset = buffer->len;
+  if (length > SIZE_MAX - offset) die("output is too large");
   resize_zero(buffer, offset + length);
   if (length) memcpy(buffer->data + offset, data, length);
   return offset;

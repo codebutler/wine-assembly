@@ -121,7 +121,19 @@ function rankSamples(r, sampleFrom = 0) {
   const perBlock = new Map();
   let total = 0;
   for (const [at, n] of samples) {
-    const o = owner(at);
+    // A sample is $ip after a budget-expired handback, and $ip is then one
+    // word PAST the op that took the handback: the handler consumed its
+    // operands before $next noticed $halt. When that op is a block's last
+    // (the branch whose CONT test ran out of steps -- where nearly all of
+    // them happen, since the budget is checked at block boundaries), the
+    // word after it is the FIRST WORD OF THE NEXT BLOCK LAID OUT, which for
+    // a loop is its fall-through exit. So charge the word before: the block
+    // that actually ran. Before this, the census had the time of whole loop
+    // nests landing on their exit tails -- CRITICAL.EXE's 98% on
+    // `mov ah,0 / mov al,[] / sub [],ax / ret` after a scaled blit whose
+    // inner loop is at 2b4:016d -- and every consumer then built from the
+    // exit: uop-live refused it as "not a loop: ret", region-live chose it.
+    const o = owner(at - 4);
     if (!o) continue;
     const k = `${o.cs.toString(16)}:${o.bip.toString(16)}`;
     if (!perBlock.has(k)) perBlock.set(k, { ...o, samples: 0 });
@@ -1162,8 +1174,11 @@ const SAFE_CALLS = [
   // the flag word -- every register access belongs to the handler around them.
   [/^(sh_\w+|shld(16|32)|shrd(16|32)|off_add|pow2)$/, []],
   // ip/halt only. rpush/rpop are the shadow return stack, which is a cache over
-  // guest ip -> arena address and holds no guest register.
-  [/^(slice_exit|jlook|rpush|rpop)$/, []],
+  // guest ip -> arena address and holds no guest register. $jlook_edge is
+  // $jlook of $gip plus a store to $ip; in a region that $ip is dead, because
+  // every exit leaves through `br $out` and the epilogue re-resolves it.
+  // $jlook_syn is the same for a jmp_syn (emit.js GO_SYN, fix J).
+  [/^(slice_exit|jlook|jlook_edge|jlook_syn|rpush|rpop)$/, []],
   [/^(port_in|port_out)$/, []],                      // leave to the host, take no register
   // REP widening's guards and its decline counter. Two queries over a linear
   // span and one statistic; none of the three reads or writes a guest register.
@@ -1501,16 +1516,17 @@ function emitTier3(ops, passes) {
 // price side exits. That is the honest limit of the measurement: a trace JIT
 // also has to pay for leaving the trace, and this says nothing about it.
 const { helpers, LOCALS, STATE, EXTRA_GLOBALS, MACHINE_STATE, machineAccessors,
-  stateAccessors } = require('./emit');
+  stateAccessors, stateGlobals, lowerRegs } = require('./emit');
 
 function moduleWat(body, extra = {}) {
   const { locals = '', pro = '', epi = '' } = extra;
-  const globals = STATE.map(g => `(global $${g} (mut i32) (i32.const 0))`).join('\n');
+  const globals = stateGlobals();
   // Shared with the interpreter's own preamble. Writing a second, simpler set
   // here is what made every segmented access in a compiled trace read from
   // linear address `0 + off`; see the note on stateAccessors() in emit.js.
   const accessors = stateAccessors();
-  return `(module
+  // Lowered like the interpreter's module: the registers live in memory.
+  return lowerRegs(`(module
 (import "host" "memory" (memory ${isa.MEM_PAGES} ${isa.MEM_PAGES}))
 (import "host" "port_in" (func $port_in (param i32) (param i32) (result i32)))
 (import "host" "port_out" (func $port_out (param i32) (param i32) (param i32)))
@@ -1522,14 +1538,16 @@ ${accessors}
 ${machineAccessors()}
 ${helpers()}
 (func (export "spin") (param $k i32) ${LOCALS} ${locals}
+  (if (call $pg_on) (then (return)))
 ${pro}
   (block $done (loop $l
+    (br_if $done (call $pg_on))
     (br_if $done (i32.eqz (local.get $k)))
 ${body}
     (local.set $k (i32.sub (local.get $k) (i32.const 1)))
     (br $l)))
 ${epi})
-)`;
+)`);
 }
 
 // Guest RAM only -- the first megabyte. Hashing the whole linear memory would
@@ -1821,6 +1839,11 @@ async function benchTiers(exe, hot, ops, { iters, reps, log = console.log, dumpW
       if (ex[`mset_${g}`]) ex[`mset_${g}`](v);
     }
     for (const [g, v] of Object.entries(snapshotRegs)) if (ex[`set_${g}`]) ex[`set_${g}`](v);
+    // Restore hidden caches as captured, including bases: selector replay may
+    // consult descriptor bytes which changed after the original segment load.
+    for (const [g, v] of Object.entries(hot.machineSnapshot || {})) {
+      if (ex[`mset_${g}`]) ex[`mset_${g}`](v);
+    }
     if (arm.afterSeed) arm.afterSeed();
   };
 
@@ -1844,7 +1867,7 @@ async function benchTiers(exe, hot, ops, { iters, reps, log = console.log, dumpW
     // selector and the wrong base and address somewhere else entirely.
     const bases = arms.every(a => (a.vm ? a.vm.exports : a.exports)[`get_${isa.SEG[0]}b`])
       ? isa.SEG : [];
-    const regs = STATE.filter(g => !['ip', 'steps', 'left', 'intno', 'gip', 'halt'].includes(g))
+    const regs = STATE.filter(g => !['ip', 'steps', 'left', 'intno', 'gip', 'halt', 'exitwhy', 'irqwant', 'dosticks', 'curpsp', 'intfast', 'intfastn', 'mousex', 'mousey', 'mousebtn', 'mousereads', 'edgelook', 'irqpend', 'ifarm'].includes(g))
       .map(g => `${g}=${ex[`get_${g}`]() >>> 0}`)
       .concat(bases.map(r => `${r}b=${ex[`get_${r}b`]() >>> 0}`))
       .join(' ');

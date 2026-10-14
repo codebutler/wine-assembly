@@ -73,7 +73,7 @@ const REPO = path.join(__dirname, '..');
     return pointer;
   };
   const createFont = (height, weight, italic, face) =>
-    wat.test_call_CreateFontW(height, weight, italic, allocFaceW(face)) >>> 0;
+    wat.test_call_CreateFontW(height, 0, 0, 0, weight, italic, 0, 0, 0, 0, 0, 0, 0, allocFaceW(face)) >>> 0;
 
   const WIDTH = 160;
   const HEIGHT = 48;
@@ -85,7 +85,7 @@ const REPO = path.join(__dirname, '..');
     wat.guest_write16(bmi + 12, 1);
     wat.guest_write16(bmi + 14, 32);
     const bitsOut = allocZero(4);
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert.ok(bitmap && hdc, 'the test needs a memory DC');
     wat.test_call_SelectObject(hdc, bitmap);

@@ -13,13 +13,14 @@
   ;;     on the extra ~11 bits of mantissa or the wider exponent range will
   ;;     still diverge.
   ;;
-  ;;   * Precision Control (CW bits 8-9: 24/53/64-bit) is ignored. All
-  ;;     arithmetic runs at f64 precision regardless of PC.
+  ;;   * FMUL honors PC=24 on its f64 result, preserving the f64 exponent
+  ;;     range. Other arithmetic still ignores PC; PC=53/64 remains f64.
+  ;;     This is not exact extended arithmetic (double rounding can remain).
   ;;
   ;;   * Rounding Control (CW bits 10-11) is honored only for FRNDINT and
   ;;     FIST/FISTP via $fpu_round. FADD/FSUB/FMUL/FDIV/FSQRT use WASM's
   ;;     fixed round-to-nearest-even — directed rounding modes are NOT
-  ;;     applied to arithmetic results.
+  ;;     applied to arithmetic results except FMUL PC24 precision reduction.
   ;;
   ;;   * Denormals are handled by the WASM runtime; FTZ/DAZ-style flushing
   ;;     in the x87 control word is ignored.
@@ -380,12 +381,97 @@
   ;; Apply current FPU rounding-control (CW bits 10-11) to an f64.
   ;; 00 = nearest-even, 01 = round down, 10 = round up, 11 = truncate.
   (func $fpu_round (param $v f64) (result f64)
-    (local $rc i32)
-    (local.set $rc (i32.and (i32.shr_u (global.get $fpu_cw) (i32.const 10)) (i32.const 3)))
+    (call $fpu_round_by (local.get $v)
+      (i32.and (i32.shr_u (global.get $fpu_cw) (i32.const 10)) (i32.const 3))))
+
+  ;; The same rounding by an explicit RC value, for callers that round by a
+  ;; mode of their own without touching the control word (WIN87EM BX=6).
+  ;; FSCALE: $v * 2^trunc($n), exactly, like ldexp. The factor is applied in
+  ;; representable steps (2^1023 / 2^-1022) because 2^n on its own leaves f64
+  ;; for |n| > 1023 while x87's 80-bit exponent does not: the MSVC CRT's
+  ;; underflow fix-up scales a zero result by 2^1536 and back, and one
+  ;; 2^1536 = +Inf factor turned every CRT function that returns 0.0 into
+  ;; 0 * Inf = NaN (MDK2's camera). Zero, infinity and NaN scale to themselves,
+  ;; except the x87's invalid cases 0 * 2^+Inf and Inf * 2^-Inf (NaN).
+  (func $fpu_scale (param $v f64) (param $n f64) (result f64)
+    (local $k i32)
+    (if (f64.ne (local.get $n) (local.get $n)) (then (return (local.get $n))))
+    (if (i32.or (f64.eq (local.get $v) (f64.const 0))
+                (i32.or (f64.ne (local.get $v) (local.get $v))
+                        (f64.eq (f64.abs (local.get $v)) (f64.const inf))))
+      (then
+        (if (i32.or
+              (i32.and (f64.eq (local.get $v) (f64.const 0)) (f64.eq (local.get $n) (f64.const inf)))
+              (i32.and (f64.eq (f64.abs (local.get $v)) (f64.const inf)) (f64.eq (local.get $n) (f64.const -inf))))
+          (then (call $fpu_set_exc (i32.const 0x01)) (return (f64.const nan))))
+        (return (local.get $v))))
+    ;; A finite nonzero f64 reaches 0 or Inf well inside +-4200 steps.
+    (local.set $k (i32.trunc_sat_f64_s
+      (f64.min (f64.max (f64.trunc (local.get $n)) (f64.const -4200)) (f64.const 4200))))
+    (block $up_done (loop $up
+      (br_if $up_done (i32.le_s (local.get $k) (i32.const 1023)))
+      (local.set $v (f64.mul (local.get $v) (f64.reinterpret_i64 (i64.const 0x7FE0000000000000))))
+      (local.set $k (i32.sub (local.get $k) (i32.const 1023)))
+      (br $up)))
+    (block $down_done (loop $down
+      (br_if $down_done (i32.ge_s (local.get $k) (i32.const -1022)))
+      (local.set $v (f64.mul (local.get $v) (f64.reinterpret_i64 (i64.const 0x0010000000000000))))
+      (local.set $k (i32.add (local.get $k) (i32.const 1022)))
+      (br $down)))
+    (f64.mul (local.get $v)
+      (f64.reinterpret_i64 (i64.shl (i64.extend_i32_u (i32.add (local.get $k) (i32.const 1023))) (i64.const 52)))))
+
+  (func $fpu_round_by (param $v f64) (param $rc i32) (result f64)
     (if (result f64) (i32.eq (local.get $rc) (i32.const 1)) (then (f64.floor (local.get $v)))
     (else (if (result f64) (i32.eq (local.get $rc) (i32.const 2)) (then (f64.ceil (local.get $v)))
     (else (if (result f64) (i32.eq (local.get $rc) (i32.const 3)) (then (f64.trunc (local.get $v)))
     (else (f64.nearest (local.get $v)))))))))
+
+  ;; Round an FMUL result to the selected 24-bit significand without reducing
+  ;; the f64 exponent range to f32. PC=53/64 retain this engine's f64 behavior.
+  ;; Like the rest of x87-lite, multiplication first rounds to f64: this does
+  ;; not emulate 80-bit exponent range or eliminate double-rounding at a
+  ;; 24-bit halfway boundary. RC applies to the precision reduction below.
+  (func $fpu_mul (param $a f64) (param $b f64) (result f64)
+    (local $v f64) (local $bits i64) (local $mag i64)
+    (local $drop i64) (local $mask i64) (local $lost i64)
+    (local $half i64) (local $rc i32) (local $up i32)
+    (local.set $v (f64.mul (local.get $a) (local.get $b)))
+    (if (i32.ne (i32.and (global.get $fpu_cw) (i32.const 0x300)) (i32.const 0))
+      (then (return (local.get $v))))
+    (local.set $bits (i64.reinterpret_f64 (local.get $v)))
+    (local.set $mag (i64.and (local.get $bits) (i64.const 0x7fffffffffffffff)))
+    ;; Preserve NaN payloads, infinities and signed zero.
+    (if (i32.or (i64.ge_u (local.get $mag) (i64.const 0x7ff0000000000000))
+                (i64.eqz (local.get $mag)))
+      (then (return (local.get $v))))
+    (local.set $drop (i64.const 29))
+    ;; An f64 subnormal has no implicit leading bit. Keep 24 significant
+    ;; bits relative to its actual leading bit, not the normal exponent.
+    (if (i64.lt_u (local.get $mag) (i64.const 0x0010000000000000))
+      (then
+        (local.set $drop (i64.sub (i64.const 40) (i64.clz (local.get $mag))))
+        (if (i64.le_s (local.get $drop) (i64.const 0))
+          (then (return (local.get $v))))))
+    (local.set $mask (i64.sub (i64.shl (i64.const 1) (local.get $drop)) (i64.const 1)))
+    (local.set $lost (i64.and (local.get $mag) (local.get $mask)))
+    (if (i64.eqz (local.get $lost)) (then (return (local.get $v))))
+    (local.set $rc (i32.and (i32.shr_u (global.get $fpu_cw) (i32.const 10)) (i32.const 3)))
+    (if (i32.eqz (local.get $rc))
+      (then
+        (local.set $half (i64.shl (i64.const 1) (i64.sub (local.get $drop) (i64.const 1))))
+        (local.set $up (i32.or (i64.gt_u (local.get $lost) (local.get $half))
+          (i32.and (i64.eq (local.get $lost) (local.get $half))
+            (i64.ne (i64.and (i64.shr_u (local.get $mag) (local.get $drop)) (i64.const 1)) (i64.const 0))))))
+      (else
+        (local.set $up (i32.or
+          (i32.and (i32.eq (local.get $rc) (i32.const 1)) (i64.lt_s (local.get $bits) (i64.const 0)))
+          (i32.and (i32.eq (local.get $rc) (i32.const 2)) (i64.ge_s (local.get $bits) (i64.const 0)))))))
+    (local.set $mag (i64.and (local.get $mag) (i64.xor (local.get $mask) (i64.const -1))))
+    (if (local.get $up)
+      (then (local.set $mag (i64.add (local.get $mag) (i64.shl (i64.const 1) (local.get $drop))))))
+    (f64.reinterpret_i64 (i64.or (local.get $mag)
+      (i64.and (local.get $bits) (i64.const 0x8000000000000000)))))
 
   (func $fpu_arith (param $a f64) (param $b f64) (param $op i32) (result f64)
     ;; FDIV (op=6: a/b) and FDIVR (op=7: b/a) — flag ZE if the divisor is zero.
@@ -396,7 +482,7 @@
     (if (i32.eq (local.get $op) (i32.const 7))
       (then (if (f64.eq (local.get $a) (f64.const 0)) (then (call $fpu_set_exc (i32.const 0x04))))))
     (if (result f64) (i32.eq (local.get $op) (i32.const 0)) (then (f64.add (local.get $a) (local.get $b)))
-    (else (if (result f64) (i32.eq (local.get $op) (i32.const 1)) (then (f64.mul (local.get $a) (local.get $b)))
+    (else (if (result f64) (i32.eq (local.get $op) (i32.const 1)) (then (call $fpu_mul (local.get $a) (local.get $b)))
     (else (if (result f64) (i32.eq (local.get $op) (i32.const 4)) (then (f64.sub (local.get $a) (local.get $b)))
     (else (if (result f64) (i32.eq (local.get $op) (i32.const 5)) (then (f64.sub (local.get $b) (local.get $a)))
     (else (if (result f64) (i32.eq (local.get $op) (i32.const 6)) (then (f64.div (local.get $a) (local.get $b)))
@@ -431,28 +517,27 @@
 
   (func $fpu_load_mem (param $addr i32) (param $group i32) (result f64)
     (if (result f64) (i32.eq (local.get $group) (i32.const 0))
-      (then (f64.promote_f32 (f32.load (call $g2w (local.get $addr)))))
+      (then (f64.promote_f32 (f32.reinterpret_i32 (call $gl32_native (local.get $addr)))))
     (else (if (result f64) (i32.eq (local.get $group) (i32.const 4))
-      (then (f64.load (call $g2w (local.get $addr))))
+      (then (f64.reinterpret_i64 (call $gl64 (local.get $addr))))
     (else (if (result f64) (i32.or (i32.eq (local.get $group) (i32.const 2)) (i32.eq (local.get $group) (i32.const 3)))
-      (then (f64.convert_i32_s (i32.load (call $g2w (local.get $addr)))))
+      (then (f64.convert_i32_s (call $gl32_native (local.get $addr))))
     (else (if (result f64) (i32.or (i32.eq (local.get $group) (i32.const 6)) (i32.eq (local.get $group) (i32.const 7)))
-      (then (f64.convert_i32_s (i32.load16_s (call $g2w (local.get $addr)))))
+      (then (f64.convert_i32_s (i32.extend16_s (call $gl16 (local.get $addr)))))
     (else
-      (f64.load (call $g2w (local.get $addr))))))))))))
+      (f64.reinterpret_i64 (call $gl64 (local.get $addr))))))))))))
 
   (func $fpu_load_m80 (param $addr i32) (result f64)
-    (local $w i32) (local $se i32) (local $exp i32) (local $sign i32)
+    (local $se i32) (local $exp i32) (local $sign i32)
     (local $mant i64) (local $val f64)
-    (local.set $w (call $g2w (local.get $addr)))
-    (local.set $mant (i64.load (local.get $w)))
-    (local.set $se (i32.load16_u (i32.add (local.get $w) (i32.const 8))))
+    (local.set $mant (call $gl64 (local.get $addr)))
+    (local.set $se (call $gl16 (i32.add (local.get $addr) (i32.const 8))))
     (local.set $exp (i32.and (local.get $se) (i32.const 0x7FFF)))
     (local.set $sign (i32.and (local.get $se) (i32.const 0x8000)))
     ;; Backward compatibility for values stored by our FSTP m80 path: an f64
     ;; payload followed by a zero sign/exponent word.
     (if (i32.and (i32.eqz (local.get $exp)) (i64.ne (local.get $mant) (i64.const 0)))
-      (then (return (f64.load (local.get $w)))))
+      (then (return (f64.reinterpret_i64 (local.get $mant)))))
     (if (i64.eqz (local.get $mant))
       (then
         (if (local.get $sign)
@@ -482,28 +567,28 @@
     (if (local.get $sign) (then (local.set $val (f64.neg (local.get $val)))))
     (local.get $val))
 
+  (func $fpu_store_m80_bits (param $addr i32) (param $mant i64) (param $sign_exp i32)
+    (call $gs64 (local.get $addr) (local.get $mant))
+    (call $gs16 (i32.add (local.get $addr) (i32.const 8)) (local.get $sign_exp)))
+
   (func $fpu_store_m80 (param $addr i32) (param $val f64)
-    (local $w i32) (local $sign i32) (local $exp i32)
+    (local $sign i32) (local $exp i32) (local $mant i64)
     (local $abs f64) (local $scaled f64)
-    (local.set $w (call $g2w (local.get $addr)))
     (local.set $abs (f64.abs (local.get $val)))
     (if (i64.lt_s (i64.reinterpret_f64 (local.get $val)) (i64.const 0))
       (then (local.set $sign (i32.const 0x8000))))
     (if (call $fpu_is_nan (local.get $val))
       (then
-        (i64.store (local.get $w) (i64.const -4611686018427387904))
-        (i32.store16 (i32.add (local.get $w) (i32.const 8))
+        (call $fpu_store_m80_bits (local.get $addr) (i64.const -4611686018427387904)
           (i32.or (local.get $sign) (i32.const 0x7FFF)))
         (return)))
     (if (f64.eq (local.get $abs) (f64.const 0))
       (then
-        (i64.store (local.get $w) (i64.const 0))
-        (i32.store16 (i32.add (local.get $w) (i32.const 8)) (local.get $sign))
+        (call $fpu_store_m80_bits (local.get $addr) (i64.const 0) (local.get $sign))
         (return)))
     (if (f64.ge (local.get $abs) (f64.const 1.7976931348623157e308))
       (then
-        (i64.store (local.get $w) (i64.const -9223372036854775808))
-        (i32.store16 (i32.add (local.get $w) (i32.const 8))
+        (call $fpu_store_m80_bits (local.get $addr) (i64.const -9223372036854775808)
           (i32.or (local.get $sign) (i32.const 0x7FFF)))
         (return)))
     (local.set $exp (i32.trunc_f64_s (f64.floor (call $host_math_log2 (local.get $abs)))))
@@ -514,11 +599,11 @@
         (f64.const 9223372036854775808.0)))
     (if (f64.ge (local.get $scaled) (f64.const 18446744073709551616.0))
       (then
-        (i64.store (local.get $w) (i64.const -9223372036854775808))
+        (local.set $mant (i64.const -9223372036854775808))
         (local.set $exp (i32.add (local.get $exp) (i32.const 1))))
       (else
-        (i64.store (local.get $w) (i64.trunc_f64_u (local.get $scaled)))))
-    (i32.store16 (i32.add (local.get $w) (i32.const 8))
+        (local.set $mant (i64.trunc_f64_u (local.get $scaled)))))
+    (call $fpu_store_m80_bits (local.get $addr) (local.get $mant)
       (i32.or (local.get $sign)
         (i32.and (i32.add (local.get $exp) (i32.const 16383)) (i32.const 0x7FFF)))))
 
@@ -559,37 +644,31 @@
   ;; document the gap. If a guest ever does parse them it sees a null
   ;; selector — easy to spot if it ever matters.
   (func $fpu_store_env (param $addr i32)
-    (local $w i32)
-    (local.set $w (call $g2w (local.get $addr)))
-    (i32.store (local.get $w) (global.get $fpu_cw))
-    (i32.store (i32.add (local.get $w) (i32.const 4))
+    (call $gs32 (local.get $addr) (global.get $fpu_cw))
+    (call $gs32 (i32.add (local.get $addr) (i32.const 4))
       (i32.or (i32.and (global.get $fpu_sw) (i32.const 0xC7FF))
               (i32.shl (global.get $fpu_top) (i32.const 11))))
-    (i32.store (i32.add (local.get $w) (i32.const 8)) (call $fpu_pack_tag_word))
-    (i32.store (i32.add (local.get $w) (i32.const 12)) (i32.const 0))   ;; FIP
-    (i32.store (i32.add (local.get $w) (i32.const 16)) (i32.const 0))   ;; FCS:FOP
-    (i32.store (i32.add (local.get $w) (i32.const 20)) (i32.const 0))   ;; FDP
-    (i32.store (i32.add (local.get $w) (i32.const 24)) (i32.const 0)))  ;; FDS
+    (call $gs32 (i32.add (local.get $addr) (i32.const 8)) (call $fpu_pack_tag_word))
+    (call $gs32 (i32.add (local.get $addr) (i32.const 12)) (i32.const 0))   ;; FIP
+    (call $gs32 (i32.add (local.get $addr) (i32.const 16)) (i32.const 0))   ;; FCS:FOP
+    (call $gs32 (i32.add (local.get $addr) (i32.const 20)) (i32.const 0))   ;; FDP
+    (call $gs32 (i32.add (local.get $addr) (i32.const 24)) (i32.const 0)))  ;; FDS
 
   (func $fpu_load_env (param $addr i32)
-    (local $w i32) (local $sw i32)
-    (local.set $w (call $g2w (local.get $addr)))
-    (global.set $fpu_cw (i32.and (i32.load (local.get $w)) (i32.const 0xFFFF)))
-    (local.set $sw (i32.and (i32.load (i32.add (local.get $w) (i32.const 4))) (i32.const 0xFFFF)))
+    (local $sw i32)
+    (global.set $fpu_cw (i32.and (call $gl32_native (local.get $addr)) (i32.const 0xFFFF)))
+    (local.set $sw (i32.and (call $gl32_native (i32.add (local.get $addr) (i32.const 4))) (i32.const 0xFFFF)))
     (global.set $fpu_top (i32.and (i32.shr_u (local.get $sw) (i32.const 11)) (i32.const 7)))
     (global.set $fpu_sw (i32.and (local.get $sw) (i32.const 0xC7FF)))
     (global.set $fpu_raw_tag (i32.const 0))
     (call $fpu_unpack_tag_word
-      (i32.and (i32.load (i32.add (local.get $w) (i32.const 8))) (i32.const 0xFFFF))))
+      (i32.and (call $gl32_native (i32.add (local.get $addr) (i32.const 8))) (i32.const 0xFFFF))))
 
   ;; FNSAVE/FRSTOR ST area: 8 x 10-byte slots in PHYSICAL order.
   (func $fpu_store_regs (param $addr i32)
-    (local $i i32) (local $base i32) (local $slot i32)
-    (local.set $base (call $g2w (local.get $addr)))
+    (local $i i32)
     (block $done (loop $lp
       (br_if $done (i32.ge_u (local.get $i) (i32.const 8)))
-      (local.set $slot (i32.add (local.get $base)
-        (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.shl (local.get $i) (i32.const 1)))))
       (call $fpu_store_m80
         (i32.add (local.get $addr)
           (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.shl (local.get $i) (i32.const 1))))
@@ -598,13 +677,10 @@
       (br $lp))))
 
   (func $fpu_load_regs (param $addr i32)
-    (local $i i32) (local $base i32) (local $slot i32)
+    (local $i i32)
     (global.set $fpu_raw_tag (i32.const 0))
-    (local.set $base (call $g2w (local.get $addr)))
     (block $done (loop $lp
       (br_if $done (i32.ge_u (local.get $i) (i32.const 8)))
-      (local.set $slot (i32.add (local.get $base)
-        (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.shl (local.get $i) (i32.const 1)))))
       (call $fpu_set_phys (local.get $i)
         (call $fpu_load_m80 (i32.add (local.get $addr)
           (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.shl (local.get $i) (i32.const 1))))))
@@ -614,12 +690,11 @@
   ;; FBLD: 80-bit packed BCD → ST(0). 18 BCD digits in low 9 bytes
   ;; (low nibble = lower digit), sign byte at offset 9 (bit 7 = negative).
   (func $fpu_bld (param $addr i32)
-    (local $i i32) (local $w i32) (local $b i32) (local $val f64) (local $mult f64)
-    (local.set $w (call $g2w (local.get $addr)))
+    (local $i i32) (local $b i32) (local $val f64) (local $mult f64)
     (local.set $mult (f64.const 1))
     (block $done (loop $lp
       (br_if $done (i32.ge_u (local.get $i) (i32.const 9)))
-      (local.set $b (i32.load8_u (i32.add (local.get $w) (local.get $i))))
+      (local.set $b (call $gl8 (i32.add (local.get $addr) (local.get $i))))
       (local.set $val (f64.add (local.get $val)
         (f64.mul (f64.convert_i32_u (i32.and (local.get $b) (i32.const 0x0F)))
                  (local.get $mult))))
@@ -630,15 +705,14 @@
       (local.set $mult (f64.mul (local.get $mult) (f64.const 10)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $lp)))
-    (if (i32.and (i32.load8_u (i32.add (local.get $w) (i32.const 9))) (i32.const 0x80))
+    (if (i32.and (call $gl8 (i32.add (local.get $addr) (i32.const 9))) (i32.const 0x80))
       (then (local.set $val (f64.neg (local.get $val)))))
     (call $fpu_push (local.get $val)))
 
   ;; FBSTP: ST(0) → 80-bit packed BCD, then pop.
   (func $fpu_bstp (param $addr i32)
-    (local $i i32) (local $w i32) (local $sign i32) (local $val f64) (local $vi i64)
+    (local $i i32) (local $sign i32) (local $val f64) (local $vi i64)
     (local $rem i32) (local $tens i32) (local $ones i32)
-    (local.set $w (call $g2w (local.get $addr)))
     (local.set $val (call $fpu_pop))
     (if (f64.lt (local.get $val) (f64.const 0))
       (then (local.set $sign (i32.const 0x80)) (local.set $val (f64.neg (local.get $val)))))
@@ -654,11 +728,11 @@
       (local.set $vi  (i64.div_u (local.get $vi) (i64.const 100)))
       (local.set $ones (i32.rem_u (local.get $rem) (i32.const 10)))
       (local.set $tens (i32.div_u (local.get $rem) (i32.const 10)))
-      (i32.store8 (i32.add (local.get $w) (local.get $i))
+      (call $gs8 (i32.add (local.get $addr) (local.get $i))
         (i32.or (i32.shl (local.get $tens) (i32.const 4)) (local.get $ones)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $lp)))
-    (i32.store8 (i32.add (local.get $w) (i32.const 9)) (local.get $sign)))
+    (call $gs8 (i32.add (local.get $addr) (i32.const 9)) (local.get $sign)))
 
   (func $fpu_exec_mem (param $group i32) (param $reg i32) (param $addr i32)
     (local $val f64) (local $raw i64)
@@ -686,17 +760,19 @@
     (if (i32.eq (local.get $group) (i32.const 1))
       (then
         (if (i32.eq (local.get $reg) (i32.const 0))
-          (then (call $fpu_push (f64.promote_f32 (f32.load (call $g2w (local.get $addr))))) (return)))
+          (then (call $fpu_push (f64.promote_f32 (f32.reinterpret_i32 (call $gl32_native (local.get $addr))))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 2))
           (then
-            (f32.store (call $g2w (local.get $addr)) (f32.demote_f64 (call $fpu_get (i32.const 0))))
+            (call $gs32 (local.get $addr)
+              (i32.reinterpret_f32 (f32.demote_f64 (call $fpu_get (i32.const 0)))))
             (return)))
         (if (i32.eq (local.get $reg) (i32.const 3))
           (then
-            (f32.store (call $g2w (local.get $addr)) (f32.demote_f64 (call $fpu_pop)))
+            (call $gs32 (local.get $addr)
+              (i32.reinterpret_f32 (f32.demote_f64 (call $fpu_pop))))
             (return)))
         (if (i32.eq (local.get $reg) (i32.const 5))
-          (then (global.set $fpu_cw (i32.load16_u (call $g2w (local.get $addr)))) (return)))
+          (then (global.set $fpu_cw (call $gl16 (local.get $addr))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 7))
           (then (call $gs16 (local.get $addr) (global.get $fpu_cw)) (return)))
         ;; reg=4 FLDENV, reg=6 FNSTENV — 28-byte 32-bit protected-mode env block.
@@ -712,14 +788,14 @@
     (if (i32.eq (local.get $group) (i32.const 5))
       (then
         (if (i32.eq (local.get $reg) (i32.const 0))
-          (then (call $fpu_push (f64.load (call $g2w (local.get $addr)))) (return)))
+          (then (call $fpu_push (f64.reinterpret_i64 (call $gl64 (local.get $addr)))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 2))
           (then
-            (f64.store (call $g2w (local.get $addr)) (call $fpu_get (i32.const 0)))
+            (call $gs64 (local.get $addr) (i64.reinterpret_f64 (call $fpu_get (i32.const 0))))
             (return)))
         (if (i32.eq (local.get $reg) (i32.const 3))
           (then
-            (f64.store (call $g2w (local.get $addr)) (call $fpu_pop))
+            (call $gs64 (local.get $addr) (i64.reinterpret_f64 (call $fpu_pop)))
             (return)))
         (if (i32.eq (local.get $reg) (i32.const 7))
           (then
@@ -760,7 +836,7 @@
     (if (i32.eq (local.get $group) (i32.const 7))
       (then
         (if (i32.eq (local.get $reg) (i32.const 0))
-          (then (call $fpu_push (f64.convert_i32_s (i32.load16_s (call $g2w (local.get $addr))))) (return)))
+          (then (call $fpu_push (f64.convert_i32_s (i32.extend16_s (call $gl16 (local.get $addr))))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 2))
           (then (call $gs16 (local.get $addr) (call $fpu_to_i16 (call $fpu_get (i32.const 0)))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 3))
@@ -769,7 +845,7 @@
           (then (call $fpu_bld (local.get $addr)) (return)))
         (if (i32.eq (local.get $reg) (i32.const 5))
           (then
-            (local.set $raw (i64.load (call $g2w (local.get $addr))))
+            (local.set $raw (call $gl64 (local.get $addr)))
             (call $fpu_push (f64.convert_i64_s (local.get $raw)))
             (call $fpu_raw_set (i32.const 0) (local.get $raw))
             (return)))
@@ -779,10 +855,10 @@
           (then
             (if (call $fpu_raw_valid (i32.const 0))
               (then
-                (i64.store (call $g2w (local.get $addr)) (call $fpu_raw_get (i32.const 0)))
+                (call $gs64 (local.get $addr) (call $fpu_raw_get (i32.const 0)))
                 (drop (call $fpu_pop))
                 (return)))
-            (i64.store (call $g2w (local.get $addr)) (call $fpu_to_i64 (call $fpu_pop)))
+            (call $gs64 (local.get $addr) (call $fpu_to_i64 (call $fpu_pop)))
             (return)))
         (call $fpu_crash_op (local.get $group) (local.get $reg) (i32.const 0)) (return)))
     (call $fpu_crash_op (local.get $group) (local.get $reg) (i32.const 0))
@@ -940,7 +1016,7 @@
                 (drop (call $fpu_pop)) (return)))
             (if (i32.eq (local.get $rm) (i32.const 5))
               (then ;; FSCALE: ST(0) = ST(0) * 2^trunc(ST(1))
-                (call $fpu_set (i32.const 0) (f64.mul (local.get $st0) (call $host_math_pow2 (f64.trunc (call $fpu_get (i32.const 1)))))) (return)))
+                (call $fpu_set (i32.const 0) (call $fpu_scale (local.get $st0) (call $fpu_get (i32.const 1)))) (return)))
             (call $fpu_crash_op (local.get $group) (local.get $reg) (local.get $rm)) (return)))
         (call $fpu_crash_op (local.get $group) (local.get $reg) (local.get $rm)) (return)))
     ;; Group 2 (DA): FCMOV / FUCOMPP
@@ -1000,7 +1076,7 @@
         (if (i32.eq (local.get $reg) (i32.const 0))
           (then (call $fpu_set (local.get $rm) (f64.add (local.get $v) (local.get $st0))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 1))
-          (then (call $fpu_set (local.get $rm) (f64.mul (local.get $v) (local.get $st0))) (return)))
+          (then (call $fpu_set (local.get $rm) (call $fpu_mul (local.get $v) (local.get $st0))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 4))
           (then (call $fpu_set (local.get $rm) (f64.sub (local.get $st0) (local.get $v))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 5))
@@ -1009,7 +1085,14 @@
           (then (call $fpu_set (local.get $rm) (f64.div (local.get $st0) (local.get $v))) (return)))
         (if (i32.eq (local.get $reg) (i32.const 7))
           (then (call $fpu_set (local.get $rm) (f64.div (local.get $v) (local.get $st0))) (return)))
-        ;; DC reg=2,3 are FCOM/FCOMP register-form aliases — uncommon, not impl.
+        ;; DC D0+i / DC D8+i: the undocumented FCOM / FCOMP ST(i) aliases of
+        ;; D8 D0+i / D8 D8+i, which every x87 since the 8087 executes the same
+        ;; way. Trespasser's compiler emits "fcomp st(0)" as DC D8 to compare
+        ;; and pop (0x539172 in its level loader).
+        (if (i32.eq (local.get $reg) (i32.const 2))
+          (then (call $fpu_compare (local.get $st0) (local.get $v)) (return)))
+        (if (i32.eq (local.get $reg) (i32.const 3))
+          (then (call $fpu_compare (local.get $st0) (local.get $v)) (drop (call $fpu_pop)) (return)))
         (call $fpu_crash_op (local.get $group) (local.get $reg) (local.get $rm)) (return)))
     ;; Group 5 (DD): FFREE, FST, FSTP, FUCOM, FUCOMP
     (if (i32.eq (local.get $group) (i32.const 5))
@@ -1034,7 +1117,7 @@
         (if (i32.eq (local.get $reg) (i32.const 0))
           (then (call $fpu_set (local.get $rm) (f64.add (local.get $v) (local.get $st0))) (drop (call $fpu_pop)) (return)))
         (if (i32.eq (local.get $reg) (i32.const 1))
-          (then (call $fpu_set (local.get $rm) (f64.mul (local.get $v) (local.get $st0))) (drop (call $fpu_pop)) (return)))
+          (then (call $fpu_set (local.get $rm) (call $fpu_mul (local.get $v) (local.get $st0))) (drop (call $fpu_pop)) (return)))
         (if (i32.and (i32.eq (local.get $reg) (i32.const 3)) (i32.eq (local.get $rm) (i32.const 1)))
           (then (call $fpu_compare (local.get $st0) (call $fpu_get (i32.const 1))) (drop (call $fpu_pop)) (drop (call $fpu_pop)) (return)))
         (if (i32.eq (local.get $reg) (i32.const 4))
@@ -1055,7 +1138,7 @@
           (then
             (global.set $fpu_sw (i32.or (i32.and (global.get $fpu_sw) (i32.const 0xC7FF))
               (i32.shl (global.get $fpu_top) (i32.const 11))))
-            (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000)) (global.get $fpu_sw)))
+            (i32.store16 (global.get $reg_base) (global.get $fpu_sw))
             (return)))
         ;; DF E8..EF = FUCOMIP ST, ST(i) — pop after unordered compare.
         (if (i32.eq (local.get $reg) (i32.const 5))
@@ -1072,7 +1155,7 @@
   ;; 188: FPU memory op — op=(group<<4)|reg, addr in next word
   (func $th_fpu_mem (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $addr i32)
-    (local.set $addr (call $read_thread_word))
+    (local.set $addr (read-thread-word))
     (if (i32.eq (local.get $addr) (global.get $SIB_SENTINEL))
       (then (local.set $addr (global.get $ea_temp))))
     (call $fpu_exec_mem
@@ -1089,12 +1172,31 @@
       (i32.and (local.get $op) (i32.const 0xF)))
     (dispatch-next))
 
+  ;; 500: the body of a statically linked MSVC _ftol, which the decoder
+  ;; recognises by its exact bytes ($ftol_body_at) and emits as this op followed
+  ;; by RET. The same semantics as the imported override $handle__ftol: pop
+  ;; ST(0), convert with truncation (the body's `or ah,0Ch` + fldcw), restore
+  ;; the caller's control word, return the 64-bit result in EDX:EAX. Not
+  ;; reproduced, as with the import: the body's scratch stores below ESP and
+  ;; the flags its `add esp`/`or ah` leave, both dead in the MSVC calling
+  ;; convention. Croc 2 spends 14% of its block entries in this one body.
+  (func $th_ftol_native (param $op i32)
+    (local $nx_fn i32) (local $nx_op i32)
+    (local $saved_cw i32) (local $value i64)
+    (local.set $saved_cw (global.get $fpu_cw))
+    (global.set $fpu_cw (i32.or (local.get $saved_cw) (i32.const 0x0C00)))
+    (local.set $value (call $fpu_to_i64 (call $fpu_pop)))
+    (global.set $fpu_cw (local.get $saved_cw))
+    (i32.store offset=0 (global.get $reg_base) (i32.wrap_i64 (local.get $value)))
+    (i32.store offset=8 (global.get $reg_base) (i32.wrap_i64 (i64.shr_u (local.get $value) (i64.const 32))))
+    (dispatch-next))
+
   ;; 190: FPU memory op with base+disp — op=(group<<8)|(reg<<4)|base, disp in next word
   (func $th_fpu_mem_ro (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (call $fpu_exec_mem
       (i32.shr_u (local.get $op) (i32.const 8))
       (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF))
-      (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))) (call $read_thread_word)))
+      (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))) (read-thread-word)))
     (dispatch-next))
 
   ;; 439: canonical x87 compare branch tail:
@@ -1112,19 +1214,19 @@
       (i32.or
         (i32.and (global.get $fpu_sw) (i32.const 0xC7FF))
         (i32.shl (global.get $fpu_top) (i32.const 11))))
-    (i32.store offset=0 (global.get $reg_base) (i32.or
-        (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000))
-        (global.get $fpu_sw)))
+    (i32.store16 (global.get $reg_base) (global.get $fpu_sw))
+    ;; AH is the status word's high byte; read it from $fpu_sw rather than
+    ;; back out of the halfword just stored.
     (local.set $r
       (i32.and
-        (i32.and (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 8)) (i32.const 0xFF))
+        (i32.and (i32.shr_u (global.get $fpu_sw) (i32.const 8)) (i32.const 0xFF))
         (i32.and (local.get $op) (i32.const 0xFF))))
     (call $set_flags_logic (local.get $r))
     (global.set $flag_sign_shift (i32.const 7))
     (local.set $cc
       (i32.and (i32.shr_u (local.get $op) (i32.const 8)) (i32.const 0xF)))
-    (local.set $fall (call $read_thread_word))
-    (local.set $target (call $read_thread_word))
+    (local.set $fall (read-thread-word))
+    (local.set $target (read-thread-word))
     (if (call $eval_cc (local.get $cc))
       (then (global.set $eip (local.get $target)))
       (else (global.set $eip (local.get $fall))))

@@ -161,8 +161,26 @@ const familyNameOf = buffer => {
     'writable media gets a concrete resource file');
   assert.strictEqual(add(writableFot), 1,
     'AddFontResourceA must install the TTF represented by a created .FOT');
+  assert.strictEqual(registered(family).toLowerCase(), ARIAL.toLowerCase(),
+    'a known FOT resolves its source before registering, even when a copied file exists');
   assert.strictEqual(remove(writableFot), 1,
     'RemoveFontResourceA must remove a face installed through its .FOT');
+  assert.strictEqual(registered(family), null, 'FOT removal uses the same source identity');
+  // Three successful adds need three removals; aliases share one live entry.
+  for (const resource of [writableFot, ARIAL, ARIAL.toLowerCase()]) {
+    assert.strictEqual(add(resource), 1, 'each add acquires a registration');
+  }
+  for (const resource of [ARIAL.toLowerCase(), writableFot]) {
+    assert.strictEqual(remove(resource), 1, 'remove releases one registration');
+    assert.strictEqual(registered(family)?.toLowerCase(), ARIAL.toLowerCase(),
+      'the face remains registered while another add is outstanding');
+  }
+  assert.strictEqual(remove(ARIAL), 1, 'the last removal succeeds');
+  assert.strictEqual(registered(family), null, 'the last removal unregisters the face');
+  assert.strictEqual(remove(writableFot), 0, 'an extra removal fails');
+  assert.strictEqual(add(ARIAL), 1, 'a fully removed slot can be registered again');
+  assert.strictEqual(remove(ARIAL), 1, 'the reused slot starts at one reference');
+  assert.strictEqual(remove(ARIAL), 0, 'reuse does not retain an old reference count');
   assert.strictEqual(createScalable(writableFot, ARIAL), 0,
     'an existing destination must fail instead of being overwritten');
 
@@ -299,13 +317,13 @@ const familyNameOf = buffer => {
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bits = allocZero(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bits) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bits, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert.ok(bitmap && hdc, 'the test needs a memory DC');
   wat.test_call_SelectObject(hdc, bitmap);
   wat.test_call_PatBlt(hdc, 0, 0, WIDTH, HEIGHT, 0x00FF0062); // WHITENESS
 
-  const font = wat.test_call_CreateFontW(-16, 400, 0, allocFaceW(family)) >>> 0;
+  const font = wat.test_call_CreateFontW(-16, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, allocFaceW(family)) >>> 0;
   assert.ok(font, 'CreateFont must produce a WAT font object');
   wat.test_call_SelectObject(hdc, font);
   assert.ok(wat.test_gdi_bitmap_font_selected(hdc) >>> 0,

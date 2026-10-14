@@ -14,7 +14,7 @@
 // +connect to the owner's seat over WebRTC. Each browser context is its own
 // cookie, so its own signaling user, as two people are.
 //
-// A third browser says "Continue offline", starts at the game's menu, and joins from
+// A third browser says "Play offline", starts at the game's menu, and joins from
 // the toast the shell shows it later. That join reaches a game already past
 // its command line, so it goes through lan.join.inGame typing into Quake's
 // console. It is also the three-player room where an unread UDP socket used
@@ -82,6 +82,9 @@ const wireOf = () => {
     address: w.address, sent: w.sentFrames, recv: w.recvFrames,
     members: w.memberCount === undefined ? null : w.memberCount,
     forwarded: w.forwardedFrames === undefined ? null : w.forwardedFrames,
+    // Which of its peer links carry datagrams on the unordered channel.
+    dg: (w.link ? [w.link] : Array.from((w.links || new Map()).values()))
+      .map(l => !!(l.dgChannel && l.dgChannel.readyState === 'open')),
   } : null;
 };
 const snapWindow = () => {
@@ -146,9 +149,12 @@ const snapWindow = () => {
             if (v && v.APPS && v.APPS.quake2_demo) v.APPS.quake2_demo.args = a;
           },
         });
+        // Cards other than the "Joining <host>'s game" progress card (be94aa32),
+        // which a room link shows on purpose while it connects.
         window.__cards = 0;
         new MutationObserver(() => {
-          if (document.getElementById('wine-lan-card')) window.__cards++;
+          const card = document.getElementById('wine-lan-card');
+          if (card && !/^Joining /.test(card.textContent)) window.__cards++;
         }).observe(document, { childList: true, subtree: true });
       }, args);
       await page.goto(link, { waitUntil: 'load', timeout: 60000 });
@@ -218,7 +224,7 @@ const snapWindow = () => {
       !!card && card.length === 1 && /demo1/.test(card[0]));
     check('with a way to continue offline', await guest.page.evaluate(() =>
       Array.from(document.querySelectorAll('#wine-lan-card button'))
-        .some(x => x.textContent === 'Continue offline')));
+        .some(x => x.textContent === 'Play offline')));
     check('and its game was not started behind the list',
       await guest.page.evaluate(() => runningApps.length === 0));
     const grown = await H.until(guest.page, 'guest: the list never refreshed',
@@ -252,6 +258,9 @@ const snapWindow = () => {
     check(`the server's frames reach the joiner (${flowing || 0} received)`, !!flowing);
     check('the owner counts one member', hw && hw.members === 1);
     check('the joiner talks to the server too', gw && gw.sent > 50);
+    check('datagrams travel the unordered channel at both ends',
+      hw && gw && hw.dg.length === 1 && hw.dg[0] && gw.dg.length === 1 && gw.dg[0],
+      `owner ${JSON.stringify(hw && hw.dg)} joiner ${JSON.stringify(gw && gw.dg)}`);
 
     await H.sleep(8000);
     const hp = await snap(host, 'host-match');
@@ -262,7 +271,7 @@ const snapWindow = () => {
 
     // ---- a third player, already playing when they take the offer --------
     //
-    // "Continue offline" on the list, so the game starts at its own menu with no room.
+    // "Play offline" on the list, so the game starts at its own menu with no room.
     // The shell keeps looking, offers the same host again as a toast, and a
     // Join there has to reach a game that is past its command line: the
     // recipe types `connect 10.0.0.1 into its console. Three players is also
@@ -273,12 +282,12 @@ const snapWindow = () => {
     if (offered) {
       await third.page.evaluate(() => {
         Array.from(document.querySelectorAll('#wine-lan-card button'))
-          .find(x => x.textContent === 'Continue offline').click();
+          .find(x => x.textContent === 'Play offline').click();
       });
     }
     const running = await H.until(third.page, 'third: game never started',
       () => runningApps.length > 0 && !runningApps[0].wine.vlanWire, null, 60000);
-    check('"Continue offline" starts the game with no room', !!running);
+    check('"Play offline" starts the game with no room', !!running);
     const toast = await H.until(third.page, 'third: no toast',
       () => { const c = document.getElementById('wine-lan-card'); return c ? c.textContent : null; },
       null, 90000);
@@ -347,6 +356,22 @@ const snapWindow = () => {
       () => { const w = runningApps[0] && runningApps[0].wine.vlanWire; return w && w.recvFrames > 300 ? w.recvFrames : null; },
       null, 240000);
     check(`the fourth player reached the server (${fourthIn || 0} frames received)`, !!fourthIn);
+
+    // A socket game that went online into an empty lobby opened a room only
+    // its link can reach, so it gets the card that hands the link out.
+    check('the host was shown the share card for its room',
+      await host.page.evaluate(() => !!document.querySelector('#wine-lan-share .wine-lan-share-url')));
+
+    // ---- quitting the game that opened the room ----------------------------
+    //
+    // The owner's "room open" chip is held with no timeout, so nothing but
+    // the quit takes it down.
+    await host.page.evaluate(() => stopAllApps());
+    const noticesGone = await H.until(host.page, 'host: room notices outlived the game',
+      () => (!document.getElementById('wine-lan-chip') && !document.getElementById('wine-lan-share')) || null,
+      null, 30000);
+    check('quitting the host takes its room chip and share card down', !!noticesGone,
+      `chip: ${await host.page.evaluate(chipText)}`);
 
     const sides = [host, guest, third].concat(fourth ? [fourth] : []);
     for (const side of sides) {

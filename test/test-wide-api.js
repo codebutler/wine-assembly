@@ -178,10 +178,17 @@ async function main() {
     (e.test_call_GetModuleHandleA(writeAscii('USER32.DLL')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 1);
   check('GetModuleHandleA recognizes statically dispatched COMCTL32',
     (e.test_call_GetModuleHandleA(writeAscii('comctl32.dll')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 2);
+  // Win9x maps GDI32 into every process. InstallShield 3 registers GDI32,
+  // KERNEL32 and USER32 by extensionless GetModuleHandle and gives up on the
+  // rest at the first NULL (War Wind II's setup then spins in SdAskOptions).
+  check('GetModuleHandleA recognizes extensionless GDI32',
+    (e.test_call_GetModuleHandleA(writeAscii('GDI32')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 3);
+  check('GetModuleHandleA recognizes extensionless USER32',
+    (e.test_call_GetModuleHandleA(writeAscii('USER32')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 1);
   const dsound = writeAscii('C:\\WINDOWS\\SYSTEM\\DSOUND.DLL');
   const dsoundHandle = e.test_call_LoadLibraryA(dsound) >>> 0;
   check('LoadLibraryA preserves statically dispatched DSOUND identity',
-    dsoundHandle === STATIC_SYS_DLL_HANDLE_BASE + 5,
+    dsoundHandle === STATIC_SYS_DLL_HANDLE_BASE + 6,
     `handle=0x${dsoundHandle.toString(16)}`);
   const directSoundCreate = e.test_call_GetProcAddress(dsoundHandle, 1) >>> 0;
   const directSoundCreateWa = wa(directSoundCreate);
@@ -240,7 +247,7 @@ async function main() {
   e.guest_write32(wc + 36, className);
   check('RegisterClassW returns atom', e.test_call_RegisterClassW(wc) !== 0);
   const out = e.guest_alloc(40);
-  check('GetClassInfoW finds RegisterClassW record', e.test_call_GetClassInfoW(className, out) === 1);
+  check('GetClassInfoW finds RegisterClassW record', e.test_call_GetClassInfoW(0, className, out) === 1);
   check('GetClassInfoW preserves WNDCLASSW wndproc', e.guest_read32(out + 4) === wndproc);
   check('GetClassInfoW preserves WNDCLASSW class pointer', e.guest_read32(out + 36) === className);
 
@@ -254,7 +261,7 @@ async function main() {
   e.guest_write32(wcx + 40, classNameEx);
   check('RegisterClassExW returns atom', e.test_call_RegisterClassExW(wcx) !== 0);
   const outEx = e.guest_alloc(40);
-  check('GetClassInfoW finds RegisterClassExW record', e.test_call_GetClassInfoW(classNameEx, outEx) === 1);
+  check('GetClassInfoW finds RegisterClassExW record', e.test_call_GetClassInfoW(0, classNameEx, outEx) === 1);
   check('GetClassInfoW maps WNDCLASSEXW wndproc into WNDCLASS slot',
     e.guest_read32(outEx + 4) === wndprocEx);
 
@@ -303,7 +310,7 @@ async function main() {
   const fileInfo = e.guest_alloc(692);
   const fullPath = writeWide('C:\\MEDIA\\PINBALL.MID');
   check('SHGetFileInfoW returns a display-name basename for an attributed synthetic path',
-    e.test_call_SHGetFileInfoW(fullPath, fileInfo, 692, 0x210) !== 0 &&
+    e.test_call_SHGetFileInfoW(fullPath, 0, fileInfo, 692, 0x210) !== 0 &&
       readWide(fileInfo + 12) === 'PINBALL.MID', readWide(fileInfo + 12));
 
   console.log(`--- wide-api: ${pass} passed, ${fail} failed`);

@@ -31,6 +31,136 @@
   ;;   +0x2C  lpstrInitialDir
   ;;   +0x30  lpstrTitle
 
+  ;; ---- File-type filter ----
+  ;;
+  ;; "Files of type" decides which files the list shows; directories are
+  ;; always listed so the user can still navigate. The pattern is found from
+  ;; state every instance shares — the filter combo's selection and the OFN
+  ;; pointer in the dialog's userdata — because a renderer shadow can repaint
+  ;; the list with none of the owning instance's globals.
+
+  ;; Character $i of a filter string, ASCII-folded to lower case; 0 past the
+  ;; end. ';' also ends one pattern of a "*.bmp;*.dib" list.
+  (func $opendlg_pat_char (param $pat_g i32) (param $i i32) (param $wide i32) (result i32)
+    (local $c i32)
+    (local.set $c
+      (if (result i32) (local.get $wide)
+        (then (i32.load16_u (call $g2w (i32.add (local.get $pat_g) (i32.shl (local.get $i) (i32.const 1))))))
+        (else (i32.load8_u (call $g2w (i32.add (local.get $pat_g) (local.get $i)))))))
+    (if (i32.eq (local.get $c) (i32.const 0x3B)) (then (return (i32.const 0))))
+    (if (i32.and (i32.ge_u (local.get $c) (i32.const 0x41)) (i32.le_u (local.get $c) (i32.const 0x5A)))
+      (then (return (i32.or (local.get $c) (i32.const 0x20)))))
+    (local.get $c))
+
+  ;; Does the NUL-terminated ANSI name at $name_w match the one pattern that
+  ;; starts at $pat_g? '*' is any run, '?' any one character, case-folded.
+  ;; "*.*" is every file, with or without a dot, as it is on Windows.
+  (func $opendlg_wild_match (param $name_w i32) (param $pat_g i32) (param $wide i32) (result i32)
+    (local $n i32) (local $p i32) (local $star i32) (local $mark i32)
+    (local $nc i32) (local $pc i32)
+    (if (i32.and
+          (i32.and (i32.eq (call $opendlg_pat_char (local.get $pat_g) (i32.const 0) (local.get $wide)) (i32.const 0x2A))
+                   (i32.eq (call $opendlg_pat_char (local.get $pat_g) (i32.const 1) (local.get $wide)) (i32.const 0x2E)))
+          (i32.and (i32.eq (call $opendlg_pat_char (local.get $pat_g) (i32.const 2) (local.get $wide)) (i32.const 0x2A))
+                   (i32.eqz (call $opendlg_pat_char (local.get $pat_g) (i32.const 3) (local.get $wide)))))
+      (then (return (i32.const 1))))
+    (local.set $star (i32.const -1))
+    (block $done (loop $step
+      (local.set $nc (i32.load8_u (i32.add (local.get $name_w) (local.get $n))))
+      (br_if $done (i32.eqz (local.get $nc)))
+      (if (i32.and (i32.ge_u (local.get $nc) (i32.const 0x41)) (i32.le_u (local.get $nc) (i32.const 0x5A)))
+        (then (local.set $nc (i32.or (local.get $nc) (i32.const 0x20)))))
+      (local.set $pc (call $opendlg_pat_char (local.get $pat_g) (local.get $p) (local.get $wide)))
+      (if (i32.eq (local.get $pc) (i32.const 0x2A))
+        (then
+          (local.set $star (local.get $p))
+          (local.set $mark (local.get $n))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $step)))
+      (if (i32.and (i32.ne (local.get $pc) (i32.const 0))
+                   (i32.or (i32.eq (local.get $pc) (i32.const 0x3F))
+                           (i32.eq (local.get $pc) (local.get $nc))))
+        (then
+          (local.set $n (i32.add (local.get $n) (i32.const 1)))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $step)))
+      (if (i32.lt_s (local.get $star) (i32.const 0)) (then (return (i32.const 0))))
+      (local.set $p (i32.add (local.get $star) (i32.const 1)))
+      (local.set $mark (i32.add (local.get $mark) (i32.const 1)))
+      (local.set $n (local.get $mark))
+      (br $step)))
+    (block $tail (loop $stars
+      (br_if $tail (i32.ne (call $opendlg_pat_char (local.get $pat_g) (local.get $p) (local.get $wide))
+                           (i32.const 0x2A)))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $stars)))
+    (i32.eqz (call $opendlg_pat_char (local.get $pat_g) (local.get $p) (local.get $wide))))
+
+  ;; Match against every ';'-separated pattern of a filter's pattern string.
+  ;; Spaces after a ';' are skipped ("*.bmp; *.dib").
+  (func $opendlg_name_matches (param $name_w i32) (param $pat_g i32) (param $wide i32) (result i32)
+    (local $i i32) (local $c i32) (local $unit i32)
+    (local.set $unit (select (i32.const 2) (i32.const 1) (local.get $wide)))
+    (block $done (loop $each
+      (if (call $opendlg_wild_match (local.get $name_w)
+            (i32.add (local.get $pat_g) (i32.mul (local.get $i) (local.get $unit))) (local.get $wide))
+        (then (return (i32.const 1))))
+      ;; Advance past this pattern's ';', or stop at the terminator.
+      (block $next (loop $scan
+        (local.set $c
+          (if (result i32) (local.get $wide)
+            (then (i32.load16_u (call $g2w (i32.add (local.get $pat_g) (i32.shl (local.get $i) (i32.const 1))))))
+            (else (i32.load8_u (call $g2w (i32.add (local.get $pat_g) (local.get $i)))))))
+        (br_if $done (i32.eqz (local.get $c)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $next (i32.eq (local.get $c) (i32.const 0x3B)))
+        (br $scan)))
+      (block $trimmed (loop $spaces
+        (br_if $trimmed (i32.ne (call $opendlg_pat_char (local.get $pat_g) (local.get $i) (local.get $wide))
+                                (i32.const 0x20)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $spaces)))
+      (br $each)))
+    (i32.const 0))
+
+  ;; The pattern string of the filter the dialog currently shows, or 0 when
+  ;; there is no filter list (every file is listed). High bit of the result
+  ;; set means the string is UTF-16, from a wide OPENFILENAMEW.
+  (func $opendlg_current_pattern (param $dlg i32) (result i32)
+    (local $ofn i32) (local $wide i32) (local $unit i32) (local $p_g i32)
+    (local $cb i32) (local $sel i32) (local $k i32)
+    (local.set $ofn (call $wnd_get_userdata (local.get $dlg)))
+    (local.set $wide (i32.lt_s (local.get $ofn) (i32.const 0)))
+    (local.set $ofn (i32.and (local.get $ofn) (i32.const 0x7FFFFFFF)))
+    (if (i32.eqz (local.get $ofn)) (then (return (i32.const 0))))
+    (local.set $p_g (call $gl32 (i32.add (local.get $ofn) (i32.const 12))))
+    (if (i32.eqz (local.get $p_g)) (then (return (i32.const 0))))
+    (local.set $cb (call $ctrl_find_by_id (local.get $dlg) (i32.const 0x445)))
+    (if (i32.eqz (local.get $cb)) (then (return (i32.const 0))))
+    (local.set $sel (call $wnd_send_message (local.get $cb) (i32.const 0x0147) (i32.const 0) (i32.const 0)))
+    (if (i32.lt_s (local.get $sel) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $unit (select (i32.const 2) (i32.const 1) (local.get $wide)))
+    ;; Pair $sel is display string 2*sel; its pattern is string 2*sel+1.
+    (local.set $k (i32.add (i32.shl (local.get $sel) (i32.const 1)) (i32.const 1)))
+    (block $found (loop $skip
+      (br_if $found (i32.eqz (local.get $k)))
+      (if (i32.eqz
+            (if (result i32) (local.get $wide)
+              (then (i32.load16_u (call $g2w (local.get $p_g))))
+              (else (i32.load8_u (call $g2w (local.get $p_g))))))
+        (then (return (i32.const 0))))
+      (block $end (loop $chars
+        (br_if $end (i32.eqz
+          (if (result i32) (local.get $wide)
+            (then (i32.load16_u (call $g2w (local.get $p_g))))
+            (else (i32.load8_u (call $g2w (local.get $p_g)))))))
+        (local.set $p_g (i32.add (local.get $p_g) (local.get $unit)))
+        (br $chars)))
+      (local.set $p_g (i32.add (local.get $p_g) (local.get $unit)))
+      (local.set $k (i32.sub (local.get $k) (i32.const 1)))
+      (br $skip)))
+    (i32.or (local.get $p_g) (i32.shl (local.get $wide) (i32.const 31))))
+
   ;; ---- Listbox population helper ----
   ;;
   ;; Walks fs_find_first_file/next from a given pattern (e.g. "C:\*"),
@@ -46,6 +176,15 @@
     (local $name_g i32) (local $name_w i32) (local $attrs i32)
     (local $tmp_g i32) (local $tmp_w i32) (local $name_len i32)
     (local $drive_mask i32) (local $letter i32)
+    (local $pat i32) (local $pat_wide i32)
+    (local.set $pat (call $opendlg_current_pattern (call $wnd_get_parent (local.get $lb))))
+    (local.set $pat_wide (i32.lt_s (local.get $pat) (i32.const 0)))
+    (local.set $pat (i32.and (local.get $pat) (i32.const 0x7FFFFFFF)))
+    ;; An empty pattern string is a malformed list; show everything.
+    (if (local.get $pat)
+      (then
+        (if (i32.eqz (call $opendlg_pat_char (local.get $pat) (i32.const 0) (local.get $pat_wide)))
+          (then (local.set $pat (i32.const 0))))))
     ;; Reset listbox first.
     (drop (call $wnd_send_message (local.get $lb) (i32.const 0x0184) (i32.const 0) (i32.const 0)))
     ;; Add ".." entry as the first row so the user can navigate up.
@@ -120,9 +259,14 @@
               (drop (call $wnd_send_message (local.get $lb) (i32.const 0x0180) (i32.const 0)
                       (local.get $tmp_g))))
             (else
-              ;; File: add as-is via the FIND_DATA's cFileName guest ptr.
-              (drop (call $wnd_send_message (local.get $lb) (i32.const 0x0180) (i32.const 0)
-                      (i32.add (local.get $fd_g) (i32.const 44))))))))
+              ;; File: add as-is via the FIND_DATA's cFileName guest ptr,
+              ;; when it is of the type the filter combo names.
+              (if (i32.or (i32.eqz (local.get $pat))
+                          (call $opendlg_name_matches (local.get $name_w)
+                            (local.get $pat) (local.get $pat_wide)))
+                (then
+                  (drop (call $wnd_send_message (local.get $lb) (i32.const 0x0180) (i32.const 0)
+                          (i32.add (local.get $fd_g) (i32.const 44))))))))))
       (br_if $done (i32.eqz (call $host_fs_find_next_file
                               (local.get $find_handle) (local.get $fd_g) (i32.const 0))))
       (br $next)))
@@ -194,6 +338,30 @@
     (drop (call $wnd_send_message (local.get $cb) (i32.const 0x014E) ;; CB_SETCURSEL
             (i32.sub (local.get $sel) (i32.const 1)) (i32.const 0))))
 
+  ;; Absolute filename edit text must not receive the displayed directory.
+  ;; These EditState bytes are internally allocated, not a caller guest span.
+  (func $opendlg_path_absolute (param $p i32) (param $len i32) (result i32)
+    (local $c i32)
+    (if (i32.ge_u (local.get $len) (i32.const 2))
+      (then
+        (if (i32.and
+              (i32.or (i32.eq (i32.load8_u (local.get $p)) (i32.const 92))
+                      (i32.eq (i32.load8_u (local.get $p)) (i32.const 47)))
+              (i32.or (i32.eq (i32.load8_u offset=1 (local.get $p)) (i32.const 92))
+                      (i32.eq (i32.load8_u offset=1 (local.get $p)) (i32.const 47))))
+          (then (return (i32.const 1))))))
+    (if (i32.ge_u (local.get $len) (i32.const 3))
+      (then
+        (local.set $c (i32.or (i32.load8_u (local.get $p)) (i32.const 32)))
+        (if (i32.and
+              (i32.and (i32.ge_u (local.get $c) (i32.const 97))
+                       (i32.le_u (local.get $c) (i32.const 122)))
+              (i32.and (i32.eq (i32.load8_u offset=1 (local.get $p)) (i32.const 58))
+                (i32.or (i32.eq (i32.load8_u offset=2 (local.get $p)) (i32.const 92))
+                        (i32.eq (i32.load8_u offset=2 (local.get $p)) (i32.const 47)))))
+          (then (return (i32.const 1))))))
+    (i32.const 0))
+
   ;; ---- Open dialog wndproc ----
   (func $opendlg_wndproc
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
@@ -203,7 +371,7 @@
     (local $text_len i32) (local $text_src_w i32)
     (local $dir_len i32) (local $dir_src_w i32) (local $sep_len i32)
     (local $path_g i32) (local $path_w i32) (local $path_len i32)
-    (local $file_offset i32) (local $extension_offset i32) (local $i i32)
+    (local $file_offset i32) (local $extension_offset i32) (local $i i32) (local $path_char i32)
     (local $dst_g i32) (local $dst_w i32) (local $max_len i32)
     (local $required_w i32) (local $is_wide i32)
     (local $filter_cb i32) (local $filter_sel i32)
@@ -229,6 +397,23 @@
     (if (i32.eq (local.get $cmd) (i32.const 2))
       (then
         (call $modal_done (i32.const 0))
+        (return (i32.const 0))))
+
+    ;; ---- Files of type changed: list the directory again under it ----
+    ;; The directory comes from the path edit, which every instance shares.
+    (if (i32.and (i32.eq (local.get $cmd) (i32.const 0x445))
+                 (i32.eq (local.get $notif) (i32.const 1)))   ;; CBN_SELCHANGE
+      (then
+        (local.set $dir_h (call $ctrl_find_by_id (local.get $hwnd) (i32.const 0x440)))
+        (if (local.get $dir_h)
+          (then
+            (local.set $path_g (call $heap_alloc (i32.const 280)))
+            (call $gs8 (local.get $path_g) (i32.const 0))
+            (drop (call $wnd_send_message (local.get $dir_h) (i32.const 0x000D)
+                    (i32.const 280) (local.get $path_g)))
+            (if (call $gl8 (local.get $path_g))
+              (then (call $opendlg_set_dir (local.get $hwnd) (local.get $path_g))))
+            (call $heap_free (local.get $path_g))))
         (return (i32.const 0))))
 
     ;; ---- OK / Open / Save: copy filename edit text into OFN.lpstrFile ----
@@ -259,8 +444,11 @@
               (then
                 (local.set $edit_sw (cast ptr<EditState> (call $g2w (local.get $edit_state))))
                 (local.set $text_len (load.field.memarg EditState text_len (local.get $edit_sw)))
-                ;; The filename edit contains only the leaf. OPENFILENAME's
-                ;; successful lpstrFile result is the full path. Read the
+                (if (load.field EditState text_buf_ptr (local.get $edit_sw))
+                  (then (local.set $text_src_w
+                    (call $g2w (load.field EditState text_buf_ptr (local.get $edit_sw))))))
+                ;; The edit may hold a leaf, relative path, or absolute path.
+                ;; Successful lpstrFile is the full path. Read the
                 ;; displayed current directory from shared EditState rather
                 ;; than $opendlg_current_dir: a renderer shadow accepting a
                 ;; Worker-owned modal has private globals but shared controls.
@@ -282,6 +470,10 @@
                         (i32.add (local.get $dir_src_w) (i32.sub (local.get $dir_len) (i32.const 1))))
                         (i32.const 0x5C)))
                   (then (local.set $sep_len (i32.const 1))))
+                (if (call $opendlg_path_absolute (local.get $text_src_w) (local.get $text_len))
+                  (then
+                    (local.set $dir_len (i32.const 0))
+                    (local.set $sep_len (i32.const 0))))
                 (local.set $file_offset (i32.add (local.get $dir_len) (local.get $sep_len)))
                 (local.set $path_len (i32.add (local.get $file_offset) (local.get $text_len)))
                 ;; OPENFILENAME.nMaxFile counts characters including the NUL.
@@ -329,14 +521,20 @@
                 ;; nFileOffset names the leaf within the returned full path;
                 ;; nFileExtension names the first character after the last
                 ;; dot, or zero when the leaf has no extension.
+                (local.set $file_offset (i32.const 0))
+                (local.set $extension_offset (i32.const 0))
                 (local.set $i (i32.const 0))
                 (block $ext_done (loop $ext_scan
-                  (br_if $ext_done (i32.ge_u (local.get $i) (local.get $text_len)))
-                  (if (i32.eq (i32.load8_u (i32.add (local.get $text_src_w) (local.get $i)))
-                              (i32.const 0x2E))
+                  (br_if $ext_done (i32.ge_u (local.get $i) (local.get $path_len)))
+                  (local.set $path_char (i32.load8_u (i32.add (local.get $path_w) (local.get $i))))
+                  (if (i32.or (i32.eq (local.get $path_char) (i32.const 92))
+                              (i32.eq (local.get $path_char) (i32.const 47)))
                     (then
-                      (local.set $extension_offset
-                        (i32.add (local.get $file_offset) (i32.add (local.get $i) (i32.const 1))))))
+                      (local.set $file_offset (i32.add (local.get $i) (i32.const 1)))
+                      (local.set $extension_offset (i32.const 0)))
+                    (else
+                      (if (i32.eq (local.get $path_char) (i32.const 46))
+                        (then (local.set $extension_offset (i32.add (local.get $i) (i32.const 1)))))))
                   (local.set $i (i32.add (local.get $i) (i32.const 1)))
                   (br $ext_scan)))
                 (i32.store16 offset=56 (local.get $ofn_w) (local.get $file_offset))

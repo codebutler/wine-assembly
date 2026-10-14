@@ -5,6 +5,11 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_dx_caps_aux") (param $surface i32) (result i32)
+    (call $dx_get_wrapper_for_vtbl (call $dx_slot_of (call $dx_from_this (local.get $surface)))
+      (i32.const 0x53000000)))
+  (func (export "test_dx_caps_refs") (param $surface i32) (result i32)
+    (load.field DxObject refcount (call $dx_from_this (local.get $surface))))
   (func (export "test_dx_caps_seed") (param $ddraw_vtbl i32) (param $surface_vtbl i32)
     (global.set $DX_VTBL_DDRAW (local.get $ddraw_vtbl))
     (global.set $DX_VTBL_DDSURF2 (local.get $surface_vtbl)))
@@ -62,8 +67,8 @@ const extraWat = String.raw`
   assert(primary, 'primary surface should be created');
 
   assert.strictEqual(wat.test_dx_caps_desc(primary, queryDesc) >>> 0, 0);
-  assert.strictEqual(wat.guest_read32(queryDesc + 104) >>> 0, requested,
-    'primary GetSurfaceDesc must preserve requested allocation/render caps');
+  assert.strictEqual(wat.guest_read32(queryDesc + 104) >>> 0, requested | 0x20,
+    'primary GetSurfaceDesc must preserve requested allocation/render caps and add FRONTBUFFER');
 
   wat.guest_write32(attachedCaps, 0x401000); // DDSCAPS_TEXTURE|MIPMAP
   wat.guest_write32(attachedOut, 0xdeadbeef);
@@ -71,18 +76,77 @@ const extraWat = String.raw`
     wat.test_dx_caps_get_attached(primary, attachedCaps, attachedOut) >>> 0,
     0x887600ff,
     'GetAttachedSurface must reject a child missing any requested capability');
-  assert.strictEqual(wat.guest_read32(attachedOut) >>> 0, 0xdeadbeef,
-    'a failed attachment query must not publish the unrelated back buffer');
+  // Current runtime policy (also asserted by the mip-chain regression), not
+  // a native Win98 failure-output oracle: clear rather than publish a child.
+  assert.strictEqual(wat.guest_read32(attachedOut) >>> 0, 0,
+    'a failed attachment query clears output instead of publishing a back buffer');
 
   wat.guest_write32(attachedCaps, 0x4); // DDSCAPS_BACKBUFFER
   assert.strictEqual(
     wat.test_dx_caps_get_attached(primary, attachedCaps, attachedOut) >>> 0, 0);
   const attached = wat.guest_read32(attachedOut) >>> 0;
   assert(attached, 'attached back buffer should be returned');
+  assert.strictEqual(wat.test_dx_caps_refs(attached), 2,
+    'attachment ownership plus one caller reference');
+  assert.strictEqual(wat.test_dx_caps_get_attached(primary, attachedCaps, attachedOut), 0);
+  assert.strictEqual(wat.guest_read32(attachedOut) >>> 0, attached);
+  assert.strictEqual(wat.test_dx_caps_refs(attached), 3,
+    'each successful query transfers a separate reference');
+  wat.guest_write32(attachedCaps, 0x401000);
+  assert.strictEqual(wat.test_dx_caps_get_attached(primary, attachedCaps, attachedOut) >>> 0,
+    0x887600ff);
+  assert.strictEqual(wat.test_dx_caps_refs(attached), 3,
+    'a rejected query must not AddRef');
+  assert.strictEqual(wat.test_dx_caps_release(attached), 2);
+  assert.strictEqual(wat.test_dx_caps_release(attached), 1,
+    'releasing both caller references leaves the attachment alive');
+  wat.guest_write32(attachedCaps, 0x4);
 
+  // Invalid receiver/NULL parameters must fail before touching output or
+  // acquiring another child reference. Error precedence is tested one fault
+  // at a time; arbitrary non-NULL page permissions are outside this test.
+  const fake = wat.guest_alloc(8);
+  wat.guest_write32(fake, 0x52000000);
+  wat.guest_write32(fake + 4, 0);
+  for (const receiver of [0, 0xdeadbeef, primary + 1, fake]) {
+    wat.guest_write32(attachedOut, 0xdeadbeef);
+    assert.strictEqual(wat.test_dx_caps_get_attached(receiver, attachedCaps, attachedOut) >>> 0,
+      0x88760082, 'invalid receiver is not a live registered surface');
+    assert.strictEqual(wat.guest_read32(attachedOut) >>> 0, 0xdeadbeef);
+    assert.strictEqual(wat.get_esp(), 0x30010);
+    assert.strictEqual(wat.test_dx_caps_refs(attached), 1);
+  }
+  for (const [caps, out] of [[0, attachedOut], [attachedCaps, 0]]) {
+    wat.guest_write32(attachedOut, 0xdeadbeef);
+    assert.strictEqual(wat.test_dx_caps_get_attached(primary, caps, out) >>> 0,
+      0x80070057, 'NULL parameter is invalid');
+    assert.strictEqual(wat.guest_read32(attachedOut) >>> 0, 0xdeadbeef);
+    assert.strictEqual(wat.get_esp(), 0x30010);
+    assert.strictEqual(wat.test_dx_caps_refs(attached), 1);
+  }
+  const aux = wat.test_dx_caps_aux(primary) >>> 0;
+  assert.notStrictEqual(aux, primary);
+  assert.strictEqual(wat.test_dx_caps_get_attached(aux, attachedCaps, attachedOut), 0,
+    'a registered auxiliary interface still resolves the same live surface');
+  assert.strictEqual(wat.guest_read32(attachedOut) >>> 0, attached);
+  assert.strictEqual(wat.test_dx_caps_release(attached), 1);
+
+  const savedSlot = wat.guest_read32(primary + 4);
+  wat.guest_write32(primary + 4, 0xffffffff);
+  assert.strictEqual(wat.test_dx_caps_get_attached(primary, attachedCaps, attachedOut) >>> 0,
+    0x88760082, 'corrupt wrapper slot is rejected, never clamped to slot zero');
+  wat.guest_write32(primary + 4, savedSlot);
   assert.strictEqual(wat.test_dx_caps_desc(attached, queryDesc) >>> 0, 0);
   assert.strictEqual(wat.guest_read32(queryDesc + 104) >>> 0, 0x601c,
     'back buffer must inherit 3DDEVICE and VIDEOMEMORY while replacing PRIMARY');
+  // Dispose the child only after all live-child checks; the parent still has
+  // its stale implicit link, which must not resurrect the retired object.
+  assert.strictEqual(wat.test_dx_caps_release(attached), 0);
+  assert.strictEqual(wat.test_dx_caps_get_attached(primary, attachedCaps, attachedOut) >>> 0,
+    0x887600ff, 'a retired child cannot be returned or AddRefed');
+  assert.strictEqual(wat.test_dx_caps_refs(attached), 0);
+  assert.strictEqual(wat.test_dx_caps_get_attached(attached, attachedCaps, attachedOut) >>> 0,
+    0x88760082, 'a retired receiver is invalid');
 
   const defaultDesc = 0x410300;
   const defaultPrimaryOut = 0x410400;
@@ -99,8 +163,10 @@ const extraWat = String.raw`
     'an internally allocated flip-chain back buffer reports video memory');
   const defaultAttached = wat.guest_read32(defaultAttachedOut) >>> 0;
   assert.strictEqual(wat.test_dx_caps_desc(defaultAttached, queryDesc) >>> 0, 0);
-  assert.strictEqual(wat.guest_read32(queryDesc + 104) >>> 0, 0x401c,
-    'default back-buffer caps include actual VIDEOMEMORY placement');
+  // A primary requested with no memory flag is placed in local video memory,
+  // and its back buffer inherits both placement bits.
+  assert.strictEqual(wat.guest_read32(queryDesc + 104) >>> 0, 0x1000401c,
+    'default back-buffer caps include actual LOCALVIDMEM|VIDEOMEMORY placement');
 
   const externalDesc = 0x411000;
   const externalOut = 0x411100;

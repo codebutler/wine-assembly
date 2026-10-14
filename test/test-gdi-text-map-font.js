@@ -40,12 +40,12 @@ const RegionMap = require('../lib/region-map.generated.js');
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bitsOut = allocZero(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert(bitmap && hdc);
   wat.test_call_SelectObject(hdc, bitmap);
 
-  const font = wat.test_call_CreateFontW(-13, 400, 0, writeWide('Times New Roman')) >>> 0;
+  const font = wat.test_call_CreateFontW(-13, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, writeWide('Times New Roman')) >>> 0;
   assert(font, 'CreateFontW should return a font handle');
   wat.test_call_SelectObject(hdc, font);
 

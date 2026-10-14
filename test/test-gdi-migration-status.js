@@ -40,10 +40,14 @@ const imported = sorted([...header.matchAll(/\(import\s+"host"\s+"(gdi_[^"]+)"/g
   .map(match => match[1]));
 const jsMethods = sorted([...hostImports.matchAll(/^\s+(gdi_[a-z0-9_]+):/gm)]
   .map(match => match[1]));
-const internalStubs = sorted([...header.matchAll(
-  /^\s+\(func \$host_(gdi_[a-z0-9_]+).*\(i32\.const 0\)\)$/gm)]
+const internalStubs = sorted([...watSource.matchAll(
+  /^\s+\(func \$(gdi_native_[a-z0-9_]+).*\(i32\.const 0\)\)$/gm)]
   .map(match => match[1]));
 const expectedImports = sorted([...PERMANENT_NON_TEXT_BRIDGE, ...CANVAS_TEXT_POLICY]);
+assert(!/^  \(func \$(?:host_gdi_|gdi_native_)/m.test(header),
+  'native GDI adapters belong with the GDI implementation, not among host imports');
+assert(!/^  \(func \$host_gdi_/m.test(watSource),
+  'native GDI functions must not masquerade as host imports');
 
 assert.strictEqual(status.schemaVersion, 2);
 assert.deepStrictEqual(sorted(status.policy.permanentNonTextBridge.map(item => item.name)),

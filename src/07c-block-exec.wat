@@ -530,9 +530,9 @@
   ;; pool forward from the middle. Two cursors rather than one because the pool
   ;; is variable-length and the micro-op array must not be.
   (func $bx_scratch (result i32)
-    (i32.add (global.get $OP_INDEX) (i32.shr_u (global.get $OP_INDEX_SIZE) (i32.const 1))))
+    (i32.add (global.get $OP_INDEX) (i32.shr_u (global.get $OP_INDEX_SLICE) (i32.const 1))))
   (func $bx_scratch_words (result i32)
-    (i32.shr_u (global.get $OP_INDEX_SIZE) (i32.const 3)))
+    (i32.shr_u (global.get $OP_INDEX_SLICE) (i32.const 3)))
 
   ;; "Is this thread word the first word of a block-executor descriptor?"
   ;; There are two such words since round 16 -- the general executor's and the
@@ -772,6 +772,27 @@
   ;; over thousands of heads reset each other before the 16-install threshold
   ;; bites, which is why raising K works at all and is the next lever.
   (global $bx_walk_hot_k (mut i32) (i32.const 256))
+  ;; Hot-slot takeovers by another EIP, and those that threw away a count of
+  ;; 16 or more ($bx_hot_bump).
+  (global $bx_hot_evicts (mut i32) (i32.const 0))
+  (global $bx_hot_evicts_warm (mut i32) (i32.const 0))
+  ;; Sticky hot slots (default on; --no-uop-hot-sticky, docs/uop-tier-design.md
+  ;; section 21.5): a foreign EIP decrements the resident's count and takes the
+  ;; slot only once that count is spent, instead of resetting it on sight.
+  (global $bx_hot_sticky (mut i32) (i32.const 1))
+  (global $bx_hot_decays (mut i32) (i32.const 0))
+  ;; Time decay for the sticky counts (--uop-hot-age=N, 0 = off;
+  ;; docs/uop-tier-design.md section 22): every N bumps, every slot's count
+  ;; is halved. A sticky count otherwise only ever falls when a sharer
+  ;; arrives, so a head entered a few hundred times over a whole run
+  ;; installs eventually; halving turns the gate back into a RATE -- a head
+  ;; must see about 128 entries per N bumps to reach the threshold. The
+  ;; clock is bumps, not wall time or batches, so it is deterministic under
+  ;; either guest clock. $bx_hot_age_left counts down to the next halving.
+  ;; Only acts with sticky slots on.
+  (global $bx_hot_age      (mut i32) (i32.const 0x8000))
+  (global $bx_hot_age_left (mut i32) (i32.const 0x8000))
+  (global $bx_hot_halvings (mut i32) (i32.const 0))
   ;; Blocks one walk may visit. This is the discovery COST bound, and it is
   ;; counted in blocks rather than in uops because a block is what costs a
   ;; $decode_block.
@@ -2381,8 +2402,10 @@
   ;; global so the hot path never reads two. Both setters call this.
   (func $bx_hot_gate_refresh
     (global.set $bx_hot_on
-      (i32.and (i32.ne (global.get $block_exec_enabled) (i32.const 0))
-               (i32.ne (global.get $bx_region_enabled) (i32.const 0))))
+      (i32.or
+        (i32.and (i32.ne (global.get $block_exec_enabled) (i32.const 0))
+                 (i32.ne (global.get $bx_region_enabled) (i32.const 0)))
+        (global.get $uop_enabled)))
     (call $be_gate_refresh))
 
   (func $bx_hot_slot (param $eip i32) (result i32)
@@ -2392,11 +2415,54 @@
                           (i32.const 511))
                  (i32.const 1)))))
 
+  ;; Halve every hot-table count (the age tick of $bx_hot_bump).
+  (func $bx_hot_halve
+    (local $p i32) (local $e i32)
+    (global.set $bx_hot_halvings (i32.add (global.get $bx_hot_halvings) (i32.const 1)))
+    (local.set $p (i32.add (call $bx_rg_word (global.get $BX_RG_HOT_OFF)) (i32.const 4)))
+    (local.set $e (i32.add (local.get $p) (i32.const 4096)))
+    (loop $l
+      (i32.store (local.get $p) (i32.shr_u (i32.load (local.get $p)) (i32.const 1)))
+      (local.set $p (i32.add (local.get $p) (i32.const 8)))
+      (br_if $l (i32.lt_u (local.get $p) (local.get $e)))))
+
   (func $bx_hot_bump (param $eip i32)
     (local $s i32) (local $c i32)
+    ;; Only with sticky slots: reset-on-sight already forgets, and
+    ;; --no-uop-hot-sticky must stay the pre-section-21.5 gate exactly.
+    (if (i32.and (i32.ne (global.get $bx_hot_age) (i32.const 0))
+                 (i32.ne (global.get $bx_hot_sticky) (i32.const 0)))
+      (then
+        (global.set $bx_hot_age_left (i32.sub (global.get $bx_hot_age_left) (i32.const 1)))
+        (if (i32.le_s (global.get $bx_hot_age_left) (i32.const 0))
+          (then
+            (global.set $bx_hot_age_left (global.get $bx_hot_age))
+            (call $bx_hot_halve)))))
     (local.set $s (call $bx_hot_slot (local.get $eip)))
     (if (i32.ne (i32.load (local.get $s)) (local.get $eip))
       (then
+        ;; Sticky: a foreign entry wears the resident's count down by one and
+        ;; only takes the slot at zero. Resetting on sight let a head entered
+        ;; one time in eighteen keep a 150K-entry head below the threshold for
+        ;; a whole run -- Caesar III's blit tail at exe+0x41de07 shares its
+        ;; slot with exe+0x41f606 and was never compiled (section 21.5). With
+        ;; the decay the hotter of two sharers keeps the slot and reaches the
+        ;; threshold; a squatter that went cold is worn out by at most 255
+        ;; entries of its successor.
+        (if (i32.and (i32.ne (global.get $bx_hot_sticky) (i32.const 0))
+                     (i32.ne (i32.load offset=4 (local.get $s)) (i32.const 0)))
+          (then
+            (global.set $bx_hot_decays (i32.add (global.get $bx_hot_decays) (i32.const 1)))
+            (i32.store offset=4 (local.get $s)
+              (i32.sub (i32.load offset=4 (local.get $s)) (i32.const 1)))
+            (return)))
+        ;; The slot is taken over and its count lost: two heads sharing a
+        ;; slot reset each other and neither ever reaches the threshold.
+        ;; Counted so --uop-census can say how often a warm count is lost.
+        (global.set $bx_hot_evicts (i32.add (global.get $bx_hot_evicts) (i32.const 1)))
+        (if (i32.ge_u (i32.load offset=4 (local.get $s)) (i32.const 16))
+          (then (global.set $bx_hot_evicts_warm
+                  (i32.add (global.get $bx_hot_evicts_warm) (i32.const 1)))))
         (i32.store (local.get $s) (local.get $eip))
         (i32.store offset=4 (local.get $s) (i32.const 1))
         (return)))
@@ -2408,7 +2474,24 @@
     (i32.store offset=4 (local.get $s) (i32.const 0))
     (global.set $bx_walk_hot_probes
       (i32.add (global.get $bx_walk_hot_probes) (i32.const 1)))
+    ;; The micro-op tier (07d) shares this hotness gate and replaces the walk.
+    ;; A settled "never" (declined, or retired as poor) is marked in the page
+    ;; index under $uop_fast, and transfers into the head stop counting.
+    (if (global.get $uop_enabled)
+      (then
+        (if (i32.and (call $uop_try (local.get $eip)) (global.get $uop_fast))
+          (then (call $page_nobump_mark (local.get $eip))))
+        (return)))
     (call $bx_walk_try (local.get $eip)))
+
+  (func (export "set_uop_hot_sticky") (param $on i32)
+    (global.set $bx_hot_sticky (local.get $on)))
+  (func (export "uop_hot_decays") (result i32) (global.get $bx_hot_decays))
+  ;; --uop-hot-age=N: halve every hot count each N bumps (0 = never).
+  (func (export "set_uop_hot_age") (param $n i32)
+    (global.set $bx_hot_age (select (local.get $n) (i32.const 0) (i32.gt_s (local.get $n) (i32.const 0))))
+    (global.set $bx_hot_age_left (global.get $bx_hot_age)))
+  (func (export "uop_hot_halvings") (result i32) (global.get $bx_hot_halvings))
 
   ;; The per-head failure memo. 256 direct-mapped slots of {head EIP, fails}.
   ;; A head that has declined $bx_walk_memo_max times is never walked again,
@@ -2642,8 +2725,7 @@
       (then (return (i32.const 0))))
     (if (global.get $thread_flush_pending) (then (return (i32.const 0))))
     (if (i32.eqz (local.get $head)) (then (return (i32.const 0))))
-    (if (i32.and (i32.ge_u (local.get $head) (global.get $thunk_guest_base))
-                 (i32.lt_u (local.get $head) (global.get $thunk_guest_end)))
+    (if (thunk-contains (local.get $head))
       (then (return (i32.const 0))))
     (call $page_probe (local.get $head)))
 

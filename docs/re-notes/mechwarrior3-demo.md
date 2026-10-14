@@ -968,3 +968,616 @@ full method in [docs/d3d-backend-coverage.md](../d3d-backend-coverage.md).
 
 Note the 2026-09-19 corpus sweep scored MW3 `IDENTICAL, 0%`. It was comparing a
 menu: a startup slice never reaches the cockpit.
+
+### Resolved (2026-09-23): the software arm's 565 dither was biased dark
+
+**The WebGL arm was right.** The near terrain is the brown base texture
+(slot 319, 128x128 565, mostly `#6b5139`) times grey vertex diffuse
+`0xff737373`: `#302418`, which is the executor's `#312418` to the bit.
+
+A `--watch-word` on one back-buffer pixel (slot 6, pixel 80,320) gave its
+value after each of the three passes on the software arm:
+
+| pass (return address) | 565 | colour |
+|---|---|---|
+| base `MODULATE`, TCI 0 (`0x54a87f`) | `0x28e2` | `#281c10` brown -- correct |
+| light map `ZERO/SRCCOLOR`, TCI 1 (`0x54a991`, ESI=1) | `0x20c1` | `#201808` |
+| all-white no-op `ZERO/SRCCOLOR`, TCI 2 (`0x54a991`, ESI=2) | `0x18a0` | `#181400` olive |
+
+The last pass multiplies by pure white (`--dump-dx-surfaces` confirmed
+slot 1401 is 1024 texels of `#ffffff` at that very frame), yet it took every
+channel down exactly one 565 step. The cause was `$d3dim_pack_rgb565`:
+`DITHERENABLE` added a Bayer threshold **centred on zero** (`-4..+3` for
+red/blue) and then truncated. Truncation already rounds down, so the pair is
+half a step dark on average, and a destination read back from 565 (red 4 reads
+as 32, the bottom of its bucket) lands one step lower on half the pixels. Each
+read-modify-write pass drifts darker; at these levels blue is only two steps
+above zero, so two passes erase it and brown becomes olive. The threshold is
+now `[0, step)`, which is unbiased and leaves exactly-representable pixels
+alone; `test/test-d3dim-dither-bias.js` checks both properties over all 65536
+565 values and the whole 4x4 cell.
+
+Ruled out on the way, so nobody re-checks them: `TEXCOORDINDEX` (both arms get
+the same packed TL vertices), texture decode (both call
+`$d3dim_texture_fetch_prepared`; the a4444 set decodes to sensible sprites),
+the inline `fast16` sampler (forcing the general sampler changed nothing), the
+`SRCALPHA/INVSRCALPHA` overlay pass, and fog (FOGCOLOR is never set; neither
+arm implements D3DIM vertex fog, which MW3 enables with fog factor in specular
+alpha, e.g. `0xd4`).
+
+`test/test-mw3-gameplay.js`'s cockpit gate was tuned on the olive frame: the
+dark terrain counted as near-black, and 85k-140k matched a transitional frame
+at batch ~882. Loading frames are ~183k near-black and the corrected cockpit
+~42k on both arms (GPU 43.3k), so the window is now 30k-70k. Both modes pass.
+
+### 2026-09-28: selective page tracking, remote menu A/B
+
+Compared `ff6dc0f4` with its parent on quiet remote box 8, headful Chrome and
+real Workers, in A/A/B/B/A order. Two 15-second windows after 60 seconds of
+settling showed 23.92/42.72, 23.98/43.07, 23.24/32.46, 24.26/42.06 and
+24.20/32.33 guest presents per second. Captures show the animated menu;
+the slow second window occurs with and without tracking. Mean difference
+(-3.8%) is smaller than the baseline repeat spread (15.7%): no causal
+dirty-tracking regression established, and no claim of zero overhead.
+Zero texture uploads/comparisons in these windows; framebuffer byte checks
+total only about 4-5 ms per second window. Do not attribute menu slowness to
+gigabytes of texture checks. Full method, limitations, artifacts and commands:
+[dirty tracking measurements](../d3dim-dirty-tracking-perf.md#mechwarrior-iii-menu-remote-regression-check-2026-09-28).
+
+The browser harness needs `?debug` to retain MW3 in this snapshot's picker.
+Waiting for present counts alone is not a menu gate: the startup fade also
+presents. Earlier failed-launch/startup probes were excluded.
+
+Follow-up 2026-09-29: four 60-second per-present captures in A/B/B/A order
+show pooled 23.00/s before vs 21.99/s after, median 43.0/45.3 ms and p95
+79.6/80.5 ms. Each run has one ~1.01s and one ~5.00s presentation gap, then
+a burst of presents; the last 30 seconds run near 13/s in both arms. Pacing
+is not stable. The longer samples suggest modest tracking overhead (-4.4%
+average), but the large gaps predate it. Intentional guest wait vs emulator
+stall remains untraced. Raw timestamps and full table are in the linked report.
+
+### 2026-09-29: gaps are scripted WAIT; active menu has a decode storm
+
+The uncertainty above is resolved. The `ATTRACT` script in `reader.zbd`
+(offset `0x3487a`) explicitly runs `WAIT 1.0` and `WAIT 5.0`, around a splash
+image. Parser `0x562dd0` matches the `WAIT` string at `0x5bc2c4`, constructs
+vtable `0x599cd8`, and its method `0x563c60` polls elapsed time without drawing.
+Guest samples during the gap hit `0x563c73`, the dispatcher `0x5633f0`, input
+polling and the timer/message loop. Zero sleep/wait yields. These long gaps
+are guest animation pacing; the unattended menu benchmark entered attract
+mode. They must not be described as emulator freezes.
+
+The slow active menu is different: whole-loop alpha fold `0x528064..0x528111`
+and internal entries `0x5280f4` / `0x52807b` repeatedly retire one another.
+A bounded trace captures 1,000 such retirements, all with `in_code_write=0`.
+The interior entries can be entered by micro-op fallback. The whole-loop
+matcher lacks the interior-entry protection that smaller folds use.
+29 seconds of slow animation rebuilt 47.6M blocks and retired 47.0M.
+Worker profile: 22.84% publishing, 12.74% decoding, 11.82% alpha recognition.
+This is cache churn, not megabytes of texture checking. The alpha matcher now
+uses `$fuse_stop` to preserve independently compiled interior entries, while
+retaining the native fold for cold loops. The authentic-loop overlap test
+fails before the fix and passes afterwards (both stores, correct pixels,
+zero warmed recompiles/retirements). Full isolated build and code-write
+regression pass.
+
+Unprofiled remote ABBA on pinned `ff6dc0f4` versus only this guard improves
+30-second throughput from 29.06/31.39 to 76.82/73.55 guest presents/s (2.49x
+mean), reducing retirements from ~36.3M to ~3.8M per window. These windows
+still include scripted waits; small periodic mouse movements did not stop
+attract mode. See the linked report for frame-time percentiles and phase
+limitations. This fixes the alpha-fold conflict, not every remaining retirement.
+
+The benchmark also had a repeated GPU-name query costing 7.6% sampled worker
+time. Fixed in the bench tool by caching once per GL context; prior rates
+include that artificial overhead. See the full linked report for artifacts,
+named-build verification, and corrected profiling limitations.
+
+The separate active-animation pair (`--warmup-ms=95000`, 30-second capture)
+contains no scripted gaps: 14.59 → 78.74 presents/s; median 70.49 → 13.42 ms;
+p95 74.96 → 18.04 ms; worst 80.00 → 31.53 ms. All 437 control intervals
+exceed 50 ms, versus none of 2,362 fixed intervals. Per-second fixed counts
+still vary 60–151 with the animation. Retirements fall 47.69M → 2.18M.
+
+### Remaining color-key overlap (2026-09-29)
+
+With the alpha guard enabled, a fresh bounded retirement trace at 95 seconds
+finds the same conflict in the color-key row: `0x528268..0x52827b` versus
+its interior store at `0x528271`. Of 995 retirement records, 494 are the
+whole row evicting the store and 494 are the reverse; all are outside code
+writes. The other seven records are initial splits. Parse `0xCAC0DE02`
+markers rather than assuming every five logged words form a record: other
+diagnostic messages can occur between them.
+
+`$try_emit_rgb565_colorkey_run` now declines a candidate containing an
+existing interior entry, using `$fuse_stop` after the exact-byte check.
+The overlap regression covers all six interior instruction boundaries,
+correct output and zero warmed retirements/recompiles; the cold native fold
+remains enabled. The test fails before this guard and passes after it.
+The standalone H440 test also passes its ordinary/fused pixel, register,
+flag, relocation and source/destination-overlap comparisons.
+
+The guard alone removed churn but cost 4.3% throughput in a longer matched
+capture. The implementation therefore also splits a predecessor before the
+exact native row and makes micro-op compilation exit at that row, preserving
+native execution instead of repeatedly creating an interior-store fallback.
+The exact-byte matcher is shared by the decoder and compiler; there is no
+guest-address special case. Tests verify native execution through a preceding
+block and refusal to install a micro-op program over the native row.
+
+The revised two-minute menu capture reduces retirements 7,556,801 → 4 and
+decodes 7,972,493 → 5. Throughput is 82.98 → 81.78 presents/s (-1.45%):
+the sustained churn is removed, but this is not an established FPS win.
+The final isolated build, overlap test, H440 equivalence and micro-op compiler
+suite pass. The extra local cockpit acceptance timed out without a capture;
+combat remains unvalidated by this follow-up. Full results and artifacts are
+in the linked dirty-tracking report.
+
+A fresh 30-second active-menu confirmation of the final version reaches
+85.40 presents/s with zero retirements/decodes, p95 17.76 ms and worst
+39.27 ms. No >50 ms intervals. This verifies the cache result across a fresh
+launch; no repeatable FPS gain is claimed.
+
+The alpha-only profile already spends 47.25% of sampled worker wall time in
+`uop_fast`, with 15.74% idle; decoding is no longer the dominant sampled
+cost. Thus retirement reduction alone is not evidence of another large FPS
+gain. Trace/profile artifacts: `build/mw3-watch-ab-results/mw3-fixed-retirement-trace`.
+
+## Remote WebGL cockpit profile after cache fixes (2026-09-29)
+
+The browser now reaches verified Instant Action gameplay via
+`tools/bench-d3dim-gameplay.js --app=mw3 --route=gameplay --warmup-ms=15000`.
+`tools/mw3-gameplay-route.js` creates pilot ACE in a fresh context, accepts
+Instant Action, checks the operation-map image, waits ten seconds for its
+deployment button to become active, and verifies orange sky plus advancing
+3D geometry after deployment. The first automated attempt clicked too early
+and remained on the operation map; its timeout is not a gameplay measurement.
+Stage screenshots remain part of acceptance. Runtime logging is disabled.
+
+Box8, headful Chrome 151, Threads enabled, actual renderer
+`ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6 Mesa 23.2.1)`.
+This deliberately reuses the menu experiment's pinned ff6dc0f4 closure plus
+the final alpha/color-key overlap fixes, rather than the concurrently changing
+main worktree. WASM SHA-256:
+`d3919ebcb7c1351a6539c620a504532bfe1a30f035e737e3b792d1f16e515d86`.
+The run manifests pin GPU JS and region-map hashes too. These are baseline
+measurements of the fixed build, not a gameplay A/B or Safari performance claim.
+
+Three unprofiled, stationary-cockpit windows (`mw3-cockpit-unprofiled2`):
+
+| 20-second window | Presents/s | Median ms | p95 ms | Worst ms |
+|---|---:|---:|---:|---:|
+| 0 | 18.24 | 53.70 | 64.36 | 79.36 |
+| 1 | 17.97 | 54.58 | 66.70 | 79.71 |
+| 2 | 16.68 | 59.34 | 71.35 | 83.98 |
+
+No intervals exceeded 100 ms. The mission continues simulating while the mech
+stands still, so the scene/draw count is not constant. Load before/after was
+2.12/2.57. Per frame: 1,073–1,134 GPU draws, 1,843–1,970 triangles, about five
+readback synchronizations, one target upload, and 2.1–2.9 texture uploads.
+GPU sync/readback including pixel conversion costs 13.6–14.7 ms/frame;
+draw submission costs 10.0–10.4 ms/frame; target upload costs 1.7–2.1 ms/frame.
+These timers are not GPU hardware timing counters or a complete partition.
+
+Texture byte checks remain **zero**, with about 5,200 page checks/frame.
+Render-target comparison still examines about 1.23 MB of equal bytes/frame
+but costs only 0.67–0.68 ms/frame here. Cache retirements are 207, 18, 14
+per window, unlike the millions observed in the old menu overlap failure.
+
+Separate three-window CPU sampling (`mw3-cockpit-live1`, 16.4–17.8 presents/s)
+attributes 48.0% of guest-worker wall samples to WASM. Largest self costs:
+`readPixels` 19.0%, `x87_island_fast` 6.5%, `branch_end_at` 5.2%, JS `fence`
+3.5%, `th_load32_rop` 3.0%, `getError` 2.5%, `uop_fast` 2.4%.
+The page thread is 95.2–95.4% idle. In window 0, 88.6% of `readPixels` sample
+time comes through `IDirectDrawSurface::Lock`, and 11.4% through `Blt`.
+Thus the next renderer investigation is which surface each Lock/Blt actually
+needs: the current fence reads back every dirty target, including pixel
+conversion and a shadow copy. Removing a required guest readback would be
+incorrect; surface-specific dependency tracking needs separate validation.
+
+Artifacts live under `build/mw3-watch-ab-results/` and on box8 under
+`~/mw3-watch-ab/build/d3dim-gameplay-perf/`. Function indices were resolved with
+a named rebuild whose noncustom WASM sections exactly match the measured
+binary. The interactive profile's original manifest has a stale menu note;
+`mw3-cockpit-live1/scene.json` records the corrected cockpit attribution.
+
+A second unprofiled run, `mw3-cockpit-moving1`, holds top-row 5
+(`--guest-key=53`), the included demo readme's 50%-throttle binding. Screenshots
+confirm changing terrain and a 45-speed HUD reading. Three 20-second windows:
+
+| Moving window | Presents/s | Median ms | p95 ms | Worst ms |
+|---|---:|---:|---:|---:|
+| 0 | 16.04 | 61.35 | 77.07 | 102.73 |
+| 1 | 20.29 | 49.09 | 57.36 | 68.01 |
+| 2 | 18.99 | 51.67 | 63.27 | 102.46 |
+
+Two intervals exceed 100 ms, none exceed 250 ms. Per-second counts range
+14–22, so moving gameplay is scene-dependent rather than a locked frame rate.
+Load before/after is 1.69/2.79. Draws/frame vary 578–1,140, but about five
+readbacks/frame remain, costing 15.0–17.4 ms/frame. Texture byte checks remain
+zero. There are 44/32/0 renderer fallbacks across the windows and zero GPU
+errors; this is predominantly WebGL with occasional software fallback, not
+evidence that every draw is hardware-rendered. A future profile should identify
+those fallbacks separately. This run captures pacing, not a moving CPU profile.
+
+The same run confirms the Threads cursor-visibility bug: the page WASM reports
+display count **0**, while the executing guest Worker reports **-1**. Both
+report cursor handle 425728. `ShowCursor` changes an instance-local global,
+but `renderer.wantsHiddenMouse` reads the page instance. MW3 also lacks the
+explicit `relativeMouse` opt-in and Moorhuhn's `hideHostCursor` manifest override.
+Moorhuhn's override is not evidence that its desktop input already uses relative
+motion. No cursor behavior was changed in this profiling task.
+
+## Surface-specific WebGL fences (2026-09-29)
+
+`--trace-fences --frame-times` on the browser benchmark records each actual
+readback's target/DIB, preceding DirectDraw surface event, count, and one stack
+per combination. The preceding event is context, not necessarily the caller:
+after narrowing Lock, the same texture event remains current when Texture2
+Load and Release issue later global fences. The recorded stacks identify those
+callers. The diagnostic capture `mw3-surface-trace1` reports exactly five
+640x480 color readbacks/frame: three color-buffer Locks, one unrelated texture
+Lock (slot 1400), and one depth-surface Blt/COLORFILL (slot 10).
+
+The WebGL FENCE opcode now accepts a WASM backing address and length; zero
+length retains the global barrier. It flushes every dirty target whose byte
+range overlaps the access, including aliases. It returns 1 when no target is
+dirty and 2 when unrelated targets remain pending. WAT preserves that pending
+state so a later global fence cannot miss deferred work. Software render-worker
+execution and deferred presentation retain global ordering.
+
+DirectDraw Lock and Blt use the scoped barrier, as does Texture::Load for both
+source and destination. Partial writes conservatively synchronize the entire
+surface; no overwrite/discard assumption was added. Nonfinal WebGL surface
+reference drops no longer synchronize pixels. Texture interface Release
+delegates to that surface path instead of fencing a second time. Final
+destruction still globally fences before freeing backing memory.
+
+The intermediate experiments matter: Lock/Blt alone reduced five readbacks to
+four, but the texture-related readback moved to Texture::Load. Narrowing Load
+moved it again, to the following Texture2::Release. Skipping only the nonfinal
+reference barrier addresses that sequence without removing lifetime safety.
+
+`test/test-d3dim-surface-fence.js` checks unrelated/overlapping ranges, exact
+RGB565 readback bytes, pending-state propagation, software/global barriers,
+a real WAT Texture::Load consuming fresh GPU source pixels, and nonfinal versus
+final Release. The indexed-texture conversion/color-key regression and texture
+release/arena regression also pass. An isolated full build passes; the shared
+main build encounters the pre-existing union-gate failure for
+`10a-gdi-bitmap.wat:1014`, unrelated to these changes.
+
+Final remote run `mw3-surface-final4` reduces actual readbacks from **5 to 3 per
+frame (40%)**, apart from three incidental fallback/lifetime synchronizations
+in the first window. The remaining recurring stacks are color-buffer Locks.
+Each avoided readback is 640x480 RGBA (1,228,800 bytes), followed by RGB565
+conversion and a shadow copy, so two avoided calls save 2.46 MB/frame of GPU
+readback alone. No render-target Lock was skipped.
+
+| Run / 20s windows | FPS | Readbacks/frame | Sync ms/frame |
+|---|---|---|---|
+| Control `surface-control2` | 17.39 / 17.23 / 16.84 | 5.01 / 5.01 / 5.00 | 13.44 / 13.50 / 13.42 |
+| Final `surface-final4` | 18.79 / 18.79 / 16.89 | 3.01 / 2.99 / 3.00 | 11.49 / 10.53 / 12.68 |
+
+Do **not** attribute the entire 17.15→18.16 mean-FPS difference to this change:
+the browser mission differs between launches (about 1,248 draws/frame in this
+control versus 1,072 in the final run). The earlier control with ~1,073 draws
+also reached 18.24/17.97 FPS in its first two windows. A repeatable FPS gain is
+not established; the 40% reduction in recurring readbacks is. The final run
+has zero GPU errors, two software fallbacks, p95 62.7–71.8 ms, and one 100.5 ms
+interval. Screenshots retain the cockpit, sky, terrain and HUD. Load before/
+after is 0.01/2.33. Final pinned WASM SHA-256:
+`ad5e74dd3f58f0cf9bfc26f4fa205e71ebaf687bb6d5d27c76d039493e724962`.
+
+The final moving validation (`surface-final-audit`, 50% throttle, 20 seconds)
+passes **1,233,496 byte-backed dirty-page audit checks with zero misses**, zero
+GPU errors and no browser errors. Its screenshot shows advancing terrain and
+45 speed. Audit instrumentation performs comparisons intentionally, so its
+13.8 FPS is not an ordinary-performance measurement.
+
+### Remaining color-buffer Lock callers
+
+Remote `mw3-lock-access2` uses the same pinned surface-fence WASM and GPU
+source with `--frame-times --trace-locks --warmup-ms=15000 --seconds=10
+--windows=1`. It records 555 readbacks / 185 presents (three per frame), zero
+GPU errors and zero fallbacks. The diagnostic run measured 18.43 FPS; snapshot
+copies and byte comparisons make this unsuitable for an optimization A/B.
+
+Every recurring color Lock is slot 6, null rectangle (whole 640x480 surface),
+flags 1 (`DDLOCK_WAIT`), without read-only, write-only or discard permission.
+`0x541820` calls the backend Lock through `[0x7c546c]`, then installs the
+returned pixel pointer/pitch in software-drawing state. The backend chain is
+`0x5420a0 -> 0x542140 -> surface.Lock`; the API return is `0x542165`.
+MW3 omits frame pointers here. Raw stack offsets +36, +168 and +172 recover
+`0x5420d8`, `0x54182b` and the distinct caller below; an EBP walk alone
+does not identify the three sites.
+
+| Caller return | Code around the lock | First three sampled intervals |
+|---|---|---|
+| `0x46a513` | CPU drawing after the game object's render call | 10,114 / 10,113 / 10,114 changed bytes; bounding rectangle `[5,5,639,333)` |
+| `0x46a425` | Lock, call `0x570850`, Unlock (`0x541880`) | No changed bytes |
+| `0x56facb` | Conditional re-lock at a rendering helper's exit | No changed bytes |
+
+The first site's sparse changes span most of the screen horizontally. These
+are **changed-byte bounds**, not access bounds: unchanged bytes can have been
+read or written with the same value. The latter two sites are candidates for
+deferred synchronization, but this capture does not prove they never read
+pixels. Texture locks (slots 1400/1402) still occur without recurring color
+readbacks, as intended by the committed fix.
+
+No additional renderer optimization is justified by Lock rectangles or flags
+in this trace. A safe next mechanism is lazy synchronization on the first
+actual CPU access to a GPU-newer surface, covering reads and partial writes
+before memory is consumed or modified, including native/folded memory paths.
+Locks that never access pixels could then avoid readback. Existing write-dirty
+flags alone cannot detect a CPU read or preserve untouched pixels before a
+partial write. Do not skip a fence based on the previous frame's zero changes.
+
+### Software timing, current CPU profile, and pixel access (2026-09-29)
+
+Box8, headful Chrome 151, same pinned surface-fence executable sections as above.
+`software-time2` routes into the cockpit with WebGL, fences outstanding work,
+then turns off GPU execution and declines the legacy host worker-draw seam.
+The latter is necessary: changing `d3dim_gpu_enable(0)` alone still allows
+`d3dim_worker_try_draw` to submit to the GPU executor. `software-time1` was
+rejected by the zero-GPU-draw assertion and is not a software measurement.
+This measures in-guest-worker WAT rasterization, not the separate experimental
+software render worker. The retained GPU object only publishes benchmark
+counters. Its draw/readback/upload counters stay flat throughout measurement.
+
+Three 20-second windows, no CPU profiler or pixel-access instrumentation:
+
+| Backend / run | FPS | Mean ms/frame | p95 ms |
+|---|---|---|---|
+| Software `software-time2` | 21.99 / 21.09 / 20.52 | 45.48 / 47.41 / 48.74 | 48.72 / 51.73 / 52.74 |
+| WebGL `webgl-time3` | 16.52 / 17.02 / 16.83 | 60.54 / 58.77 / 59.43 | 71.39 / 69.25 / 71.81 |
+
+Aggregate software: **21.20 FPS, 47.17 ms/frame**; WebGL: **16.79 FPS,
+59.57 ms/frame**. Software was faster in these runs, but these are independent
+live missions, not deterministic frame replay: WebGL draws vary from 1,391 to
+1,120/frame, while the earlier `surface-final4` run averaged 1,072 and 18.16 FPS.
+Do not turn the observed difference into a fixed renderer speedup claim.
+Screenshots show cockpit, sky, terrain and HUD in both. Both runs have no
+browser/GPU errors. Software has no >100 ms intervals in these windows.
+
+Separate 20-second named CPU profiles (`webgl-profile3`, `software-profile3`):
+the named build's noncustom sections exactly match the pinned WASM SHA above.
+Percentages below are **self samples / guest-worker sampled wall time**, not
+hardware CPI counters or mutually exclusive subdivisions of the GPU timers.
+
+| Function/work | WebGL | Software |
+|---|---:|---:|
+| All WASM self samples | 46.96% | 93.48% |
+| `viewport_draw_textured_span` | not a leading cost | 37.41% |
+| `readPixels` | 17.64% | absent |
+| `x87_island_fast` | 6.57% | 7.75% |
+| `branch_end_at` | 4.89% | 5.72% |
+| `th_load32_rop` | 3.48% | 3.47% |
+| `uop_fast` | 2.34% | 2.95% |
+| `th_test_jcc` | 2.20% | 2.48% |
+| `th_store32_rop` | 1.88% | 2.15% |
+| `fpu_exec_mem` | 1.46% | 1.89% |
+
+Software's span loop alone is roughly 19 ms of its 50.66 ms profiled frame.
+WebGL also spends 2.83% in `getError`, 2.55% in backend `draw`, 2.30% in
+`setUniform`, 2.15% in fixed-function `compile` (not necessarily a shader-cache
+miss), 2.15% in `_draw`, 2.12% in JS `fence`, 2.05% in fixed-function `source`,
+and 1.85% in `bufferData`. The page thread is 94.27% / 94.84% idle; the guest
+worker itself is only 4.25% / 4.52% idle. Floating-point execution, control flow
+and operand movement are substantial remaining guest CPU costs.
+
+`tools/bench-d3dim-access-build.js` builds a diagnostic WASM with DIB range
+probes at `g2w_slow` and scalar `gl8/16/32`, `gs8/16/32`. Use
+`--frame-times --trace-locks --trace-access` with that build. The recorder arms
+only the slot-6 640x480 RGB565 backing between Lock/Unlock and captures nine
+intervals. Event 90 is translation (not necessarily an actual access), 91 is
+a scalar read, 92 a scalar write. Native loops/cached pointers/direct WASM
+loads can bypass scalar hooks; these probes identify callers, not a universal
+proof of no reads. The persisted builder reproduces the measured diagnostic
+binary byte-for-byte on the pinned source closure.
+
+`pixel-access3` observed three repetitions of:
+
+* Return `0x46a425`: no DIB translation or scalar access.
+* Return `0x56facb`: no DIB translation or scalar access.
+* Return `0x46a513`: 5,304 scalar stores, 7,911 translations (including the
+  stores and write barriers), zero scalar reads. `pixel-moving4`, with top-row
+  5 held, observes 5,370 / 5,374 / 5,376 stores in this interval, again zero
+  scalar reads and no events in the other two intervals. Samples are from
+  the beginning of the throttle run, not exhaustive coverage of the mission.
+
+The observed write mechanisms are concrete:
+
+* `0x528268`: color-key copy reads the **source image** and conditionally
+  writes RGB565 destination pixels; native `th_rgb565_colorkey_run` calls gs16.
+  No destination read is needed by this loop.
+* `0x52807b`, `0x5280f4`, `0x5309bf`, `0x530a04`, `0x52fe39`: word stores.
+* `0x530e60`: sets **ESP to a framebuffer address**, then uses `push ax/eax`
+  to fill a span; captured through `th_push_r16` and native `stack_run_push`.
+* `0x528301` loop / `0x52830a rep movsd`: row copies. Sixteen destination
+  write-span translations are captured through `page_watch_write_guest` /
+  `invalidate_code_write` / `rep_movsd_do`; direct copies bypass scalar stores.
+
+Two implementation paths follow, neither implemented by this investigation:
+
+1. Defer synchronization until the first real CPU access, covering reads,
+   writes, stack writes, native loops and host access paths. This can eliminate
+   untouched Lock intervals while keeping one conservative readback before
+   the first partial CPU write. Translation alone is not an access barrier.
+2. Preserve GPU ownership through write-only intervals using exact written
+   spans/masks, and upload only those pixels. This could avoid the drawing
+   interval's readback too. Page dirty bits alone are insufficient: uploading
+   a whole page/row would overwrite untouched GPU pixels with stale CPU bytes;
+   comparing to a stale shadow also misses writes equal to old CPU values.
+   Any true CPU read must first resolve GPU contents plus pending CPU writes.
+
+Artifacts: `build/mw3-watch-ab-results/mw3-{software-time2,webgl-time3,
+software-profile3,webgl-profile3,pixel-access3,pixel-moving4}/`, plus
+`mw3-current-profile-summary.json`. These runs change benchmark diagnostics
+only; shipping renderer behavior is unchanged.
+
+### Opt-in lazy Lock experiment (`experiment/mw3-lazy-sync`)
+
+The separate worktree `/private/tmp/mw3-lazy-sync` adds a benchmark-only
+`--lazy-sync` switch (MW3, WebGL, `--frame-times`, one guest thread). Default
+behavior remains eager. This is a single-render-thread experiment, not a
+general promise for GDI, multiple guest threads or every native pointer cache.
+The benchmark rejects additional live guest threads before enabling and after
+each measurement window. There is no new default or shipping UI selection.
+
+Eligible nonprimary, DIB-backed Locks defer their surface fence. A pending
+range is checked in the DIB branches of `g2w_slow` and `g2w_affine_span`;
+ordinary direct-window heap/code accesses do not acquire another check.
+The first overlapping translation/span proof synchronizes the whole surface
+before a read or partial write. This is intentionally conservative: proving
+a span may synchronize before actual access. The pending range is cleared
+before reentering the host fence. Later accesses pay only the DIB branch's
+pending-length test. That test exists even with the option disabled.
+
+Arming bumps the existing uop-window epoch so a cached native read window
+cannot bypass the new barrier. Nested Locks flush conservatively before
+replacing the single tracked range. Global/scoped barriers, software paths,
+primary Locks and non-DIB backing retain eager synchronization. An untouched
+Unlock drops the access barrier without marking CPU pixels dirty; GPU work
+remains pending for subsequent access/presentation/lifetime barriers.
+
+Focused tests verify deferred/untouched cycles, unrelated DIB reads, fresh
+first reads, partial-write ordering and untouched-pixel preservation, native
+span synchronization, epoch invalidation, eager option-off behavior and global
+barrier cleanup. Existing indexed-texture and texture-release/arena tests pass.
+Canonical/named compilation passes. The full build stops at the baseline's
+known union-gate attribution error in `10a-gdi-bitmap.wat:1014`.
+
+Box8 sequential runs, three 20-second windows each, same pinned executable
+base and GPU source, no audit or CPU profiler:
+
+| Arm | FPS by window | Aggregate FPS | Readbacks/frame |
+|---|---|---:|---:|
+| Original `lazy-base1` | 18.47 / 17.97 / 18.42 | 18.29 | ~3 |
+| Candidate, option off `lazy-off1` | 19.51 / 19.26 / 17.97 | 18.91 | ~3 |
+| Candidate, option on `lazy-on1` | 21.07 / 20.87 / 18.17 | 20.03 | **1** |
+
+No disabled-option slowdown is visible in these samples, but this does not
+measure the added branch's isolated cost: mission geometry changes between
+launches and windows. Candidate-off has 1,071 / 1,113 / 1,281 draws/frame;
+candidate-on has 1,070 / 1,071 / 1,294. Do not claim a fixed FPS percentage.
+The directly established result is **three recurring readbacks become one**.
+Five Locks/frame are armed: two texture accesses and one color access touch
+memory; two color Locks remain untouched. Only the color access requires an
+actual GPU readback. Candidate-on has exactly one upload/frame.
+
+Sync time is 7.96 / 8.16 / 9.16 ms/frame on, versus 11.35 / 10.78 / 10.34 off.
+Render-target comparison time falls from ~0.67 ms/frame to 0.0035–0.0040:
+untouched Unlocks no longer trigger conservative whole-surface notifications.
+All timing runs have zero browser/GPU errors. Screenshots retain cockpit,
+terrain and HUD. Remaining promotion work includes cross-thread ownership,
+an audit of retained native/GDI pointers and access ranges at surface edges,
+and broader renderer/application coverage. The option stays experimental.
+
+Artifacts are in `build/mw3-lazy-results/` in the experiment worktree and
+`~/mw3-watch-ab/build/d3dim-gameplay-perf/mw3-lazy-*` on box8.
+
+The 20-second throttle/audit run `lazy-audit1` completed 1,460,911 dirty-page
+audit checks with zero misses, zero GPU errors and no browser errors. It
+retained two untouched Locks/frame and 1.003 readbacks/frame (one incidental
+extra synchronization). Its screenshot shows the progressing mission, terrain,
+HUD and another mech. Audit FPS (15.43) includes deliberate byte comparisons
+and is excluded from the timing table. Measured named candidate SHA-256:
+`e1be4076cf7f91f1629acc44f8478749d941bc1a2ca22e22f7a55b4e2b3e9c8b`.
+
+
+### Merge and default evaluation (2026-09-29)
+
+Merged into main at `a4f6b4a1`; **lazy synchronization remains disabled by
+default**. The benchmark now accepts the established NFS3/GTA2/SDK routes and
+`--lazy-sync-startup` enables the experiment before guest execution. Eligibility
+also requires page-aligned DIB backing: otherwise a scalar access starting
+before an unaligned surface could overlap it without another translation.
+The focused surface-fence test verifies this eager fallback.
+
+Box8 sequential compatibility runs (`lazy-coverage2-off/on`), same candidate
+WASM and pinned GPU source, 10-second windows after warmup:
+
+| Application | Off FPS | On FPS | Result |
+|---|---:|---:|---|
+| SDK Boids | 71.03 | 73.43 | Both pass, zero GPU/browser errors |
+| SDK Flip3DTL | 186.07 | 179.36 | Both pass, zero GPU/browser errors |
+| NFS3 demo | — | — | Both fail page protocol timeout before measurement |
+| GTA2 demo | — | — | Both refuse multiple guest-worker present recorders |
+
+Neither SDK sample arms a lazy Lock, so these are compatibility controls,
+not evidence that deferred CPU access is safe in other games. Their short
+windows do not establish a performance improvement or regression. Heroes II
+also reaches its adventure map (1,864 presents) with the candidate's default
+software/eager path; this does not exercise GPU lazy synchronization.
+
+GTA2's multiple guest instances reinforce the outstanding ownership issue:
+the pending range currently belongs to one WASM instance, while guest memory
+is shared. NFS3 needs its baseline route/debugging resolved before it can be
+counted as coverage. Retained native/GDI pointers also remain unaudited. Those
+gaps rule out enabling this globally despite the demonstrated MW3 reduction
+from three readbacks to one. Artifacts: experiment worktree
+`build/mw3-lazy-results/*-lazy-coverage2-{off,on}/`.
+
+### Shared synchronization follow-up (2026-09-29)
+
+Commit `1730589d` replaces the instance-local pending range with shared state
+and synchronization. The subsequent [real-game A/B](../lazy-sync-game-results.md)
+measured 21.29 FPS OFF / 22.64 ON, with GPU readbacks dropping from 3.016 to
+1.011 per frame. ON submitted about 10% fewer triangles, so the FPS difference
+is not an isolated speedup measurement. Each launch created a helper that
+exited before measurement; persistent thread history catches this startup
+activity. Global enablement was initially deferred based on GTA2's extra backend fence call with
+no readback reduction, and the documented retained GDI/native-pointer limit.
+
+The subsequent scoped-barrier correction removes one duplicate guest fence
+per cockpit frame: **4.00 → 3.00**, retaining one readback. Matched lazy-ON
+before/after runs measured 22.41 / 22.97 FPS, but geometry and host load vary;
+this establishes a request-count saving, not an isolated FPS improvement.
+Publication waits remain about 1 ms/frame. See the same report for artifacts.
+
+The later shared-WebGL rollout enables lazy sync by default. Use
+`?no-lazy-sync` or uncheck **Lazy sync** in the debug toolbar for eager readback;
+the checkbox also applies to running guest workers.
+
+The [P/PC repeatability follow-up](../fp-mw3-repeatability.md) found that
+`processSharedCtx()` omitted `wallNowMs`: the cooperative loading thread could
+read the host date while the main thread read the pinned calendar. Adding the
+shared key makes P/P match at all 1,750 recorded batch boundaries; pinning file
+timestamps alone did not (first loading-thread divergence at batch 742).
+Six subsequent untraced 2,400-batch cockpit windows pass image/API/tier-counter
+checks. Balanced P/PC user CPU is 83.1945/84.5155s on EPYC/V8, a 1.588% slowdown
+for the countdown, with +1.225%/+1.952% in the two orders. The older -3.85%
+single-pair observation is not reproduced; C remains experimental.
+
+## Game step and headful GAME/s (2026-10-10)
+
+`perf.logicalFrame` is `0x46aa90` (verifier `0x46aa79`, `4200abf30`). WinMain
+(`0x579570`) calls the active state's per-frame callback from the table at
+`0x58e118`; in a mission that is `0x46aa90` -> `0x46a9b0`, which reads the
+cursor (`GetCursorPos`), runs the update calls (`0x4fa240`, `0x4d3eb0`,
+`0x539810`), draws the scene through `[eax+0x50]` and presents through
+`0x5419c0` -> `0x544da0` (Flip returns to `0x544e08`, which is also a branch
+target of its WASSTILLDRAWING retry loop, so it is not a frame counter).
+CLI audit in the cockpit (`test-mw3-gameplay.js` route, batches 960-1060):
+31 GAME steps for 31 frame ends. The step does not run in the menus.
+
+Headful boat (Xorg :0, Chrome 151, llvmpipe, no `/dev/dri`; the WebGL string
+says "Intel UHD 620" but is faked on boats), cooperative backend, in-mission
+cockpit with the clock running, 5 s samples: uncapped 5.3 / 4.9 GAME/s, present
+cap 60 5.5 / 5.1, distinct frames equal to GAME/s each time. CPU-bound at ~5
+steps/s; the cap never engages. The browser route is the CLI one sent through
+the dev-server hub (`ctl.js -s ... cmd relmousemove/mousedown/...`) to a
+`profile-web-frames.js --origin --guest-script=gate:...` page.
+Evidence: `scratch/runs/20261010T2215Z-mw3-game-fps-boat-d10ba697`.
+
+## Instant Action captions: FormatMessage va_list (fixed e027a9ca8)
+
+The Instant Action screen showed "Commander: Đĺn", "Enemy: Đĺn" and
+"Wave 122682568". Not a font problem: the captions come from Mech3Msg.dll
+templates through `FormatMessageA(FROM_HMODULE, ..., Arguments)` with flags
+`0x800` and `Arguments = &va_list` (return site `0x540b58`). Without
+`FORMAT_MESSAGE_ARGUMENT_ARRAY` that parameter is a `va_list*`; our handlers
+read it as the insert array, so `%1!d!` printed a stack address (0x074FFDC8)
+and `%1!s!` the bytes there. Now "Commander: Bushwacker", "Enemy: Firefly /
+Owens", "Wave 1". Evidence:
+`scratch/runs/20261010T2225Z-mw3-instant-action-glyphs-d10ba697`.

@@ -667,30 +667,30 @@
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    (local.set $p (call $g2w (local.get $arg1)))
+    (local.set $p (local.get $arg1))
     ;; dwSize.X, dwSize.Y
-    (i32.store16 (local.get $p) (global.get $console_width))
-    (i32.store16 (i32.add (local.get $p) (i32.const 2)) (global.get $console_height))
+    (call $gs16 (local.get $p) (global.get $console_width))
+    (call $gs16 (i32.add (local.get $p) (i32.const 2)) (global.get $console_height))
     ;; dwCursorPosition.X, Y
-    (i32.store16 (i32.add (local.get $p) (i32.const 4)) (global.get $console_cursor_x))
-    (i32.store16 (i32.add (local.get $p) (i32.const 6)) (global.get $console_cursor_y))
+    (call $gs16 (i32.add (local.get $p) (i32.const 4)) (global.get $console_cursor_x))
+    (call $gs16 (i32.add (local.get $p) (i32.const 6)) (global.get $console_cursor_y))
     ;; wAttributes
-    (i32.store16 (i32.add (local.get $p) (i32.const 8)) (global.get $console_attr))
+    (call $gs16 (i32.add (local.get $p) (i32.const 8)) (global.get $console_attr))
     ;; srWindow is an inclusive SMALL_RECT and may be smaller than or offset
     ;; within the backing screen buffer.
     (local.set $win (call $console_loaded_window_record))
-    (i64.store (i32.add (local.get $p) (i32.const 10)) (i64.load (local.get $win)))
+    (call $gs64 (i32.add (local.get $p) (i32.const 10)) (i64.load (local.get $win)))
     ;; dwMaximumWindowSize is constrained by both the display/font and this
     ;; screen buffer. It is not simply dwSize, nor is it always the display
     ;; maximum returned by GetLargestConsoleWindowSize.
     (local.set $largest (call $console_largest_window_size))
-    (i32.store16 (i32.add (local.get $p) (i32.const 18))
+    (call $gs16 (i32.add (local.get $p) (i32.const 18))
       (select
         (global.get $console_width)
         (i32.and (local.get $largest) (i32.const 0xFFFF))
         (i32.le_u (global.get $console_width)
           (i32.and (local.get $largest) (i32.const 0xFFFF)))))
-    (i32.store16 (i32.add (local.get $p) (i32.const 20))
+    (call $gs16 (i32.add (local.get $p) (i32.const 20))
       (select
         (global.get $console_height)
         (i32.shr_u (local.get $largest) (i32.const 16))
@@ -843,8 +843,8 @@
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    (local.set $p (call $g2w (local.get $arg1)))
-    (local.set $size (i32.load (local.get $p)))
+    (local.set $p (local.get $arg1))
+    (local.set $size (call $gl32 (local.get $p)))
     (if (i32.or (i32.lt_u (local.get $size) (i32.const 1))
                 (i32.gt_u (local.get $size) (i32.const 100)))
       (then
@@ -855,7 +855,7 @@
         (return)))
     (global.set $console_cursor_size (local.get $size))
     (global.set $console_cursor_visible
-      (i32.ne (i32.load (i32.add (local.get $p) (i32.const 4))) (i32.const 0)))
+      (i32.ne (call $gl32 (i32.add (local.get $p) (i32.const 4))) (i32.const 0)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
@@ -891,9 +891,9 @@
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    (local.set $p (call $g2w (local.get $arg1)))
-    (i32.store (local.get $p) (global.get $console_cursor_size))
-    (i32.store (i32.add (local.get $p) (i32.const 4)) (global.get $console_cursor_visible))
+    (local.set $p (local.get $arg1))
+    (call $gs32 (local.get $p) (global.get $console_cursor_size))
+    (call $gs32 (i32.add (local.get $p) (i32.const 4)) (global.get $console_cursor_visible))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
@@ -920,15 +920,15 @@
       (then
         (global.set $last_error (i32.const 87))
         (return (i32.const 0))))
-    (local.set $src (call $g2w (local.get $title_gp)))
+    (local.set $src (local.get $title_gp))
     (block $done (loop $copy
       (br_if $done (i32.ge_u (local.get $len)
         (i32.sub (global.get $CONSOLE_TITLE_MAX) (i32.const 1))))
       (local.set $ch
         (if (result i32) (local.get $wide)
-          (then (i32.load16_u (i32.add (local.get $src)
+          (then (call $gl16 (i32.add (local.get $src)
             (i32.shl (local.get $len) (i32.const 1)))))
-          (else (i32.load8_u (i32.add (local.get $src) (local.get $len))))))
+          (else (call $gl8 (i32.add (local.get $src) (local.get $len))))))
       (br_if $done (i32.eqz (local.get $ch)))
       (i32.store8 (i32.add (global.get $CONSOLE_TITLE_STORAGE) (local.get $len))
         (select
@@ -960,29 +960,28 @@
   ;; but not the limit.
   (func $console_title_get (param $title_gp i32) (param $size i32)
         (param $wide i32) (result i32)
-    (local $dst i32) (local $len i32) (local $copy i32) (local $i i32)
+    (local $dst i32) (local $len i32) (local $copy i32) (local $i i32) (local $ch i32)
     (call $console_title_ensure)
     (if (i32.or (i32.eqz (local.get $title_gp)) (i32.eqz (local.get $size)))
       (then (return (i32.const 0))))
     (local.set $len (call $strlen (global.get $CONSOLE_TITLE_STORAGE)))
-    (local.set $dst (call $g2w (local.get $title_gp)))
+    (local.set $dst (local.get $title_gp))
     (local.set $copy (local.get $len))
     (if (i32.ge_u (local.get $copy) (local.get $size))
       (then (local.set $copy (i32.sub (local.get $size) (i32.const 1)))))
-    (if (local.get $wide)
-      (then
-        (block $done (loop $widen
-          (br_if $done (i32.ge_u (local.get $i) (local.get $copy)))
-          (i32.store16 (i32.add (local.get $dst)
-              (i32.shl (local.get $i) (i32.const 1)))
-            (i32.load8_u (i32.add (global.get $CONSOLE_TITLE_STORAGE) (local.get $i))))
-          (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (br $widen)))
-        (i32.store16 (i32.add (local.get $dst)
-          (i32.shl (local.get $copy) (i32.const 1))) (i32.const 0)))
-      (else
-        (memory.copy (local.get $dst) (global.get $CONSOLE_TITLE_STORAGE) (local.get $copy))
-        (i32.store8 (i32.add (local.get $dst) (local.get $copy)) (i32.const 0))))
+    ;; Include the terminator in the shared bounded copy. Storage is private;
+    ;; only the caller destination goes through guest translation.
+    (loop $copy_title
+      (local.set $ch
+        (if (result i32) (i32.lt_u (local.get $i) (local.get $copy))
+          (then (i32.load8_u (i32.add (global.get $CONSOLE_TITLE_STORAGE) (local.get $i))))
+          (else (i32.const 0))))
+      (if (local.get $wide)
+        (then (call $gs16 (i32.add (local.get $dst)
+          (i32.shl (local.get $i) (i32.const 1))) (local.get $ch)))
+        (else (call $gs8 (i32.add (local.get $dst) (local.get $i)) (local.get $ch))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $copy_title (i32.le_u (local.get $i) (local.get $copy))))
     (local.get $copy))
 
   (func $handle_GetConsoleTitleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1010,12 +1009,12 @@
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
-    (local.set $src (call $g2w (local.get $arg2)))
+    (local.set $src (local.get $arg2))
     (local.set $win (call $console_loaded_window_record))
-    (local.set $left (i32.load16_s (local.get $src)))
-    (local.set $top (i32.load16_s offset=2 (local.get $src)))
-    (local.set $right (i32.load16_s offset=4 (local.get $src)))
-    (local.set $bottom (i32.load16_s offset=6 (local.get $src)))
+    (local.set $left (i32.extend16_s (call $gl16 (local.get $src))))
+    (local.set $top (i32.extend16_s (call $gl16 (i32.add (local.get $src) (i32.const 2)))))
+    (local.set $right (i32.extend16_s (call $gl16 (i32.add (local.get $src) (i32.const 4)))))
+    (local.set $bottom (i32.extend16_s (call $gl16 (i32.add (local.get $src) (i32.const 6)))))
     ;; Relative coordinates offset each corresponding side of the current
     ;; viewport; this moves/resizes exactly as Win32 SMALL_RECT semantics do.
     (if (i32.eqz (local.get $arg1))
@@ -1136,7 +1135,7 @@
     (if (i32.eq (local.get $limit) (i32.const -1))
       (then
         (if (local.get $arg4)
-          (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
+          (then (call $gs32 (local.get $arg4) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
@@ -1158,7 +1157,7 @@
       (br $fill)))
     ;; Write count to lpNumberOfCharsWritten
     (if (local.get $arg4)
-      (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
+      (then (call $gs32 (local.get $arg4) (local.get $limit))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -1176,7 +1175,7 @@
     (if (i32.eq (local.get $limit) (i32.const -1))
       (then
         (if (local.get $arg4)
-          (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
+          (then (call $gs32 (local.get $arg4) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
@@ -1197,7 +1196,7 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $fill)))
     (if (local.get $arg4)
-      (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
+      (then (call $gs32 (local.get $arg4) (local.get $limit))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -1246,12 +1245,15 @@
       (then (return (i32.const 0))))
     (call $console_cells_ensure)
     (local.set $step (select (i32.const 2) (i32.const 1) (local.get $wide)))
-    (local.set $src (call $g2w (local.get $buf_g)))
+    (local.set $src (local.get $buf_g))
     (local.set $i (i32.const 0))
     (block $done (loop $write
       (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
-      (call $console_put_char (call $load_char
-        (i32.add (local.get $src) (i32.mul (local.get $i) (local.get $step))) (local.get $wide)))
+      (call $console_put_char
+        (if (result i32) (local.get $wide)
+          (then (call $gl16 (local.get $src)))
+          (else (call $gl8 (local.get $src)))))
+      (local.set $src (i32.add (local.get $src) (local.get $step)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $write)))
     (call $console_buffer_finish (i32.const 1))
@@ -1761,7 +1763,7 @@
     ;; A previous park left the auto-pop suppressed; this call completes its
     ;; own frame, so hand the flag back before returning.
     (global.set $handler_set_eip (i32.const 0))
-    (local.set $dst (call $g2w (local.get $buf_g)))
+    (local.set $dst (local.get $buf_g))
     (block $done (loop $copy
       (br_if $done (i32.ge_u (local.get $i) (local.get $avail)))
       (br_if $done (i32.ge_u (local.get $out) (local.get $maxch)))
@@ -1773,16 +1775,16 @@
             (i32.ne (local.get $ch) (i32.const 0)))
         (then
           (if (local.get $wide)
-            (then (i32.store16 (i32.add (local.get $dst) (i32.mul (local.get $out) (i32.const 2))) (local.get $ch)))
-            (else (i32.store8 (i32.add (local.get $dst) (local.get $out)) (local.get $ch))))
+            (then (call $gs16 (i32.add (local.get $dst) (i32.mul (local.get $out) (i32.const 2))) (local.get $ch)))
+            (else (call $gs8 (i32.add (local.get $dst) (local.get $out)) (local.get $ch))))
           (local.set $out (i32.add (local.get $out) (i32.const 1)))
           ;; Enter reads back as CRLF, the way a real line-mode read does.
           (if (i32.and (i32.eq (local.get $ch) (i32.const 13))
                        (i32.lt_u (local.get $out) (local.get $maxch)))
             (then
               (if (local.get $wide)
-                (then (i32.store16 (i32.add (local.get $dst) (i32.mul (local.get $out) (i32.const 2))) (i32.const 10)))
-                (else (i32.store8 (i32.add (local.get $dst) (local.get $out)) (i32.const 10))))
+                (then (call $gs16 (i32.add (local.get $dst) (i32.mul (local.get $out) (i32.const 2))) (i32.const 10)))
+                (else (call $gs8 (i32.add (local.get $dst) (local.get $out)) (i32.const 10))))
               (local.set $out (i32.add (local.get $out) (i32.const 1)))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $copy)))
@@ -1792,7 +1794,7 @@
         (call $console_input_block)
         (return (i32.const 1))))
     (if (local.get $pread)
-      (then (i32.store (call $g2w (local.get $pread)) (local.get $out))))
+      (then (call $gs32 (local.get $pread) (local.get $out))))
     (i32.const 0))
 
   ;; Fill INPUT_RECORDs from the queue. Returns the number of records written.
@@ -1800,52 +1802,54 @@
   ;; +10 wVirtualKeyCode, +12 wVirtualScanCode, +14 uChar, +16 dwControlKeyState.
   (func $console_read_input (param $buf_g i32) (param $nrec i32) (param $wide i32)
                             (result i32)
-    (local $i i32) (local $rec i32) (local $count i32) (local $type i32)
+    (local $i i32) (local $rec i32) (local $count i32) (local $type i32) (local $slot i32)
     (local.set $count (call $console_input_count))
     (if (i32.gt_u (local.get $nrec) (local.get $count)) (then (local.set $nrec (local.get $count))))
-    (local.set $rec (call $g2w (local.get $buf_g)))
+    (local.set $rec (local.get $buf_g))
     (block $done (loop $fill
       (br_if $done (i32.ge_u (local.get $i) (local.get $nrec)))
       (local.set $type (call $console_input_type (local.get $i)))
-      (i32.store16 (local.get $rec) (local.get $type))
+      (call $gs16 (local.get $rec) (local.get $type))
       (if (i32.eq (local.get $type) (i32.const 2)) ;; MOUSE_EVENT
         (then
-          (i32.store offset=4 (local.get $rec)
+          (call $gs32 (i32.add (local.get $rec) (i32.const 4))
             (call $console_input_char (local.get $i))) ;; COORD
-          (i32.store offset=8 (local.get $rec)
+          (call $gs32 (i32.add (local.get $rec) (i32.const 8))
             (call $console_input_vk (local.get $i))) ;; dwButtonState
-          (i32.store offset=12 (local.get $rec)
+          (call $gs32 (i32.add (local.get $rec) (i32.const 12))
             (call $console_input_control_state (local.get $i)))
-          (i32.store offset=16 (local.get $rec)
+          (call $gs32 (i32.add (local.get $rec) (i32.const 16))
             (call $console_input_event_flags (local.get $i))))
         (else
           (if (i32.eq (local.get $type) (i32.const 1)) ;; KEY_EVENT
             (then
-              (i32.store offset=4 (local.get $rec)
+              (call $gs32 (i32.add (local.get $rec) (i32.const 4))
                 (i32.eqz (i32.and
                   (call $console_input_event_flags (local.get $i))
                   (i32.const 0x80000000))))                         ;; bKeyDown
-              (i32.store16 offset=8 (local.get $rec)
+              (call $gs16 (i32.add (local.get $rec) (i32.const 8))
                 (i32.and (call $console_input_event_flags (local.get $i))
                   (i32.const 0xFFFF)))                              ;; repeat
-              (i32.store16 offset=10 (local.get $rec) (call $console_input_vk (local.get $i)))
-              (i32.store16 offset=12 (local.get $rec)
+              (call $gs16 (i32.add (local.get $rec) (i32.const 10)) (call $console_input_vk (local.get $i)))
+              (call $gs16 (i32.add (local.get $rec) (i32.const 12))
                 (i32.and
                   (i32.shr_u (call $console_input_event_flags (local.get $i)) (i32.const 16))
                   (i32.const 0xFF)))                                ;; scan code
-              (i32.store16 offset=14 (local.get $rec)
+              (call $gs16 (i32.add (local.get $rec) (i32.const 14))
                 (select
                   (call $console_input_char (local.get $i))
                   (i32.and (call $console_input_char (local.get $i)) (i32.const 0xFF))
                   (local.get $wide)))
-              (i32.store offset=16 (local.get $rec)
+              (call $gs32 (i32.add (local.get $rec) (i32.const 16))
                 (call $console_input_control_state (local.get $i))))
             (else
               ;; Other INPUT_RECORD unions already occupy the four raw dwords
               ;; used by the internal ring. Preserve them byte-for-byte.
-              (memory.copy (i32.add (local.get $rec) (i32.const 4))
-                (i32.add (call $console_input_slot (local.get $i)) (i32.const 4))
-                (i32.const 16))))))
+              (local.set $slot (call $console_input_slot (local.get $i)))
+              (call $gs32 (i32.add (local.get $rec) (i32.const 4)) (i32.load offset=4 (local.get $slot)))
+              (call $gs32 (i32.add (local.get $rec) (i32.const 8)) (i32.load offset=8 (local.get $slot)))
+              (call $gs32 (i32.add (local.get $rec) (i32.const 12)) (i32.load offset=12 (local.get $slot)))
+              (call $gs32 (i32.add (local.get $rec) (i32.const 16)) (i32.load offset=16 (local.get $slot)))))))
       (local.set $rec (i32.add (local.get $rec) (i32.const 20)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $fill)))
@@ -1856,7 +1860,7 @@
     (i32.store offset=0 (global.get $reg_base) (call $console_write
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
     (if (i32.and (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)) (i32.ne (local.get $arg3) (i32.const 0)))
-      (then (i32.store (call $g2w (local.get $arg3)) (local.get $arg2))))
+      (then (call $gs32 (local.get $arg3) (local.get $arg2))))
     (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (global.set $last_error (i32.const 6))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -1886,11 +1890,11 @@
     (local.set $bh (i32.shr_s (local.get $arg2) (i32.const 16)))
     (local.set $bx (i32.extend16_s (local.get $arg3)))
     (local.set $by (i32.shr_s (local.get $arg3) (i32.const 16)))
-    (local.set $rgn (call $g2w (local.get $arg4)))
-    (local.set $left (i32.load16_s (local.get $rgn)))
-    (local.set $top (i32.load16_s (i32.add (local.get $rgn) (i32.const 2))))
-    (local.set $right (i32.load16_s (i32.add (local.get $rgn) (i32.const 4))))
-    (local.set $bottom (i32.load16_s (i32.add (local.get $rgn) (i32.const 6))))
+    (local.set $rgn (local.get $arg4))
+    (local.set $left (i32.extend16_s (call $gl16 (local.get $rgn))))
+    (local.set $top (i32.extend16_s (call $gl16 (i32.add (local.get $rgn) (i32.const 2)))))
+    (local.set $right (i32.extend16_s (call $gl16 (i32.add (local.get $rgn) (i32.const 4)))))
+    (local.set $bottom (i32.extend16_s (call $gl16 (i32.add (local.get $rgn) (i32.const 6)))))
     (local.set $src_left (local.get $left))
     (local.set $src_top (local.get $top))
 
@@ -1938,17 +1942,17 @@
         (local.set $bottom (i32.const -1))))
     ;; Report the actual screen-buffer rectangle even for an empty successful
     ;; operation, where Right < Left and Bottom < Top.
-    (i32.store16 (local.get $rgn) (local.get $left))
-    (i32.store16 offset=2 (local.get $rgn) (local.get $top))
-    (i32.store16 offset=4 (local.get $rgn) (local.get $right))
-    (i32.store16 offset=6 (local.get $rgn) (local.get $bottom))
+    (call $gs16 (local.get $rgn) (local.get $left))
+    (call $gs16 (i32.add (local.get $rgn) (i32.const 2)) (local.get $top))
+    (call $gs16 (i32.add (local.get $rgn) (i32.const 4)) (local.get $right))
+    (call $gs16 (i32.add (local.get $rgn) (i32.const 6)) (local.get $bottom))
     (local.set $changed
       (i32.and (i32.le_s (local.get $left) (local.get $right))
         (i32.le_s (local.get $top) (local.get $bottom))))
     (if (local.get $changed)
       (then
         (call $console_cells_ensure)
-        (local.set $src (call $g2w (local.get $arg1)))))
+        (local.set $src (local.get $arg1))))
     (local.set $row (local.get $top))
     (block $rdone (loop $rows
       (br_if $rdone (i32.gt_s (local.get $row) (local.get $bottom)))
@@ -1964,11 +1968,11 @@
         ;; Destination coordinates have already been clipped to this buffer.
         (local.set $doff (i32.add (i32.mul (local.get $row) (global.get $console_width)) (local.get $col)))
         (i32.store16 (i32.add (global.get $console_text_base) (i32.mul (local.get $doff) (i32.const 2)))
-          (select (i32.load16_u (local.get $soff))
-                  (i32.load8_u (local.get $soff))
-                  (local.get $wide)))
+          (if (result i32) (local.get $wide)
+            (then (call $gl16 (local.get $soff)))
+            (else (call $gl8 (local.get $soff)))))
         (i32.store16 (i32.add (global.get $console_attr_base) (i32.mul (local.get $doff) (i32.const 2)))
-          (i32.load16_u (i32.add (local.get $soff) (i32.const 2))))
+          (call $gl16 (i32.add (local.get $soff) (i32.const 2))))
         (local.set $col (i32.add (local.get $col) (i32.const 1)))
         (br $cols)))
       (local.set $row (i32.add (local.get $row) (i32.const 1)))
@@ -2001,14 +2005,14 @@
     (if (i32.eq (local.get $limit) (i32.const -1))
       (then
         (if (local.get $arg4)
-          (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
+          (then (call $gs32 (local.get $arg4) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
-    (local.set $src (call $g2w (local.get $arg1)))
+    (local.set $src (local.get $arg1))
     (local.set $x (i32.and (local.get $arg3) (i32.const 0xFFFF)))
     (local.set $y (i32.shr_u (local.get $arg3) (i32.const 16)))
     (local.set $i (i32.const 0))
@@ -2016,14 +2020,14 @@
       (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
       (local.set $off (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
       (i32.store16 (i32.add (global.get $console_text_base) (i32.mul (local.get $off) (i32.const 2)))
-        (i32.load8_u (i32.add (local.get $src) (local.get $i))))
+        (call $gl8 (i32.add (local.get $src) (local.get $i))))
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (if (i32.ge_u (local.get $x) (global.get $console_width))
         (then (local.set $x (i32.const 0)) (local.set $y (i32.add (local.get $y) (i32.const 1)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $fill)))
     (if (local.get $arg4)
-      (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
+      (then (call $gs32 (local.get $arg4) (local.get $limit))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -2041,14 +2045,14 @@
     (if (i32.eq (local.get $limit) (i32.const -1))
       (then
         (if (local.get $arg4)
-          (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
+          (then (call $gs32 (local.get $arg4) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
-    (local.set $src (call $g2w (local.get $arg1)))
+    (local.set $src (local.get $arg1))
     (local.set $x (i32.and (local.get $arg3) (i32.const 0xFFFF)))
     (local.set $y (i32.shr_u (local.get $arg3) (i32.const 16)))
     (local.set $i (i32.const 0))
@@ -2056,14 +2060,14 @@
       (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
       (local.set $off (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
       (i32.store16 (i32.add (global.get $console_attr_base) (i32.mul (local.get $off) (i32.const 2)))
-        (i32.load16_u (i32.add (local.get $src) (i32.mul (local.get $i) (i32.const 2)))))
+        (call $gl16 (i32.add (local.get $src) (i32.mul (local.get $i) (i32.const 2)))))
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (if (i32.ge_u (local.get $x) (global.get $console_width))
         (then (local.set $x (i32.const 0)) (local.set $y (i32.add (local.get $y) (i32.const 1)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $fill)))
     (if (local.get $arg4)
-      (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
+      (then (call $gs32 (local.get $arg4) (local.get $limit))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -2095,7 +2099,7 @@
                    (i32.eqz (local.get $buffer))))
       (then
         (if (local.get $count_ptr)
-          (then (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))))
+          (then (call $gs32 (local.get $count_ptr) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return (i32.const 0))))
@@ -2103,7 +2107,7 @@
     ;; blocking and without touching the queue or the (possibly NULL) buffer.
     (if (i32.eqz (local.get $length))
       (then
-        (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))
+        (call $gs32 (local.get $count_ptr) (i32.const 0))
         (if (i32.eqz (local.get $peek))
           (then (global.set $handler_set_eip (i32.const 0))))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))
@@ -2122,7 +2126,7 @@
       (local.get $buffer) (local.get $length) (local.get $wide)))
     (if (i32.eqz (local.get $peek))
       (then (call $console_input_drop (local.get $n))))
-    (i32.store (call $g2w (local.get $count_ptr)) (local.get $n))
+    (call $gs32 (local.get $count_ptr) (local.get $n))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.const 0))
 
@@ -2141,7 +2145,7 @@
     (call $console_input_poll_host)
     (if (global.get $console_ctrl_dispatching)
       (then (return (i32.const 1))))
-    (i32.store (call $g2w (local.get $count_ptr)) (call $console_input_count))
+    (call $gs32 (local.get $count_ptr) (call $console_input_count))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.const 0))
 
@@ -2176,7 +2180,7 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (call $console_cells_ensure)
-    (local.set $dst (call $g2w (local.get $arg1)))
+    (local.set $dst (local.get $arg1))
     ;; COORD members are signed SHORTs. The destination is a true 2-D array;
     ;; treating Y as absent (and X/Y as unsigned) lets a clipped read walk past
     ;; the caller's CHAR_INFO allocation.
@@ -2184,11 +2188,11 @@
     (local.set $bh (i32.shr_s (local.get $arg2) (i32.const 16)))
     (local.set $bx (i32.extend16_s (local.get $arg3)))
     (local.set $by (i32.shr_s (local.get $arg3) (i32.const 16)))
-    (local.set $rgn (call $g2w (local.get $arg4)))
-    (local.set $left (i32.load16_s (local.get $rgn)))
-    (local.set $top (i32.load16_s (i32.add (local.get $rgn) (i32.const 2))))
-    (local.set $right (i32.load16_s (i32.add (local.get $rgn) (i32.const 4))))
-    (local.set $bottom (i32.load16_s (i32.add (local.get $rgn) (i32.const 6))))
+    (local.set $rgn (local.get $arg4))
+    (local.set $left (i32.extend16_s (call $gl16 (local.get $rgn))))
+    (local.set $top (i32.extend16_s (call $gl16 (i32.add (local.get $rgn) (i32.const 2)))))
+    (local.set $right (i32.extend16_s (call $gl16 (i32.add (local.get $rgn) (i32.const 4)))))
+    (local.set $bottom (i32.extend16_s (call $gl16 (i32.add (local.get $rgn) (i32.const 6)))))
     (local.set $src_left (local.get $left))
     (local.set $src_top (local.get $top))
 
@@ -2236,10 +2240,10 @@
         (local.set $top (i32.const 0))
         (local.set $right (i32.const -1))
         (local.set $bottom (i32.const -1))))
-    (i32.store16 (local.get $rgn) (local.get $left))
-    (i32.store16 offset=2 (local.get $rgn) (local.get $top))
-    (i32.store16 offset=4 (local.get $rgn) (local.get $right))
-    (i32.store16 offset=6 (local.get $rgn) (local.get $bottom))
+    (call $gs16 (local.get $rgn) (local.get $left))
+    (call $gs16 (i32.add (local.get $rgn) (i32.const 2)) (local.get $top))
+    (call $gs16 (i32.add (local.get $rgn) (i32.const 4)) (local.get $right))
+    (call $gs16 (i32.add (local.get $rgn) (i32.const 6)) (local.get $bottom))
     (local.set $row (local.get $top))
     (block $rdone (loop $rows
       (br_if $rdone (i32.gt_s (local.get $row) (local.get $bottom)))
@@ -2252,14 +2256,14 @@
             (i32.add
               (i32.mul (i32.add (i32.sub (local.get $row) (local.get $src_top)) (local.get $by)) (local.get $bw))
               (i32.add (i32.sub (local.get $col) (local.get $src_left)) (local.get $bx))))))
-        (i32.store16 (local.get $doff)
+        (call $gs16 (local.get $doff)
           (select
             (i32.load16_u (i32.add (global.get $console_text_base)
               (i32.mul (local.get $soff) (i32.const 2))))
             (i32.and (i32.load16_u (i32.add (global.get $console_text_base)
               (i32.mul (local.get $soff) (i32.const 2)))) (i32.const 0xff))
             (local.get $wide)))
-        (i32.store16 (i32.add (local.get $doff) (i32.const 2))
+        (call $gs16 (i32.add (local.get $doff) (i32.const 2))
           (i32.load16_u (i32.add (global.get $console_attr_base)
             (i32.mul (local.get $soff) (i32.const 2)))))
         (local.set $col (i32.add (local.get $col) (i32.const 1)))
@@ -2296,20 +2300,20 @@
     (if (i32.eq (local.get $limit) (i32.const -1))
       (then
         (if (local.get $arg4)
-          (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
+          (then (call $gs32 (local.get $arg4) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
-    (local.set $dst (call $g2w (local.get $arg1)))
+    (local.set $dst (local.get $arg1))
     (local.set $x (i32.and (local.get $arg3) (i32.const 0xFFFF)))
     (local.set $y (i32.shr_u (local.get $arg3) (i32.const 16)))
     (local.set $i (i32.const 0))
     (block $done (loop $read
       (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
       (local.set $off (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
-      (i32.store16 (i32.add (local.get $dst) (i32.mul (local.get $i) (i32.const 2)))
+      (call $gs16 (i32.add (local.get $dst) (i32.mul (local.get $i) (i32.const 2)))
         (i32.load16_u (i32.add (global.get $console_attr_base) (i32.mul (local.get $off) (i32.const 2)))))
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (if (i32.ge_u (local.get $x) (global.get $console_width))
@@ -2317,7 +2321,7 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $read)))
     (if (local.get $arg4)
-      (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
+      (then (call $gs32 (local.get $arg4) (local.get $limit))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -2361,7 +2365,7 @@
     (if (local.get $limit)
       (then
         (call $console_cells_ensure)
-        (local.set $dst (call $g2w (local.get $buffer_g)))
+        (local.set $dst (local.get $buffer_g))
         (local.set $start
           (i32.add
             (i32.mul (i32.shr_s (local.get $coord) (i32.const 16))
@@ -2376,13 +2380,13 @@
                   (i32.const 1)))))
           (if (local.get $wide)
             (then
-              (i32.store16
+              (call $gs16
                 (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 1)))
                 (local.get $ch)))
             (else
               ;; Match the runtime's existing console-code-page narrowing in
               ;; ReadConsoleOutputA: ANSI output exposes the low byte.
-              (i32.store8 (i32.add (local.get $dst) (local.get $i))
+              (call $gs8 (i32.add (local.get $dst) (local.get $i))
                 (local.get $ch))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $read)))
@@ -2427,12 +2431,12 @@
         (call $console_buffer_finish (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
-    (local.set $scroll (call $g2w (local.get $arg1)))
-    (local.set $fill (call $g2w (local.get $arg4)))
-    (local.set $left (i32.load16_s (local.get $scroll)))
-    (local.set $top (i32.load16_s offset=2 (local.get $scroll)))
-    (local.set $right (i32.load16_s offset=4 (local.get $scroll)))
-    (local.set $bottom (i32.load16_s offset=6 (local.get $scroll)))
+    (local.set $scroll (local.get $arg1))
+    (local.set $fill (local.get $arg4))
+    (local.set $left (i32.extend16_s (call $gl16 (local.get $scroll))))
+    (local.set $top (i32.extend16_s (call $gl16 (i32.add (local.get $scroll) (i32.const 2)))))
+    (local.set $right (i32.extend16_s (call $gl16 (i32.add (local.get $scroll) (i32.const 4)))))
+    (local.set $bottom (i32.extend16_s (call $gl16 (i32.add (local.get $scroll) (i32.const 6)))))
     (if (i32.or (i32.lt_s (local.get $right) (local.get $left))
                 (i32.lt_s (local.get $bottom) (local.get $top)))
       (then
@@ -2443,11 +2447,11 @@
         (return)))
     (if (local.get $arg2)
       (then
-        (local.set $clip (call $g2w (local.get $arg2)))
-        (local.set $clip_left (i32.load16_s (local.get $clip)))
-        (local.set $clip_top (i32.load16_s offset=2 (local.get $clip)))
-        (local.set $clip_right (i32.load16_s offset=4 (local.get $clip)))
-        (local.set $clip_bottom (i32.load16_s offset=6 (local.get $clip))))
+        (local.set $clip (local.get $arg2))
+        (local.set $clip_left (i32.extend16_s (call $gl16 (local.get $clip))))
+        (local.set $clip_top (i32.extend16_s (call $gl16 (i32.add (local.get $clip) (i32.const 2)))))
+        (local.set $clip_right (i32.extend16_s (call $gl16 (i32.add (local.get $clip) (i32.const 4)))))
+        (local.set $clip_bottom (i32.extend16_s (call $gl16 (i32.add (local.get $clip) (i32.const 6))))))
       (else
         (local.set $clip_left (i32.const 0))
         (local.set $clip_top (i32.const 0))
@@ -2578,10 +2582,10 @@
                   (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
                 (i32.store16
                   (i32.add (global.get $console_text_base) (i32.shl (local.get $target_off) (i32.const 1)))
-                  (i32.load16_u (local.get $fill)))
+                  (call $gl16 (local.get $fill)))
                 (i32.store16
                   (i32.add (global.get $console_attr_base) (i32.shl (local.get $target_off) (i32.const 1)))
-                  (i32.load16_u offset=2 (local.get $fill)))
+                  (call $gl16 (i32.add (local.get $fill) (i32.const 2))))
                 (local.set $changed (i32.const 1))))
             (br_if $fill_cols_done (i32.eq (local.get $x) (local.get $copy_right)))
             (local.set $x (i32.add (local.get $x) (i32.const 1)))
@@ -2599,7 +2603,7 @@
   (func $console_write_input
       (param $handle i32) (param $buffer i32) (param $length i32)
       (param $count_ptr i32) (param $wide i32)
-    (local $source i32) (local $record i32) (local $slot i32)
+    (local $record i32) (local $slot i32)
     (local $count i32) (local $limit i32) (local $i i32) (local $type i32)
     (if (i32.ne (call $console_handle_resolve (local.get $handle)) (i32.const 1))
       (then
@@ -2611,7 +2615,7 @@
                    (i32.eqz (local.get $buffer))))
       (then
         (if (local.get $count_ptr)
-          (then (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))))
+          (then (call $gs32 (local.get $count_ptr) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
@@ -2621,39 +2625,39 @@
         (i32.sub (global.get $CONSOLE_INPUT_MAX) (local.get $count))
         (i32.le_u (local.get $length)
           (i32.sub (global.get $CONSOLE_INPUT_MAX) (local.get $count)))))
-    (local.set $source (call $g2w (local.get $buffer)))
     (block $done (loop $write
       (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
       (local.set $record
-        (i32.add (local.get $source) (i32.mul (local.get $i) (i32.const 20))))
+        (i32.add (local.get $buffer) (i32.mul (local.get $i) (i32.const 20))))
       (local.set $slot (call $console_input_slot (i32.add (local.get $count) (local.get $i))))
-      (local.set $type (i32.load16_u (local.get $record)))
+      (local.set $type (call $gl16 (local.get $record)))
       (i32.store (local.get $slot) (local.get $type))
       (if (i32.eq (local.get $type) (i32.const 1)) ;; KEY_EVENT
         (then
           (i32.store offset=4 (local.get $slot)
-            (select
-              (i32.load16_u offset=14 (local.get $record))
-              (i32.load8_u offset=14 (local.get $record))
-              (local.get $wide)))
-          (i32.store offset=8 (local.get $slot) (i32.load16_u offset=10 (local.get $record)))
-          (i32.store offset=12 (local.get $slot) (i32.load offset=16 (local.get $record)))
+            (if (result i32) (local.get $wide)
+              (then (call $gl16 (i32.add (local.get $record) (i32.const 14))))
+              (else (call $gl8 (i32.add (local.get $record) (i32.const 14))))))
+          (i32.store offset=8 (local.get $slot) (call $gl16 (i32.add (local.get $record) (i32.const 10))))
+          (i32.store offset=12 (local.get $slot) (call $gl32 (i32.add (local.get $record) (i32.const 16))))
           (i32.store offset=16 (local.get $slot)
             (i32.or
               (i32.or
-                (i32.load16_u offset=8 (local.get $record))
-                (i32.shl (i32.load16_u offset=12 (local.get $record)) (i32.const 16)))
+                (call $gl16 (i32.add (local.get $record) (i32.const 8)))
+                (i32.shl (call $gl16 (i32.add (local.get $record) (i32.const 12))) (i32.const 16)))
               (select (i32.const 0x80000000) (i32.const 0)
-                (i32.eqz (i32.load offset=4 (local.get $record)))))))
+                (i32.eqz (call $gl32 (i32.add (local.get $record) (i32.const 4))))))))
         (else
-          (memory.copy (i32.add (local.get $slot) (i32.const 4))
-            (i32.add (local.get $record) (i32.const 4)) (i32.const 16))))
+          (i32.store offset=4 (local.get $slot) (call $gl32 (i32.add (local.get $record) (i32.const 4))))
+          (i32.store offset=8 (local.get $slot) (call $gl32 (i32.add (local.get $record) (i32.const 8))))
+          (i32.store offset=12 (local.get $slot) (call $gl32 (i32.add (local.get $record) (i32.const 12))))
+          (i32.store offset=16 (local.get $slot) (call $gl32 (i32.add (local.get $record) (i32.const 16))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $write)))
     (i32.store (global.get $CONSOLE_INPUT) (i32.add (local.get $count) (local.get $limit)))
     (if (local.get $limit)
       (then (drop (call $host_set_event (call $console_input_event)))))
-    (i32.store (call $g2w (local.get $count_ptr)) (local.get $limit))
+    (call $gs32 (local.get $count_ptr) (local.get $limit))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
 
   (func $handle_WriteConsoleInputA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2760,12 +2764,12 @@
   (func $console_draw_run (param $hdc i32) (param $row i32) (param $col i32)
                           (param $len i32) (param $attr i32) (param $base i32)
     (if (i32.eqz (local.get $len)) (then (return)))
-    (drop (call $host_gdi_set_text_color (local.get $hdc)
+    (drop (call $gdi_native_set_text_color (local.get $hdc)
       (call $console_palette (local.get $attr))))
-    (drop (call $host_gdi_set_bk_color (local.get $hdc)
+    (drop (call $gdi_native_set_bk_color (local.get $hdc)
       (call $console_palette (i32.shr_u (local.get $attr) (i32.const 4)))))
-    (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 2)))  ;; OPAQUE
-    (drop (call $host_gdi_text_out (local.get $hdc)
+    (drop (call $gdi_native_set_bk_mode (local.get $hdc) (i32.const 2)))  ;; OPAQUE
+    (drop (call $gdi_native_text_out (local.get $hdc)
       (i32.mul (local.get $col) (global.get $CONSOLE_CELL_W))
       (i32.mul (local.get $row) (global.get $CONSOLE_CELL_H))
       (i32.add (global.get $console_text_base)
@@ -2786,13 +2790,13 @@
         (local.set $hdc (i32.add (local.get $hwnd) (i32.const 0x40000)))
         ;; Ground the whole client in the current background attribute first,
         ;; so a buffer shorter than the window does not show through.
-        (local.set $brush (call $host_gdi_create_solid_brush
+        (local.set $brush (call $gdi_native_create_solid_brush
           (call $console_palette (i32.shr_u (global.get $console_attr) (i32.const 4)))))
-        (drop (call $host_gdi_fill_rect (local.get $hdc) (i32.const 0) (i32.const 0)
+        (drop (call $gdi_native_fill_rect (local.get $hdc) (i32.const 0) (i32.const 0)
           (i32.mul (local.get $window_width) (global.get $CONSOLE_CELL_W))
           (i32.mul (local.get $window_height) (global.get $CONSOLE_CELL_H))
           (local.get $brush)))
-        (drop (call $host_gdi_delete_object (local.get $brush)))
+        (drop (call $gdi_native_delete_object (local.get $brush)))
         ;; Field 88 is the DC's font (default SYSTEM_FONT 0x3001D); field 84
         ;; is its bitmap. OEM_FIXED_FONT is the 8x12 Terminal strike, which is
         ;; what makes the cell grid line up.

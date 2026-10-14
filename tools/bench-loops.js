@@ -32,10 +32,13 @@
 // CALIBRATION
 // -----------
 // Before believing anything new, the harness must reproduce a KNOWN sign. Two
-// runtime fold toggles exist for exactly this (13-exports.wat):
+// runtime fold toggles existed for exactly this (13-exports.wat):
 //   --toggle=case_chain   handler 423, measured at ~0 on the real app
 //   --toggle=rle_run      handler 424, measured at +7% batches on the real app
-// A harness that cannot separate those two is measuring itself.
+// A harness that cannot separate those two is measuring itself. The
+// case_chain toggle is gone with its fold (retired to the uop tier,
+// docs/uop-tier-design.md section 18); the record below is history, and
+// rle_run on its own shapes is the calibration toggle that remains.
 //
 // CALIBRATION RESULT, 2026-08-24, box at load 3.5:
 //   --shapes=cmp_ladder --toggle=case_chain   +57.4%, +57.8%  (two runs)
@@ -59,7 +62,6 @@
 //   node tools/bench-loops.js                          # all shapes, 4MB set
 //   node tools/bench-loops.js --shapes=lut,store_stream --bytes=16m
 //   node tools/bench-loops.js --shapes=lut,store_stream --mapping=sparse
-//   node tools/bench-loops.js --shapes=cmp_ladder --toggle=case_chain
 //   node tools/bench-loops.js --shapes=blk_rld8,blk_memalu8 --toggle=block_exec_split
 //   node tools/bench-loops.js --json
 //
@@ -573,6 +575,44 @@ const SHAPES = {
     describe: 'K jmp $+0 per iteration — same dispatches as nop_chain plus K block ends',
     real: 'subtract nop_chain to price one block entry',
     emit: a => blockEntryShape(a, true),
+  },
+
+  mmx_fill: {
+    describe: 'movq [edi],mm0 / add edi,8 / dec ecx / jnz (UE1 SoftDrv surface clear)',
+    real: 'Deus Ex demo softdrv+0x10d3ed70 (24.6% of block entries), Unreal SE softdrv+0x10931ed0; --toggle=mmx_fill',
+    emit(a) {
+      const n = Math.floor(a.bufBytes / 8);
+      const dst = a.buf;
+      return {
+        iters: n,
+        bytesTouched: n * 8,
+        code: [
+          0x0F, 0x6E, 0xC0,             // movd mm0, eax
+          0x0F, 0x62, 0xC0,             // punpckldq mm0, mm0
+          0x0F, 0x7F, 0x07,             // loop: movq [edi], mm0
+          0x83, 0xC7, 0x08,             //       add edi, 8
+          0x49,                         //       dec ecx
+          0x75, 0xF7,                   //       jnz loop
+          0x0F, 0x77,                   // emms
+        ],
+        setup(e, mem, g2w) {
+          const dv = new DataView(mem.buffer);
+          dv.setUint32(g2w(dst), 0, true);
+          dv.setUint32(g2w(dst) + n * 8 - 4, 0, true);
+          e.set_edi(dst); e.set_ecx(n); e.set_eax(0xC3A5965A | 0);
+        },
+        verify(e, mem, g2w) {
+          const dv = new DataView(mem.buffer);
+          for (const off of [0, 4, (n * 8) >> 1, n * 8 - 4]) {
+            const got = dv.getUint32(g2w(dst) + off, true);
+            if (got !== 0xC3A5965A) return `[buf+0x${off.toString(16)}]=0x${got.toString(16)} want 0xc3a5965a`;
+          }
+          if ((e.get_edi() >>> 0) !== ((dst + n * 8) >>> 0)) return `edi=0x${(e.get_edi() >>> 0).toString(16)}`;
+          if (e.get_ecx() !== 0) return `ecx=${e.get_ecx()}, expected 0`;
+          return null;
+        },
+      };
+    },
   },
 
   rep_movsd: {
@@ -1511,6 +1551,68 @@ function mixShape(fixedUops, spacing, stride, fbEvery) {
   };
 }
 SHAPES.blk_mix512 = mixShape(null, 128, 0x20000);
+// SimCity 2000's hottest region (0x45b021): per tile, two four-compare
+// bounds ladders on 16-bit frame locals (never taken, so every Jcc is a
+// fall-through), two data-dependent tile-bit tests read from a random buffer,
+// and one if/else join `jmp`. ~13 blocks per iteration, ~2 x86 insns each.
+// It is the shape that priced the per-Jcc-handler dispatch in 05-alu.wat's
+// (jcc-finish): +9.7% here, +3.5% on cmp_ladder, 0% on blk_mix512.
+SHAPES.sc_ladder = {
+  describe: 'SimCity 2000 0x45b021: 16-bit bounds ladders + data-dependent tile tests',
+  real: 'simdemo.exe city simulation, 18% of block entries in the city window',
+  emit(a) {
+    const out = [], fix = [], lab = {};
+    const B = (...b) => out.push(...b);
+    const J = (op, name) => { out.push(op, 0); fix.push([out.length - 1, name]); };
+    const ladder = () => {
+      B(0x66, 0x83, 0x7D, 0xF0, 0x00); J(0x7C, 'out');         // cmp word [ebp-0x10],0 / jl
+      B(0x66, 0x81, 0x7D, 0xF0, 0x80, 0x00); J(0x7D, 'out');   // cmp word [ebp-0x10],0x80 / jge
+      B(0x66, 0x83, 0x7D, 0xF8, 0x00); J(0x7C, 'out');         // cmp word [ebp-8],0 / jl
+      B(0x66, 0x81, 0x7D, 0xF8, 0x80, 0x00); J(0x7D, 'out');   // cmp word [ebp-8],0x80 / jge
+    };
+    ladder();
+    B(0xF6, 0x06, 0x01); J(0x74, 'odd');                       // test byte [esi],1 / jz
+    B(0x66, 0x05, 0x04, 0x00); J(0xEB, 'join');                // add ax,4 / jmp
+    lab.odd = out.length; B(0x66, 0x05, 0x0C, 0x00);           // add ax,0xc
+    lab.join = out.length;
+    B(0xF6, 0x06, 0x02); J(0x74, 'skip2');                     // test byte [esi],2 / jz
+    B(0x66, 0x83, 0xC3, 0x04);                                 // add bx,4
+    lab.skip2 = out.length;
+    ladder();
+    lab.out = out.length;
+    B(0x46);                                                   // inc esi
+    B(0x66, 0xFF, 0x45, 0xF8);                                 // inc word [ebp-8]
+    B(0x66, 0x83, 0x65, 0xF8, 0x7F);                           // and word [ebp-8],0x7f
+    for (const [at, name] of fix) out[at] = (lab[name] - (at + 1)) & 0xFF;
+    const n = Math.min(Math.floor(a.bufBytes), 1_000_000);
+    let seed = 12345;
+    const bytes = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { seed = (seed * 1103515245 + 12345) >>> 0; bytes[i] = seed >>> 24; }
+    let ax = 0, bx = 0;
+    for (let i = 0; i < n; i++) {
+      ax = (ax + ((bytes[i] & 1) ? 4 : 12)) & 0xFFFF;
+      if (bytes[i] & 2) bx = (bx + 4) & 0xFFFF;
+    }
+    const frame = a.stackTop - 0x100;
+    return {
+      iters: n, bytesTouched: n,
+      code: loopBack(out),
+      setup(e, mem, g2w) {
+        mem.set(bytes, g2w(a.buf));
+        const dv = new DataView(mem.buffer);
+        dv.setUint16(g2w(frame - 0x10), 5, true);
+        dv.setUint16(g2w(frame - 8), 0, true);
+        e.set_ebp(frame); e.set_esi(a.buf); e.set_ecx(n); e.set_eax(0); e.set_ebx(0);
+      },
+      verify(e) {
+        if (e.get_ecx() !== 0) return `ecx=${e.get_ecx()}, expected 0`;
+        if ((e.get_eax() & 0xFFFF) !== ax) return `ax=${e.get_eax() & 0xFFFF}, expected ${ax}`;
+        if ((e.get_ebx() & 0xFFFF) !== bx) return `bx=${e.get_ebx() & 0xFFFF}, expected ${bx}`;
+        return null;
+      },
+    };
+  },
+};
 // ROUND 17 (section 27): the shape the widened leaf contract is about. Same
 // 512-block cold-predictor working set, but every second block carries one
 // `adc ebx,eax` -- so half the descriptors take the pure leaf H463 and half
@@ -2231,13 +2333,10 @@ const TOGGLES = {
   region: 'set_region_fold',
   tree_fold: 'set_tree_fold',
   lut_superops: 'set_loop_lut_emit',
-  lut16_stack: 'set_loop_lut16_stack_emit',
-  case_chain: 'set_case_chain',
+  mmx_fill: 'set_loop_mmx_fill_emit',
   rle_run: 'set_rle_run',
-  rect_run: 'set_rect_run',
-  ck_lut16: 'set_ck_lut16',
-  ck_blend16: 'set_ck_blend16',
-  ck_shadow16: 'set_ck_shadow16',
+  // ck_lut16/ck_blend16/ck_shadow16 were the SimGolf keyed-blit folds, retired
+  // to the uop tier (docs/uop-tier-design.md section 18); their shapes stay.
   block_exec: 'set_block_exec',
   // Save-compression prototypes: a SIB-fused `OP [sib], r8` (handler 465) and
   // the implode match-extension fold (466). Shapes: implode_a, implode_b.
@@ -2431,13 +2530,34 @@ function ensureBuilt() {
   }
 }
 
-async function newInstance() {
-  const { createHostImports } = require(path.join(ROOT, 'lib/host-imports'));
-  const wasmBytes = fs.readFileSync(WASM_PATH);
+// A synthetic shape never reaches Win32, so the host it needs is only an import
+// object that links. --stub-host gives it one without lib/host-imports, which is
+// what lets this file run in an engine shell (JSC, d8, SpiderMonkey) through
+// tools/shell-require.js -- those have no Node module graph to load it from.
+// Every host import returns i32 or nothing except the seven f64 math_* ones, so
+// "0, or the real Math function" is a complete, correctly typed set.
+const STUB_HOST = process.argv.includes('--stub-host') ||
+  !(typeof process.versions === 'object' && process.versions && process.versions.node);
+const STUB_MATH = {
+  math_sin: Math.sin, math_cos: Math.cos, math_tan: Math.tan, math_atan2: Math.atan2,
+  math_log2: Math.log2, math_pow: Math.pow, math_pow2: x => Math.pow(2, x),
+};
+function stubHostImports() {
+  return new Proxy({}, {
+    get(target, key) {
+      if (key in target) return target[key];
+      return STUB_MATH[key] || (() => 0);
+    },
+  });
+}
+
+async function newInstance(wasmPath = WASM_PATH) {
+  const wasmBytes = fs.readFileSync(wasmPath);
   const exeBytes = fs.readFileSync(path.join(ROOT, 'test', 'binaries', 'notepad.exe'));
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { exports: null, getMemory: () => memory.buffer };
-  const h = createHostImports(ctx).host;
+  const h = STUB_HOST ? stubHostImports()
+    : require(path.join(ROOT, 'lib/host-imports')).createHostImports(ctx).host;
   h.memory = memory;
   h.exit = () => {};
   h.log = () => {};
@@ -2459,7 +2579,7 @@ async function newInstance() {
   // Use the module's translator so the same setup/verification code works for
   // both ordinary direct addresses and demand-backed sparse guest mappings.
   const g2w = ga => e.guest_to_wasm(ga >>> 0) >>> 0;
-  return { e, mem, g2w, imageBase };
+  return { e, mem, g2w, imageBase, ctx };
 }
 
 // Guest-address layout for a shape run. Everything sits inside the direct g2w
@@ -2696,6 +2816,16 @@ async function main() {
   const bufBytes = parseBytes(arg('bytes', '4m'));
   const reps = Number(arg('reps', 9));
   const toggle = arg('toggle', null);
+  // --wasm=label=path[,label=path...]: one arm per module (see the note at the
+  // top of main's shape loop). A bare path is labelled by its basename.
+  const wasmArg = arg('wasm', null);
+  const wasmArms = wasmArg
+    ? wasmArg.split(',').filter(Boolean).map(s => {
+      const eq = s.indexOf('=');
+      const p = eq < 0 ? s : s.slice(eq + 1);
+      return { label: eq < 0 ? path.basename(p, '.wasm') : s.slice(0, eq), path: path.resolve(ROOT, p) };
+    })
+    : [{ label: '', path: WASM_PATH }];
   const wantJson = has('json');
   const mapping = arg('mapping', 'direct');
   const scatterPageCount = Number(arg('scatter-pages', 64));
@@ -2711,7 +2841,8 @@ async function main() {
     throw new Error(`bad --scatter-pages=${scatterPageCount} (expected integer 1..256)`);
   }
 
-  ensureBuilt();
+  if (!wasmArg) ensureBuilt();
+  for (const w of wasmArms) if (!fs.existsSync(w.path)) throw new Error(`--wasm: no such module ${w.path}`);
 
   const loadBefore = require('os').loadavg().map(x => x.toFixed(2)).join(' ');
   const results = [];
@@ -2720,28 +2851,44 @@ async function main() {
     // A fresh instance per shape: a block cache and code-page bitmap carried
     // over from the previous shape would make this one's numbers depend on run
     // order, which is the exact failure mode that wrecked the whole-app A/Bs.
-    const inst = await newInstance();
-    const a = layout(inst.imageBase, bufBytes);
-    a.scatterPageCount = scatterPageCount;
-    if (mapping === 'sparse') {
-      const sparse = inst.e.guest_map_alloc(bufBytes) >>> 0;
-      if (!sparse) throw new Error(`${name}: could not allocate ${bufBytes} sparse guest bytes`);
-      a.buf = sparse;
+    //
+    // With --wasm=, one instance per module: an arm is then (module, toggle
+    // value), and every module's arms interleave with every other's exactly as
+    // two toggle values do. Each instance gets its own layout and its own rep
+    // counter, because each has its own memory and its own block cache.
+    const modules = [];
+    for (const w of wasmArms) {
+      const inst = await newInstance(w.path);
+      const a = layout(inst.imageBase, bufBytes);
+      a.scatterPageCount = scatterPageCount;
+      if (mapping === 'sparse') {
+        const sparse = inst.e.guest_map_alloc(bufBytes) >>> 0;
+        if (!sparse) throw new Error(`${name}: could not allocate ${bufBytes} sparse guest bytes`);
+        a.buf = sparse;
+      }
+      if (shape.prepare) shape.prepare(inst, a);
+      modules.push({ label: w.label, inst, a, rep: 0 });
     }
-    if (shape.prepare) shape.prepare(inst, a);
 
-
-    const arms = toggle
+    const toggleValues = toggle
       ? String(arg('arms', '1,0')).split(',').map(Number)
       : [null];
-    const armNs = new Map(arms.map(v => [v, []]));
+    const arms = [];
+    for (const m of modules) {
+      for (const v of toggleValues) {
+        const parts = [];
+        if (m.label) parts.push(m.label);
+        if (v !== null) parts.push(`${toggle}=${v}`);
+        arms.push({ m, v, label: parts.join(' ') || 'base' });
+      }
+    }
+    const armNs = new Map(arms.map(arm => [arm, []]));
     const armOps = new Map();
     const armCheck = new Map();
 
-    let repIndex = 0;
-    for (const v of arms) {
-      if (v !== null) applyToggle(inst.e, toggle, v);
-      armOps.set(v, countOps(inst, shape, a, repIndex++));
+    for (const arm of arms) {
+      if (arm.v !== null) applyToggle(arm.m.inst.e, toggle, arm.v);
+      armOps.set(arm, countOps(arm.m.inst, shape, arm.m.a, arm.m.rep++));
     }
     // Interleave the arms rep by rep. Background load drifts on the scale of
     // seconds; alternating at millisecond granularity makes it common-mode.
@@ -2756,38 +2903,40 @@ async function main() {
       // arms, but leaves the middle arm permanently in slot 2 for three arms.
       const shift = r % arms.length;
       const order = arms.slice(shift).concat(arms.slice(0, shift));
-      for (const v of order) {
-        if (v !== null) applyToggle(inst.e, toggle, v);
-        const { ns, built, check, stackFastHits } = oneRep(inst, shape, a, repIndex++);
+      for (const arm of order) {
+        const v = arm.v;
+        if (v !== null) applyToggle(arm.m.inst.e, toggle, v);
+        const { ns, built, check, stackFastHits } = oneRep(arm.m.inst, shape, arm.m.a, arm.m.rep++);
         if (toggle === 'stack_candidate' && name.startsWith('stack_calls')) {
           if (stackFastHits !== (v ? built.iters * 2 : 0))
-            throw Error(`${name}: unexpected fast hits ${stackFastHits} in arm ${v}`);
+            throw Error(`${name}: unexpected fast hits ${stackFastHits} in arm ${arm.label}`);
         }
-        armNs.get(v).push(ns);
-        a.lastBuilt = built;
+        armNs.get(arm).push(ns);
+        arm.m.a.lastBuilt = built;
         if (check !== null) {
-          if (armCheck.has(v)) {
-            if (armCheck.get(v) !== check) {
-              throw new Error(`${name}: arm ${v} is not deterministic\n  ${armCheck.get(v)}\n  ${check}`);
+          if (armCheck.has(arm)) {
+            if (armCheck.get(arm) !== check) {
+              throw new Error(`${name}: arm ${arm.label} is not deterministic\n  ${armCheck.get(arm)}\n  ${check}`);
             }
           } else {
-            armCheck.set(v, check);
+            armCheck.set(arm, check);
           }
         }
       }
     }
     // Every arm must leave the same guest state. Without this a region
-    // descriptor that disagrees with its own x86 just reports a speedup.
+    // descriptor that disagrees with its own x86 just reports a speedup -- and
+    // a dispatch variant that loses an op reports one too.
     if (armCheck.size > 1) {
       const [[refArm, ref]] = [...armCheck];
-      for (const [v, c] of armCheck) {
+      for (const [arm, c] of armCheck) {
         if (c !== ref) {
-          throw new Error(`${name}: arms disagree on the result\n  ${toggle}=${refArm}: ${ref}\n  ${toggle}=${v}: ${c}`);
+          throw new Error(`${name}: arms disagree on the result\n  ${refArm.label}: ${ref}\n  ${arm.label}: ${c}`);
         }
       }
     }
 
-    const built = a.lastBuilt;
+    const built = modules[modules.length - 1].a.lastBuilt;
     const row = {
       shape: name,
       iters: built.iters,
@@ -2799,7 +2948,7 @@ async function main() {
         const min = ns[0];
         const median = ns[Math.floor(ns.length / 2)];
         return {
-          arm: v === null ? 'base' : `${toggle}=${v}`,
+          arm: v.label,
           minMs: min / 1e6,
           medianMs: median / 1e6,
           nsPerIter: min / built.iters,
@@ -2812,7 +2961,7 @@ async function main() {
           blockCollisions: ops.blockCollisions,
           // Handlers 420-424 deliberately re-record the ops they replaced into
           // the histogram so totals stay comparable with a fold-off build (see
-          // $th_case_chain in 06b-core-handlers.wat). When one of them is live,
+          // $th_rle_run in 06b-core-handlers.wat). When one of them is live,
           // opsTotal is NOT the dispatch count — it is the unfolded-equivalent
           // count plus the fold's own dispatch. Read blocksPerIter instead.
           // 454 (TREE_FOLD) re-records the handler indices it replaced too, so
@@ -2845,7 +2994,7 @@ async function main() {
       row.paired = arms.slice(0, -1).map(v => {
         const ratios = armNs.get(v).map((ns, i) =>
           (baseline[i] - ns) / baseline[i] * 100).sort((x, y) => x - y);
-        return { arm: `${toggle}=${v}`, vs: `${toggle}=${arms[arms.length - 1]}`,
+        return { arm: v.label, vs: arms[arms.length - 1].label,
           medianPct: ratios[Math.floor(ratios.length / 2)] };
       });
     }
@@ -2870,6 +3019,8 @@ async function main() {
   console.log(`\nloadavg ${loadBefore} at start, ${load()} at end` +
     (Number(loadBefore.split(' ')[0]) > 4 ? '  <-- LOADED, treat single percentages as noise' : ''));
   console.log(`working set ${fmt(bufBytes)} bytes (${mapping} guest mapping), ${reps} interleaved reps, minima quoted`);
+  if (wasmArg) console.log(`modules: ${wasmArms.map(w => `${w.label}=${path.relative(ROOT, w.path)}`).join('  ')}`);
+  const ARM_W = Math.max(16, ...results.flatMap(r => r.arms.map(x => x.arm.length)));
   if (toggle) console.log(`A/B toggle: ${toggle} (on vs off, same process, alternating)`);
   console.log('');
   for (const r of results) {
@@ -2883,46 +3034,47 @@ async function main() {
       // ns/op is the cross-shape number: it says what one interpreted x86
       // instruction of this kind costs.
       const mb = arm.guestMBps === null ? '' : `  ${arm.guestMBps.toFixed(0)} MB/s(same-shape only)`;
-      console.log(`    ${arm.arm.padEnd(16)} min ${arm.minMs.toFixed(1)}ms  med ${arm.medianMs.toFixed(1)}ms  ` +
+      console.log(`    ${arm.arm.padEnd(ARM_W)} min ${arm.minMs.toFixed(1)}ms  med ${arm.medianMs.toFixed(1)}ms  ` +
         // A REP is one op for the whole range, so per-op cost is not a
         // per-instruction number there and printing it invites nonsense.
         `${arm.nsPerIter.toFixed(1)} ns/iter  ${arm.opsPerIter >= 1 ? `${arm.nsPerOp.toFixed(1)} ns/op` : '(bulk op)'}  ` +
         `${arm.opsPerIter.toFixed(2)} ops/iter  ${arm.bytesPerIter} B/iter  ` +
         `${arm.blocksPerIter.toFixed(2)} blocks/iter${mb}`);
-      console.log(`    ${' '.repeat(16)} top handlers: ${arm.topHandlers.map(([i, c]) => `H${i}:${fmt(c)}`).join('  ')}`);
-      console.log(`    ${' '.repeat(16)} LUT matches/runs/bytes: ${fmt(arm.matched)}/${fmt(arm.lutRuns)}/${fmt(arm.lutBytes)}`);
+      console.log(`    ${' '.repeat(ARM_W)} top handlers: ${arm.topHandlers.map(([i, c]) => `H${i}:${fmt(c)}`).join('  ')}`);
+      console.log(`    ${' '.repeat(ARM_W)} LUT matches/runs/bytes: ${fmt(arm.matched)}/${fmt(arm.lutRuns)}/${fmt(arm.lutBytes)}`);
       if (toggle && toggle.startsWith('block_exec')) {
         // installs=0 means the descriptor never took, and every other number on
         // this line is then about a shape the block executor did not run at all.
         // fallback is the one round 11 moves: a memory-form ALU op is a FALLBACK
         // until the split converts it, and a native micro-op afterwards.
-        console.log(`    ${' '.repeat(16)} block-exec installs/native/fallback: ` +
+        console.log(`    ${' '.repeat(ARM_W)} block-exec installs/native/fallback: ` +
           `${fmt(arm.bxInstalls)}/${fmt(arm.bxNativeOps)}/${fmt(arm.bxFallbackOps)}  ` +
           `pass split/rle/movelim: ${fmt(arm.bxSplit)}/${fmt(arm.bxRle)}/${fmt(arm.bxMovelim)}` +
           (arm.bxInstalls ? '' : `  declWhy ${arm.bxDeclWhy}`));
         if (arm.bxX87 || arm.bxX87Native) {
-          console.log(`    ${' '.repeat(16)} x87 entries: ${fmt(arm.bxX87)} ` +
+          console.log(`    ${' '.repeat(ARM_W)} x87 entries: ${fmt(arm.bxX87)} ` +
             `(cheap ${fmt(arm.bxX87Run)}, trampoline ${fmt(arm.bxX87 - arm.bxX87Run)})  ` +
             `bare-native ${fmt(arm.bxX87Native)}`);
         }
       }
       if (arm.lut16Matches || arm.lut16Runs) {
-        console.log(`    ${' '.repeat(16)} RGB565 matches/runs/pixels: ` +
+        console.log(`    ${' '.repeat(ARM_W)} RGB565 matches/runs/pixels: ` +
           `${fmt(arm.lut16Matches)}/${fmt(arm.lut16Runs)}/${fmt(arm.lut16Bytes)}`);
       }
       if (arm.blockCollisions) {
-        console.log(`    ${' '.repeat(16)} (${fmt(arm.blockCollisions)} of those entries came from the collision counter, ` +
+        console.log(`    ${' '.repeat(ARM_W)} (${fmt(arm.blockCollisions)} of those entries came from the collision counter, ` +
           `not the bucket)`);
       }
       if (arm.foldsLive.length) {
-        console.log(`    ${' '.repeat(16)} NOTE: ${arm.foldsLive.join(',')} live — ops/iter is the unfolded-equivalent`);
-        console.log(`    ${' '.repeat(16)}       count, not the dispatch count, so ns/op is understated too.`);
-        console.log(`    ${' '.repeat(16)}       Compare blocks/iter and time.`);
+        console.log(`    ${' '.repeat(ARM_W)} NOTE: ${arm.foldsLive.join(',')} live — ops/iter is the unfolded-equivalent`);
+        console.log(`    ${' '.repeat(ARM_W)}       count, not the dispatch count, so ns/op is understated too.`);
+        console.log(`    ${' '.repeat(ARM_W)}       Compare blocks/iter and time.`);
       }
     }
     if (r.delta) {
       const sign = v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
-      console.log(`    => fold is worth ${sign(r.delta.timePct)} time, ` +
+      const who = wasmArg ? `${r.arms[0].arm} vs ${r.arms[1].arm}:` : 'fold is worth';
+      console.log(`    => ${who} ${sign(r.delta.timePct)} time, ` +
         `${sign(r.delta.opsPct)} ops, ${sign(r.delta.blocksPct)} block entries`);
     }
     if (r.paired) {
@@ -2941,7 +3093,10 @@ async function main() {
 // test/test-tree-fold.js builds its descriptors with it too: a bench and a
 // correctness test that disagree about the layout would each look right on its
 // own while proving nothing together.
-module.exports = { regionWords, uop, RG, TU, TK, CC, FN, REGION_BLOCK_WORDS };
+module.exports = { regionWords, uop, RG, TU, TK, CC, FN, REGION_BLOCK_WORDS,
+  // The instance/layout/run plumbing, for tools/uop-engine-bench.js, which
+  // times the same x86 on the threaded path next to a micro-op program.
+  newInstance, layout, runToCompletion, ensureBuilt, loopBack };
 
 if (require.main === module) {
   main().catch(err => { console.error(err.stack || String(err)); process.exit(1); });

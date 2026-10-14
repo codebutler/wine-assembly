@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 const assert = require('assert');
+const apiTable = require('../src/api_table.json');
+const handlerFor = name => '$handle_' + (apiTable.find(api => api.name === name)?.handler || name);
 const { watxSourceClosure, compileClosure } = require('../tools/watx-closure');
 // Read the authoritative include closure, not a fixed handler filename: the
 // structural-owner lane may move these functions without changing behavior.
@@ -26,6 +28,7 @@ const cases = [
   ['ImmGetOpenStatus', 8], ['ImmSetOpenStatus', 12],
   ['ImmGetConversionStatus', 16], ['ImmSetConversionStatus', 16],
   ['ImmGetCandidateListA', 20],
+  ['ImmGetDescriptionA', 16], ['ImmGetDescriptionW', 16],
 ];
 const needed = new Map();
 function collect(name) {
@@ -34,7 +37,7 @@ function collect(name) {
   needed.set(name, body);
   for (const match of body.matchAll(/\((?:call|return_call)\s+(\$[^\s()]+)/g)) collect(match[1]);
 }
-for (const [name] of cases) collect('$handle_' + name);
+for (const [name] of cases) collect(handlerFor(name));
 const REGFILE = 0x10000 - 64;
 const source = `
  (memory 1)
@@ -54,14 +57,14 @@ const source = `
  (func (export "esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
  (func (export "last_error") (result i32) (global.get $last_error))
  ${[...needed.values()].join('\n')}
- ${cases.map(([name]) => `(export "${name}" (func $handle_${name}))`).join('\n')}
+ ${cases.map(([name]) => `(export "${name}" (func ${handlerFor(name)}))`).join('\n')}
 `;
 const compiled = compileClosure({ source, vfs: new Map() }, { tailCalls: true });
 assert(compiled.success && compiled.wasmBinary, compiled.error || 'canonical WATX compilation failed');
 const e = new WebAssembly.Instance(new WebAssembly.Module(compiled.wasmBinary)).exports;
 const memory = new Uint8Array(e.memory.buffer);
 for (const [name, cleanup] of cases) {
-  for (const context of [0, 0x12345678, -1]) {
+  for (const context of [0, 0x04090409, 0x12345678, -1]) {
     memory.fill(0xa5); const before = memory.slice(0, REGFILE);
     e.seed();
     // Output pointers refer to initialized canaries; full-memory comparison
@@ -74,4 +77,15 @@ for (const [name, cleanup] of cases) {
   }
   console.log(`PASS ${name}: NULL/fabricated contexts, cleanup ${cleanup}, preserved error/output`);
 }
-console.log('PASS 15 actual-source IMM no-context forwarding cases');
+for (const name of ['ImmGetDescriptionA', 'ImmGetDescriptionW']) {
+  for (const [buffer, count] of [[0, 0], [0, 256], [8192, 0], [8192, 1], [8192, 256]]) {
+    memory.fill(0xa5); const before = memory.slice(0, REGFILE);
+    e.seed();
+    e[name](0x04090409, buffer, count, 0, 0, 0);
+    assert.strictEqual(e.eax(), 0, name + ' has no IME description');
+    assert.strictEqual(e.esp(), 4112, name + ' pops three arguments and return address');
+    assert.strictEqual(e.last_error(), 0x13572468);
+    assert.deepStrictEqual(memory.slice(0, REGFILE), before);
+  }
+}
+console.log(`PASS ${cases.length * 4 + 10} actual-source IMM no-context and description cases`);

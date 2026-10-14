@@ -1562,8 +1562,8 @@
           (local.set $flags (i32.load offset=36 (local.get $run)))
           (if (i32.and (local.get $flags) (i32.const 0x0FFFFFFF))
             (then (local.set $color (i32.const 0xFF0000))))
-          (drop (call $host_gdi_set_text_color (local.get $hdc) (local.get $color)))
-          (drop (call $host_gdi_text_out
+          (drop (call $gdi_native_set_text_color (local.get $hdc) (local.get $color)))
+          (drop (call $gdi_native_text_out
             (local.get $hdc) (i32.load offset=4 (local.get $run)) (local.get $y)
             (i32.add (global.get $help_topic_wa) (i32.load offset=20 (local.get $run)))
             (i32.load offset=24 (local.get $run)) (i32.const 0)))
@@ -1576,7 +1576,7 @@
                 (br_if $underline_done (i32.ge_u (local.get $pixel_x)
                   (i32.add (i32.load offset=4 (local.get $run))
                     (i32.load offset=12 (local.get $run)))))
-                (drop (call $host_gdi_set_pixel
+                (drop (call $gdi_native_set_pixel
                   (local.get $hdc) (local.get $pixel_x) (local.get $line_y)
                   (local.get $color)))
                 (local.set $pixel_x (i32.add (local.get $pixel_x) (i32.const 1)))
@@ -1590,7 +1590,7 @@
                 (br_if $strike_done (i32.ge_u (local.get $pixel_x)
                   (i32.add (i32.load offset=4 (local.get $run))
                     (i32.load offset=12 (local.get $run)))))
-                (drop (call $host_gdi_set_pixel
+                (drop (call $gdi_native_set_pixel
                   (local.get $hdc) (local.get $pixel_x) (local.get $line_y)
                   (local.get $color)))
                 (local.set $pixel_x (i32.add (local.get $pixel_x) (i32.const 1)))
@@ -1611,7 +1611,7 @@
                 (then
                   (drop (call $gdi_dc_select_owned_object
                     (global.get $help_view_bitmap_dc) (local.get $handle)))
-                  (drop (call $host_gdi_bitblt
+                  (drop (call $gdi_native_bitblt
                     (local.get $hdc)
                     (i32.load offset=4 (local.get $run)) (local.get $y)
                     (i32.load offset=12 (local.get $run)) (local.get $height)
@@ -2023,13 +2023,20 @@
             (call $heap_free (local.get $dll_ga))
             (return (i32.const 0))))
         ;; The loader reads the image from the staging buffer, exactly as it
-        ;; does for a LoadLibraryA the host drives.
+        ;; does for a LoadLibraryA the host drives -- and under the same loader
+        ;; lock, since PE_STAGING and the next address are shared with every
+        ;; other thread loading a DLL. load_dll releases it.
+        (call $dll_load_lock_begin)
         (memory.copy (global.get $PE_STAGING) (call $g2w (local.get $bytes_ga))
           (local.get $size))
-        (call $heap_free (local.get $read_ga))
-        (call $heap_free (local.get $bytes_ga))
         (local.set $load_addr (call $next_dll_addr))
         (drop (call $load_dll (local.get $size) (local.get $load_addr)))
+        ;; Help DLLs are entered only through their routines, never DllMain,
+        ;; so the row is as initialized as it will get: say so, or a later
+        ;; LoadLibrary of the same file would wait for an attach that never comes.
+        (call $mark_dll_row_initialized (global.get $last_loaded_dll_index))
+        (call $heap_free (local.get $read_ga))
+        (call $heap_free (local.get $bytes_ga))
         (local.set $dll_index (call $find_loaded_dll (local.get $dll_ga)))
         (if (i32.lt_s (local.get $dll_index) (i32.const 0))
           (then (return (i32.const 0))))))
@@ -2180,7 +2187,7 @@
         (global.set $steps (i32.const 0))
         (global.set $yield_reason (i32.const 0))
         (global.set $yield_flag (i32.const 0))
-        (global.set $sync_msg_depth (i32.add (global.get $sync_msg_depth) (i32.const 1)))
+        (call $sync_depth_enter)
         (local.set $rounds (i32.const 0))
         (block $call_done (loop $call_run
           (call $run (i32.const 1000000))
@@ -2188,7 +2195,7 @@
           (local.set $rounds (i32.add (local.get $rounds) (i32.const 1)))
           (br_if $call_done (i32.ge_u (local.get $rounds) (i32.const 64)))
           (br $call_run)))
-        (global.set $sync_msg_depth (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
+        (call $sync_depth_leave)
         (global.set $eip (local.get $old_eip))
         (i32.store offset=16 (global.get $reg_base) (local.get $old_esp))
         (i32.store offset=0 (global.get $reg_base) (local.get $old_eax))
@@ -3022,8 +3029,7 @@
     (if (i32.eqz (global.get $help_topics_tab_hwnd)) (then (return)))
     (drop (call $wnd_send_message (global.get $help_topics_tab_hwnd)
       (i32.const 0x130C)   ;; TCM_SETCURSEL
-      (select (i32.const 0) (i32.const 1)
-        (i32.eq (global.get $help_session_mode) (i32.const 3)))
+      (call $help_topics_current_tab)
       (i32.const 0))))
 
   (func $help_topics_apply_tab (param $tab i32)
@@ -3040,18 +3046,22 @@
   (func $help_topics_tab_wndproc
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
     (result i32)
-    (local $tab i32)
+    (local $tab i32) (local $state i32)
     (if (i32.eq (local.get $msg) (i32.const 0x000F))
       (then (return (call $tab_native_paint (local.get $hwnd)))))
+    ;; TCM_GETITEMCOUNT, answered from the same mirror the strip paints.
+    (if (i32.eq (local.get $msg) (i32.const 0x1304))
+      (then
+        (local.set $state (call $tab_native_state_get (local.get $hwnd) (i32.const 0)))
+        (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+        (return (i32.load (call $g2w (local.get $state))))))
     (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0201))
                 (i32.eq (local.get $msg) (i32.const 0x0203)))
       (then
         (local.set $tab (call $tab_native_cursel (local.get $hwnd)))
         (if (i32.ge_s (local.get $tab) (i32.const 0))
           (then
-            (if (i32.ne (local.get $tab)
-                  (select (i32.const 0) (i32.const 1)
-                    (i32.eq (global.get $help_session_mode) (i32.const 3))))
+            (if (i32.ne (local.get $tab) (call $help_topics_current_tab))
               (then
                 (drop (call $help_topics_set_tab (local.get $tab)))
                 (call $help_topics_fill_list)
@@ -3116,9 +3126,13 @@
         (i32.const 0x50000000) (i32.const 0)))
     (call $tab_native_mark_slot
       (call $wnd_table_find (global.get $help_topics_tab_hwnd)) (i32.const 1))
-    (call $help_topics_add_tab (global.get $help_topics_tab_hwnd) (i32.const 0)
-      (i32.add (global.get $help_topics_labels_ga) (i32.const 16)))
-    (call $help_topics_add_tab (global.get $help_topics_tab_hwnd) (i32.const 1)
+    ;; No .cnt, no Contents tab: the strip is just [Index].
+    (if (call $help_topics_has_contents)
+      (then
+        (call $help_topics_add_tab (global.get $help_topics_tab_hwnd) (i32.const 0)
+          (i32.add (global.get $help_topics_labels_ga) (i32.const 16)))))
+    (call $help_topics_add_tab (global.get $help_topics_tab_hwnd)
+      (call $help_topics_has_contents)
       (i32.add (global.get $help_topics_labels_ga) (i32.const 28)))
     ;; Row list - WS_VSCROLL so the listbox draws and drives its own scrollbar,
     ;; LBS_NOTIFY so selection and double-click reach this dialog as WM_COMMAND.
@@ -3224,8 +3238,8 @@
           (then (drop (call $help_topics_move_selection (i32.const 13)))))
         (if (i32.eq (local.get $wParam) (i32.const 0x09))
           (then (call $help_topics_apply_tab
-            (select (i32.const 0) (i32.const 1)
-              (i32.eq (global.get $help_session_mode) (i32.const 4))))))
+            (i32.rem_u (i32.add (call $help_topics_current_tab) (i32.const 1))
+              (call $help_topics_tab_count)))))
         (if (i32.eq (local.get $wParam) (i32.const 0x27))
           (then
             (if (i32.eq (global.get $help_session_mode) (i32.const 3))

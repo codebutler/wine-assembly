@@ -18,7 +18,17 @@ const SUBDOMAIN = 'wine-assembly';
 const ROOT = path.resolve(__dirname, '..');
 
 // Text file extensions (served as-is)
-const TEXT_EXTS = new Set(['.html', '.js', '.json', '.wat', '.css', '.md', '.webmanifest', '.ini', '.xml']);
+const TEXT_EXTS = new Set(['.html', '.js', '.mjs', '.json', '.wat', '.css', '.md', '.webmanifest', '.ini', '.xml']);
+// lib/ also ships .txt: apps mount notes from there (the Quake II demo's
+// source note). Not the root, where .txt is the agents' message board.
+// skills/ is what an AI agent reads to connect to a session
+// (docs/design-agent-connect.md): SKILL.md, its bundled bridge
+// scripts/wine-agent.mjs and the SHA256SUMS.txt that verifies it.
+const SUBDIR_TEXT_EXTS = { lib: new Set([...TEXT_EXTS, '.txt']), src: TEXT_EXTS, skills: new Set([...TEXT_EXTS, '.txt']) };
+function shipsAsSiteText(rel) {
+  const exts = SUBDIR_TEXT_EXTS[rel.split('/')[0]];
+  return !!exts && exts.has(path.extname(rel));
+}
 
 // Skip these root text files. The Markdown entries are working notes for
 // the people and agents in this tree (an outreach plan, a TODO snapshot, a
@@ -30,8 +40,14 @@ const SKIP_FILES = new Set(['package.json', 'package-lock.json',
 // Directories to skip entirely
 const SKIP_DIRS = new Set(['node_modules', '.git', '.claude', 'scratch', 'tools', 'test', 'build', 'binaries']);
 
-// Directories that contain binary assets (base64-encoded)
-const BINARY_DIRS = ['binaries', 'icons', 'build', 'screenshots/apps', 'screenshots/og'];
+// Directories that contain binary assets (base64-encoded). build/ is NOT one:
+// it is where every test, capture and sweep writes its PNGs and logs, and a
+// walk of it published test-web-direct-launch's screenshots on the 2026-10-05
+// deploy. What the page fetches from build/ is named in BUILD_OUTPUTS, and
+// registry-mounted assets there (the NFS II SE demo) come in through
+// desktopAssetPaths like any other app file.
+const BINARY_DIRS = ['binaries', 'icons', 'screenshots/apps', 'screenshots/og'];
+const BUILD_OUTPUTS = ['build/wine-assembly.wasm', 'build/wine-assembly.compat.wasm'];
 
 // berrry rejects any single file over this with HTTP 400. Oversized binary
 // assets are therefore published as name.part000, name.part001, ...; the web
@@ -169,11 +185,11 @@ function collectTextFiles() {
         files.push({ name: entry, content: fs.readFileSync(full, 'utf-8') });
     }
   }
-  // Subdirectories with text content (lib/, src/)
-  for (const subdir of ['lib', 'src']) {
+  // Subdirectories with text content (lib/, src/, skills/)
+  for (const subdir of Object.keys(SUBDIR_TEXT_EXTS)) {
     const dir = path.join(ROOT, subdir);
     if (!fs.existsSync(dir)) continue;
-    const found = walk(dir, subdir, (name) => TEXT_EXTS.has(path.extname(name)));
+    const found = walk(dir, subdir, (name) => SUBDIR_TEXT_EXTS[subdir].has(path.extname(name)));
     for (const f of found)
       files.push({ name: f.rel, content: fs.readFileSync(f.full, 'utf-8') });
   }
@@ -224,11 +240,8 @@ const NOT_REDISTRIBUTABLE = new Set([
 const NEVER_PUBLISH_PREFIXES = [
   'test/binaries/candidates/morrowind/',
   'binaries/candidates/morrowind/',
-  // A promotional Maxis/EA demo off a third-party compilation CD. Its media
-  // carries no redistribution grant at all, so unlike the StarCraft and Diablo
-  // demos above it is local-only whatever the registry says (test/binaries/SOURCES.md).
-  'test/binaries/candidates/simcity-2000-demo/',
-  'binaries/candidates/simcity-2000-demo/',
+  'test/binaries/candidates/myth-the-fallen-lords/',
+  'binaries/candidates/myth-the-fallen-lords/',
   'downloads/',
 ];
 const neverPublish = p => {
@@ -255,6 +268,36 @@ const PUBLISHABLE_OUTSIDE_BINARIES = [
   // data. The Diablo manual explicitly describes installing that shareware
   // copy on other systems. Ship only the files the desktop registry mounts.
   'test/binaries/candidates/diablo-shareware/installed/',
+  // Quake II demo: id's "Limited Use Software Demo License" §3 permits free
+  // electronic distribution so long as the license accompanies the software,
+  // and the registry mounts DOCS/license.txt for exactly that. Every file is
+  // an unmodified extraction of id's q2-314-demo-x86.exe (MD5
+  // 4d1cd4618e80a38db59304132ea0856c, source in lib/quake2-demo-source.txt);
+  // only the files the registry mounts ship, so the 3Dfx/PowerVR drivers and
+  // the HTML manual stay behind.
+  'test/binaries/candidates/quake-2-demo-installer/installed-extracted/Install/Data/',
+  // SimCity 2000 for Windows 95 Interactive Demo: Maxis's own standalone
+  // package (archive.org item sc295dmo, byte-identical setup files to our copy),
+  // crippled for promotion -- no Load/Save/Scenarios, disasters at 25 minutes,
+  // back to the menu at 30. Its media states no redistribution terms either
+  // way; publishing it as a promotional demo is the owner's decision
+  // (2026-09-24, test/binaries/SOURCES.md). Only its manifest's files ship.
+  'test/binaries/candidates/simcity-2000-demo/',
+  // Moorhuhn (Die Original Moorhuhn Jagd): Phenomedia/Art Department's 1999
+  // Johnnie Walker promotion, given away free and passed around by its own
+  // design. Only Moorhuhn.exe + MOORHUHN.DAT (its manifest) ship; publishing
+  // it is the owner's decision (2026-09-28, test/binaries/SOURCES.md). The
+  // sequels and Winter/3/Tennis siblings stay local-only.
+  'test/binaries/candidates/moorhuhn/',
+  // Need for Speed II (original), II Special Edition and III: Hot Pursuit
+  // demos: EA's own promotional demos, given away on magazine discs and
+  // download sites. Their packaging grants no redistribution right either
+  // way; publishing them as promotional demos is the owner's decision
+  // (2026-09-30, test/binaries/SOURCES.md). Only each manifest's files ship.
+  'test/binaries/candidates/need-for-speed-2-demo/',
+  'test/binaries/candidates/need-for-speed-3-demo/',
+  'build/nfs2se-browser.json',
+  'build/nfs2se-demo/',
   'packages/freeware/dxball/',
   'packages/freeware/blobby-volley/',
 ];
@@ -322,6 +365,20 @@ function desktopAssetPaths() {
       }
     }
     for (const f of app.files || []) add(appFileUrl(f));
+    // A `localFileManifest` app lists its files (and its installer's registry)
+    // in a JSON the page fetches at launch, with URLs relative to it. Ship the
+    // manifest and exactly what it names; add() still refuses anything outside
+    // the publishable roots, so the local-only candidates stay local.
+    if (app.localFileManifest) {
+      const manifest = app.localFileManifest;
+      const full = path.join(ROOT, manifest);
+      if (publishable(manifest) && !neverPublish(manifest) && fs.existsSync(full)) {
+        add(manifest);
+        const dir = path.posix.dirname(manifest);
+        for (const f of JSON.parse(fs.readFileSync(full, 'utf8')).files || [])
+          add(path.posix.normalize(path.posix.join(dir, f.url)));
+      }
+    }
   }
   // Any app can LoadLibrary any of these at runtime, so they all ship.
   for (const p of Object.values(DLL_PATHS)) add(p);
@@ -352,8 +409,18 @@ function collectBinaries() {
     files.push(...encodeBinaryFile(rel, full));
   }
 
-  // icons/ and build/ have no registry; they are whole directories the page
-  // fetches by name, so they still walk.
+  // The compiled module is the one build/ product the page loads. A deploy
+  // without it would ship a site that cannot boot anything, so its absence
+  // stops the deploy rather than logging past it.
+  for (const rel of BUILD_OUTPUTS) {
+    const full = path.join(ROOT, rel);
+    if (!fs.existsSync(full)) throw new Error(`${rel} is missing; run bash tools/build.sh first`);
+    seen.add(rel);
+    files.push(...encodeBinaryFile(rel, full));
+  }
+
+  // icons/ and screenshots/ have no registry; they are whole directories the
+  // page fetches by name, so they still walk.
   for (const subdir of BINARY_DIRS.filter(d => d !== 'binaries')) {
     const dir = path.join(ROOT, subdir);
     if (!fs.existsSync(dir)) continue;
@@ -539,7 +606,13 @@ function fileByteSize(file) {
 // Shared by deploy and rollback so both stay under the same request ceiling.
 // Leave headroom for multipart framing while taking advantage of Berry's new
 // 20MiB file support. A larger single file still occupies a batch by itself.
-const BATCH_LIMIT = 19 * 1024 * 1024;
+// --batch-mb=N lowers it: berrry keeps file contents in a 256MB Postgres, and
+// on 2026-10-01 three ~19MB batches in a row crashed that database (and every
+// berrry app with it). --batch-pause=SEC gives it time between batches.
+const BATCH_MB_ARG = process.argv.find(a => a.startsWith('--batch-mb='));
+const BATCH_LIMIT = (BATCH_MB_ARG ? Number(BATCH_MB_ARG.split('=')[1]) : 19) * 1024 * 1024;
+const PAUSE_ARG = process.argv.find(a => a.startsWith('--batch-pause='));
+const BATCH_PAUSE_MS = (PAUSE_ARG ? Number(PAUSE_ARG.split('=')[1]) : 0) * 1000;
 
 // Two halves by byte size, not by count: one 15MiB file beside twenty small
 // ones splits usefully only if the split follows the bytes. Both halves are
@@ -836,6 +909,7 @@ async function deploy() {
 
   // First batch: create or update with metadata
   for (let i = 0; i < batches.length; i++) {
+    if (i > 0 && BATCH_PAUSE_MS) await new Promise(resolve => setTimeout(resolve, BATCH_PAUSE_MS));
     const isFirst = i === 0;
     const body = isFirst
       ? { ...appMeta, files: batches[i] }
@@ -849,8 +923,25 @@ async function deploy() {
       if (r.status >= 400) return;
     } else {
       console.log('Updating (batch ' + (i + 1) + '/' + batches.length + ', ' + batches[i].length + ' files, ' + transport + ')...');
-      let r = await api('PUT', '/apps/' + SUBDOMAIN, body);
+      let r;
+      try { r = await api('PUT', '/apps/' + SUBDOMAIN, body); }
+      catch (error) {
+        // api() already retried. A batch the server keeps dropping mid-upload
+        // (EPIPE) is treated like one it answers 5xx: split it below.
+        if (batches[i].length <= 1) throw error;
+        console.log('  ' + (error.cause?.code || error.message) + ' after retries');
+        r = { status: 599 };
+      }
       console.log('Result:', r.status);
+      // A 5xx that survives api()'s retries is NOT split and retried: on
+      // 2026-10-01 those 500s were berrry's database crashing under the
+      // upload, and hammering it again takes the whole site down with it.
+      // Stop; re-run later with a smaller --batch-mb.
+      if (r.status >= 500) {
+        throw new Error(`batch ${i + 1}/${batches.length} failed with HTTP ${r.status}`
+          + ` — the server may be overloaded; batches 1..${i} are live. Wait, then`
+          + ` re-run with a smaller --batch-mb and a --batch-pause`);
+      }
       // 413 means the batch, not the deploy, is too big: the request ceiling
       // sits below BATCH_LIMIT for this payload. Halving and retrying costs one
       // wasted request and finds the real ceiling by itself, which beats
@@ -935,8 +1026,12 @@ if (require.main === module) {
 
 module.exports = {
   ASSET_PART_SIZE,
+  BINARY_DIRS,
+  BUILD_OUTPUTS,
+  PUBLISHABLE_OUTSIDE_BINARIES,
   SERVER_MAX_FILE_SIZE,
   encodeBinaryBytes,
   desktopAssetPaths,
+  shipsAsSiteText,
   neverPublish,
 };

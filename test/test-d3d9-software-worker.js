@@ -122,6 +122,36 @@ function snapshot(){
     const pointFrame=await queue.submit(OP.PRESENT).value;
     assert.deepStrictEqual([...pointFrame.pixels.slice(0,4)],[191,128,64,255]);
     assert.deepStrictEqual([...pointFrame.pixels.slice((8+8*16)*4,(9+8*16)*4)],[0,0,0,255]);
+    // Point topology is independent of polygon fill/cull and emits each
+    // submitted point exactly once, including coincident points.
+    function pointList(positions,extra={}) {
+      const s=snapshot(),v=new Float32Array(positions.length*12);
+      positions.forEach((p,i)=>v.set([...p,1,0,0,1,0,0,0,1],i*12));
+      return {...s,primitive:1,primitiveCount:positions.length,vertices:new Uint8Array(v.buffer),
+        state:{...s.state,zenable:false,zwrite:false,fillMode:2,cull:3,...extra}};
+    }
+    const center=[0,0,.5,1];
+    for(const [positions,state,expected] of [
+      [[center],{},1],[[center,center],{},2],
+      [[[-.5,.5,-.1,1],[.5,.5,1.1,1],center],{},1],
+      // Production advertises MaxPointSize=1 and clamps larger requests.
+      [[center],{pointSize:3,pointSizeMin:0,pointSizeMax:8},1],
+      [Array.from({length:300},()=>center),{},300],
+    ]) {
+      const draw=pointList(positions,state);
+      queue.submit(OP.CLEAR,{color:[0,0,0,1],flags:1});
+      queue.submit(OP.QUERY_BEGIN,{queryId:21});queue.submit(OP.DRAW,draw);
+      assert.deepStrictEqual(await queue.submit(OP.QUERY_END,{queryId:21}).value,
+        {samplesLow:expected,samplesHigh:0},'point-list samples, clipping, size and batch boundaries');
+      const frame=await queue.submit(OP.PRESENT).value;
+      assert.deepStrictEqual([...frame.pixels.slice((8+8*16)*4,(9+8*16)*4)],[191,128,64,255]);
+      assert.deepStrictEqual([...frame.pixels.slice(0,4)],[0,0,0,255],'point does not fill surrounding polygon');
+    }
+    const clippedPoints=pointList([[-.5,0,.5,1],[.5,0,.5,1]]);
+    clippedPoints.userClipPlanes={space:'clip',mask:1,planes:new Float32Array([1,0,0,0,...Array(20).fill(0)])};
+    queue.submit(OP.QUERY_BEGIN,{queryId:22});queue.submit(OP.DRAW,clippedPoints);
+    assert.deepStrictEqual(await queue.submit(OP.QUERY_END,{queryId:22}).value,
+      {samplesLow:1,samplesHigh:0},'user plane clips point centers without generating extra points');
     queue.submit(OP.CLEAR,{color:[0,0,0,1],flags:7,depth:1,stencil:0,depthAttachment:stencilSurface});
     const stencilWrite=snapshot();stencilWrite.depthAttachment=stencilSurface;
     Object.assign(stencilWrite.state,{stencilEnable:true,stencilPass:3,stencilRef:7,colorWriteMask:0,zwrite:false});
@@ -191,8 +221,11 @@ function snapshot(){
     assert.strictEqual(queue.inflight,0);assert.strictEqual(queue.bytes,0);
     assert(cancelConsumer.shutdownInfo.heapAdopted>0);
     const handedSize=new DataView(memory.buffer).getUint32(e.guest_to_wasm(adoptedHead)>>>0,true);
-    const reuse=e.guest_alloc(1)>>>0;
-    assert.strictEqual(reuse,adoptedHead+(handedSize>=32?handedSize-16:0)+4,
+    // Ask for more than HEAP_BIN_MAX (256): a small request is served from the
+    // exact-size bins (0e43eff2) before the free list, so it proves nothing
+    // about the adopted block. 1024 bytes is a 1032-byte block.
+    const reuse=e.guest_alloc(1024)>>>0;
+    assert.strictEqual(reuse,adoptedHead+(handedSize>=1048?handedSize-1032:0)+4,
       'parent allocator really reuses handed-off worker storage (tail-split allocator)');
     e.guest_free(reuse);
   }finally{await cancelConsumer.cancel();}

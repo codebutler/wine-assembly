@@ -24,6 +24,427 @@ function test(name, fn) {
 
 console.log('VFS tests:');
 
+test('file creation and duplication share collision-safe handle allocation across wrap', () => {
+  const vfs = makeVFS({ 'c:\\first.bin': 4, 'c:\\second.bin': 8 });
+  const first = vfs.createFile('c:\\first.bin', 0x80000000, 3);
+  const record = vfs.getOpenFile(first);
+  vfs.setFilePointer(first, 2, 0);
+  vfs._nextHandle = 0x7fffffff;
+  assert.strictEqual(vfs.createFile('c:\\second.bin', 0x80000000, 3), 0x7fffffff);
+  const afterWrap = vfs.createFile('c:\\second.bin', 0x80000000, 3);
+  assert.strictEqual(afterWrap, first + 1, 'wrap skips occupied first handle');
+  assert.strictEqual(vfs.getOpenFile(first), record, 'original record is not overwritten');
+  assert.strictEqual(vfs.getFileSize(first), 4);
+  assert.strictEqual(record.pos, 2);
+  vfs.closeHandle(afterWrap);
+  vfs._nextHandle = first;
+  const duplicate = vfs.duplicateFileHandle(first, 0, false, 2);
+  assert.strictEqual(duplicate, first + 2, 'duplicate skips live and tombstone records');
+  vfs._nextHandle = first;
+  const opened = vfs.createFile('c:\\second.bin', 0x80000000, 3);
+  assert.strictEqual(opened, first + 3, 'ordinary open uses the same collision policy');
+  assert.strictEqual(vfs.getOpenFile(afterWrap), null);
+  for (const seed of [0, 4, 0x80000000, 0xffffffff]) {
+    vfs._nextHandle = seed;
+    const h = vfs.createFile('c:\\second.bin', 0x80000000, 3);
+    assert(h >= 0x70000001 && h <= 0x7fffffff, 'disk handles stay in their positive namespace');
+    assert.strictEqual(vfs.getOpenFile(first), record);
+  }
+});
+
+test('handle allocation failure cannot truncate files and still honors duplicate close-source', () => {
+  const vfs = makeVFS({ 'c:\\original.bin': 8 });
+  const h = vfs.createFile('c:\\original.bin', 0xc0000000, 3);
+  // Exercise exhaustion without allocating a quarter billion handle records.
+  vfs._allocateFileHandle = () => 0;
+  assert.strictEqual(vfs.createFile('c:\\original.bin', 0xc0000000, 2), 0);
+  assert.strictEqual(vfs.getFileSize(h), 8);
+  assert.strictEqual(vfs.createFile('c:\\new.bin', 0xc0000000, 1), 0);
+  assert(!vfs.files.has('c:\\new.bin'));
+  assert.strictEqual(vfs.duplicateFileHandle(h, 0, false, 2), -4);
+  assert(vfs.getOpenFile(h));
+  assert.strictEqual(vfs.duplicateFileHandle(h, 0, false, 3), -4);
+  assert.strictEqual(vfs.getOpenFile(h), null);
+});
+
+test('file data access is enforced before bytes, providers or cursors change', () => {
+  const vfs = makeVFS({ 'c:\\rights.bin': 4 });
+  const bytes = Uint8Array.from([9, 9]);
+  for (const access of [0, 0x80000000, 0x40000000, 0xc0000000, 0x10000000, 1, 2, 3, 0x80, 0x100]) {
+    const h = vfs.createFile('c:\\rights.bin', access, 3);
+    assert(h);
+    assert.strictEqual(vfs.getFileSize(h), 4, 'metadata remains queryable');
+    for (const count of [0, 2]) {
+      vfs.setFilePointer(h, 1, 0);
+      const dest = Uint8Array.from([7, 7]);
+      const read = vfs.readFile(h, dest, count);
+      if (access & 0x90000001) assert(read.ok);
+      else {
+        assert.strictEqual(read.error, 5);
+        assert.deepStrictEqual([...dest], [7, 7]);
+        assert.strictEqual(vfs.getOpenFile(h).pos, 1);
+      }
+      vfs.setFilePointer(h, 1, 0);
+      const before = [...vfs.files.get('c:\\rights.bin').data];
+      const write = vfs.writeFile(h, bytes, count);
+      if (access & 0x50000002) assert(write.ok);
+      else {
+        assert.strictEqual(write.error, 5);
+        assert.deepStrictEqual([...vfs.files.get('c:\\rights.bin').data], before);
+        assert.strictEqual(vfs.getOpenFile(h).pos, 1);
+      }
+    }
+  }
+  const memory = new WebAssembly.Memory({ initial: 40 });
+  const imports = createFilesystemImports({ vfs, getMemory: () => memory.buffer,
+    exports: { get_image_base: () => 0x400000 } });
+  vfs.setProviderFile('c:\\no-data.bin', { provider: { size: 8,
+    tryRead: () => { throw Error('unauthorized provider access'); }, fill: async () => {},
+  } });
+  const query = vfs.createFile('c:\\no-data.bin', 0, 3);
+  assert.strictEqual(vfs.createFile('c:\\no-data.bin', 0, 5), 0);
+  assert.strictEqual(vfs.setEndOfFile(query), false);
+  assert.strictEqual(imports.fs_set_end_of_file_result(query), 5);
+  assert.strictEqual(imports.fs_set_end_of_file(query), 0);
+  assert.strictEqual(vfs.getFileSize(query), 8);
+  for (const count of [0, 2]) {
+    assert.strictEqual(imports.fs_read_file_result(query, 0xffffffff, count, 0), 5);
+    assert.strictEqual(imports.fs_read_pending(), 0);
+    assert.strictEqual(imports.fs_write_file_result(query, 0xffffffff, count, 0), 5);
+  }
+});
+
+test('generic and specific file rights compare by meaning without granting extra rights', () => {
+  const GENERIC_EXECUTE = 1 << 29;
+  const vfs = makeVFS({ 'c:\\rights.bin': 4 });
+  const open = access => vfs.createFile('c:\\rights.bin', access, 3);
+  for (const [generic, specific] of [[0x80000000, 0x120089],
+    [0x40000000, 0x120116], [GENERIC_EXECUTE, 0x1200a0], [0x10000000, 0x1f01ff]]) {
+    const h = open(generic);
+    const alias = vfs.duplicateFileHandle(h, specific, false, 0);
+    assert(alias > 0);
+    const reverse = vfs.duplicateFileHandle(open(specific), generic, false, 0);
+    assert(reverse > 0, 'equivalent explicit rights allow the generic request');
+    assert.strictEqual(vfs.getOpenFile(alias).access, specific);
+  }
+  const read = open(0x80000000);
+  const narrowed = vfs.duplicateFileHandle(read, 1, false, 0);
+  assert(narrowed > 0);
+  assert.strictEqual(vfs.duplicateFileHandle(narrowed, 0x80000000, false, 0), -5,
+    'data-only read cannot acquire attributes, EA, or standard rights');
+  assert.strictEqual(vfs.duplicateFileHandle(read, 2, false, 0), -5);
+  assert.strictEqual(vfs.duplicateFileHandle(read, 0x10000000, false, 0), -5);
+  const all = open(0x10000000);
+  assert(vfs.duplicateFileHandle(all, 0x80000000, false, 0) > 0);
+  assert.strictEqual(vfs.flushFileBuffers(all), 0);
+  assert.strictEqual(vfs.setFileTimes(all, null, null, null), 0);
+  assert.strictEqual(vfs.flushFileBuffers(open(2)), 0);
+  assert.strictEqual(vfs.setFileTimes(open(2), null, null, null), 5);
+  assert.strictEqual(vfs.setFileTimes(open(0x100), null, null, null), 0);
+  vfs.setDriveReadOnly('c', true);
+  for (const access of [2, 4, 0x10, 0x100, 0x10000000, 0x40000000]) {
+    assert.strictEqual(open(access), 0, 'write intent cannot open protected media');
+  }
+  for (const access of [0, 1, 0x80, 0x80000000, GENERIC_EXECUTE]) assert(open(access) > 0);
+});
+
+test('creation dispositions validate truncation before mutation and permit protected existing opens', () => {
+  const vfs = makeVFS({ 'c:\\disposition.bin': 4 });
+  const entry = vfs.files.get('c:\\disposition.bin');
+  entry.data.set([1, 2, 3, 4]);
+  const nextHandle = vfs._nextHandle;
+  for (const access of [0, 1, 4, 0x80, 0x100, 0x80000000]) {
+    assert.strictEqual(vfs.createFile('c:\\disposition.bin', access, 5), 0);
+    assert.strictEqual(vfs.files.get('c:\\disposition.bin'), entry);
+    assert.deepStrictEqual([...entry.data], [1, 2, 3, 4]);
+    assert.strictEqual(vfs._nextHandle, nextHandle);
+  }
+  for (const disposition of [0, 6, -1, 1.5]) {
+    assert.strictEqual(vfs.createFile('c:\\disposition.bin', 0x40000000, disposition), 0);
+    assert.deepStrictEqual([...entry.data], [1, 2, 3, 4]);
+  }
+  vfs.setDriveReadOnly('c', true);
+  assert(vfs.createFile('c:\\disposition.bin', 0x80000000, 4) > 0,
+    'OPEN_ALWAYS of an existing file need not write the medium');
+  assert.strictEqual(vfs.createFile('c:\\new.bin', 0x80000000, 4), 0);
+  assert.strictEqual(vfs.files.has('c:\\new.bin'), false);
+  for (const disposition of [1, 2, 5]) {
+    assert.strictEqual(vfs.createFile('c:\\disposition.bin', 0x40000000, disposition), 0);
+    assert.deepStrictEqual([...entry.data], [1, 2, 3, 4]);
+  }
+  vfs.setDriveReadOnly('c', false);
+  assert(vfs.createFile('c:\\disposition.bin', 0x40000000, 5) > 0);
+  assert.strictEqual(entry.data.length, 0);
+});
+
+test('named mapping handles close independently and views retain the section', () => {
+  const vfs = makeVFS({ 'c:\\lifetime.bin': 16 });
+  const memory = new WebAssembly.Memory({ initial: 40 });
+  const bytes = new Uint8Array(memory.buffer);
+  const regions = require('../lib/region-map.generated');
+  const wa = guest => regions.g2w(guest, 0x400000);
+  let next = 0x410000;
+  const host = createFilesystemImports({ vfs, getMemory: () => memory.buffer,
+    exports: { get_image_base: () => 0x400000,
+      guest_map_alloc: () => { const address = next; next += 65536; return address; } } });
+  bytes.set(Buffer.from('section-lifetime\0'), 64);
+  const first = host.fs_create_file_mapping(-1, 4, 0, 16, 64);
+  const second = host.fs_create_file_mapping(-1, 4, 0, 32, 64);
+  const third = host.fs_open_file_mapping(64);
+  assert(first && second && third);
+  assert.strictEqual(new Set([first, second, third]).size, 3);
+  const view = host.fs_map_view_of_file(first, 2, 0, 0, 0);
+  assert(view);
+  assert.strictEqual(host.fs_close_handle(first >>> 0), 1);
+  assert.strictEqual(host.fs_close_handle(first), 0, 'double close is invalid');
+  assert.strictEqual(host.fs_map_view_of_file(first, 2, 0, 0, 16), 0);
+  assert.strictEqual(host.fs_map_view_of_file(second, 2, 0, 0, 32), 0,
+    'reopening ignores the new maximum and retains the original section size');
+  assert.strictEqual(host.fs_close_handle(second), 1);
+  assert.strictEqual(host.fs_close_handle(third), 1);
+  bytes[wa(view)] = 0x5a;
+  assert.strictEqual(host.fs_flush_view(view, 1), 1);
+  const reopened = host.fs_open_file_mapping(64);
+  assert(reopened, 'a view alone keeps the name and section alive');
+  const reader = host.fs_map_view_of_file(reopened, 4, 0, 0, 0);
+  assert.strictEqual(bytes[wa(reader)], 0x5a, 'flush works after originating handle closes');
+  assert.strictEqual(host.fs_unmap_view(view), 1);
+  assert.strictEqual(host.fs_unmap_view(reader), 1);
+  assert.strictEqual(host.fs_close_handle(reopened), 1);
+  assert.strictEqual(host.fs_open_file_mapping(64), 0, 'last view plus last handle retires name');
+  const replacement = host.fs_create_file_mapping(-1, 4, 0, 32, 64);
+  const fresh = host.fs_map_view_of_file(replacement, 4, 0, 0, 32);
+  assert(fresh);
+  assert.strictEqual(bytes[wa(fresh)], 0, 'recreated name has new backing');
+  assert.strictEqual(host.fs_close_handle(replacement), 1);
+  assert.strictEqual(host.fs_unmap_view(fresh), 1);
+  assert.strictEqual(host.fs_open_file_mapping(64), 0, 'reverse release order also retires name');
+
+  const file = vfs.createFile('c:\\lifetime.bin', 0xc0000000, 3);
+  const section = host.fs_create_file_mapping(file, 4, 0, 0, 0);
+  const fileView = host.fs_map_view_of_file(section, 2, 0, 0, 16);
+  assert.strictEqual(host.fs_close_handle(file), 1);
+  assert.strictEqual(host.fs_close_handle(section), 1);
+  bytes[wa(fileView)] = 0x7b;
+  assert.strictEqual(host.fs_unmap_view(fileView), 1);
+  assert.strictEqual(vfs.files.get('c:\\lifetime.bin').data[0], 0x7b);
+});
+
+test('file sections retain backing identity across rename and path replacement', () => {
+  const originalPath = 'c:\\identity.bin', renamedPath = 'c:\\renamed.bin';
+  const vfs = makeVFS({ [originalPath]: 16 });
+  const entry = vfs.files.get(originalPath);
+  entry.data.fill(0x41);
+  const memory = new WebAssembly.Memory({ initial: 40 });
+  const bytes = new Uint8Array(memory.buffer);
+  const { g2w } = require('../lib/region-map.generated');
+  let next = 0x410000;
+  const host = createFilesystemImports({ vfs, getMemory: () => memory.buffer,
+    exports: { get_image_base: () => 0x400000,
+      guest_map_alloc: () => { const address = next; next += 65536; return address; } } });
+  const file = vfs.createFile(originalPath, 0xc0000000, 3);
+  const section = host.fs_create_file_mapping(file, 4, 0, 0, 0);
+  assert(section);
+  const before = host.fs_map_view_of_file(section, 2, 0, 0, 16);
+  assert(before);
+  assert.strictEqual(host.fs_close_handle(file), 1);
+  assert(vfs.moveFile(originalPath, renamedPath));
+  const replacement = { data: new Uint8Array(16).fill(0x62), attrs: 0x20 };
+  vfs.files.set(originalPath, replacement);
+  const after = host.fs_map_view_of_file(section, 2, 0, 0, 16);
+  assert(after);
+  assert.strictEqual(bytes[g2w(after, 0x400000)], 0x41);
+  bytes[g2w(before, 0x400000)] = 0x73;
+  assert.strictEqual(host.fs_flush_view(before, 1), 1);
+  assert.strictEqual(entry.data[0], 0x73);
+  assert.strictEqual(replacement.data[0], 0x62, 'flush must not modify the new path occupant');
+  vfs.files.delete(renamedPath);
+  assert.strictEqual(host.fs_close_handle(section), 1);
+  bytes[g2w(after, 0x400000)] = 0x74;
+  assert.strictEqual(host.fs_unmap_view(after), 1);
+  assert.strictEqual(entry.data[0], 0x74, 'view owns backing even without any directory entry');
+  assert.strictEqual(replacement.data[0], 0x62);
+  assert.strictEqual(host.fs_unmap_view(before), 1);
+});
+
+test('file mapping and view access cannot exceed file or section rights', () => {
+  const vfs = makeVFS({ 'c:\\mapped.bin': 16 });
+  let allocations = 0;
+  const memory = new WebAssembly.Memory({ initial: 40 });
+  const host = createFilesystemImports({ vfs, getMemory: () => memory.buffer,
+    exports: { get_image_base: () => 0x400000,
+      guest_map_alloc: () => { allocations++; return 0x410000; } } });
+  for (const access of [0, 1, 2, 3, 4, 0x80000000, 0xc0000000, 0x10000000]) {
+    const h = vfs.createFile('c:\\mapped.bin', access, 3);
+    const read = !!(access & 0x90000001), write = !!(access & 0x50000002);
+    for (const protect of [2, 4, 8]) {
+      const mapping = host.fs_create_file_mapping(h, protect, 0, 0, 0);
+      assert.strictEqual(mapping !== 0, read && (protect !== 4 || write));
+      if (!mapping) continue;
+      for (const view of [1, 2, 4, 0xf001f, 0x24]) {
+        const before = allocations;
+        const allowed = !(view & 0x20) && (!(view & 2) || protect === 4) &&
+          ((view & 7) !== 1 || protect === 8);
+        const address = host.fs_map_view_of_file(mapping, view, 0, 0, 16);
+        assert.strictEqual(address !== 0, allowed);
+        assert.strictEqual(allocations - before, allowed ? 1 : 0);
+        if (address) host.fs_unmap_view(address);
+      }
+    }
+  }
+  const anon = host.fs_create_file_mapping(-1, 2, 0, 16, 0);
+  assert(anon);
+  assert.strictEqual(host.fs_map_view_of_file(anon, 2, 0, 0, 16), 0);
+  assert.strictEqual(host.fs_create_file_mapping(-1, 0, 0, 16, 0), 0);
+  vfs.setProviderFile('c:\\lazy-map.bin', { provider: { size: 16,
+    tryRead: () => { throw Error('denied view must not read provider'); }, fill: async () => {},
+  } });
+  const lazy = vfs.createFile('c:\\lazy-map.bin', 0x80000000, 3);
+  assert.strictEqual(host.fs_create_file_mapping(lazy, 4, 0, 0, 0), 0);
+  const section = host.fs_create_file_mapping(lazy, 2, 0, 0, 0);
+  assert(section);
+  const before = allocations;
+  assert.strictEqual(host.fs_map_view_of_file(section, 2, 0, 0, 16), 0);
+  assert.strictEqual(allocations, before);
+  assert.strictEqual(host.fs_read_pending(), 0);
+  const all = vfs.createFile('c:\\mapped.bin', 0x10000000, 3);
+  for (const protection of [0x20, 0x40, 0x80]) {
+    const executable = host.fs_create_file_mapping(all, protection, 0, 0, 0);
+    assert(executable);
+    assert(host.fs_map_view_of_file(executable, 0x24, 0, 0, 16));
+    host.fs_unmap_view(0x410000);
+  }
+});
+
+test('mapping views remain within the section size captured at creation', () => {
+  const vfs = makeVFS({ 'c:\\bounds.bin': 32 });
+  const sizes = [];
+  const memory = new WebAssembly.Memory({ initial: 40 });
+  const host = createFilesystemImports({ vfs, getMemory: () => memory.buffer,
+    exports: { get_image_base: () => 0x400000,
+      guest_map_alloc: n => { sizes.push(n); return 0x410000; } } });
+  const h = vfs.createFile('c:\\bounds.bin', 0xc0000000, 3);
+  const section = host.fs_create_file_mapping(h, 2, 0, 16, 0);
+  assert(section);
+  assert.strictEqual(host.fs_map_view_of_file(section, 4, 0, 0, 17), 0);
+  assert.deepStrictEqual(sizes, []);
+  assert(host.fs_map_view_of_file(section, 4, 0, 0, 0));
+  assert.deepStrictEqual(sizes, [16]);
+  host.fs_unmap_view(0x410000);
+  vfs.setFilePointer(h, 64, 0);
+  vfs.setEndOfFile(h);
+  assert(host.fs_map_view_of_file(section, 4, 0, 0, 0));
+  assert.deepStrictEqual(sizes, [16, 16], 'file growth cannot grow the section');
+  host.fs_unmap_view(0x410000);
+  const anon = host.fs_create_file_mapping(-1, 4, 0, 16, 0);
+  assert.strictEqual(host.fs_map_view_of_file(anon, 2, 0, 16, 1), 0);
+  assert.strictEqual(host.fs_map_view_of_file(anon, 2, 0, 0, 17), 0);
+  assert.strictEqual(host.fs_create_file_mapping(-1, 4, 1, 16, 0), 0,
+    'unsupported high sizes must not wrap to a small section');
+  assert.strictEqual(host.fs_create_file_mapping(h, 2, 0, 65, 0), 0);
+  const empty = vfs.createFile('c:\\empty-section.bin', 0xc0000000, 2);
+  assert.strictEqual(host.fs_create_file_mapping(empty, 2, 0, 0, 0), 0);
+  assert(host.fs_create_file_mapping(empty, 4, 0, 8, 0));
+  assert.strictEqual(vfs.getFileSize(empty), 8);
+  const original = vfs.files.get('c:\\bounds.bin');
+  original.data.set([1, 2, 3, 4]);
+  vfs.setFilePointer(h, 3, 0);
+  assert(host.fs_create_file_mapping(h, 4, 0, 80, 0));
+  assert.strictEqual(vfs.files.get('c:\\bounds.bin'), original);
+  assert.strictEqual(vfs.getOpenFile(h).pos, 3);
+  assert.strictEqual(vfs.getFileSize(h), 80);
+  assert.deepStrictEqual([...original.data.slice(0, 4)], [1, 2, 3, 4]);
+  assert(original.data.slice(64).every(n => n === 0));
+});
+
+test('mapped offsets require allocation granularity, not just page alignment', () => {
+  const vfs = makeVFS({ 'c:\\aligned.bin': 131072 });
+  let allocations = 0, reads = 0;
+  const memory = new WebAssembly.Memory({ initial: 40 });
+  const host = createFilesystemImports({ vfs, getMemory: () => memory.buffer,
+    exports: { get_image_base: () => 0x400000,
+      guest_map_alloc: () => { allocations++; return 0x410000; } } });
+  vfs.setProviderFile('c:\\lazy-aligned.bin', { provider: { size: 131072,
+    tryRead: () => { reads++; return null; },
+    fill: async () => { reads++; },
+  } });
+  const eager = vfs.createFile('c:\\aligned.bin', 0x80000000, 3);
+  const lazy = vfs.createFile('c:\\lazy-aligned.bin', 0x80000000, 3);
+  for (const h of [eager, lazy, -1]) {
+    const section = host.fs_create_file_mapping(h, 2, 0, 131072, 0);
+    assert(section);
+    for (const offset of [1, 4096, 65535, 65537]) {
+      assert.strictEqual(host.fs_map_view_of_file(section, 4, 0, offset, 1), 0);
+      assert.strictEqual(allocations, 0);
+      assert.strictEqual(reads, 0);
+      assert.strictEqual(host.fs_read_pending(), 0);
+    }
+  }
+  vfs.files.get('c:\\aligned.bin').data[65536] = 0x7b;
+  const section = host.fs_create_file_mapping(eager, 2, 0, 0, 0);
+  assert.strictEqual(host.fs_map_view_of_file(section, 4, 0, 65536, 1), 0x410000,
+    'view length need not be page aligned');
+  assert.strictEqual(allocations, 1);
+  const { g2w } = require('../lib/region-map.generated');
+  assert.strictEqual(new Uint8Array(memory.buffer)[g2w(0x410000, 0x400000)], 0x7b);
+});
+
+test('append-only writes cannot overwrite and null writes cannot extend', () => {
+  const vfs = makeVFS({ 'c:\\append.bin': 4 });
+  const h = vfs.createFile('c:\\append.bin', 4, 3);
+  assert(vfs.writeFile(h, Uint8Array.from([9]), 1).ok);
+  assert.deepStrictEqual([...vfs.files.get('c:\\append.bin').data], [0, 0, 0, 0, 9]);
+  assert.strictEqual(vfs.getOpenFile(h).pos, 5);
+  for (const access of [4, 0x40000000]) {
+    const alias = vfs.createFile('c:\\append.bin', access, 3);
+    vfs.setFilePointer(alias, 100, 0);
+    assert(vfs.writeFile(alias, new Uint8Array(0), 0).ok);
+    assert.strictEqual(vfs.getOpenFile(alias).pos, 100);
+    assert.strictEqual(vfs.getFileSize(alias), 5);
+  }
+});
+
+test('closed file handles reject I/O and metadata without harming live duplicates', () => {
+  const vfs = makeVFS({ 'c:\\lifetime.bin': 4 });
+  const h = vfs.createFile('c:\\lifetime.bin', 0xc0000000, 3);
+  vfs.writeFile(h, Uint8Array.from([1, 2, 3, 4]), 4);
+  vfs.setFilePointer(h, 1, 0);
+  const alias = vfs.duplicateFileHandle(h, 0, false, 2);
+  assert(vfs.closeHandle(h));
+  assert.strictEqual(vfs.closeHandle(h), false, 'double close fails');
+  const buffer = Uint8Array.from([99]);
+  assert.strictEqual(vfs.readFile(h, buffer, 1).ok, false);
+  assert.strictEqual(vfs.readFile(h, buffer, 0).error, 6);
+  assert.strictEqual(buffer[0], 99, 'closed read leaves destination untouched');
+  assert.strictEqual(vfs.writeFile(h, buffer, 1).ok, false);
+  assert.strictEqual(vfs.writeFile(h, buffer, 0).error, 6);
+  assert.strictEqual(vfs.setFilePointer(h, 100, 0) >>> 0, 0xffffffff);
+  assert.strictEqual(vfs.setEndOfFile(h), false);
+  assert.strictEqual(vfs.getFileSize(h) >>> 0, 0xffffffff);
+  assert.strictEqual(vfs.getFileTimes(h).error, 6);
+  assert.strictEqual(vfs.setFileTimes(h, null, null, null), 6);
+  assert.strictEqual(vfs.flushFileBuffers(h), 6);
+  assert.strictEqual(vfs.handles.get(alias).pos, 1, 'rejected I/O cannot move the shared cursor');
+  assert.deepStrictEqual([...vfs.files.get('c:\\lifetime.bin').data], [1, 2, 3, 4]);
+  assert.strictEqual(vfs.readFile(alias, buffer, 1).bytesRead, 1);
+  assert.strictEqual(buffer[0], 2);
+});
+
+test('closed host I/O rejects even zero-length requests and new file mappings', () => {
+  const vfs = makeVFS({ 'c:\\mapping.bin': 4 });
+  const memory = new ArrayBuffer(0x1000);
+  const imports = createFilesystemImports({ vfs, getMemory: () => memory });
+  const h = vfs.createFile('c:\\mapping.bin', 0xc0000000, 3);
+  const mapping = imports.fs_create_file_mapping(h, 2, 0, 0, 0);
+  assert(mapping, 'a live file can create a mapping');
+  vfs.closeHandle(h);
+  assert.strictEqual(imports.fs_create_file_mapping(h, 2, 0, 0, 0), 0);
+  // No output pointer: validation must happen before guest-buffer translation.
+  assert.strictEqual(imports.fs_read_file(h, 0xdeadbeef, 0, 0), 0);
+  assert.strictEqual(imports.fs_write_file(h, 0xdeadbeef, 0, 0), 0);
+  assert.strictEqual(imports.fs_read_file_at(h, 0xdeadbeef, 0, 0, 0, 0), 6);
+});
+
 test('standard Win98 shell folders exist before an installer runs', () => {
   const vfs = makeVFS({});
   assert(vfs.dirs.has('c:\\windows\\start menu'));
@@ -114,6 +535,37 @@ test('directory notifications honor filter and subtree boundaries', () => {
 
 // --- findFirstFile ---
 
+test('CreateFile on an existing directory fails ERROR_ACCESS_DENIED under every disposition', () => {
+  // Win9x behavior. Myth: The Fallen Lords probes a directory with
+  // CreateFile(dir, GENERIC_READ, OPEN_EXISTING) and reads error 5 (or 32) as
+  // "exists"; FILE_NOT_FOUND sent it to CreateDirectory and recursion.
+  const vfs = makeVFS({ 'c:\\tags\\tags.gor': 4 });
+  vfs.dirs.add('c:\\tags');
+  vfs.dirs.add('c:\\tags\\local');
+  for (const creation of [1, 2, 3, 4, 5]) {
+    const access = creation === 5 ? 0xC0000000 : 0x80000000;
+    assert.deepStrictEqual(vfs.createFileResult('C:\\TAGS\\LOCAL', access, creation),
+      { handle: 0, error: 5 }, `disposition ${creation}`);
+  }
+  assert(!vfs.files.has('c:\\tags\\local'), 'no file is created over the directory');
+  assert.deepStrictEqual(vfs.createFileResult('c:\\tags\\missing', 0x80000000, 3),
+    { handle: 0, error: 2 }, 'a missing path is still FILE_NOT_FOUND');
+  assert(vfs.createFile('c:\\tags\\tags.gor', 0x80000000, 3), 'files beside it still open');
+});
+
+test('a directory implied by a mounted file exists for chdir, attributes and CreateFile', () => {
+  // Manifest mounts write file keys only. Myth's UBER.DLL chdirs to C:\\Modules,
+  // whose only content is a mounted TCPIP.DLL, to enumerate network modules.
+  const vfs = makeVFS({ 'c:\\modules\\tcpip.dll': 4 });
+  assert(!vfs.dirs.has('c:\\modules'), 'precondition: never declared');
+  assert.strictEqual(vfs.getFileAttributes('C:\\Modules'), 0x10);
+  assert.strictEqual(vfs.createFileResult('C:\\MODULES', 0x80000000, 3).error, 5);
+  assert.strictEqual(vfs.setCurrentDirectory('C:\\Modules'), true);
+  assert.strictEqual(vfs.getCurrentDirectory().toLowerCase().replace(/\\$/, ''), 'c:\\modules');
+  assert.strictEqual(vfs.setCurrentDirectory('C:\\Modul'), false, 'a name prefix is not a directory');
+  assert.strictEqual(vfs.getFileAttributes('C:\\modules\\tcpip.dll') & 0x10, 0, 'the file stays a file');
+});
+
 test('wildcard *.* in CWD finds files in c:\\', () => {
   const vfs = makeVFS({ 'c:\\foo.txt': 10, 'c:\\bar.dat': 20 });
   const r = vfs.findFirstFile('.\\*.*');
@@ -164,11 +616,13 @@ test('manifest parent registration makes a non-C drive enumerable', () => {
   assert.strictEqual(vfs.findNextFile(root.handle).name, 'cd2');
 });
 
-test('basename fallback finds file by name on wrong drive', () => {
+test('a file of the same name on another drive is not found', () => {
+  // There was a basename fallback here. It served Colin McRae Rally
+  // c:\demo\english.txt for Q:\Game\language\english.txt.
   const vfs = makeVFS({ 'c:\\demoopen.ddv': 100 });
   const r = vfs.findFirstFile('D:\\abe\\demoopen.ddv');
-  assert(r.handle, 'should find via basename fallback');
-  assert.strictEqual(r.entry.name, 'demoopen.ddv');
+  assert(!r.handle, 'FindFirstFile is exact');
+  assert.strictEqual(r.entry, null);
 });
 
 test('missing C-drive directories cannot borrow an exact filename from a cache', () => {
@@ -221,14 +675,19 @@ test('parent traversal clamps at drive root for sibling asset wildcards', () => 
   assert.deepStrictEqual(names, ['entry.dx', 'training.dx']);
 });
 
-test('relative missing subdir wildcard falls back to current directory', () => {
+test('a wildcard in a missing relative directory finds nothing', () => {
+  // AoE used to depend on the current directory standing in for campaign;
+  // its registry entry now mounts the .cpn files at c:\campaign.
   const vfs = makeVFS({ 'c:\\armies_1.cpn': 1, 'c:\\readme.txt': 2, 'c:\\reigno_1.cpn': 3 });
-  const r = vfs.findFirstFile('campaign\\*.cpn');
-  assert(r.handle, 'should find flat campaign files');
+  assert(!vfs.findFirstFile('campaign\\*.cpn').handle, 'no current-directory retry');
+  const mounted = makeVFS({ 'c:\\campaign\\armies_1.cpn': 1, 'c:\\campaign\\reigno_1.cpn': 3 });
+  mounted.dirs.add('c:\\campaign');
+  const r = mounted.findFirstFile('campaign\\*.cpn');
+  assert(r.handle, 'the mounted layout enumerates');
   const names = [r.entry.name];
   let next;
-  while ((next = vfs.findNextFile(r.handle))) names.push(next.name);
-  assert.deepStrictEqual(names, ['armies_1.cpn', 'reigno_1.cpn']);
+  while ((next = mounted.findNextFile(r.handle))) names.push(next.name);
+  assert.deepStrictEqual(names.filter(n => n.endsWith('.cpn')), ['armies_1.cpn', 'reigno_1.cpn']);
 });
 
 test('broad wildcard in a missing relative directory does not enumerate the root', () => {
@@ -251,10 +710,18 @@ test('case insensitive matching', () => {
 
 // --- createFile basename fallback ---
 
-test('createFile OPEN_EXISTING with wrong drive uses basename fallback', () => {
-  const vfs = makeVFS({ 'c:\\level.lvl': 50 });
-  const h = vfs.createFile('D:\\game\\level.lvl', 0x80000000, 3); // OPEN_EXISTING
-  assert(h && h !== 0xFFFFFFFF, 'should open via basename fallback');
+test('createFile OPEN_EXISTING on another drive is exact, with the Win32 error', () => {
+  const vfs = makeVFS({ 'c:\\level.lvl': 50, 'c:\\game\\other.lvl': 1 });
+  vfs.dirs.add('c:\\game');
+  const wrongDrive = vfs.createFileResult('D:\\game\\level.lvl', 0x80000000, 3);
+  assert.strictEqual(wrongDrive.handle, 0, 'no basename fallback');
+  assert.strictEqual(wrongDrive.error, 3, 'a missing directory is ERROR_PATH_NOT_FOUND');
+  const missingFile = vfs.createFileResult('C:\\game\\level.lvl', 0x80000000, 3);
+  assert.strictEqual(missingFile.handle, 0);
+  assert.strictEqual(missingFile.error, 2, 'a missing file in a real directory is ERROR_FILE_NOT_FOUND');
+  const truncate = vfs.createFileResult('D:\\game\\level.lvl', 0xC0000000, 5);
+  assert.strictEqual(truncate.error, 3, 'TRUNCATE_EXISTING reports the same');
+  assert(vfs.createFile('C:\\level.lvl', 0x80000000, 3), 'the exact path still opens');
 });
 
 test('createFile OPEN_EXISTING without match returns error', () => {
@@ -305,7 +772,7 @@ test('read-only drive permits reads and rejects every write path', () => {
   assert.strictEqual(vfs.createFile('D:\\manual.hlp', 0x40000000, 3), 0,
     'GENERIC_WRITE OPEN_EXISTING must fail');
   assert.deepStrictEqual(vfs.writeFile(readHandle, Uint8Array.of(1), 1),
-    { ok: false, bytesWritten: 0 }, 'writes through a read handle must fail');
+    { ok: false, bytesWritten: 0, error: 5 }, 'a read-only handle denies writes before checking the medium');
   assert.strictEqual(vfs.setFileAttributes('D:\\manual.hlp', 0x20), false);
   assert.strictEqual(vfs.deleteFile('D:\\manual.hlp'), false);
   assert.strictEqual(vfs.createDirectory('D:\\cache'), false);
@@ -414,6 +881,38 @@ test('SearchPath finds an installed DLL in the Win98 system directory', () => {
   );
 });
 
+test('SearchPath splits a semicolon-separated lpPath and searches it first', () => {
+  // Evolva: SearchPathA("C:\evolva;c:\evolva\Textures", "flare64.dds") found
+  // nothing while the list was joined as one directory, and the game drew white.
+  const memory = new ArrayBuffer(0x1000);
+  const bytes = new Uint8Array(memory);
+  const writeA = (addr, value) => {
+    for (let i = 0; i < value.length; i++) bytes[addr + i] = value.charCodeAt(i);
+    bytes[addr + value.length] = 0;
+  };
+  const readA = (addr) => {
+    let s = '';
+    while (bytes[addr]) s += String.fromCharCode(bytes[addr++]);
+    return s.toLowerCase();
+  };
+  const vfs = makeVFS({
+    'c:\\evolva\\textures\\flare64.dds': 64,
+    'c:\\evolva\\sounds\\click.wav': 32,
+    'c:\\windows\\click.wav': 16,
+  });
+  const imports = createFilesystemImports({ vfs, getMemory: () => memory });
+  writeA(0x100, 'C:\\evolva;c:\\evolva\\Textures');
+  writeA(0x180, 'flare64.dds');
+  const want = 'c:\\evolva\\textures\\flare64.dds';
+  assert.strictEqual(imports.fs_search_path(0x100, 0x180, 0, 260, 0x200, 0, 0), want.length);
+  assert.strictEqual(readA(0x200), want);
+  // Listed directories win over the Windows directory fallback.
+  writeA(0x100, ' c:\\evolva\\Sounds\\ ;;c:\\evolva');
+  writeA(0x180, 'click.wav');
+  imports.fs_search_path(0x100, 0x180, 0, 260, 0x200, 0, 0);
+  assert.strictEqual(readA(0x200), 'c:\\evolva\\sounds\\click.wav');
+});
+
 // --- AbeDemo specific scenario ---
 
 test('AbeDemo: wildcard scan after loading exe sibling files', () => {
@@ -423,9 +922,10 @@ test('AbeDemo: wildcard scan after loading exe sibling files', () => {
   for (const f of abeFiles) {
     vfs.files.set('c:\\' + f, { data: new Uint8Array(100), attrs: 0x20 });
   }
-  // Game scans D:\abe\demoopen.ddv — should find via basename
+  // The game probes D:..Z:\abe\demoopen.ddv for its CD. With no CD those
+  // miss, as on Windows, and it carries on with the installed copy.
   const r1 = vfs.findFirstFile('D:\\abe\\demoopen.ddv');
-  assert(r1.handle, 'demoopen.ddv via basename fallback');
+  assert(!r1.handle, 'no CD copy is found on D:');
 
   // Game scans .\*.* — should find all files in c:\
   const r2 = vfs.findFirstFile('.\\*.*');

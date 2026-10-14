@@ -146,6 +146,16 @@ assert.deepStrictEqual(queued(a), [[mainWindow, 0x927, 99, 100]],
 a.set_post_queue_count(0);
 console.log('PASS shadow and native cross-owner routing, same-slot byte isolation, distinct recursive lock ownership');
 
+// The page's single-app maximizer sends WM_SYSCOMMAND/SC_MAXIMIZE through the
+// host shadow's send_message. The shadow has no guest thread, so the x86
+// wndproc must not run there (it ran Solitaire's on the shadow's own state
+// and blanked the phone); the message goes to the owning thread instead.
+assert.strictEqual(shadow.send_message(mainWindow, 0x0112, 0xF030, 0), 0);
+assert.deepStrictEqual(queued(a), [[mainWindow, 0x0112, 0xF030, 0]],
+  'a shadow send to a guest wndproc is posted to the owner, not run on the shadow');
+a.set_post_queue_count(0);
+console.log('PASS host shadow send_message posts to the owning thread instead of running guest code');
+
 // Same-thread and foreign producers serialize into one arrival order. This is
 // the invariant the former private/shared split could not represent.
 assert.strictEqual(a.test_post(mainWindow, 0x930, 1, 0), 1);

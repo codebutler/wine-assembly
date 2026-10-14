@@ -85,16 +85,26 @@ function normalizeDirectAnimationApis(table) {
   return kept;
 }
 
+// --check: compute both outputs and compare them with the files on disk
+// instead of writing them. The build runs this, so a table row that the
+// generator's own specs would rewrite (a hand-added handler alias the spec
+// does not know, a spec entry naming a handler the table dropped) fails the
+// build instead of being silently reverted by the next person to regenerate.
+const CHECK = process.argv.includes('--check');
+
 // Load existing table
 let existing = [];
+let existingText = '';
 if (fs.existsSync(jsonPath)) {
-  existing = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  existingText = fs.readFileSync(jsonPath, 'utf8');
+  existing = JSON.parse(existingText);
 }
 existing = normalizeDirectAnimationApis(existing);
 const seen = new Set(existing.map(e => e.name));
 
 // APIs from sub-dispatchers (not in main dispatch comment pattern)
 const extra = [
+  { name: 'SysReAllocStringLen', nargs: 3 },
   { name: 'LocalAlloc', nargs: 2 },
   { name: 'LocalFree', nargs: 1 },
   { name: 'LocalLock', nargs: 1 },
@@ -132,6 +142,8 @@ const extra = [
   { name: 'EnumTimeFormatsA', nargs: 3 },
   { name: 'EnumResourceLanguagesW', nargs: 5 },
   { name: 'EnumResourceNamesA', nargs: 4 },
+  { name: 'EnumResourceTypesA', nargs: 3 },
+  { name: 'EnumResourceLanguagesA', nargs: 5 },
   { name: 'GetUserDefaultUILanguage', nargs: 0 },
   { name: 'CreateDialogIndirectParamA', nargs: 5 },
   { name: 'SetViewportExtEx', nargs: 4 },
@@ -175,6 +187,7 @@ const extra = [
   { name: 'AttachThreadInput', nargs: 3 },
   { name: 'ToAsciiEx', nargs: 6 },
   { name: 'keybd_event', nargs: 4 },
+  { name: 'mouse_event', nargs: 5 },
   { name: 'GetStringTypeExA', nargs: 5, handler: 'GetStringTypeA' },
   { name: 'VirtualQuery', nargs: 3 },
   { name: 'WaitForSingleObjectEx', nargs: 3 },
@@ -254,6 +267,13 @@ const extra = [
   { name: '_beginthreadex', nargs: 6, convention: 'cdecl' },
   { name: '_endthreadex', nargs: 1, convention: 'cdecl' },
   { name: '_chdir', nargs: 1, convention: 'cdecl' },
+  { name: '_mkdir', nargs: 1, convention: 'cdecl' },
+  { name: 'setvbuf', nargs: 4, convention: 'cdecl' },
+  { name: 'getc', nargs: 1, convention: 'cdecl' },
+  { name: '__p___mb_cur_max', nargs: 0, convention: 'cdecl' },
+  { name: '__p__pctype', nargs: 0, convention: 'cdecl' },
+  { name: 'fgetc', nargs: 1, convention: 'cdecl' },
+  { name: '_makepath', nargs: 5, convention: 'cdecl' },
   { name: 'feof', nargs: 1, convention: 'cdecl' },
   { name: 'ferror', nargs: 1, convention: 'cdecl' },
   { name: 'fgets', nargs: 3, convention: 'cdecl' },
@@ -583,6 +603,7 @@ const extra = [
   { name: 'InterlockedIncrement', nargs: 1 },
   { name: 'InterlockedDecrement', nargs: 1 },
   { name: 'InterlockedExchange', nargs: 2 },
+  { name: 'InterlockedExchangeAdd', nargs: 2 },
   { name: 'VirtualAlloc', nargs: 4 },
   { name: 'VirtualFree', nargs: 3 },
   { name: 'IsBadReadPtr', nargs: 2 },
@@ -741,7 +762,7 @@ const extra = [
   { name: 'IDirectInput_EnumDevices', nargs: 5 },
   { name: 'IDirectInput_GetDeviceStatus', nargs: 2 },
   { name: 'IDirectInput_RunControlPanel', nargs: 3 },
-  { name: 'IDirectInput_Initialize', nargs: 4 },
+  { name: 'IDirectInput_Initialize', nargs: 3 }, // this, hinst, dwVersion
   // IDirectInputDeviceA vtable (18 methods)
   { name: 'IDirectInputDevice_QueryInterface', nargs: 3 },
   { name: 'IDirectInputDevice_AddRef', nargs: 1 },
@@ -1258,7 +1279,9 @@ const extra = [
   { name: 'IDirectDraw7_EvaluateMode', nargs: 3 },
   { name: 'LZClose', nargs: 1 },
   // WINMM — RIFF file seek used by RCT after the 16-bit POP decoder fix.
-  { name: 'mmioSeek', nargs: 3, handler: '_llseek' },
+  // Has its own $handle_mmioSeek since memory files (3c7b023e); it falls back
+  // to _llseek for file handles itself, so no dispatch alias here.
+  { name: 'mmioSeek', nargs: 3 },
   // KERNEL32/USER32 — the halves of the atom API that had no entry at all.
   // Delphi's VCL calls GlobalFindAtomA on every window activation, so a
   // missing entry resolved to api_id 0xFFFF and trapped (Tetravex).
@@ -1385,6 +1408,9 @@ const extra = [
   // SHLWAPI — Cave Story resolves this dynamically during startup.
   { name: 'PathRemoveFileSpecA', nargs: 1 },
   { name: 'PathRemoveFileSpecW', nargs: 1 },
+  { name: 'PathAppendW', nargs: 2, args: [{ name: 'pszPath', type: 'LPWSTR', out: true }, { name: 'pszMore', type: 'LPCWSTR' }], ret: 'BOOL' },
+  { name: 'PathFileExistsW', nargs: 1, args: [{ name: 'pszPath', type: 'LPCWSTR' }], ret: 'BOOL' },
+  { name: 'SHCreateDirectoryExW', nargs: 3, args: [{ name: 'hwnd', type: 'HWND' }, { name: 'pszPath', type: 'LPCWSTR' }, { name: 'psa', type: 'LPVOID' }], ret: 'DWORD' },
   // DirectShow AMMultiMediaStream. Darkstone uses this legacy DirectX Media
   // object for optional full-motion-video playback during startup.
   { name: 'IAMMultiMediaStream_QueryInterface', nargs: 3 },
@@ -1439,6 +1465,15 @@ const extra = [
   { name: 'IPersistFile_Save', nargs: 3 },
   { name: 'IPersistFile_SaveCompleted', nargs: 2 },
   { name: 'IPersistFile_GetCurFile', nargs: 2 },
+  // ScummVM (SDL1) FOTAQ: USER32 message extra info and three CRT stdio/string
+  // exports. strncat had a handler body but no row, so it trapped as 0xFFFF.
+  { name: 'GetMessageExtraInfo', nargs: 0, ret: 'LPARAM' },
+  { name: 'SetMessageExtraInfo', nargs: 1, args: [{ name: 'lParam', type: 'LPARAM' }], ret: 'LPARAM' },
+  { name: 'clearerr', nargs: 1, convention: 'cdecl' },
+  { name: 'strncat', nargs: 3, convention: 'cdecl' },
+  { name: 'fputc', nargs: 2, convention: 'cdecl' },
+  { name: 'DirectSoundCreate8', nargs: 3 },
+  { name: 'IDirectSound8_VerifyCertification', nargs: 2 },
 ];
 for (const api of extra) {
   const ownsHandler = Object.prototype.hasOwnProperty.call(api, 'handler');
@@ -1475,7 +1510,7 @@ const cdeclCrtApis = new Set([
   '__getmainargs', '__p__acmdln', '__p__commode', '__p__environ', '__p__fmode', '__p__wcmdln',
   '__mb_cur_max',
   '__set_app_type', '__setusermatherr', '__wgetmainargs', '_adjust_fdiv',
-  '_cexit', '_chdir', '_close', '_controlfp', '_dup', '_exit', '_ftol', '_fullpath', '_getcwd', '_getdcwd', '_getdrive', '_global_unwind2', '_initterm',
+  '_cexit', '_chdir', '_close', '_controlfp', '_dup', '_exit', '_ftol', '_fullpath', '_getcwd', '_getdcwd', '_getdrive', '_global_unwind2', '_initterm', '_mkdir', 'setvbuf', 'getc', '__p___mb_cur_max', '__p__pctype', 'fgetc', '_makepath',
   '_iob',
   '_itoa', '_itow', '_ltoa', '_mbschr', '_mbsinc', '_mbsnbcmp', '_mbsrchr', '_onexit', '_unlink',
   '_isctype', '_pctype', '_purecall', '_setmode', '_splitpath', '_strdup', '_stricmp', '_strlwr', '_strrev',
@@ -1491,7 +1526,7 @@ for (const api of existing) {
   if (cdeclCrtApis.has(api.name)) api.convention = 'cdecl';
 }
 
-// Pull Direct3D Immediate Mode methods from shared spec (used by gen_d3dim_stubs.js too)
+// Pull Direct3D Immediate Mode identities/aliases from the shared interface spec.
 const { interfaces: d3dimIfaces } = require('./d3dim-methods');
 for (const iface of d3dimIfaces) {
   for (const m of iface.methods) {
@@ -1543,12 +1578,1332 @@ for (const iface of d3d8Ifaces) {
       current.nargs = m.nargs;
       if (m.handler) current.handler = m.handler;
       else delete current.handler;
+      // A typed return lets --trace-api print the HRESULT a method gave.
+      if (m.ret) current.ret = m.ret;
     } else {
       const api = { id: existing.length, name: fullName, nargs: m.nargs, convention: 'stdcall', hash: 0 };
       if (m.handler) api.handler = m.handler;
+      if (m.ret) api.ret = m.ret;
       existing.push(api);
       seen.add(fullName);
     }
+  }
+}
+
+// Keep the two Glide ABIs distinct while appending new exports after every
+// existing API. The DLL-aware resolver selects signature-colliding names.
+for (const entry of require('./glide3-methods').entries) {
+  if (!seen.has(entry.name)) {
+    existing.push({id: existing.length, ...entry, convention: 'stdcall', hash: 0});
+    seen.add(entry.name);
+  }
+}
+
+// Dedicated DX7VB image surface ABI; unsupported methods fail with exact cleanup.
+const vbImageMethods = [
+  {
+    "name": "IVBImageSurface7_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "handler": "VBImage_QueryInterface"
+  },
+  {
+    "name": "IVBImageSurface7_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "handler": "VBImage_AddRef"
+  },
+  {
+    "name": "IVBImageSurface7_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "handler": "VBImage_Release"
+  },
+  {
+    "name": "IVBImageSurface7_InternalSetObject",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_InternalGetObject",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_AddAttachedSurface",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_Blt",
+    "nargs": 6,
+    "convention": "stdcall",
+    "handler": "VBImage_Blt"
+  },
+  {
+    "name": "IVBImageSurface7_BltColorFill",
+    "nargs": 4,
+    "convention": "stdcall",
+    "handler": "VBImage_BltColorFill"
+  },
+  {
+    "name": "IVBImageSurface7_BltFast",
+    "nargs": 7,
+    "convention": "stdcall",
+    "handler": "VBImage_BltFast"
+  },
+  {
+    "name": "IVBImageSurface7_BltFx",
+    "nargs": 7,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 32,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_BltToDC",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_ChangeUniquenessValue",
+    "nargs": 1,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 8,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_DeleteAttachedSurface",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_DrawBox",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_DrawCircle",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_DrawEllipse",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_DrawLine",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_DrawRoundedBox",
+    "nargs": 7,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 32,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_DrawText",
+    "nargs": 5,
+    "convention": "stdcall",
+    "handler": "VBImage_DrawText"
+  },
+  {
+    "name": "IVBImageSurface7_Flip",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetAttachedSurface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetAttachedSurfaceEnum",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetBltStatus",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetCaps",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetClipper",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetColorKey",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetDC",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetDirectDraw",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetDirectDrawColorControl",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetDirectDrawGammaControl",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_getDrawStyle",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_getDrawWidth",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetFillColor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetFillStyle",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetFlipStatus",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetFontTransparency",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetForeColor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetLockedPixel",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetPalette",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetPixelFormat",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetSurfaceDesc",
+    "nargs": 2,
+    "convention": "stdcall",
+    "handler": "VBImage_GetSurfaceDesc"
+  },
+  {
+    "name": "IVBImageSurface7_GetUniquenessValue",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_isLost",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_Lock",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_ReleaseDC",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_restore",
+    "nargs": 1,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 8,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetClipper",
+    "nargs": 2,
+    "convention": "stdcall",
+    "handler": "VBImage_SetClipper"
+  },
+  {
+    "name": "IVBImageSurface7_SetColorKey",
+    "nargs": 3,
+    "convention": "stdcall",
+    "handler": "VBImage_SetColorKey"
+  },
+  {
+    "name": "IVBImageSurface7_setDrawStyle",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_setDrawWidth",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetFillColor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetFillStyle",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetFont",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetFontTransparency",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetForeColor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "handler": "VBImage_SetForeColor"
+  },
+  {
+    "name": "IVBImageSurface7_SetLockedPixel",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetPalette",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_Unlock",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetPriority",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetPriority",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetLOD",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetLOD",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetLockedArray",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetFontBackColor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetFontBackColor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_UpdateOverlay",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_UpdateOverlayZOrder",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetOverlayPosition",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_SetOverlayPosition",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_GetOverlayZOrdersEnum",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBImageSurface7_UpdateOverlayFx",
+    "nargs": 6,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    }
+  }
+];
+for (const row of vbImageMethods) {
+  let current=existing.find(api=>api.name===row.name);
+  if (!current) { current={id:existing.length,...row}; existing.push(current); seen.add(row.name); }
+  Object.assign(current,row);
+  if (row.handler) delete current.stub;
+}
+const vbImageFile=existing.find(api=>api.name==='IVBDirectDraw7_DirectSlot008');
+if (!vbImageFile) throw Error('Missing established VB image API');
+vbImageFile.nargs=4; vbImageFile.handler='VBDD_CreateSurfaceFromFile';
+
+
+// Native DX7VB DirectDraw7 has34slots. Preserve old API IDs and correct
+// unsupported ABI cleanup; append only the missing tail.
+const vbDd34Unsupported=[
+  {
+    "name": "IVBDirectDraw7_DirectSlot003",
+    "nargs": 2,
+    "slot": 3,
+    "nativeName": "InternalSetObject"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot004",
+    "nargs": 2,
+    "slot": 4,
+    "nativeName": "InternalGetObject"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot006",
+    "nargs": 4,
+    "slot": 6,
+    "nativeName": "CreatePalette"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot009",
+    "nargs": 5,
+    "slot": 9,
+    "nativeName": "CreateSurfaceFromResource"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot010",
+    "nargs": 3,
+    "slot": 10,
+    "nativeName": "DuplicateSurface"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot011",
+    "nargs": 1,
+    "slot": 11,
+    "nativeName": "FlipToGDISurface"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot012",
+    "nargs": 3,
+    "slot": 12,
+    "nativeName": "GetAvailableTotalMem"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot013",
+    "nargs": 3,
+    "slot": 13,
+    "nativeName": "GetCaps"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot014",
+    "nargs": 2,
+    "slot": 14,
+    "nativeName": "GetDirect3D"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot015",
+    "nargs": 2,
+    "slot": 15,
+    "nativeName": "GetDisplayMode"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot016",
+    "nargs": 4,
+    "slot": 16,
+    "nativeName": "GetDisplayModesEnum"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot017",
+    "nargs": 2,
+    "slot": 17,
+    "nativeName": "GetFourCCCodes"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot018",
+    "nargs": 3,
+    "slot": 18,
+    "nativeName": "GetFreeMem"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot019",
+    "nargs": 2,
+    "slot": 19,
+    "nativeName": "GetGDISurface"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot020",
+    "nargs": 2,
+    "slot": 20,
+    "nativeName": "GetMonitorFrequency"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot021",
+    "nargs": 2,
+    "slot": 21,
+    "nativeName": "GetNumFourCCCodes"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot022",
+    "nargs": 3,
+    "slot": 22,
+    "nativeName": "GetScanLine"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot023",
+    "nargs": 3,
+    "slot": 23,
+    "nativeName": "GetSurfaceFromDC"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot024",
+    "nargs": 4,
+    "slot": 24,
+    "nativeName": "GetSurfacesEnum"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot025",
+    "nargs": 2,
+    "slot": 25,
+    "nativeName": "GetVerticalBlankStatus"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot026",
+    "nargs": 3,
+    "slot": 26,
+    "nativeName": "LoadPaletteFromBitmap"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot027",
+    "nargs": 1,
+    "slot": 27,
+    "nativeName": "RestoreAllSurfaces"
+  },
+  {
+    "name": "IVBDirectDraw7_DirectSlot028",
+    "nargs": 1,
+    "slot": 28,
+    "nativeName": "RestoreDisplayMode"
+  }
+];
+for(const row of vbDd34Unsupported){const a=existing.find(a=>a.name===row.name);if(!a)throw Error('Missing existing VB DD method '+row.name);a.nargs=row.nargs;a.convention='stdcall';}
+const vbDd34Tail=[
+  {
+    "name": "IVBDirectDraw7_SetDisplayMode",
+    "nargs": 6,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectDraw7_TestCooperativeLevel",
+    "nargs": 2,
+    "convention": "stdcall",
+    "handler": "IVBDirectDraw7_TestCooperativeLevel"
+  },
+  {
+    "name": "IVBDirectDraw7_WaitForVerticalBlank",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectDraw7_GetDeviceIdentifier",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  }
+];
+for(const row of vbDd34Tail){let a=existing.find(a=>a.name===row.name);if(!a){a={id:existing.length,...row};existing.push(a);seen.add(row.name);}Object.assign(a,row);}
+// Full native IDirectX7 typelib ABI:55 declared methods plus IUnknown3.
+// Old API IDs are retained; new table fixes missing/incorrect slots.
+const vbDirectX7Methods = [
+  {
+    "name": "IVBDirectX7_QueryInterface",
+    "nargs": 3,
+    "handler": "IDirectX7_QueryInterface"
+  },
+  {
+    "name": "IVBDirectX7_AddRef",
+    "nargs": 1,
+    "handler": "dx_com_addref"
+  },
+  {
+    "name": "IVBDirectX7_Release",
+    "nargs": 1,
+    "handler": "dx_com_release_basic"
+  },
+  {
+    "name": "IVBDirectX7_Direct3DRMCreate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectDrawCreate",
+    "nargs": 3,
+    "convention": "stdcall",
+    "handler": "IDirectX7_DirectDrawCreate"
+  },
+  {
+    "name": "IVBDirectX7_GetDDEnum",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectSoundCreate",
+    "nargs": 3,
+    "convention": "stdcall",
+    "handler": "IDirectX7_DirectSoundCreate"
+  },
+  {
+    "name": "IVBDirectX7_DirectSoundCaptureCreate",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_GetDSEnum",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_GetDSCaptureEnum",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectInputCreate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "handler": "IDirectX7_DirectInputCreate"
+  },
+  {
+    "name": "IVBDirectX7_DirectPlayCreate",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectPlayLobbyCreate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_GetDPEnum",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_ColorGetAlpha",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_ColorGetBlue",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_ColorGetGreen",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_ColorGetRed",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_CreateColorRGB",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_CreateColorRGBA",
+    "nargs": 6,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_MatrixFromQuaternion",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_QuaternionRotation",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_QuaternionMultiply",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_QuaternionSlerp",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorAdd",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorCrossProduct",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorDotProduct",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorModulus",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorNormalize",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorRandom",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorReflect",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorRotate",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorScale",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorSubtract",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_VectorCopy",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_RotateXMatrix",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_RotateYMatrix",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_RotateZMatrix",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_ViewMatrix",
+    "nargs": 6,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_MatrixMultiply",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_ProjectionMatrix",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_CopyMatrix",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_IdentityMatrix",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_ZeroMatrix",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_TickCount",
+    "nargs": 2,
+    "convention": "stdcall"
+  },
+  {
+    "name": "IVBDirectX7_SystemBpp",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectMusicLoaderCreate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectMusicComposerCreate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectMusicPerformanceCreate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_GetWindowRect",
+    "nargs": 3,
+    "convention": "stdcall",
+    "handler": "IVBDirectX7_GetWindowRect"
+  },
+  {
+    "name": "IVBDirectX7_CreateEvent",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_SetEvent",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DestroyEvent",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_CreateD3DVertex",
+    "nargs": 10,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 44,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_CreateD3DLVertex",
+    "nargs": 9,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 40,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_CreateD3DTLVertex",
+    "nargs": 10,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 44,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_DirectDraw4Create",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    }
+  },
+  {
+    "name": "IVBDirectX7_CreateNewGuid",
+    "nargs": 2,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    }
+  }
+];
+for(const row of vbDirectX7Methods){let current=existing.find(api=>api.name===row.name);if(!current){current={id:existing.length,...row};existing.push(current);seen.add(row.name);}Object.assign(current,row);}
+
+// Full separate Unicode DirectPlay4 ABI, appended after established interfaces.
+for (const api of existing.filter(a => /^IDirectPlay[34]_/.test(a.name))) {
+  const name = 'IDirectPlay4W_' + api.name.split('_')[1];
+  if (!seen.has(name)) {
+    existing.push({ id: existing.length, name, nargs: api.nargs, convention: 'stdcall', hash: 0 });
+    seen.add(name);
   }
 }
 
@@ -1596,16 +2951,67 @@ if (table.length * 8 > HASH_TABLE_SIZE) {
   process.exit(1);
 }
 
-// Write api_table.json. Constant stubs are deliberately one-line metadata in
-// the canonical table; retain that compact shape so a generator run does not
-// mechanically rewrite every migrated row.
-const tableJson = JSON.stringify(table, null, 2).replace(
-  /"stub": \{\n\s+"pop": ([^,\n]+),\n\s+"ret": ([^\n]+)\n\s+\}/g,
-  '"stub": { "pop": $1, "ret": $2 }');
-fs.writeFileSync(jsonPath, tableJson + '\n');
-console.log(`Generated ${jsonPath} with ${table.length} APIs`);
+// Write api_table.json. Rows are hand-appended as often as they are generated,
+// so the file mixes key orders ("test_call" before or after "nargs", "handler"
+// before or after "ret") and one-line "args" arrays. A row whose CONTENT is
+// unchanged keeps its original text byte for byte; only rows the generator
+// actually changed (or created) are re-serialized. That is what makes a rerun
+// on a clean tree a no-op, and what keeps a real change a one-row diff.
+function sortDeep(o) {
+  if (Array.isArray(o)) return o.map(sortDeep);
+  if (o && typeof o === 'object') {
+    const r = {};
+    for (const k of Object.keys(o).sort()) r[k] = sortDeep(o[k]);
+    return r;
+  }
+  return o;
+}
+const sameRow = (a, b) => JSON.stringify(sortDeep(a)) === JSON.stringify(sortDeep(b));
 
-// Generate WAT data segment
+// Split the top-level array's text into one source chunk per element, by a
+// bracket scan that skips string contents. Returns null if the text is not a
+// plain top-level array (then every row is re-serialized).
+function splitRowTexts(text) {
+  const rows = [];
+  let depth = 0, inStr = false, esc = false, start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '[' || c === '{') {
+      if (depth === 1 && c === '{') start = i;
+      depth++;
+    } else if (c === ']' || c === '}') {
+      depth--;
+      if (depth === 1 && c === '}') rows.push(text.slice(start, i + 1));
+    }
+  }
+  return depth === 0 ? rows : null;
+}
+const oldRowTexts = splitRowTexts(existingText);
+const oldRows = existingText ? JSON.parse(existingText) : [];
+function serializeRow(row) {
+  // Constant stubs are deliberately one-line metadata in the canonical table.
+  return JSON.stringify(row, null, 2)
+    .replace(/"stub": \{\n\s+"pop": ([^,\n]+),\n\s+"ret": ([^\n]+)\n\s+\}/g,
+      '"stub": { "pop": $1, "ret": $2 }')
+    .split('\n').map(line => '  ' + line).join('\n').replace(/^ {2}/, '');
+}
+const rowTexts = table.map((row, i) => {
+  if (oldRowTexts && oldRowTexts.length === oldRows.length && i < oldRows.length &&
+      sameRow(oldRows[i], row)) {
+    return oldRowTexts[i];
+  }
+  return serializeRow(row);
+});
+const tableJson = '[\n  ' + rowTexts.join(',\n  ') + '\n]\n';
+
+// Generate WAT data segment (built before any write so --check sees both).
 let watData = `  ;; Static API hash table: ${table.length} entries in $API_HASH_TABLE\n`;
 watData += `  ;; Generated by tools/gen_api_table.js — do not edit by hand\n`;
 // Anchored to the region, not to its current address: an allocated region
@@ -1621,8 +3027,37 @@ for (const entry of table) {
 }
 watData += `  )\n`;
 watData += `  (global $API_HASH_COUNT i32 (i32.const ${table.length}))\n`;
-
 const watPath = path.join(__dirname, '..', 'src', '01b-api-hashes.generated.wat');
+
+if (CHECK) {
+  let stale = false;
+  if (tableJson !== existingText) {
+    stale = true;
+    console.error('ERROR: src/api_table.json is not what tools/gen_api_table.js produces.');
+    let shown = 0;
+    for (let i = 0; i < Math.max(table.length, oldRows.length); i++) {
+      if (oldRows[i] && table[i] && sameRow(oldRows[i], table[i])) continue;
+      if (shown++ >= 10) { console.error('  ...'); break; }
+      console.error(`  [${i}] table:     ${JSON.stringify(oldRows[i])}`);
+      console.error(`  [${i}] generator: ${JSON.stringify(table[i])}`);
+    }
+    if (!shown) console.error('  (formatting only)');
+    console.error('A row the generator would rewrite is metadata that lives only in the table.');
+    console.error('Put it in the generator\'s spec (tools/gen_api_table.js extra list, or the');
+    console.error('d3d9/d3d8/d3dim method specs) so a rerun keeps it, then run the generator.');
+  }
+  const currentWat = fs.existsSync(watPath) ? fs.readFileSync(watPath, 'utf8') : '';
+  if (watData !== currentWat) {
+    stale = true;
+    console.error('ERROR: src/01b-api-hashes.generated.wat is stale; run node tools/gen_api_table.js');
+  }
+  if (stale) process.exit(1);
+  console.log(`gen_api_table --check: api_table.json and 01b-api-hashes.generated.wat are current (${table.length} APIs)`);
+  process.exit(0);
+}
+
+fs.writeFileSync(jsonPath, tableJson);
+console.log(`Generated ${jsonPath} with ${table.length} APIs`);
 fs.writeFileSync(watPath, watData);
 console.log(`Generated ${watPath}`);
 console.log(`Hash collisions: 0`);

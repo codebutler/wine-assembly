@@ -21,17 +21,29 @@ function stripComments(s) {
   return s.replace(/\(;[\s\S]*?;\)/g, '').replace(/;;[^\n]*/g, '');
 }
 
+// The operand-word read is the (read-thread-word) macro for the same reason:
+// as a call it was never inlined by V8 and cost 3.5-7% self CPU per game.
+let rtwCalls = [];
 let oldSites = [], macroSites = 0, funcsMissingLocals = [], macroDefs = 0, nextDefs = 0;
 for (const f of WAT_FILES) {
   const text = stripComments(fs.readFileSync(path.join(SRC, f), 'utf8'));
   text.split('\n').forEach((line, i) => { if (line.includes('(return_call $next)')) oldSites.push(`${f}:${i + 1}`); });
+  text.split('\n').forEach((line, i) => { if (line.includes('(call $read_thread_word)')) rtwCalls.push(`${f}:${i + 1}`); });
   macroDefs += (text.match(/\(defmacro \(dispatch-next\)/g) || []).length;
   nextDefs += (text.match(/\(func \$next\b/g) || []).length;
-  // Function extents: split on top-level "(func " and look inside each.
-  const parts = text.split(/\n(?=  \(func )/);
+  // Function extents: split on top-level "(func " / "(defmacro " and look
+  // inside each. A macro whose body expands (dispatch-next) -- 05-alu.wat's
+  // (jcc-finish) -- is not itself a site, but every function expanding IT is.
+  const parts = text.split(/\n(?=  \((?:func|defmacro) )/);
+  const wrappers = [];
   for (const part of parts) {
-    // The definition itself, `(defmacro (dispatch-next) ...)`, is not a site.
-    const n = (part.match(/(?<!\(defmacro )\(dispatch-next\)/g) || []).length;
+    const dm = /^\s*\(defmacro \(([^\s()]+)\)/.exec(part);
+    if (dm && dm[1] !== 'dispatch-next' && part.includes('(dispatch-next)')) wrappers.push(dm[1]);
+  }
+  for (const part of parts) {
+    if (/^\s*\(defmacro /.test(part)) continue;
+    const n = (part.match(/\(dispatch-next\)/g) || []).length
+      + wrappers.reduce((k, w) => k + part.split(`(${w})`).length - 1, 0);
     if (!n) continue;
     macroSites += n;
     const m = /^\s*\(func\s+(\$[^\s()]+)/.exec(part);
@@ -40,6 +52,7 @@ for (const f of WAT_FILES) {
   }
 }
 ok(oldSites.length === 0, `no (return_call $next) in src/ outside comments${oldSites.length ? ': ' + oldSites.slice(0, 5).join(', ') : ''}`);
+ok(rtwCalls.length === 0, `no (call $read_thread_word) in src/ outside comments -- use (read-thread-word)${rtwCalls.length ? ': ' + rtwCalls.slice(0, 5).join(', ') : ''}`);
 ok(macroDefs === 1, `exactly one (defmacro (dispatch-next)) (got ${macroDefs})`);
 ok(nextDefs === 1, `exactly one $next (got ${nextDefs})`);
 ok(macroSites >= 400, `${macroSites} (dispatch-next) sites, at least the 420 that landed`);

@@ -38,7 +38,7 @@ const {bootRenderHarness}=require('./render-helper');
     ${[...methods.map(n=>['IDirect3DDevice9',n]),...blockMethods.map(n=>['IDirect3DStateBlock9',n])].map(([type,name])=>`
     (func (export "${name}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (result i32)
       (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
-      (call $handle_${type}_${name} (local.get $a) (local.get $b) (local.get $c)
+      (call $handle_${require('../src/api_table.json').find(a=>a.name===`${type}_${name}`).handler||`${type}_${name}`} (local.get $a) (local.get $b) (local.get $c)
         (local.get $d) (local.get $f) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   `});
   e.init_dx_com_thunks();
@@ -203,15 +203,25 @@ const {bootRenderHarness}=require('./render-helper');
   e.guest_write32(elements+8,255);e.guest_write32(elements+12,17); // END
   assert.strictEqual(e.CreateVertexDeclaration(d,elements,out),0);const decl=read(out);
   assert.strictEqual(e.SetFVF(d,0x4002),0);
+  // Native D3D9 preserves both FVF and declaration selection on SetFVF(0).
+  // Wine conformance: dlls/d3d9/tests/device.c, test_fvf_decl_conversion.
+  assert.strictEqual(e.SetFVF(d,0),0);
+  assert.strictEqual(e.GetFVF(d,out),0);assert.strictEqual(read(out),0x4002,'zero FVF preserves live FVF');
   assert.strictEqual(e.BeginStateBlock(d),0);
   assert.strictEqual(e.SetVertexDeclaration(d,decl),0);
   assert.strictEqual(e.SetVertexDeclaration(d,0),0);assert.strictEqual(e.SetVertexDeclaration(d,decl),0);
+  assert.strictEqual(e.SetFVF(d,0),0,'zero FVF does not replace a recorded declaration');
   assert.strictEqual(read(decl+20),1,'recorded declaration keeps only one reference');
   assert.strictEqual(e.GetVertexDeclaration(d,out),0);assert.strictEqual(read(out),0);
   assert.strictEqual(e.GetFVF(d,out),0);assert.strictEqual(read(out),0x4002,'recording does not clear live FVF');
   assert.strictEqual(e.EndStateBlock(d,out),0);const db=read(out);
   assert.strictEqual(e.releaseTexture(decl),0); // common resource Release helper
   assert.strictEqual(e.Apply(db),0);assert.strictEqual(read(decl+20),2);
+  assert.strictEqual(e.SetFVF(d,0),0);
+  assert.strictEqual(e.get_esp()>>>0,0x074ff00c,'zero FVF retains stdcall cleanup');
+  assert.strictEqual(read(decl+20),2,'zero FVF preserves declaration lifetime');
+  assert.strictEqual(e.GetVertexDeclaration(d,out),0);assert.strictEqual(read(out),decl,'zero FVF preserves live declaration');
+  e.releaseTexture(decl); // balance GetVertexDeclaration AddRef
   assert.strictEqual(e.GetFVF(d,out),0);assert.strictEqual(read(out),0);
   assert.strictEqual(e.SetFVF(d,0x4002),0);assert.strictEqual(e.Capture(db),0);
   assert.strictEqual(e.SetFVF(d,0x102),0);assert.strictEqual(e.Apply(db),0);
@@ -253,9 +263,16 @@ const {bootRenderHarness}=require('./render-helper');
     assert.strictEqual(e['Get'+stage+'Shader'](d,out),0);assert.strictEqual(read(out),0);
     assert.strictEqual(e.Release(sb),0);
   }
+  // SetFVF records as "no declaration, this FVF" (D3D8 SetVertexShader(FVF)
+  // inside BeginStateBlock is how MilkDrop builds its blocks).
+  assert.strictEqual(e.SetFVF(d,0x102),0);
   assert.strictEqual(e.BeginStateBlock(d),0);
-  assert.throws(()=>e.SetFVF(d,0x4002),WebAssembly.RuntimeError,
-    'uncaptured state categories fail explicitly rather than changing live device state');
-  assert.strictEqual(e.EndStateBlock(d,out),0);assert.strictEqual(e.Release(read(out)),0);
+  assert.strictEqual(e.SetFVF(d,0x4002),0,'SetFVF records while a block is open');
+  assert.strictEqual(e.SetFVF(d,0),0,'zero FVF does not replace a recorded FVF');
+  assert.strictEqual(e.GetFVF(d,out),0);assert.strictEqual(read(out),0x102,'recording SetFVF leaves live FVF');
+  assert.strictEqual(e.EndStateBlock(d,out),0);const fb=read(out);
+  assert.strictEqual(e.Apply(fb),0);
+  assert.strictEqual(e.GetFVF(d,out),0);assert.strictEqual(read(out),0x4002,'Apply restores the recorded FVF');
+  assert.strictEqual(e.Release(fb),0);
   console.log('PASS D3D9 selective state recording, last-write wins, Capture/Apply and lifetime');
 })().catch(error=>{console.error(error);process.exitCode=1;});

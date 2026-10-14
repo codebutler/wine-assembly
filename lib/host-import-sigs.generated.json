@@ -1,6 +1,6 @@
 {
-  "generated_from": "src/01-header.wat",
-  "count": 249,
+  "generated_from": "src/main.watx include closure",
+  "count": 274,
   "sigs": {
     "log": {
       "params": [
@@ -144,6 +144,14 @@
     },
     "cs_pump": {
       "params": [],
+      "results": [
+        "i32"
+      ]
+    },
+    "io_fill_sync": {
+      "params": [
+        "i32"
+      ],
       "results": [
         "i32"
       ]
@@ -349,6 +357,18 @@
         "i32"
       ]
     },
+    "queue_mouse_input": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "get_mouse_position": {
       "params": [],
       "results": [
@@ -363,6 +383,12 @@
       "results": []
     },
     "get_mouse_buttons": {
+      "params": [],
+      "results": [
+        "i32"
+      ]
+    },
+    "get_mouse_buttons_live": {
       "params": [],
       "results": [
         "i32"
@@ -575,6 +601,16 @@
         "i32"
       ]
     },
+    "broadcast_registered_message": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "activate_window": {
       "params": [
         "i32"
@@ -617,6 +653,16 @@
       ]
     },
     "gpu_gl_call": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "glide_submit": {
       "params": [
         "i32",
         "i32",
@@ -1282,6 +1328,20 @@
         "i32"
       ]
     },
+    "fs_create_file_result": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "fs_create_legacy_file": {
       "params": [
         "i32",
@@ -1299,6 +1359,7 @@
         "i32",
         "i32",
         "i32",
+        "i32",
         "i32"
       ],
       "results": [
@@ -1312,6 +1373,7 @@
         "i32",
         "i32",
         "i32",
+        "i32",
         "i32"
       ],
       "results": [
@@ -1319,12 +1381,37 @@
       ]
     },
     "fs_read_pending": {
-      "params": [],
+      "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_read_file_result": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
       "results": [
         "i32"
       ]
     },
     "fs_write_file": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_write_file_result": {
       "params": [
         "i32",
         "i32",
@@ -1351,8 +1438,43 @@
         "i32"
       ]
     },
+    "fs_duplicate_handle": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_duplicate_mapping_result": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "fs_set_file_pointer": {
       "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_seek_result": {
+      "params": [
+        "i32",
+        "i32",
         "i32",
         "i32",
         "i32"
@@ -1369,8 +1491,35 @@
         "i32"
       ]
     },
+    "fs_set_end_of_file_result": {
+      "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "fs_get_file_size": {
       "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_file_size_result": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_file_information": {
+      "params": [
+        "i32",
         "i32"
       ],
       "results": [
@@ -1675,6 +1824,19 @@
         "i32"
       ]
     },
+    "fs_create_file_mapping_result": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "fs_open_file_mapping": {
       "params": [
         "i32"
@@ -1683,8 +1845,35 @@
         "i32"
       ]
     },
+    "fs_open_file_mapping_result": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "fs_map_view_of_file": {
       "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_map_view_of_file_result": {
+      "params": [
+        "i32",
+        "i32",
         "i32",
         "i32",
         "i32",
@@ -1729,6 +1918,12 @@
         "i32"
       ]
     },
+    "service_load_library": {
+      "params": [],
+      "results": [
+        "i32"
+      ]
+    },
     "com_create_instance": {
       "params": [
         "i32",
@@ -1761,7 +1956,10 @@
       ]
     },
     "com_get_pending_dll": {
-      "params": [],
+      "params": [
+        "i32",
+        "i32"
+      ],
       "results": [
         "i32"
       ]
@@ -1815,6 +2013,43 @@
     },
     "resume_thread": {
       "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "thread_apc_target": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "thread_alert": {
+      "params": [
+        "i32"
+      ],
+      "results": []
+    },
+    "process_spawn": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "process_ctl": {
+      "params": [
+        "i32",
+        "i32",
         "i32"
       ],
       "results": [
@@ -1908,6 +2143,26 @@
         "i32"
       ]
     },
+    "socket_event": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "close_event": {
+      "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "reset_event": {
       "params": [
         "i32"
@@ -1968,6 +2223,8 @@
     },
     "wave_out_open": {
       "params": [
+        "i32",
+        "i32",
         "i32",
         "i32",
         "i32",
@@ -2236,7 +2493,9 @@
       "results": []
     },
     "net_link_open": {
-      "params": [],
+      "params": [
+        "i32"
+      ],
       "results": [
         "i32"
       ]
@@ -2259,6 +2518,17 @@
     },
     "computer_name": {
       "params": [
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "voice_notify_set": {
+      "params": [
+        "i32",
+        "i32",
         "i32",
         "i32"
       ],

@@ -1425,6 +1425,18 @@
       (then
         (local.set $request (load.field.memarg GdiFont height (local.get $object)))
         (local.set $height (local.get $request))
+        ;; A positive request is a cell height, and an installed raster strike
+        ;; cannot be shrunk: below its dfPixHeight Win98 hands back the whole
+        ;; cell. SimCity 2000's power-plant picker asks MS Sans Serif for an
+        ;; 8px cell and gets the 13px strike; drawing it squeezed to 8px left
+        ;; its captions unreadable and spaced for glyphs that were not there.
+        (if (i32.and (i32.gt_s (local.get $request) (i32.const 0))
+              (i32.eq (i32.load (local.get $strike)) (i32.const 1)))
+          (then
+            (if (i32.lt_s (local.get $request)
+                  (i32.load offset=20 (local.get $strike)))
+              (then (local.set $height
+                (i32.load offset=20 (local.get $strike)))))))
         ;; Negative LOGFONT heights request character height. Bitmap selection
         ;; returns a complete cell. Fixedsys exposes the same integer-scaled
         ;; cells measured on native Win98 even though Wine stores one 8x15 base.
@@ -2731,7 +2743,7 @@
       (local.set $run_count (i32.sub (local.get $i) (local.get $run_start)))
       (if (i32.gt_u (local.get $run_count) (i32.const 0))
         (then
-          (if (i32.eqz (call $host_gdi_ext_text_out
+          (if (i32.eqz (call $gdi_native_ext_text_out
                 (local.get $hdc)
                 (call $gdi_shape_unmap_x (local.get $desc) (local.get $cursor))
                 (local.get $y) (local.get $options) (local.get $rect)
@@ -2850,6 +2862,7 @@
     (local $path_origin_x i32) (local $path_origin_y i32)
     (local $indexed i32) (local $tt_face i32) (local $tt_ppem i32) (local $bold i32)
     (local $underlined i32)
+    (local $sx_end i32)
     (call $gdi_clip_row_reset)
     (local.set $strike (call $gdi_bitmap_font_selected (local.get $hdc)))
     (if (i32.eqz (local.get $strike)) (then (return (i32.const -1))))
@@ -3106,14 +3119,38 @@
           (local.set $sx (i32.div_u
             (i32.mul (local.get $dx) (local.get $native_ink_width))
             (local.get $ink_width)))
-          (if (local.get $indexed) (then
-            (local.set $bit (call $tt_entry_pixel (local.get $glyph) (local.get $sx)
-              (i32.sub (local.get $sy) (i32.sub (i32.load offset=24 (local.get $strike)) (call $tt_entry_top (local.get $glyph)))))))
-          (else (local.set $bit (i32.and (i32.load8_u (i32.add
-            (i32.add (i32.load offset=8 (local.get $strike)) (local.get $glyph_offset))
-            (i32.add (i32.mul (i32.shr_u (local.get $sx) (i32.const 3)) (local.get $native_height))
-              (local.get $sy))))
-            (i32.shl (i32.const 1) (i32.sub (i32.const 7) (i32.and (local.get $sx) (i32.const 7))))))))
+          ;; A narrowing lfWidth compresses the strike horizontally. Sampling
+          ;; one source column per output column skips the columns in between,
+          ;; and at text sizes those are whole stems: SimCity 2000's 16x8
+          ;; Arial read 'u' as 'L' and '0' as 'C'. Take the ink of every source
+          ;; column this output column covers instead.
+          (local.set $sx_end (i32.add (local.get $sx) (i32.const 1)))
+          (if (i32.gt_u (local.get $native_ink_width) (local.get $ink_width))
+            (then
+              (local.set $sx_end (i32.div_u
+                (i32.add
+                  (i32.mul (i32.add (local.get $dx) (i32.const 1))
+                    (local.get $native_ink_width))
+                  (i32.sub (local.get $ink_width) (i32.const 1)))
+                (local.get $ink_width)))
+              (if (i32.gt_u (local.get $sx_end) (local.get $native_ink_width))
+                (then (local.set $sx_end (local.get $native_ink_width))))
+              (if (i32.le_u (local.get $sx_end) (local.get $sx))
+                (then (local.set $sx_end (i32.add (local.get $sx) (i32.const 1)))))))
+          (local.set $bit (i32.const 0))
+          (block $span_done (loop $span
+            (br_if $span_done (i32.ge_u (local.get $sx) (local.get $sx_end)))
+            (br_if $span_done (i32.ne (local.get $bit) (i32.const 0)))
+            (if (local.get $indexed) (then
+              (local.set $bit (call $tt_entry_pixel (local.get $glyph) (local.get $sx)
+                (i32.sub (local.get $sy) (i32.sub (i32.load offset=24 (local.get $strike)) (call $tt_entry_top (local.get $glyph)))))))
+            (else (local.set $bit (i32.and (i32.load8_u (i32.add
+              (i32.add (i32.load offset=8 (local.get $strike)) (local.get $glyph_offset))
+              (i32.add (i32.mul (i32.shr_u (local.get $sx) (i32.const 3)) (local.get $native_height))
+                (local.get $sy))))
+              (i32.shl (i32.const 1) (i32.sub (i32.const 7) (i32.and (local.get $sx) (i32.const 7))))))))
+            (local.set $sx (i32.add (local.get $sx) (i32.const 1)))
+            (br $span)))
           (if (i32.and (i32.ne (local.get $bit) (i32.const 0))
                 (i32.eqz (local.get $is_tab)))
             (then
@@ -3471,6 +3508,14 @@
             (local.set $draw_x (i32.shr_s (i32.add
               (i32.load (local.get $rect)) (i32.load offset=8 (local.get $rect)))
               (i32.const 1)))))))
+    ;; USER draws each line through ExtTextOut with the DC's own TA_UPDATECP,
+    ;; so on such a DC the line starts at the current position (and moves it),
+    ;; and the rectangle only clips. Civilization II draws every city label
+    ;; that way -- MoveTo the label, DrawText with the region being repainted
+    ;; -- and anchoring on rect.left put the label at the left edge of that
+    ;; region instead: "RoRo" beside a unit that had just moved.
+    (local.set $draw_align (i32.or (local.get $draw_align)
+      (i32.and (local.get $saved_align) (i32.const 1))))
     (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 32)
       (local.get $draw_align) (i32.const 0)))
     (local.set $device_y (local.get $top_device))

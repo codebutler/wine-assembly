@@ -35,7 +35,7 @@ with `--save-vfs`; where we now ship something different, both are given.
 | 0x32 | 0x0d  | `+0x978288` | ShortString[12] player 2 name             | `09 "Spieler 2"` |
 | 0x3f | 0x04 **+ N×0x3c** | `[this+0x30]+0x1774` | **result-table count, then N records** | 0 |
 | 0x43 | 0x0d  | `+0x97cdcd` | ShortString[12] **network session name**  | empty → `game <0..99>` |
-| 0x50 | 0x04  | `+0x97cddc` | **network connection (provider) index**   | 0 |
+| 0x50 | 0x04  | `+0x97cddc` | **network screen's CONTROL** (0 kbd / 1 mouse) | 0 |
 | 0x54 | 0x1f  | `+0x97cde0` | ShortString[30] **host IP address**       | empty → `0.0.0.0` |
 | 0x73 | 0x01  | `+0x978287` | **player 1 colour index**                 | `00` = red |
 | 0x74 | 0x01  | `+0x9782db` | **player 2 colour index**                 | `03` = green |
@@ -63,9 +63,10 @@ Evidence for the three renamed fields, none of it inference:
   §3.2.2 field for field. `0x97cde0` is seeded at `0x44a46e` from the literal
   `07 "0.0.0.0"` at `0x44a6dc` when its length byte is zero — an IP address.
   `0x97cdcd` is seeded from `"game "` (`0x44abe4`) + `Random(100)`, a session
-  name. `0x97cddc` is not a value but a **label selector**: `0x44a8dc` adds it
-  to a string-table base (`[0x97cd8c] + it + 7`) before the same `GetString`,
-  which is how a DirectPlay provider row gets its text.
+  name. `0x97cddc` is the network screen's own **CONTROL** choice, not a
+  provider index: `0x44a8dc` uses it to pick the label text
+  (`[0x97cd8c] + it + 7`), and the network match copies it into the *local*
+  player's CONTROL dword (see "Network matches override CONTROL" below).
 
 **A truncated file is legal.** The reader re-checks `Position < Size`
 (`0x40ece8` = Position, `0x40eccc` = Size) before four of the groups — after
@@ -91,8 +92,9 @@ Read off the branches in the per-frame input path, not guessed:
   **confirmed in-game**: with `--control=keyboard,computer` the player-two
   label on the match screen changes from `Spieler 2` to **ADAM**, the AI's own
   name. That is the cheap oracle for this field — the label, not a memory read.
-- `4` exists and is compared against a coordinate; still unidentified. It is the
-  likely remote-player marker (see the network section).
+- `0x32` → **remote**: the network match writes it into the other machine's
+  player (see below). `4` is compared against a coordinate somewhere and is
+  still unidentified; it is *not* the remote marker.
 
 ### Any VK is a legal player key
 
@@ -122,9 +124,13 @@ That is what makes the touch remap below safe.
 
 `packages/freeware/blobby-volley/settings.dat` keeps the game's **stock** key
 assignment — player one `A`/`D`/`W`, player two `← → ↑` — with the single
-change that **player two is on the keyboard, not the mouse**
-(`tools/blobby-settings.js --control=keyboard,keyboard`), because the mouse
-never reaches a network client.
+change that **player two is the computer, not the mouse**
+(`tools/blobby-settings.js --control=keyboard,computer`, since 2026-09-21;
+before that `keyboard,keyboard`). A solo launch is then a game against ADAM,
+and a network match is unaffected, because both network entry points
+overwrite CONTROL for the match (see "Network matches override CONTROL"
+below). Player two's keys still matter: they are what the network guest
+drives its blob with.
 
 **The phone pad sends only the key set of the player this machine owns.**
 It used to send both (`A`+`←`, `D`+`→`) on the theory that each machine
@@ -136,9 +142,17 @@ So there are two layouts in `lib/apps.js`: `touchControls` (player one:
 `A`/`D`, jump `W`) and `lanClientTouchControls` (player two: `←`/`→`, jump
 `Space`). `touchControlsForSeat` in `lib/browser-shell.js` picks between them:
 before any room, and at the host seat `10.0.0.1`, this machine is player one;
-at any other seat it is player two. The on-demand lobby hands out the seat
+at any other seat it is player two. The room hands out the seat
 while the game is already running, so the shell rewrites that running app's
 record and calls `TouchControls.sync` again. The guest's state is not touched.
+
+Since 2026-09-21 that room is the star room (`room: 'auto'`, see
+docs/virtual-lan-party.md), and there seat `10.0.0.1` goes to whoever went
+online *first*, not to whoever hosts the DirectPlay session. The usual order
+(the host picks NETZWERKSPIEL first, the guest joins from the list) keeps the
+two aligned. If the searcher goes online first, the touch layouts are
+swapped. The keyboard is unaffected, because the shipped settings.dat gives both
+players the arrows.
 
 **On a touch device only, player two's jump moves from `↑` to `Space`**
 (`touchPatches` in `lib/apps.js`, applied by `applyTouchPatches` in
@@ -193,35 +207,39 @@ Verified on a 375x667 touch viewport, 2026-09-20
 tapping the `OK` button starts the match, and holding the pad's right edge
 walks the blobs right.
 
-A person who wants solo-vs-AI sets player two to COMPUTER on the game's own
-options screen; we cannot preset it, for the reason below.
+### Network matches override CONTROL — a stored COMPUTER is harmless
 
-### Do not preset player two to COMPUTER — measured
-
-`--control=keyboard,computer` looks like the obvious solo preset, and it works
-locally (the ADAM label above). **It breaks a network match**, because the
-joining client does not override the stored value: the AI keeps driving the
-client's own blob and the person holding the phone is a spectator.
-
-Measured with the gate, 2026-09-20, `--control=keyboard,computer` shipped:
+Both network entry points save the two players' CONTROL dwords, overwrite
+them for the match, and put them back afterwards:
 
 ```
-green blob x: host 478.7 -> 527.1 -> 591.1   guest 478.7 -> 527.1 -> 591.1
-PASS  the guest moved its own player
-PASS  the host saw the guest's player move the same way
-FAIL  and saw it come back
+host   0x44b689..  mov eax,[esi+0x97cddc] / mov [esi+0x978220],eax   ; P1 = network CONTROL
+                   mov dword [esi+0x978224],0x32                      ; P2 = remote
+                   call 0x44ba9c / call 0x4453d4 (host match) / restore
+guest  0x44b87b..  mov eax,[ebx+0x97cddc] / mov [ebx+0x978224],eax   ; P2 = network CONTROL
+                   mov dword [ebx+0x978220],0x32                      ; P1 = remote
+                   call 0x44ba9c / call 0x44bad4 (guest match) / restore
 ```
 
-Both holds moved the blob the *same* direction — right under `D`, right again
-under `A` — which is not a key-driven blob at all; it is the AI chasing the
-ball while our keys land nowhere. Note that the first two checks **pass
-spuriously** on that run: any moving blob satisfies "it moved". The direction
-reversal is the check with the teeth, which is the reason the test holds two
-keys rather than one.
+`--count` hit `0x44b6b0`/`0x44b718` once on the host and `0x44b93a` once on the
+guest. **These globals are `this`-relative, not absolute**: `esi`/`ebx` is the
+game object (`0x7e170004` in our runs), so P1's CONTROL lives at runtime
+`0x7eae8224`, which is also the `buf=` `--trace-fs` shows for the 8-byte
+settings.dat read. `--dump=0x978220` reads zeros and proves nothing.
 
-So the network settings screen's own CONTROL point (`Instructions.txt` §3.2.2)
-does not write `[0x978220+4]`, or does not write it before the match starts.
-The unidentified value `4` remains the candidate for the remote marker.
+Measured 2026-09-21 with `settings.dat` from `--control=keyboard,computer`,
+`--dump=0x7eae8224:8` at exit of the gate: solo reads `00 00 00 00 02 00 00 00`
+(P2 = computer); in the match the host reads `00000000 00000032` and the guest
+`00000032 00000000` — the stored COMPUTER is gone on both machines. The green
+blob went `478.7 -> 628.5 -> 351.1` on the host and `-> 628.6 -> 437.5` on the
+guest: right under one key and back under the other, a key-driven blob, not
+the AI. (The final positions disagreed, the same way the stock settings fail
+that check at load 30-50; that is a separate flake.)
+
+The earlier "do not preset COMPUTER" verdict here was wrong. Its evidence,
+`478.7 -> 527.1 -> 591.1`, is byte-identical to the void pre-`--real-ticks`
+batch-clock sample, where no key reached the guest at all, so it measured the
+clock, not the AI.
 
 ### Colour: `0x0044a2c0(this, edx=player, cl=index)`
 
@@ -459,6 +477,63 @@ on the **mouse** — which is one candidate explanation on its own, and the
 shipped file no longer has either property. Check
 `wine._vfsPersistence.restored` before reading anything into a repeat: a
 player's own persisted `c:\settings.dat` still carries the old values.
+
+## The host's picture froze mid-match: a cross-thread send at the wrong point
+
+Symptom (2026-09-22, live browser pair): a match played, then the **host's**
+screen stopped changing for good and ignored every key, while the guest ran on.
+It was not controls and not a hang. The game thread draws each frame by calling
+`0x442a5c` → VCL `Synchronize` (`0x411f50`), i.e.
+`SendMessage(ThreadWindow [0x44e648], 0x8FFF, 0, self)` to the main thread. The
+callback `0x4428a8` BitBlts dirty rects from the bitmap canvas onto the form
+canvas (form `[[0x44df48]]`, canvas `[F+0x220]`, hwnd `0x10002`).
+
+Our cooperative scheduler delivered that send wherever main's last slice had
+stopped. One landed inside `TControlCanvas.FreeHandle` (`0x41e9c4`) after its
+`ReleaseDC` (`0x4068a0`) and before `mov [ebx+0x5c],0`. The paint's
+`CreateHandle` (`0x41e918`) then adopted the still-cached, just-released
+FDeviceContext. From then on every BitBlt went to a dead HDC and returned 0,
+and the surface flush count stayed at 4824 forever.
+
+Win32 delivers a cross-thread send only while the receiver is inside
+GetMessage/PeekMessage/WaitMessage/MsgWait* or its own SendMessage. That is
+now enforced: the scheduler sets `incoming_send_pending` on a receiver that is
+not at a message call, and those calls then stop on their own thunk with
+yield 17 so the send is delivered there (`test/test-cross-thread-send-timing.js`).
+
+## The frame-limiter spin on the game thread
+
+The game runs on spawned thread T1 (start `0x403a00`); main sits in
+MsgWait at `0x4069c0`. In a match T1's frame limiter is a pure clock spin at
+**`0x445242`**:
+
+```
+0x445242  call GetTickCount          ; thunk 0x406228, IAT 0x44f608
+          mov edx,[ebp+8] / mov edx,[edx-0x24]
+          mov ecx,[ebp+8] / mov ecx,[ecx-4]
+          add edx,[ecx+0x978230]
+          cmp eax,edx
+          jb  0x445242                ; return landing 0x445247
+```
+
+No other API and no stores in the loop, so `$clock_spin_step` qualifies it
+(same caller, same ESP, same value, <=64 blocks between reads) and parks with
+yield 14. The menu loop (`0x4476fc..0x447864`) and the other limiter at
+`0x44c287` Sleep instead and never trip it.
+
+The park used to do nothing for a *cooperative thread*: the scheduler cleared
+yield 14 one turn later and re-ran T1, which re-read the same millisecond, hit
+the one-park-per-millisecond latch and spun out its slice; and a pending yield
+14 made `parkedThreadDelay` report "not idle", so the host never slept.
+`--count=0x445247` saw 25,063 hits over a 700-batch match. Now `runSlice`
+sleeps the thread to the park's own deadline (`get_spin_deadline_ms`, clamped
+to 1..50ms) via `sleepUntil`; `--no-clock-park-sleep` is the old arm
+(`test/test-thread-clock-park-sleep.js`).
+
+Measured on box 3, 700-batch match route (boot, SPIEL STARTEN, play), user CPU:
+**4.5s / 4.46s new vs 117.9s / 120.3s old**, identical guest API counts. The
+match frame varies run to run in *both* arms (menu frames are identical); that
+jitter predates this change and survives `--wall-clock-ms`.
 
 ## Ruled out
 

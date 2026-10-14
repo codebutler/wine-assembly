@@ -98,7 +98,7 @@
   (func $guest_page_publish_range
     (param $guest i32) (param $size i32) (param $backing i32)
       (param $protect i32) (result i32)
-    (local $cur i32) (local $end i32) (local $back i32)
+    (local $cur i32) (local $end i32) (local $back i32) (local $old i32)
     (if (i32.or
           (i32.or
             (i32.ne (i32.and (local.get $guest) (i32.const 0xFFF)) (i32.const 0))
@@ -113,33 +113,42 @@
     (local.set $back (local.get $backing))
     (block $done (loop $pages
       (br_if $done (i32.ge_u (local.get $cur) (local.get $end)))
-      (i32.atomic.store
+      (local.set $old (i32.or (local.get $old) (i32.atomic.rmw.xchg
         (i32.add (global.get $GUEST_PAGE_TABLE)
           (i32.and (i32.shr_u (local.get $cur) (i32.const 10))
             (i32.const 0x003FFFFC)))
         (i32.or (i32.and (local.get $back) (i32.const 0xFFFFF000))
           (i32.or
             (i32.and (local.get $protect) (global.get $GUEST_PTE_PROTECT_MASK))
-            (global.get $GUEST_PTE_PRESENT))))
+            (global.get $GUEST_PTE_PRESENT))))))
       (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
       (local.set $back (i32.add (local.get $back) (i32.const 0x1000)))
       (br $pages)))
+    ;; A uop window (07d) proved over a page that was already present may now
+    ;; name the wrong backing; one over pages that were absent cannot exist.
+    ;; After the stores, so no window can be proved against the old entries
+    ;; under the new epoch.
+    (if (i32.and (local.get $old) (global.get $GUEST_PTE_PRESENT))
+      (then (call $uop_win_bump)))
     (i32.const 1))
 
   (func $guest_page_clear_range (param $guest i32) (param $size i32)
-    (local $cur i32) (local $end i32)
+    (local $cur i32) (local $end i32) (local $old i32)
     (local.set $end (i32.add (local.get $guest) (local.get $size)))
     (if (i32.lt_u (local.get $end) (local.get $guest)) (then (return)))
     (local.set $cur (local.get $guest))
     (block $done (loop $pages
       (br_if $done (i32.ge_u (local.get $cur) (local.get $end)))
-      (i32.atomic.store
+      (local.set $old (i32.or (local.get $old) (i32.atomic.rmw.xchg
         (i32.add (global.get $GUEST_PAGE_TABLE)
           (i32.and (i32.shr_u (local.get $cur) (i32.const 10))
             (i32.const 0x003FFFFC)))
-        (i32.const 0))
+        (i32.const 0))))
       (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
-      (br $pages))))
+      (br $pages)))
+    ;; as above: a uop window over a page that just went away is stale
+    (if (i32.and (local.get $old) (global.get $GUEST_PTE_PRESENT))
+      (then (call $uop_win_bump))))
 
   ;; Change PAGE_* on a page-rounded committed range. The caller holds
   ;; LOCK_VIRTUAL_MAP, so the validation pass and update pass are atomic with
@@ -206,16 +215,23 @@
   ;; the corresponding contiguous backing page. Checking merely the two ends
   ;; would accept a hole or a differently backed middle page; checking each
   ;; page boundary proves the affine range that bulk string/loop helpers need.
+  ;; Why the last failing call failed, for --uop-win-census (07d $uwc_*):
+  ;; 1 first page unmapped, 2 wrapped end, 3 a later page unmapped, 4 a later
+  ;; page mapped but not backed next to its predecessor. Written only on the
+  ;; failure returns, so a successful span pays nothing for it.
+  (global $gpas_why (mut i32) (i32.const 0))
   (func $guest_page_affine_span (param $ga i32) (param $len i32) (result i32)
     (local $start_wa i32) (local $cur_wa i32)
     (local $end i32) (local $cur i32)
     (local.set $start_wa (call $guest_page_translate (local.get $ga)))
     (if (i32.eq (local.get $start_wa) (global.get $NULL_SENTINEL))
-      (then (return (global.get $NULL_SENTINEL))))
+      (then (global.set $gpas_why (i32.const 1))
+            (return (global.get $NULL_SENTINEL))))
     (if (i32.eqz (local.get $len)) (then (return (local.get $start_wa))))
     (local.set $end (i32.add (local.get $ga) (local.get $len)))
     (if (i32.le_u (local.get $end) (local.get $ga))
-      (then (return (global.get $NULL_SENTINEL))))
+      (then (global.set $gpas_why (i32.const 2))
+            (return (global.get $NULL_SENTINEL))))
     (local.set $cur
       (i32.add (i32.or (local.get $ga) (i32.const 0xFFF)) (i32.const 1)))
     (block $done (loop $pages
@@ -224,12 +240,63 @@
       (if (i32.ne (local.get $cur_wa)
             (i32.add (local.get $start_wa)
               (i32.sub (local.get $cur) (local.get $ga))))
-        (then (return (global.get $NULL_SENTINEL))))
+        (then
+          (global.set $gpas_why
+            (select (i32.const 3) (i32.const 4)
+              (i32.eq (local.get $cur_wa) (global.get $NULL_SENTINEL))))
+          (return (global.get $NULL_SENTINEL))))
       (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
       (br $pages)))
     (local.get $start_wa))
 
   (func $g2w_miss (param $ga i32) (result i32)
+    (local $wa i32)
+    ;; Mode 5: Windows' rule for reserved memory, and nothing else. A
+    ;; read of a MEM_RESERVE page that was never committed is an access
+    ;; violation, and an engine may commit the page from its own exception
+    ;; filter and continue (Serious Sam's CTStream::ExceptionFilter maps
+    ;; stream buffers this way). The filter chain runs synchronously from
+    ;; here, so the faulting instruction simply completes against the page
+    ;; the filter committed: no precise faulting EIP is needed to resume.
+    (if (i32.eq (global.get $fault_unmapped) (i32.const 5))
+      (then
+        (if (i32.and
+              (i32.and (i32.ge_u (local.get $ga) (i32.const 0x10000))
+                       (i32.eqz (global.get $fault_raising)))
+              (i32.and (i32.eqz (global.get $api_handler_depth))
+                       (call $virtual_reserved_contains (local.get $ga))))
+          (then
+            (if (call $seh_fault_sync (local.get $ga))
+              (then
+                (local.set $wa (call $guest_page_translate (local.get $ga)))
+                (if (i32.ne (local.get $wa) (global.get $NULL_SENTINEL))
+                  (then (return (local.get $wa))))))))
+        ;; A reserved page still uncommitted here -- no handler committed it,
+        ;; or the access came from inside an API handler or another raise --
+        ;; reads zeros and loses writes, which the guest cannot see. Name it in
+        ;; the per-EIP census so the loss is visible.
+        (if (i32.ge_u (local.get $ga) (i32.const 0x10000))
+          (then (if (call $virtual_reserved_contains (local.get $ga))
+            (then (call $host_unmapped_trace (local.get $ga) (global.get $eip))))))
+        ;; Every other miss keeps the quiet sentinel, as with no mode at all.
+        (i32.store (global.get $NULL_SENTINEL) (i32.const 0))
+        (return (global.get $NULL_SENTINEL))))
+    ;; Mode 4: Win98's own rule. Only the 4KB guard page at 0 faults; the rest
+    ;; of low memory is the readable DOS/Win16 arena, so everything above it
+    ;; keeps the quiet sentinel. Dark Reign's debug allocator walks the EBP
+    ;; chain to record a call stack and stops only when reading the outermost
+    ;; frame (saved EBP 0, so [4]) faults into its __except; on the sentinel it
+    ;; read zeros and walked forever.
+    (if (i32.eq (global.get $fault_unmapped) (i32.const 4))
+      (then
+        (if (i32.and (i32.lt_u (local.get $ga) (i32.const 0x1000))
+                     (i32.and (i32.eqz (global.get $fault_raising))
+                              (i32.eqz (global.get $api_handler_depth))))
+          (then
+            (global.set $fault_address (local.get $ga))
+            (call $raise_exception (i32.const 0xC0000005))))
+        (i32.store (global.get $NULL_SENTINEL) (i32.const 0))
+        (return (global.get $NULL_SENTINEL))))
     (if (global.get $fault_unmapped)
       (then
         (call $host_unmapped_trace (local.get $ga) (global.get $eip))
@@ -250,16 +317,54 @@
         ;; stops $run resuming the abandoned block.
         (if (i32.and (i32.eq (global.get $fault_unmapped) (i32.const 3))
                      (i32.eqz (global.get $fault_raising)))
-          (then (call $raise_exception (i32.const 0xC0000005))))))
+          (then
+            (global.set $fault_address (local.get $ga))
+            (call $raise_exception (i32.const 0xC0000005))))))
     (i32.store (global.get $NULL_SENTINEL) (i32.const 0))
     (global.get $NULL_SENTINEL))
 
+  ;; $g2w's direct-window fast path, expanded in place at a hot call site so
+  ;; the common translation is an add, a subtract and one compare instead of a
+  ;; call. SpiderMonkey Ion inlines no wasm call at all, so every `call $g2w`
+  ;; is a real `bl` with a frame and a stack check there; V8 inlines $g2w at
+  ;; some sites and not others (docs/accessor-fastpath-split.md).
+  ;;
+  ;; The caller declares `(local $g2w_wa i32)`; the compiler refuses an
+  ;; undeclared local, so a site that forgets it does not build. $GA appears
+  ;; exactly once and is evaluated before anything else, so an argument with
+  ;; side effects, or one that itself expands this macro, is safe.
+  ;;
+  ;; One unsigned compare is exactly the old two-compare test. The old test
+  ;; accepted wa iff (wa >=s 0) and (wa <u END), END = region.end
+  ;; $DIRECT_WINDOW = 0x08000000. Any wa with wa <u END has bit 31 clear
+  ;; (END <= 0x80000000), so it is also >=s 0: the signed test is implied and
+  ;; the conjunction is just wa <u END. Both forms compute wa with the same
+  ;; mod-2^32 arithmetic, so wraparound in (ga - image_base + GUEST_BASE)
+  ;; lands on the same bit pattern either way. test/test-g2w-fast-macro.js
+  ;; pins the bound and checks the two against each other at the edges.
+  ;;
+  ;; The miss hands $g2w_slow the guest address rebuilt from wa, the exact
+  ;; mod-2^32 inverse, so $GA is not evaluated a second time and no second
+  ;; local is needed.
+  (defmacro (g2w-fast $GA)
+    (block (result i32)
+      (local.set $g2w_wa
+        (i32.add (i32.sub $GA (global.get $image_base)) (global.get $GUEST_BASE)))
+      (if (result i32) (i32.lt_u (local.get $g2w_wa) (region.end $DIRECT_WINDOW))
+        (then (local.get $g2w_wa))
+        (else (call $g2w_slow
+          (i32.add (i32.sub (local.get $g2w_wa) (global.get $GUEST_BASE))
+                   (global.get $image_base)))))))
+
   (func $g2w (param $ga i32) (result i32)
+    (local $g2w_wa i32)
+    (g2w-fast (local.get $ga)))
+
+  ;; Everything $g2w does once the direct window has missed. Only the
+  ;; g2w-fast macro calls it; a direct-window address passed here would be
+  ;; mistranslated, since this never tests that window.
+  (func $g2w_slow (param $ga i32) (result i32)
     (local $wa i32)
-    (local.set $wa (i32.add (i32.sub (local.get $ga) (global.get $image_base)) (global.get $GUEST_BASE)))
-    (if (i32.eqz (i32.or (i32.lt_s (local.get $wa) (i32.const 0))
-                (i32.ge_u (local.get $wa) (region.end $DIRECT_WINDOW))))
-      (then (return (local.get $wa))))
     ;; CreateDIBSection pointers live in a dedicated high guest range backed by
     ;; the final 64MB of linear memory. Test it only after the normal direct
     ;; window misses so ordinary loads retain their original hot path.
@@ -267,6 +372,10 @@
           (i32.sub (local.get $ga) (global.get $DIB_GUEST_BASE))
           (global.get $DIB_GUEST_CAPACITY))
       (then
+        (if (i32.atomic.load (region.addr $D3DIM_LAZY_SHARED 4)) (then
+          (call $d3dim_lazy_access
+            (i32.add (global.get $DIB_BACKING_BASE)
+              (i32.sub (local.get $ga) (global.get $DIB_GUEST_BASE))) (i32.const 1))))
         (return (i32.add
           (global.get $DIB_BACKING_BASE)
           (i32.sub (local.get $ga) (global.get $DIB_GUEST_BASE))))))
@@ -278,6 +387,20 @@
       (then (return (local.get $wa))))
     (call $g2w_miss (local.get $ga))
   )
+
+  ;; Would $g2w resolve $ga? The same three lookups with no miss side effect,
+  ;; for a handler that has to decide whether an access faults before making it.
+  (func $guest_addr_mapped (param $ga i32) (result i32)
+    (local $wa i32)
+    (local.set $wa (i32.add (i32.sub (local.get $ga) (global.get $image_base)) (global.get $GUEST_BASE)))
+    (if (i32.eqz (i32.or (i32.lt_s (local.get $wa) (i32.const 0))
+                (i32.ge_u (local.get $wa) (region.end $DIRECT_WINDOW))))
+      (then (return (i32.const 1))))
+    (if (i32.lt_u
+          (i32.sub (local.get $ga) (global.get $DIB_GUEST_BASE))
+          (global.get $DIB_GUEST_CAPACITY))
+      (then (return (i32.const 1))))
+    (i32.ne (call $guest_page_translate (local.get $ga)) (global.get $NULL_SENTINEL)))
 
   ;; The lowest guest address a sparse VirtualAlloc reservation may occupy.
   ;;
@@ -336,12 +459,19 @@
           (i32.le_u (local.get $len)
             (i32.sub (global.get $DIB_GUEST_CAPACITY) (local.get $off))))
       (then
+        (if (i32.atomic.load (region.addr $D3DIM_LAZY_SHARED 4)) (then
+          (call $d3dim_lazy_access
+            (i32.add (global.get $DIB_BACKING_BASE) (local.get $off)) (local.get $len))))
         (return (i32.add (global.get $DIB_BACKING_BASE) (local.get $off)))))
 
     ;; The page-boundary walk is amortized by the bulk operation that requested
     ;; the span. NULL_SENTINEL tells that caller to preserve exact x86 ordering
     ;; through its elementwise path when pages are missing or non-contiguous.
-    (call $guest_page_affine_span (local.get $ga) (local.get $len))
+    (local.set $wa (call $guest_page_affine_span (local.get $ga) (local.get $len)))
+    ;; --uop-win-census: how the sparse spans bulk paths ask for turn out.
+    (if (global.get $uwc_on)
+      (then (call $uwc_bulk_note (local.get $len) (local.get $wa))))
+    (local.get $wa)
   )
   ;; Sparse backing is not in the direct affine guest window. In particular,
   ;; native shader allocations retain WASM pointers and must recover the real
@@ -393,16 +523,23 @@
   ;; normal aligned/page-local path to one translation; only gather/scatter the
   ;; few x86 word/dword accesses that actually cross a non-contiguous boundary.
   (func $gl32 (param $ga i32) (result i32)
-    (local $wa i32) (local $end_wa i32)
-    (local.set $wa (call $g2w (local.get $ga)))
+    (local $wa i32) (local $end_wa i32) (local $g2w_wa i32) (local $epoch i32)
+    (local.set $wa (g2w-fast (local.get $ga)))
     (if (i32.le_u (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFFC))
       (then (return (i32.load (local.get $wa)))))
+    (local.set $epoch (global.get $fault_sync_epoch))
     (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 3))))
-    (if (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 3)))
+    (if (i32.and (i32.eq (local.get $epoch) (global.get $fault_sync_epoch))
+          (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 3))))
       (then (return (i32.load (local.get $wa)))))
+    ;; Byte by byte, each translated just before it is read. Translating the
+    ;; last byte may have run a fault filter that decommitted the first page
+    ;; (Serious Sam's CTStream window does exactly that), so $wa is not reused;
+    ;; a byte read before a later fault was valid when it was read, which is
+    ;; what the restarted instruction would see.
     (i32.or
       (i32.or
-        (i32.load8_u (local.get $wa))
+        (i32.load8_u (call $g2w (local.get $ga)))
         (i32.shl
           (i32.load8_u (call $g2w (i32.add (local.get $ga) (i32.const 1))))
           (i32.const 8)))
@@ -411,34 +548,65 @@
           (i32.load8_u (call $g2w (i32.add (local.get $ga) (i32.const 2))))
           (i32.const 16))
         (i32.shl
-          (i32.load8_u (local.get $end_wa))
+          (i32.load8_u (call $g2w (i32.add (local.get $ga) (i32.const 3))))
           (i32.const 24)))))
-  (func $gl16 (param $ga i32) (result i32)
-    (local $wa i32) (local $end_wa i32)
+  ;; Native x87 loads retain the single contiguous direct-window lookup. Only
+  ;; other mappings need page-edge validation (and a lazy DIB access barrier).
+  (func $gl32_native (param $ga i32) (result i32)
+    (local $wa i32)
+    (local.set $wa (i32.add (i32.sub (local.get $ga) (global.get $image_base)) (global.get $GUEST_BASE)))
+    (if (i32.le_u (local.get $wa) (i32.sub (region.end $DIRECT_WINDOW) (i32.const 4)))
+      (then (return (i32.load (local.get $wa)))))
+    (call $gl32 (local.get $ga)))
+
+  (func $gl64 (param $ga i32) (result i64)
+    (local $wa i32) (local $end_wa i32) (local $epoch i32)
+    (local.set $wa (i32.add (i32.sub (local.get $ga) (global.get $image_base)) (global.get $GUEST_BASE)))
+    (if (i32.le_u (local.get $wa) (i32.sub (region.end $DIRECT_WINDOW) (i32.const 8)))
+      (then (return (i64.load (local.get $wa)))))
     (local.set $wa (call $g2w (local.get $ga)))
+    (if (i32.le_u (i32.and (local.get $ga) (i32.const 4095)) (i32.const 4088))
+      (then (return (i64.load (local.get $wa)))))
+    ;; Translate the last byte BEFORE loading either half. A pending GPU
+    ;; surface can start on the second page even when the first is outside it.
+    (local.set $epoch (global.get $fault_sync_epoch))
+    (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 7))))
+    (if (i32.and (i32.eq (local.get $epoch) (global.get $fault_sync_epoch))
+          (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 7))))
+      (then (return (i64.load (local.get $wa)))))
+    (i64.or (i64.extend_i32_u (call $gl32 (local.get $ga)))
+      (i64.shl (i64.extend_i32_u (call $gl32 (i32.add (local.get $ga) (i32.const 4)))) (i64.const 32))))
+
+  (func $gl16 (param $ga i32) (result i32)
+    (local $wa i32) (local $end_wa i32) (local $g2w_wa i32) (local $epoch i32)
+    (local.set $wa (g2w-fast (local.get $ga)))
     (if (i32.ne (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFFF))
       (then (return (i32.load16_u (local.get $wa)))))
+    (local.set $epoch (global.get $fault_sync_epoch))
     (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 1))))
-    (if (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 1)))
+    (if (i32.and (i32.eq (local.get $epoch) (global.get $fault_sync_epoch))
+          (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 1))))
       (then (return (i32.load16_u (local.get $wa)))))
+    ;; As $gl32: never a translation taken before a fault filter ran.
     (i32.or
-      (i32.load8_u (local.get $wa))
-      (i32.shl (i32.load8_u (local.get $end_wa)) (i32.const 8))))
+      (i32.load8_u (call $g2w (local.get $ga)))
+      (i32.shl (i32.load8_u (call $g2w (i32.add (local.get $ga) (i32.const 1)))) (i32.const 8))))
   (func $gl8 (param $ga i32) (result i32)
-    (i32.load8_u (call $g2w (local.get $ga))))
+    (local $g2w_wa i32)
+    (i32.load8_u (g2w-fast (local.get $ga))))
   ;; Cheap "could a write here be touching code?" test, for one guest address.
-  ;; Split out of $invalidate_code_write so the range form can skip it when the
-  ;; write spans pages and the per-page walk will ask the question anyway.
+  ;; Page-granular over the whole guest space ($code_page_test, 04-cache; exact
+  ;; below 0x10000000, hashed across 256MB segments above): the old
+  ;; OR with the sparse generated-code min..max span is gone, because that span
+  ;; flagged every data page between two generated-code islands (StarCraft:
+  ;; 7.5M no-op invalidations per 3500 batches). Kept as a name because the uop
+  ;; store-window test (07d $uop_window_set) asks the same question.
   (func $code_write_is_code (param $ga i32) (result i32)
-    (local $in_sparse_generated i32)
-    (local.set $in_sparse_generated
-      (i32.and
-        (i32.ne (global.get $generated_sparse_code_start) (i32.const 0))
-        (i32.and (i32.ge_u (local.get $ga) (global.get $generated_sparse_code_start))
-                 (i32.lt_u (local.get $ga) (global.get $generated_sparse_code_end)))))
-    (i32.or
-      (local.get $in_sparse_generated)
-      (call $code_page_test (local.get $ga))))
+    (call $code_page_test (local.get $ga)))
+
+  (func $store_page_needs_barrier (param $ga i32) (result i32)
+    (i32.or (call $code_write_is_code (local.get $ga))
+      (call $page_watch_is_watched (call $g2w (local.get $ga)))))
 
   ;; A write of $len bytes starting at $ga. The length is not decoration: with
   ;; per-offset invalidation (docs/page-compile-design.md section 5) the retire
@@ -448,19 +616,21 @@
   ;; two endpoints named every page in between as long as there were at most
   ;; two -- would now leave every block in the middle live over rewritten bytes.
   (func $invalidate_code_write (param $ga i32) (param $len i32)
+    ;; Bulk writers already use this boundary before their contiguous write.
+    ;; As with code invalidation, resource ownership must exclude a concurrent
+    ;; reader until that operation finishes; this notification is not a fence.
+    (call $page_watch_write_guest (local.get $ga) (local.get $len))
     ;; Invalidate decoded blocks only when writes can affect already-decoded
     ;; executable bytes. RCT mutates large image-data buffers during startup;
     ;; treating every image write as self-modifying code makes each byte/word
     ;; update scan the whole block-cache index.
     ;;
-    ;; $code_page_test answers that exactly for every guest page below
-    ;; $VIRTUAL_ALLOC_MIN: its bit is set by $cache_store, so it is on iff a
-    ;; block was decoded out of that page. It replaces the old code_start..end
-    ;; and generated_code_start..end span tests, which were both coarser (a
-    ;; span covers every data page between its ends — RCT executes and writes
-    ;; inside one CodeSeg section) and blind to code generated into ordinary
-    ;; heap memory, which lies in neither span. Storm's runtime blitters are
-    ;; exactly that case.
+    ;; $code_page_test answers that per page for every guest page: its bit is
+    ;; set by $code_note_decode, so it is on if a block was decoded out of
+    ;; that page (by any instance) -- or out of a page it aliases with across
+    ;; a 256MB segment, which only costs a slow path. It replaces the old code_start..end,
+    ;; generated_code_start..end and generated_sparse_code_* span tests, which
+    ;; were all coarser -- a span covers every data page between its ends.
     (if (i32.eqz (global.get $exe_size_of_image)) (then (return)))
     ;; The hot case is a 1/2/4-byte write inside one page: answer it with the
     ;; bitmap and decline without a call. A write that spans pages goes straight
@@ -470,45 +640,214 @@
     (if (i32.le_u (i32.add (i32.and (local.get $ga) (i32.const 0xFFF)) (local.get $len))
                   (i32.const 4096))
       (then
-        (if (i32.eqz (call $code_write_is_code (local.get $ga))) (then (return)))))
+        (if (i32.eqz (call $code_page_test (local.get $ga))) (then (return)))))
     ;; Multi-page spans need every page in between retired, not just the two
     ;; ends -- main fixed that with its own $invalidate_code_range, and the
     ;; page-compile one below already walks page by page, so that fix arrives
     ;; here as a property of the range walk rather than a second function.
     (call $invalidate_code_range (local.get $ga) (local.get $len)))
+
+  ;; The slow half of a single-page $gsN store, reached only when the page's
+  ;; CODE_PAGE_BITMAP bit is set: the $gsN helpers test the bit inline (one
+  ;; byte load and a few shifts/masks) so the ~every-store common case -- a data
+  ;; page, including every push/call to the stack -- never makes a call. The
+  ;; per-thread page index then decides, byte-exactly, whether anything dies.
+  (func $code_write_hit (param $ga i32) (param $len i32)
+    (if (i32.eqz (global.get $exe_size_of_image)) (then (return)))
+    (call $invalidate_code_range (local.get $ga) (local.get $len)))
+
   (func $gs32 (param $ga i32) (param $v i32)
-    (local $wa i32) (local $end_wa i32)
-    (local.set $wa (call $g2w (local.get $ga)))
-    (call $invalidate_code_write (local.get $ga) (i32.const 4))
+    (local $wa i32) (local $end_wa i32) (local $g2w_wa i32) (local $epoch i32) (local $tries i32)
+    (local.set $wa (g2w-fast (local.get $ga)))
     (if (i32.le_u (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFFC))
-      (then (i32.store (local.get $wa) (local.get $v)) (return)))
+      (then
+        (if (i32.and ;; inline $code_page_test: slot = (ga>>12 ^ ga>>28 ^ (ga>>30)<<15) & 0xFFFF
+              (i32.load8_u (i32.add (global.get $CODE_PAGE_BITMAP)
+                (i32.and (i32.xor (i32.xor (i32.shr_u (local.get $ga) (i32.const 15))
+                                           (i32.shr_u (local.get $ga) (i32.const 31)))
+                                  (i32.shl (i32.shr_u (local.get $ga) (i32.const 30)) (i32.const 12)))
+                         (i32.const 0x1FFF))))
+              (i32.shl (i32.const 1)
+                (i32.and (i32.xor (i32.shr_u (local.get $ga) (i32.const 12))
+                                  (i32.shr_u (local.get $ga) (i32.const 28)))
+                         (i32.const 7))))
+          (then (call $code_write_hit (local.get $ga) (i32.const 4))))
+        (i32.store (local.get $wa) (local.get $v))
+        (call $page_watch_write_one (local.get $wa)) (return)))
+    ;; Sampled before $invalidate_code_write: its page-watch walk translates
+    ;; the bytes too, and a fault filter it runs can move the page $wa names.
+    (local.set $epoch (global.get $fault_sync_epoch))
+    (call $invalidate_code_write (local.get $ga) (i32.const 4))
     (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 3))))
-    (if (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 3)))
-      (then (i32.store (local.get $wa) (local.get $v)) (return)))
-    (i32.store8 (local.get $wa) (local.get $v))
-    (i32.store8
-      (call $g2w (i32.add (local.get $ga) (i32.const 1)))
-      (i32.shr_u (local.get $v) (i32.const 8)))
-    (i32.store8
-      (call $g2w (i32.add (local.get $ga) (i32.const 2)))
-      (i32.shr_u (local.get $v) (i32.const 16)))
-    (i32.store8 (local.get $end_wa) (i32.shr_u (local.get $v) (i32.const 24))))
+    (if (i32.and (i32.eq (local.get $epoch) (global.get $fault_sync_epoch))
+          (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 3))))
+      (then (i32.store (local.get $wa) (local.get $v))
+        (call $page_watch_write (local.get $wa) (i32.const 4)) (return)))
+    ;; Byte by byte with fresh translations, again whenever a fault filter ran
+    ;; during the pass: it may have decommitted a page already written, and the
+    ;; restarted x86 store would write every byte again. Bounded; a filter that
+    ;; keeps both pages committed (CTStream's two-page window) settles at once.
+    (block $stored (loop $again
+      (local.set $epoch (global.get $fault_sync_epoch))
+      (local.set $wa (call $g2w (local.get $ga)))
+      (i32.store8 (local.get $wa) (local.get $v))
+      (i32.store8
+        (call $g2w (i32.add (local.get $ga) (i32.const 1)))
+        (i32.shr_u (local.get $v) (i32.const 8)))
+      (i32.store8
+        (call $g2w (i32.add (local.get $ga) (i32.const 2)))
+        (i32.shr_u (local.get $v) (i32.const 16)))
+      (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 3))))
+      (i32.store8 (local.get $end_wa) (i32.shr_u (local.get $v) (i32.const 24)))
+      (br_if $stored (i32.eq (local.get $epoch) (global.get $fault_sync_epoch)))
+      (local.set $tries (i32.add (local.get $tries) (i32.const 1)))
+      (br_if $again (i32.lt_u (local.get $tries) (i32.const 4)))))
+    (call $page_watch_write_one (local.get $wa))
+    (call $page_watch_write_one (local.get $end_wa)))
+  ;; Common 64-bit guest store for x87/MMX. Translate once for the ordinary
+  ;; same-page case; sparse guest neighbors need not be WASM neighbors.
+  (func $gs64 (param $ga i32) (param $v i64)
+    (local $wa i32) (local $end_wa i32) (local $g2w_wa i32) (local $epoch i32) (local $tries i32)
+    (local.set $wa (g2w-fast (local.get $ga)))
+    (if (i32.le_u (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFF8))
+      (then
+        (if (i32.and ;; inline $code_page_test: slot = (ga>>12 ^ ga>>28 ^ (ga>>30)<<15) & 0xFFFF
+              (i32.load8_u (i32.add (global.get $CODE_PAGE_BITMAP)
+                (i32.and (i32.xor (i32.xor (i32.shr_u (local.get $ga) (i32.const 15))
+                                           (i32.shr_u (local.get $ga) (i32.const 31)))
+                                  (i32.shl (i32.shr_u (local.get $ga) (i32.const 30)) (i32.const 12)))
+                         (i32.const 0x1FFF))))
+              (i32.shl (i32.const 1)
+                (i32.and (i32.xor (i32.shr_u (local.get $ga) (i32.const 12))
+                                  (i32.shr_u (local.get $ga) (i32.const 28)))
+                         (i32.const 7))))
+          (then (call $code_write_hit (local.get $ga) (i32.const 8))))
+        (i64.store (local.get $wa) (local.get $v))
+        (call $page_watch_write_one (local.get $wa)) (return)))
+    (local.set $epoch (global.get $fault_sync_epoch))
+    (call $invalidate_code_write (local.get $ga) (i32.const 8))
+    (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 7))))
+    (if (i32.and (i32.eq (local.get $epoch) (global.get $fault_sync_epoch))
+          (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 7))))
+      (then (i64.store (local.get $wa) (local.get $v))
+        (call $page_watch_write (local.get $wa) (i32.const 8)) (return)))
+    ;; Both halves again if a fault filter ran between them (see $gs32).
+    (block $stored (loop $again
+      (local.set $epoch (global.get $fault_sync_epoch))
+      (call $gs32 (local.get $ga) (i32.wrap_i64 (local.get $v)))
+      (call $gs32 (i32.add (local.get $ga) (i32.const 4))
+        (i32.wrap_i64 (i64.shr_u (local.get $v) (i64.const 32))))
+      (br_if $stored (i32.eq (local.get $epoch) (global.get $fault_sync_epoch)))
+      (local.set $tries (i32.add (local.get $tries) (i32.const 1)))
+      (br_if $again (i32.lt_u (local.get $tries) (i32.const 4))))))
+  ;; 128-bit guest access for SSE (MOVAPS/MOVUPS and every packed memory
+  ;; operand). A same-page access is one translation and one v128 op; a
+  ;; page-crossing operand goes lane by lane through $gl32/$gs32, since
+  ;; adjacent sparse guest pages need not be adjacent in WASM memory.
+  (func $gl128 (param $ga i32) (result v128)
+    (local $wa i32) (local $g2w_wa i32)
+    (if (i32.le_u (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFF0))
+      (then
+        (local.set $wa (g2w-fast (local.get $ga)))
+        ;; A miss has already been reported once by $g2w; every lane of an
+        ;; unmapped page reads as the sentinel's zero, as four $gl32s would.
+        ;; The sentinel is only four bytes, so it must not take a v128.load.
+        (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
+          (then (return (v128.const i32x4 0 0 0 0))))
+        (return (v128.load (local.get $wa)))))
+    (i32x4.replace_lane 3
+      (i32x4.replace_lane 2
+        (i32x4.replace_lane 1
+          (i32x4.replace_lane 0 (i32x4.splat (i32.const 0))
+            (call $gl32 (local.get $ga)))
+          (call $gl32 (i32.add (local.get $ga) (i32.const 4))))
+        (call $gl32 (i32.add (local.get $ga) (i32.const 8))))
+      (call $gl32 (i32.add (local.get $ga) (i32.const 12)))))
+  (func $gs128 (param $ga i32) (param $v v128)
+    (local $wa i32) (local $g2w_wa i32) (local $epoch i32) (local $tries i32)
+    (if (i32.le_u (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFF0))
+      (then
+        (local.set $wa (g2w-fast (local.get $ga)))
+        ;; Unmapped: the miss is reported, and the write goes nowhere.
+        (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL)) (then (return)))
+        (if (i32.and ;; inline $code_page_test: slot = (ga>>12 ^ ga>>28 ^ (ga>>30)<<15) & 0xFFFF
+              (i32.load8_u (i32.add (global.get $CODE_PAGE_BITMAP)
+                (i32.and (i32.xor (i32.xor (i32.shr_u (local.get $ga) (i32.const 15))
+                                           (i32.shr_u (local.get $ga) (i32.const 31)))
+                                  (i32.shl (i32.shr_u (local.get $ga) (i32.const 30)) (i32.const 12)))
+                         (i32.const 0x1FFF))))
+              (i32.shl (i32.const 1)
+                (i32.and (i32.xor (i32.shr_u (local.get $ga) (i32.const 12))
+                                  (i32.shr_u (local.get $ga) (i32.const 28)))
+                         (i32.const 7))))
+          (then (call $code_write_hit (local.get $ga) (i32.const 16))))
+        (v128.store (local.get $wa) (local.get $v))
+        (call $page_watch_write_one (local.get $wa)) (return)))
+    ;; Every lane again if a fault filter ran meanwhile (see $gs32).
+    (block $stored (loop $again
+      (local.set $epoch (global.get $fault_sync_epoch))
+      (call $gs32 (local.get $ga) (i32x4.extract_lane 0 (local.get $v)))
+      (call $gs32 (i32.add (local.get $ga) (i32.const 4)) (i32x4.extract_lane 1 (local.get $v)))
+      (call $gs32 (i32.add (local.get $ga) (i32.const 8)) (i32x4.extract_lane 2 (local.get $v)))
+      (call $gs32 (i32.add (local.get $ga) (i32.const 12)) (i32x4.extract_lane 3 (local.get $v)))
+      (br_if $stored (i32.eq (local.get $epoch) (global.get $fault_sync_epoch)))
+      (local.set $tries (i32.add (local.get $tries) (i32.const 1)))
+      (br_if $again (i32.lt_u (local.get $tries) (i32.const 4))))))
   (func $gs16 (param $ga i32) (param $v i32)
-    (local $wa i32) (local $end_wa i32)
-    (local.set $wa (call $g2w (local.get $ga)))
-    (call $invalidate_code_write (local.get $ga) (i32.const 2))
+    (local $wa i32) (local $end_wa i32) (local $g2w_wa i32) (local $epoch i32) (local $tries i32)
+    (local.set $wa (g2w-fast (local.get $ga)))
     (if (i32.ne (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFFF))
-      (then (i32.store16 (local.get $wa) (local.get $v)) (return)))
+      (then
+        (if (i32.and ;; inline $code_page_test: slot = (ga>>12 ^ ga>>28 ^ (ga>>30)<<15) & 0xFFFF
+              (i32.load8_u (i32.add (global.get $CODE_PAGE_BITMAP)
+                (i32.and (i32.xor (i32.xor (i32.shr_u (local.get $ga) (i32.const 15))
+                                           (i32.shr_u (local.get $ga) (i32.const 31)))
+                                  (i32.shl (i32.shr_u (local.get $ga) (i32.const 30)) (i32.const 12)))
+                         (i32.const 0x1FFF))))
+              (i32.shl (i32.const 1)
+                (i32.and (i32.xor (i32.shr_u (local.get $ga) (i32.const 12))
+                                  (i32.shr_u (local.get $ga) (i32.const 28)))
+                         (i32.const 7))))
+          (then (call $code_write_hit (local.get $ga) (i32.const 2))))
+        (i32.store16 (local.get $wa) (local.get $v))
+        (call $page_watch_write_one (local.get $wa)) (return)))
+    ;; Sampled before $invalidate_code_write: its page-watch walk translates
+    ;; the bytes too, and a fault filter it runs can move the page $wa names.
+    (local.set $epoch (global.get $fault_sync_epoch))
+    (call $invalidate_code_write (local.get $ga) (i32.const 2))
     (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 1))))
-    (if (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 1)))
-      (then (i32.store16 (local.get $wa) (local.get $v)) (return)))
-    (i32.store8 (local.get $wa) (local.get $v))
-    (i32.store8 (local.get $end_wa) (i32.shr_u (local.get $v) (i32.const 8))))
+    (if (i32.and (i32.eq (local.get $epoch) (global.get $fault_sync_epoch))
+          (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 1))))
+      (then (i32.store16 (local.get $wa) (local.get $v))
+        (call $page_watch_write (local.get $wa) (i32.const 2)) (return)))
+    ;; As $gs32.
+    (block $stored (loop $again
+      (local.set $epoch (global.get $fault_sync_epoch))
+      (local.set $wa (call $g2w (local.get $ga)))
+      (i32.store8 (local.get $wa) (local.get $v))
+      (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 1))))
+      (i32.store8 (local.get $end_wa) (i32.shr_u (local.get $v) (i32.const 8)))
+      (br_if $stored (i32.eq (local.get $epoch) (global.get $fault_sync_epoch)))
+      (local.set $tries (i32.add (local.get $tries) (i32.const 1)))
+      (br_if $again (i32.lt_u (local.get $tries) (i32.const 4)))))
+    (call $page_watch_write_one (local.get $wa))
+    (call $page_watch_write_one (local.get $end_wa)))
   (func $gs8 (param $ga i32) (param $v i32)
-    (local $wa i32)
-    (local.set $wa (call $g2w (local.get $ga)))
-    (call $invalidate_code_write (local.get $ga) (i32.const 1))
-    (i32.store8 (local.get $wa) (local.get $v)))
+    (local $wa i32) (local $g2w_wa i32)
+    (local.set $wa (g2w-fast (local.get $ga)))
+    (if (i32.and ;; inline $code_page_test: slot = (ga>>12 ^ ga>>28 ^ (ga>>30)<<15) & 0xFFFF
+              (i32.load8_u (i32.add (global.get $CODE_PAGE_BITMAP)
+                (i32.and (i32.xor (i32.xor (i32.shr_u (local.get $ga) (i32.const 15))
+                                           (i32.shr_u (local.get $ga) (i32.const 31)))
+                                  (i32.shl (i32.shr_u (local.get $ga) (i32.const 30)) (i32.const 12)))
+                         (i32.const 0x1FFF))))
+              (i32.shl (i32.const 1)
+                (i32.and (i32.xor (i32.shr_u (local.get $ga) (i32.const 12))
+                                  (i32.shr_u (local.get $ga) (i32.const 28)))
+                         (i32.const 7))))
+      (then (call $code_write_hit (local.get $ga) (i32.const 1))))
+    (i32.store8 (local.get $wa) (local.get $v))
+    (call $page_watch_write_one (local.get $wa)))
 
   ;; ============================================================
   ;; LAZY FLAGS
@@ -524,6 +863,29 @@
   (func $set_flags_shift (param $r i32) (param $cf i32)
     (global.set $flag_op (i32.const 7)) (global.set $flag_sign_shift (i32.const 31)) (global.set $flag_res (local.get $r))
     (global.set $flag_b (local.get $cf)))
+  ;; ROL/ROR/RCL/RCR write only CF and OF (count != 0); ZF, SF and PF keep
+  ;; whatever the previous instruction left. Code that tests a compare across
+  ;; a rotate depends on it: Indeo 4's generated VLC reader in ir41_32.dll does
+  ;; `cmp al,0x10 / ror eax,0x10 / jz`, and with the rotate's result written
+  ;; as the ZF source it never took the branch and decoded forever. So the
+  ;; record goes to exact raw mode (9), the one that stores each flag
+  ;; independently -- the same shape SAHF and POPF produce. The SF source has
+  ;; bits 7, 15 and 31 all set because the 8- and 16-bit shift handlers
+  ;; rewrite $flag_sign_shift to 7 / 15 after $do_shift returns.
+  (func $set_flags_rotate (param $cf i32) (param $of i32)
+    (local $zf i32) (local $sf i32) (local $pf i32)
+    (local.set $zf (call $get_zf))
+    (local.set $sf (call $get_sf))
+    (local.set $pf (call $get_pf))
+    (global.set $flag_op (i32.const 9))
+    (global.set $flag_sign_shift (i32.const 31))
+    (global.set $flag_a (i32.or (i32.and (local.get $cf) (i32.const 1))
+                                (i32.shl (local.get $pf) (i32.const 1))))
+    (global.set $flag_b (i32.and (local.get $of) (i32.const 1)))
+    (global.set $flag_res
+      (if (result i32) (local.get $zf) (then (i32.const 0))
+        (else (if (result i32) (local.get $sf) (then (i32.const 0x80008081))
+          (else (i32.const 1)))))))
   (func $set_flags_inc (param $a i32) (param $r i32)
     (global.set $saved_cf (call $get_cf))  ;; INC preserves CF
     (global.set $flag_op (i32.const 4)) (global.set $flag_sign_shift (i32.const 31))

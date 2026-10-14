@@ -154,18 +154,74 @@ function testJezzBall(outDir) {
       (r, g, b) => r < 80 && g < 80 && b > 150) > 100,
   'JezzBall should render both halves of the live wall builder');
   console.log('PASS  Win16 JezzBall grows a wall in the live arena');
+
+  // WEP4UTIL pumps the application's OWL instance thunk with the DLL's DS.
+  // The NE loader must preserve thunk AX at the exported EXE prologue.
+  const scores = runGame('wep16_jezzball',
+    '50:click:45:50,100:click:90:132,180:dump-windows:scores,' +
+    '200:click:330:368,260:dump-windows:resumed,300:stop', 310);
+  assertHealthy(scores, 'JezzBall High Scores');
+  assert.match(scores, /window:scores .*visible=true.*title="Jezz Ball High Scores"/,
+    'ordinary menu input must open the high-score dialog');
+  assert.doesNotMatch(scores, /window:resumed .*visible=true.*title="Jezz Ball High Scores"/,
+    'the OK button must dismiss the high-score dialog');
+  assert.match(scores, /window:resumed .*enabled=true.*title="JezzBall"/,
+    'dismissal must restore the playable main window');
+  console.log('PASS  Win16 JezzBall opens and dismisses DLL High Scores');
+
+  const gameOver = runGame('wep16_jezzball',
+    '50:click:45:50,100:click:90:132,200:click:330:368,' +
+    '300:click:280:200,1000:click:160:275,15000:dump-windows:score-entry,' +
+    '15100:keypress:65,15101:keypress:66,15200:click:315:229,' +
+    '16000:dump-windows:submitted,17000:click:330:368,' +
+    '18000:dump-windows:finished,19000:stop', 19100);
+  assertHealthy(gameOver, 'JezzBall game over');
+  assert.strictEqual((gameOver.match(/window:score-entry .*visible=true.*title="Jezz Ball High Score"/g) || []).length, 1,
+    'game over must keep one score-entry dialog while timers continue');
+  assert.doesNotMatch(gameOver, /Runtime error 202/,
+    'modal timer reentrancy must not overflow the guest stack');
+  assert.match(gameOver, /window:submitted .*visible=true.*title="Jezz Ball High Scores"/,
+    'ordinary name input and OK must reach the score list');
+  assert.doesNotMatch(gameOver, /window:finished .*visible=true.*title="Jezz Ball High Scores?"/,
+    'the score flow must dismiss completely');
+  console.log('PASS  Win16 JezzBall game over, name submission and score dismissal');
 }
 
+// A left click in the chamber slides the gate (the game's Help says so), so
+// this is an input A/B: two runs on the 20 ms batch clock, identical until the
+// click at batch 430, compared at 520. With no click the balls still move (the
+// chamber is live) and the gate stays put, so a ball heading left bounces off
+// it and stays in the right chamber. With the click the gate slides down, the
+// passage opens at the bottom and that ball goes through into the left
+// chamber -- which is the game. At this clock it draws one frame per WM_TIMER,
+// ~17 a guest second (docs/re-notes/wep16-maxwell.md).
 function testMaxwell(outDir) {
-  const before = path.join(outDir, 'maxwell-before.png');
-  const after = path.join(outDir, 'maxwell-after.png');
-  const output = runGame('wep16_maxwell',
-    `50:png:${before},80:sleep-ms:1000,180:png:${after},210:stop`,
-    240, ['--real-ticks']);
-  assertHealthy(output, "Maxwell's Maniac");
-  assert(changedPixels(before, after, { x: 45, y: 45, w: 450, h: 315 }) > 250,
+  const shot = (arm, batch) => path.join(outDir, `maxwell-${arm}-${batch}.png`);
+  const arm = (name, input) => {
+    const output = runGame('wep16_maxwell',
+      `420:png:${shot(name, 420)},520:png:${shot(name, 520)}${input},540:stop`,
+      560, ['--tick-ms-per-batch=20']);
+    assertHealthy(output, "Maxwell's Maniac");
+  };
+  arm('none', '');
+  arm('click', ',430:mousedown:400:150,432:mouseup:400:150');
+  const chamber = { x: 45, y: 100, w: 480, h: 260 };
+  const gate = { x: 268, y: 100, w: 26, h: 260 };
+  assert.strictEqual(changedPixels(shot('none', 420), shot('click', 420), chamber), 0,
+    'both arms must show the same chamber before the click');
+  assert(changedPixels(shot('none', 420), shot('none', 520), chamber) > 250,
     "Maxwell's Maniac should keep its live balls moving through the chamber");
-  console.log("PASS  Win16 Maxwell's Maniac runs its live chamber simulation");
+  const inGate = changedPixels(shot('none', 520), shot('click', 520), gate);
+  assert(inGate > 1000, `the click should slide the gate (changed=${inGate})`);
+  // Red ball pixels in the lower-left chamber, clear of the red walls.
+  // The gate column starts at x 274; the ball is at x 265..272, y 314..324.
+  const leftLower = { x: 150, y: 300, w: 124, h: 30 };
+  const ball = (r, g, b) => r > 180 && g < 120 && b < 120;
+  const through = matchingPixels(shot('click', 520), leftLower, ball);
+  const blocked = matchingPixels(shot('none', 520), leftLower, ball);
+  assert(through > 30 && blocked === 0,
+    `the opened gate should let a ball into the left chamber (click=${through}, none=${blocked})`);
+  console.log(`PASS  Win16 Maxwell's Maniac: a click slides the gate (${inGate} px) and a ball passes`);
 }
 
 function testTicTacDrop(outDir) {
@@ -194,6 +250,33 @@ function testTicTacDrop(outDir) {
   console.log('PASS  Win16 Tic Tac Drop enters the board and accepts a piece drag');
 }
 
+// The computer's turn. A red piece released over a column top drops in, the
+// status says "Computer's turn >", and the computer answers from a VB Timer
+// that the form never enables in code: the design-time Enabled default, which
+// ThunderTimer sets on WM_NCCREATE. Win16 CreateWindow used to skip that
+// message, so the timer never ran and the game waited forever
+// (docs/re-notes/wep16-tictacdp.md).
+function testTicTacDropComputerReply(outDir) {
+  const before = path.join(outDir, 'tictacdrop-reply-before.png');
+  const after = path.join(outDir, 'tictacdrop-reply-after.png');
+  const output = runGame('wep16_tictacdp',
+    `50:mousedown:320:240,51:mouseup:320:240,110:png:${before},` +
+    `130:mousedown:168:151,131:mousemove:180:140,132:mousemove:195:130,` +
+    `133:mousemove:210:112,134:mouseup:210:112,800:png:${after},820:stop`, 860);
+  assertHealthy(output, 'Tic Tac Drop computer reply');
+  assert.match(output,
+    /SetWindowText\] "Computer's turn >"[\s\S]*SetWindowText\] "< Player 1's turn"/,
+    'after the red drop the turn must pass to the computer and come back');
+  const bottomRow = { x: 195, y: 365, w: 255, h: 28 };
+  const blue = (r, g, b) => r < 80 && g < 80 && b > 150;
+  const red = (r, g, b) => r > 180 && g < 80 && b < 80;
+  assert.strictEqual(matchingPixels(before, bottomRow, blue), 0, 'the board starts empty');
+  assert(matchingPixels(after, bottomRow, red) > 20, 'the red piece must land on the bottom row');
+  assert(matchingPixels(after, bottomRow, blue) > 20,
+    'the computer must answer with a blue piece on the bottom row');
+  console.log('PASS  Win16 Tic Tac Drop computer answers the player\'s drop');
+}
+
 const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'win16-wep4-gameplay-'));
 try {
   const only = process.argv[2] || '';
@@ -204,6 +287,7 @@ try {
   if (!only || only === 'jezzball') testJezzBall(outDir);
   if (!only || only === 'maxwell') testMaxwell(outDir);
   if (!only || only === 'tictacdrop') testTicTacDrop(outDir);
+  if (!only || only === 'tictacdrop' || only === 'tictacdrop-reply') testTicTacDropComputerReply(outDir);
 } finally {
   fs.rmSync(outDir, { recursive: true, force: true });
 }

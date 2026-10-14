@@ -20,7 +20,7 @@
 // colour and depth attachments and doing that mid-frame throws away whatever the
 // guest had already drawn.
 const assert = require('assert');
-const { OpenGLHostBridge } = require('../lib/gl-compat');
+const { OpenGLHostBridge, CALL_INDEX } = require('../lib/gl-compat');
 
 let passed = 0;
 const check = (name, fn) => { fn(); passed++; console.log(`PASS  ${name}`); };
@@ -35,7 +35,10 @@ class Backend {
   }
   getPresentationSurface() { return this.presentation; }
   present() { this.presents++; return this.presentation; }
-  resetRenderTargets(width, height) {
+  setCapability(cap, enabled) { this.stencilEnabled = [cap, enabled]; }
+  setColorMask(...values) { this.colorMask = values; }
+  resetRenderTargets(width, height, depth) {
+    assert.deepStrictEqual(depth, {width,height,bits:24}, 'resized GL drawable retains depth/stencil storage');
     if (this.failNextReset) {
       this.failNextReset = false;
       // The real backend stages the new allocation and restores the old one on
@@ -56,7 +59,7 @@ function makeBridge(backend, win) {
   });
   const context = {
     handle: 1, hwnd: 0x10001, win, backend,
-    frontend: { flushPendingDraw() {} },
+    frontend: { flushPendingDraw() {}, applyStencil() {}, enabled: new Set(), colorMask: [true,false,true,false] },
     layer: { canvas: backend.getPresentationSurface(), backend, writeSeq: 0 },
   };
   bridge.contexts.set(1, context);
@@ -77,6 +80,7 @@ check('a window that grew after createContext gets a drawable that grew with it'
   assert.deepStrictEqual(backend.resets, [[940, 734]],
     'the drawable is resized to the window client area');
   assert.deepStrictEqual([backend.canvas.width, backend.canvas.height], [940, 734]);
+  assert.deepStrictEqual(backend.colorMask, [true,false,true,false], 'resize restores guest color write mask');
   assert.strictEqual(context.layer.canvas, backend.getPresentationSurface(),
     'the composited layer points at the new presentation surface, not the freed one');
 
@@ -94,7 +98,7 @@ check('the resize follows the present, so the published frame is never discarded
   const { bridge } = makeBridge(backend, win);
   backend.present = function () { order.push('present'); this.presents++; return this.presentation; };
   const reset = backend.resetRenderTargets.bind(backend);
-  backend.resetRenderTargets = (w, h) => { order.push('reset'); reset(w, h); };
+  backend.resetRenderTargets = (w, h, depth) => { order.push('reset'); reset(w, h, depth); };
 
   bridge.present();
   assert.deepStrictEqual(order, ['present', 'reset'],
@@ -132,6 +136,42 @@ check('a backend without resetRenderTargets still presents', () => {
   const { bridge } = makeBridge(backend, { w: 940, h: 734, clientRect: { w: 940, h: 734 } });
   assert.strictEqual(bridge.present(), 1);
   assert.strictEqual(backend.presents, 1);
+});
+
+check('software viewport queries fill all four words and retain per-context state', () => {
+  const memory = new ArrayBuffer(4096), view = new DataView(memory);
+  const bridge = new OpenGLHostBridge({
+    backend: 'software', getMemory: () => memory,
+    exports: { guest_to_wasm: p => p, gl_sw_set_enabled() {}, gl_sw_set_default_size() {} },
+    renderer: { windows: { 1: { w: 800, h: 600 }, 2: { w: 320, h: 240 } } },
+  });
+  const a = bridge.createContext(1), b = bridge.createContext(2);
+  const stack = 64, output = 256, sentinel = 0x5a5a5a5a;
+  function call(name, args) {
+    args.forEach((value, i) => view.setInt32(stack + 4 + i * 4, value, true));
+    return bridge.call(CALL_INDEX[name], stack, 0);
+  }
+  function query(expected) {
+    for (let i = -1; i < 5; i++) view.setInt32(output + i * 4, sentinel, true);
+    call('glGetIntegerv', [0x0BA2, output]);
+    assert.deepStrictEqual(Array.from(new Int32Array(memory, output, 4)), expected);
+    assert.strictEqual(view.getInt32(output - 4, true), sentinel);
+    assert.strictEqual(view.getInt32(output + 16, true), sentinel);
+  }
+  bridge.current = a;
+  query([0, 0, 800, 600]);
+  call('glViewport', [-12, 7, 640, 480]);
+  query([-12, 7, 640, 480]);
+  call('glViewport', [0, 0, -1, 400]);
+  query([-12, 7, 640, 480]);
+  assert.strictEqual(call('glGetError', []), 0x0501);
+  assert.strictEqual(call('glGetError', []), 0);
+  bridge.current = b;
+  query([0, 0, 320, 240]);
+  bridge.current = a;
+  query([-12, 7, 640, 480]);
+  call('glViewport', [3, 4, 0, 0]);
+  query([3, 4, 0, 0]);
 });
 
 console.log(`\n${passed}/${passed} checks passed`);

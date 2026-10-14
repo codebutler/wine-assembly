@@ -27,6 +27,40 @@ const { bootRenderHarness } = require('./render-helper');
       (local.get $handle) (local.get $info) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_mmio3")
+        (param $api i32) (param $a i32) (param $b i32) (param $c i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
+    (if (i32.eq (local.get $api) (i32.const 0))
+      (then (call $handle_mmioOpenA (local.get $a) (local.get $b) (local.get $c)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $api) (i32.const 1))
+      (then (call $handle_mmioSetInfo (local.get $a) (local.get $b) (local.get $c)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $api) (i32.const 2))
+      (then (call $handle_mmioSeek (local.get $a) (local.get $b) (local.get $c)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $api) (i32.const 3))
+      (then (call $handle_mmioRead (local.get $a) (local.get $b) (local.get $c)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $api) (i32.const 4))
+      (then (call $handle_mmioAdvance (local.get $a) (local.get $b) (local.get $c)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (if (i32.eq (local.get $api) (i32.const 5))
+      (then (call $handle_mmioClose (local.get $a) (local.get $b) (local.get $c)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
+    (i32.load offset=0 (global.get $reg_base)))
+  ;; mmioDescend(h, lpck, lpckParent, wFlags) and mmioAscend(h, lpck, 0).
+  (func (export "test_mmio_descend")
+        (param $h i32) (param $ck i32) (param $parent i32) (param $flags i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
+    (call $handle_mmioDescend (local.get $h) (local.get $ck) (local.get $parent)
+      (local.get $flags) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_mmio_ascend") (param $h i32) (param $ck i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
+    (call $handle_mmioAscend (local.get $h) (local.get $ck) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_mmio_set_call_state") (param $esp_value i32) (param $thunk i32)
     (i32.store offset=16 (global.get $reg_base) (local.get $esp_value))
     (global.set $current_thunk_eip (local.get $thunk))
@@ -95,7 +129,7 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(setBuffer(0x70000107, 0, 0x4000), 0,
     'Alpha Centauri 16 KiB internal-buffer request succeeds');
   const info = wat.guest_alloc(72);
-  assert.strictEqual(wat.test_call_mmioGetInfo(0x70000107, info), 0);
+  assert.strictEqual(wat.test_call_mmioGetInfo(0x70000107, info, 0), 0);
   const infoWa = (info - imageBase + guestBase) >>> 0;
   const view = new DataView(memory.buffer);
   assert.strictEqual(view.getUint32(infoWa + 20, true), 0x4000,
@@ -105,7 +139,7 @@ const { bootRenderHarness } = require('./render-helper');
   const callerBuffer = wat.guest_alloc(256);
   assert.strictEqual(setBuffer(0x70000107, callerBuffer, 256), 0,
     'an application-owned buffer succeeds');
-  assert.strictEqual(wat.test_call_mmioGetInfo(0x70000107, info), 0);
+  assert.strictEqual(wat.test_call_mmioGetInfo(0x70000107, info, 0), 0);
   assert.strictEqual(view.getUint32(infoWa + 20, true), 256,
     'mmioGetInfo reports a caller-owned buffer size');
   assert.strictEqual(view.getUint32(infoWa + 24, true), callerBuffer,
@@ -121,8 +155,11 @@ const { bootRenderHarness } = require('./render-helper');
   const lazyEsp = 0x30000;
   const lazyThunk = 0x0badf00d;
   wat.test_mmio_set_call_state(lazyEsp, lazyThunk);
-  assert.strictEqual(wat.test_mmio_lazy_read(0x70000120, lazyBuffer, lazyPayload.length), 0,
-    'a pending provider read does not masquerade as bytes read');
+  // IO_WAIT is a suspended call, not an API return. The shared read handler
+  // leaves EAX untouched until the retry completes; only then is it a count.
+  wat.set_eax(0x12345678);
+  assert.strictEqual(wat.test_mmio_lazy_read(0x70000120, lazyBuffer, lazyPayload.length), 0x12345678,
+    'a pending provider read does not publish a completed byte count');
   assert.strictEqual(wat.get_yield_reason(), 12,
     'a pending mmioRead parks on IO_WAIT');
   assert.strictEqual(wat.test_mmio_esp() >>> 0, lazyEsp,
@@ -148,10 +185,10 @@ const { bootRenderHarness } = require('./render-helper');
   const bufferedInfo = wat.guest_alloc(72) >>> 0;
   const bufferedInfoWa = (bufferedInfo - imageBase + guestBase) >>> 0;
   assert.strictEqual(setBuffer(bufferedHandle, bufferedStorage, lazyPayload.length), 0);
-  assert.strictEqual(wat.test_call_mmioGetInfo(bufferedHandle, bufferedInfo), 0);
+  assert.strictEqual(wat.test_call_mmioGetInfo(bufferedHandle, bufferedInfo, 0), 0);
   wat.test_mmio_set_call_state(lazyEsp, lazyThunk);
   assert.strictEqual(wat.test_mmio_lazy_advance(bufferedHandle, bufferedInfo), 0,
-    'a pending buffered refill retains the MMIO success contract');
+    'buffered refill leaves its internal result at zero while suspended');
   assert.strictEqual(wat.get_yield_reason(), 12,
     'a pending mmioAdvance parks on IO_WAIT');
   assert.strictEqual(wat.test_mmio_esp() >>> 0, lazyEsp,
@@ -176,7 +213,124 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(bufferedReads, 2,
     'one pending mmioAdvance refill is retried exactly once');
 
-  console.log('PASS: mmio FOURCC conversion, buffer management, and lazy read/refill retry');
+  // Memory files (fccIOProc FOURCC_MEM, NULL filename). SimGolf's sound.dll
+  // opens one over its own 128 KB malloc and then writes through the
+  // pchBuffer mmioGetInfo hands back, wrapping at 0x20000. That pointer has
+  // to be the caller's buffer at the caller's size, not a default 8 KB block.
+  const FOURCC_MEM = 0x204d454d;
+  const MMIO_CREATE = 0x1000, MMIO_READWRITE = 2, MMIO_DIRTY = 0x10000000;
+  const toWa = guest => (guest - imageBase + guestBase) >>> 0;
+  const newMemInfo = (buffer, size) => {
+    const guest = wat.guest_alloc(72) >>> 0;
+    bytes.fill(0, toWa(guest), toWa(guest) + 72);
+    view.setUint32(toWa(guest) + 4, FOURCC_MEM, true);
+    view.setUint32(toWa(guest) + 20, size, true);
+    view.setUint32(toWa(guest) + 24, buffer, true);
+    return guest;
+  };
+  const ringSize = 0x20000;
+  const ring = wat.guest_alloc(ringSize) >>> 0;
+  const openInfo = newMemInfo(ring, ringSize);
+  const memHandle = wat.test_mmio3(0, 0, openInfo, MMIO_CREATE | MMIO_READWRITE) >>> 0;
+  assert.ok(memHandle !== 0 && memHandle < 0x70000000,
+    `a memory file opens without the filesystem (got 0x${memHandle.toString(16)})`);
+  assert.strictEqual(view.getUint32(toWa(openInfo) + 12, true), 0, 'wErrorRet is clear');
+  const memInfo = wat.guest_alloc(72) >>> 0;
+  assert.strictEqual(wat.test_call_mmioGetInfo(memHandle, memInfo, 0), 0);
+  assert.strictEqual(view.getUint32(toWa(memInfo) + 24, true), ring,
+    'mmioGetInfo hands back the caller\'s buffer');
+  assert.strictEqual(view.getUint32(toWa(memInfo) + 20, true), ringSize,
+    'at the caller\'s size, not the 8 KB default');
+  assert.strictEqual(view.getUint32(toWa(memInfo) + 36, true), ring + ringSize,
+    'pchEndWrite spans the whole buffer');
+  assert.strictEqual(view.getUint32(toWa(memInfo) + 32, true), ring,
+    'a created memory file starts empty');
+  for (let i = 0; i < 6; i++) wat.guest_write8(ring + i, 0x41 + i);
+  view.setUint32(toWa(memInfo) + 28, ring + 6, true);
+  view.setUint32(toWa(memInfo), view.getUint32(toWa(memInfo), true) | MMIO_DIRTY, true);
+  assert.strictEqual(wat.test_mmio3(1, memHandle, memInfo, 0), 0, 'mmioSetInfo');
+  assert.strictEqual(wat.test_mmio3(2, memHandle, 1, 0), 1, 'mmioSeek SEEK_SET inside the data');
+  assert.strictEqual(wat.test_mmio3(2, memHandle, 0, 2), 6, 'SEEK_END is the dirtied length');
+  assert.strictEqual(wat.test_mmio3(2, memHandle, 2, 0), 2);
+  const readBack = wat.guest_alloc(16) >>> 0;
+  assert.strictEqual(wat.test_mmio3(3, memHandle, readBack, 16), 4,
+    'mmioRead stops at the end of the data');
+  assert.deepStrictEqual([0, 1, 2, 3].map(i => wat.guest_read8(readBack + i)),
+    [0x43, 0x44, 0x45, 0x46], 'mmioRead copies out of the memory file');
+  assert.strictEqual(wat.test_mmio_esp() >>> 0, 0x30010, 'mmioRead pops three arguments');
+  assert.strictEqual(wat.test_mmio3(2, memHandle, ringSize + 1, 0), -1,
+    'a memory file cannot seek past its buffer');
+  view.setUint32(toWa(memInfo) + 28, ring + ringSize, true);
+  assert.strictEqual(wat.test_mmio3(4, memHandle, memInfo, 1), 268,
+    'writing past a full fixed-size memory file is MMIOERR_CANNOTEXPAND');
+  assert.strictEqual(wat.test_mmio3(5, memHandle, 0, 0), 0, 'mmioClose');
+  assert.strictEqual(wat.test_call_mmioGetInfo(memHandle, memInfo, 0) === 0
+    && view.getUint32(toWa(memInfo) + 24, true) === ring, false,
+    'a closed memory file no longer answers with its buffer');
+
+  const fullInfo = newMemInfo(ring, 64);
+  const fullHandle = wat.test_mmio3(0, 0, fullInfo, 0) >>> 0;
+  assert.ok(fullHandle !== 0);
+  assert.strictEqual(wat.test_call_mmioGetInfo(fullHandle, memInfo, 0), 0);
+  assert.strictEqual(view.getUint32(toWa(memInfo) + 32, true), ring + 64,
+    'without MMIO_CREATE the whole buffer is the file');
+  assert.strictEqual(wat.test_mmio3(5, fullHandle, 0, 0), 0);
+  const ownedHandle = wat.test_mmio3(0, 0, newMemInfo(0, 512), MMIO_CREATE) >>> 0;
+  assert.strictEqual(wat.test_call_mmioGetInfo(ownedHandle, memInfo, 0), 0);
+  assert.ok(view.getUint32(toWa(memInfo) + 24, true) !== 0
+    && view.getUint32(toWa(memInfo) + 20, true) === 512,
+    'a NULL pchBuffer gets an allocated buffer of the requested size');
+  assert.strictEqual(wat.test_mmio3(5, ownedHandle, 0, 0), 0);
+
+  // RIFF parsing over a memory file. QBob opens its WAVE resources with
+  // FOURCC_MEM and walks them with mmioDescend/mmioAscend; both used to crash
+  // as unimplemented, so "New Game" never started. An odd-sized LIST chunk
+  // between 'fmt ' and 'data' checks the word-aligned skip.
+  const fourcc = s => s.charCodeAt(0) | s.charCodeAt(1) << 8 | s.charCodeAt(2) << 16 | s.charCodeAt(3) << 24;
+  const wave = [];
+  const u32 = v => wave.push(v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255);
+  const tag = s => u32(fourcc(s));
+  tag('RIFF'); u32(0); tag('WAVE');
+  tag('fmt '); u32(16); for (let i = 0; i < 16; i++) wave.push(0x10 + i);
+  tag('LIST'); u32(5); tag('INFO'); wave.push(0x7f, 0);          // 5 bytes + pad
+  tag('data'); u32(4); wave.push(0xd1, 0xd2, 0xd3, 0xd4);
+  const riffSize = wave.length - 8;
+  wave[4] = riffSize & 255; wave[5] = riffSize >>> 8 & 255;
+  const waveBuf = wat.guest_alloc(wave.length) >>> 0;
+  wave.forEach((b, i) => wat.guest_write8(waveBuf + i, b));
+  const waveHandle = wat.test_mmio3(0, 0, newMemInfo(waveBuf, wave.length), 0) >>> 0;
+  assert.ok(waveHandle !== 0, 'a WAVE memory file opens');
+  const ck = wat.guest_alloc(20) >>> 0, sub = wat.guest_alloc(20) >>> 0;
+  const ckWord = (p, off) => view.getUint32(toWa(p) + off, true);
+  view.setUint32(toWa(ck) + 8, fourcc('WAVE'), true);
+  assert.strictEqual(wat.test_mmio_descend(waveHandle, ck, 0, 0x20), 0, 'MMIO_FINDRIFF WAVE');
+  assert.strictEqual(wat.test_mmio_esp() >>> 0, 0x30014, 'mmioDescend pops four arguments');
+  assert.deepStrictEqual([ckWord(ck, 0), ckWord(ck, 4), ckWord(ck, 8), ckWord(ck, 12)],
+    [fourcc('RIFF'), riffSize, fourcc('WAVE'), 8], 'RIFF chunk info, dwDataOffset after cksize');
+  assert.strictEqual(wat.test_mmio3(2, waveHandle, 0, 1), 12, 'positioned after the form type');
+  view.setUint32(toWa(sub), fourcc('fmt '), true);
+  assert.strictEqual(wat.test_mmio_descend(waveHandle, sub, ck, 0x10), 0, 'MMIO_FINDCHUNK fmt');
+  assert.deepStrictEqual([ckWord(sub, 4), ckWord(sub, 12)], [16, 20], 'fmt size and data offset');
+  const fmt = wat.guest_alloc(16) >>> 0;
+  assert.strictEqual(wat.test_mmio3(3, waveHandle, fmt, 16), 16);
+  assert.strictEqual(wat.guest_read8(fmt), 0x10, 'mmioRead continues at the chunk data');
+  assert.strictEqual(wat.test_mmio_ascend(waveHandle, sub), 0, 'mmioAscend');
+  assert.strictEqual(wat.test_mmio_esp() >>> 0, 0x30010, 'mmioAscend pops three arguments');
+  assert.strictEqual(wat.test_mmio3(2, waveHandle, 0, 1), 36, 'ascend lands at the next chunk');
+  view.setUint32(toWa(sub), fourcc('data'), true);
+  assert.strictEqual(wat.test_mmio_descend(waveHandle, sub, ck, 0x10), 0,
+    'MMIO_FINDCHUNK data skips the odd-sized LIST and its pad byte');
+  assert.deepStrictEqual([ckWord(sub, 4), ckWord(sub, 12)], [4, 58]);
+  const pcm = wat.guest_alloc(4) >>> 0;
+  assert.strictEqual(wat.test_mmio3(3, waveHandle, pcm, 4), 4);
+  assert.strictEqual(wat.guest_read8(pcm + 3), 0xd4, 'the sample bytes come from the data chunk');
+  wat.test_mmio3(2, waveHandle, 12, 0);
+  view.setUint32(toWa(sub), fourcc('cue '), true);
+  assert.strictEqual(wat.test_mmio_descend(waveHandle, sub, ck, 0x10), 514,
+    'a missing chunk is MMIOERR_CHUNKNOTFOUND inside the parent');
+  assert.strictEqual(wat.test_mmio3(5, waveHandle, 0, 0), 0);
+
+  console.log('PASS: mmio FOURCC conversion, buffer management, memory files, memory-file RIFF descend/ascend, and lazy read/refill retry');
 })().catch(error => {
   console.error(error.stack || error);
   process.exit(1);

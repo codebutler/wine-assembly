@@ -6,8 +6,6 @@ const path = require('path');
 const {
   APPS, DESKTOP_APPS, LOCAL_CANDIDATE_APPS, DEBUG_ONLY_APPS,
 } = require('../lib/apps');
-const { EXE_PATCHES, applyExeCompatibilityPatches } = require('../lib/app-profiles');
-const { GUEST_BASE: guestBase } = require('../lib/region-map.generated');
 
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -15,11 +13,26 @@ const localIds = new Set(LOCAL_CANDIDATE_APPS.map(([id]) => id));
 const publicIds = new Set(DESKTOP_APPS.map(([id]) => id));
 const debugIds = new Set(DEBUG_ONLY_APPS.map(([id]) => id));
 const expected = {
+  age_of_wonders2_demo: ['AoW2.exe', 1059],
   curse_monkey_island_demo: ['COMI.EXE', 11],
-  atomic_bomberman_demo: ['_BOMB.EXE', 151],
+  atomic_bomberman_june_demo: ['BM95DEMO.EXE', 172],
   broken_sword_demo: ['winsword.exe', 63],
   dungeon_keeper_demo: ['KEEPER95.EXE', 165],
   darkstone_demo: ['darkstonedemo.exe', 13],
+  red_alert_95_demo: ['RA95.EXE', 8],
+  die_by_the_sword_demo: ['dbts_demo.exe', 28],
+  dark_colony_demo: ['dc.exe', 971],
+  daytona_usa_deluxe_demo: ['DAYTONA USA Deluxe Demo WWW.exe', 702],
+  blood2_demo: ['Client.exe', 97],
+  disciples_demo: ['discipdm.exe', 174],
+  atlantis_demo: ['ATLANTIS.EXE', 2916],
+  dark_reign_demo: ['DKReign.exe', 255],
+  colin_mcrae_rally_demo: ['GAME.EXE', 1990],
+  avp_alien_demo: ['avp_alien_demo.exe', 29],
+  descent3_demo: ['main.exe', 23],
+  anno1602_demo: ['1602.exe', 455],
+  driver_demo: ['game.exe', 152],
+  cmr2_demo: ['CMR2Demo.exe', 219],
 };
 
 for (const [id, [exeName, companionCount]] of Object.entries(expected)) {
@@ -53,6 +66,8 @@ for (const [id, [exeName, companionCount]] of Object.entries(expected)) {
 
 assert.deepStrictEqual(APPS.broken_sword_demo.dlls.map(file => path.basename(file)),
   ['smackw32.dll']);
+assert.deepStrictEqual(APPS.die_by_the_sword_demo.dlls.map(file => path.basename(file)),
+  ['rlapi.dll', 'SIMFORCE.dll'], 'Die by the Sword statically imports Rlapi.dll');
 assert.strictEqual(APPS.broken_sword_demo.startupInput, undefined,
   'the working opening movie is not skipped automatically');
 assert(APPS.broken_sword_demo.exe.includes('Broken_Sword_demo-SW/installed/'),
@@ -75,23 +90,10 @@ assert(APPS.dungeon_keeper_demo.exe.includes(
   'Dungeon Keeper launches only the original installer output');
 assert(APPS.darkstone_demo.exe.includes('DarkstoneDemo-D3D/installed/'),
   'Darkstone launches only the original installer output');
-assert.strictEqual(APPS.atomic_bomberman_demo.touchControls.dpad.ways, 4);
-assert.deepStrictEqual(APPS.atomic_bomberman_demo.touchControls.buttons,
-  [{ vk: 0x20, label: 'Bomb', pos: 'br' }]);
+assert.strictEqual(APPS.atomic_bomberman_june_demo.touchControls.dpad.ways, 4);
+assert.deepStrictEqual(APPS.atomic_bomberman_june_demo.touchControls.buttons,
+  [{ vk: 0x20, label: 'Bomb', pos: 'br' }, { vk: 0x1B, label: 'Esc', pos: 'tl' }]);
+// The June demo's expiry is a calendar pin, not a patch to the binary.
+assert.strictEqual(APPS.atomic_bomberman_june_demo.wallClock, '1997-07-01T12:00:00Z');
 
-const expiryPatch = EXE_PATCHES['_bomb.exe'];
-assert.strictEqual(expiryPatch.length, 1, 'Atomic Bomberman patch count');
-const memory = new ArrayBuffer(0x220000);
-const bytes = new Uint8Array(memory);
-const expiryWa = expiryPatch[0].addr - 0x400000 + guestBase;
-bytes.set(expiryPatch[0].expected, expiryWa);
-assert.strictEqual(applyExeCompatibilityPatches('_BOMB.EXE', {
-  get_image_base: () => 0x400000,
-  get_guest_base: () => guestBase,
-}, memory, { log: () => {} }), 1, 'verified Atomic Bomberman alpha is patched');
-assert.deepStrictEqual(
-  [...bytes.slice(expiryWa, expiryWa + expiryPatch[0].replacement.length)],
-  expiryPatch[0].replacement,
-  'the alpha upper expiry cutoff is extended');
-
-console.log('PASS  five Archive.org Windows 98 demos are reproducible local apps');
+console.log(`PASS  ${Object.keys(expected).length} Archive.org Windows 98 demos are reproducible local apps`);

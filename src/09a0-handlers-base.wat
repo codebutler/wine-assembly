@@ -115,15 +115,19 @@
     (local.get $entry))
 
   ;; Is this guest path one of the statically dispatched DirectX components?
-  ;; Those are the tail of the name list, so a list position at or past
-  ;; $STATIC_SYS_DLL_FIRST_DX (0-based) answers with the DirectX version.
+  ;; Only the DirectX range answers with the DirectX version; later static
+  ;; modules such as Glide have distinct handles but are not DirectX DLLs.
   (func $name_is_static_dx_dll (param $name i32) (result i32)
     (local $idx i32)
     (if (i32.eqz (local.get $name)) (then (return (i32.const 0))))
     (local.set $idx (call $guest_name_is_static_system_dll (local.get $name)))
     (if (i32.eqz (local.get $idx)) (then (return (i32.const 0))))
-    (i32.ge_u (i32.sub (local.get $idx) (i32.const 1))
-              (global.get $STATIC_SYS_DLL_FIRST_DX)))
+    (i32.and
+      (i32.ge_u (i32.sub (local.get $idx) (i32.const 1))
+        (global.get $STATIC_SYS_DLL_FIRST_DX))
+      (i32.lt_u (i32.sub (local.get $idx) (i32.const 1))
+        (i32.add (global.get $STATIC_SYS_DLL_FIRST_DX)
+          (global.get $STATIC_SYS_DLL_DX_COUNT)))))
 
   ;; A pseudo module handle back to its 1-based list position, or 0.
   (func $static_sys_dll_from_handle (param $h i32) (result i32)
@@ -177,7 +181,7 @@
     (local.get $at))
 
   ;; 1: GetModuleHandleA(lpModuleName) — NULL→image_base, else search DLL table
-  (func $handle_GetModuleHandleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $handle_GetModuleHandleA_locked (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $result i32) (local $idx i32)
     (if (i32.eqz (local.get $arg0))
       (then (local.set $result (global.get $image_base)))
@@ -220,13 +224,12 @@
 
   ;; 3: GetStartupInfoA
   (func $handle_GetStartupInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $zero_memory (call $g2w (local.get $arg0)) (i32.const 68))
-    (call $gs32 (local.get $arg0) (i32.const 68))
+    (call $startup_info_init (local.get $arg0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 4: GetProcAddress
-  (func $handle_GetProcAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $handle_GetProcAddress_pinned (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $v i32) (local $i i32) (local $dll_base i32) (local $resolved i32) (local $v_wa i32)
     (local $tbl i32) (local $export i32) (local $dll_name i32)
     (local $api_id i32) (local $thunk_wa i32) (local $name_wa i32)
@@ -235,6 +238,60 @@
     (block $gpa
     ;; Default return value: NULL (function not found)
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    ;; The main EXE can export callbacks for runtime-loaded plugins. Hype's
+    ;; sound driver asks its EXE for _SND_fn_vDisplayError@8; it is not in
+    ;; DLL_TABLE. Read the mapped PE header rather than the loader-instance
+    ;; exe_export_rva global: GetProcAddress may run on a secondary thread.
+    (if (i32.eq (local.get $arg0) (global.get $image_base))
+      (then
+        (if (i32.eq (call $gl16 (global.get $image_base)) (i32.const 0x5a4d))
+          (then
+            (local.set $export (i32.add (global.get $image_base)
+              (call $gl32 (i32.add (global.get $image_base) (i32.const 0x3c)))))
+            (if (i32.eq (call $gl32 (local.get $export)) (i32.const 0x4550))
+              (then
+                (local.set $resolved (call $resolve_image_export
+                  (global.get $image_base)
+                  (call $gl32 (i32.add (local.get $export) (i32.const 120)))
+                  (local.get $arg1) (local.get $name_wa)))
+                (if (local.get $resolved)
+                  (then
+                    ;; An EAT RVA inside the export-directory range names a
+                    ;; forwarder string, not code/data in this image. The shared
+                    ;; image resolver does not follow DLL.Symbol / DLL.#ordinal
+                    ;; forwarders yet. Fail explicitly rather than returning a
+                    ;; plausible address that the guest would execute as text.
+                    (local.set $dll_base (i32.add (global.get $image_base)
+                      (call $gl32 (i32.add (local.get $export) (i32.const 120)))))
+                    (if (i32.lt_u (i32.sub (local.get $resolved) (local.get $dll_base))
+                          (call $gl32 (i32.add (local.get $export) (i32.const 124))))
+                      (then
+                        (call $host_log_i32 (i32.const 0x46574452)) ;; FWDR
+                        (call $host_log_i32 (local.get $resolved))
+                        (unreachable)))
+                    (i32.store (global.get $reg_base) (local.get $resolved))
+                    (i32.store offset=16 (global.get $reg_base)
+                      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+                    (return)))))))))
+    ;; COM self-registration exports belong to a real server image, and the
+    ;; EXE above did not export one. The image base also stands in for a bare
+    ;; DLL name nothing on disk provides (LoadLibrary's last fallback), so
+    ;; without this the API-by-name path below handed out our fail-fast
+    ;; DllRegisterServer: Explorer loads ACTXPRXY.DLL, which a stock box need
+    ;; not have, and registers whatever comes back (crash sweep, 15 s in).
+    ;; Answer as Windows does for a module without the export.
+    (if (i32.and (i32.eq (local.get $arg0) (global.get $image_base))
+          (i32.ne (local.get $name_wa) (i32.const 0)))
+      (then
+        (if (i32.or (call $str_eq (local.get $name_wa) "DllRegisterServer")
+                    (call $str_eq (local.get $name_wa) "DllUnregisterServer"))
+          (then
+            (global.set $last_error (i32.const 127)) ;; ERROR_PROC_NOT_FOUND
+            (i32.store offset=16 (global.get $reg_base)
+              (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+            (return)))))
+    ;; Preserve the existing fallback below: native KERNEL32 currently shares
+    ;; this image-base handle, so a missing EXE name can still be a Win32 API.
     ;; `_acmdln` is an exported data cell, not a callable CRT function. Old
     ;; MSVC runtimes resolve it dynamically and abort startup if it is absent.
     ;; Our static-system-DLL handles are intentionally aliases, so the export
@@ -257,7 +314,7 @@
     ;; Win32-thunk path (which has no ordinals) when no DLL matches.
     (local.set $i (i32.const 0))
     (block $not_dll (loop $scan_dll
-      (br_if $not_dll (i32.ge_u (local.get $i) (global.get $dll_count)))
+      (br_if $not_dll (i32.ge_u (local.get $i) (i32.atomic.load (global.get $DLL_SHARED))))
       (local.set $dll_base (i32.load (i32.add (global.get $DLL_TABLE) (i32.mul (local.get $i) (i32.const 32)))))
       (if (i32.eq (local.get $dll_base) (local.get $arg0))
         (then
@@ -280,6 +337,8 @@
                 (local.get $dll_name) (call $g2w (local.get $dll_name)) (local.get $arg1)))
               (if (i32.ne (local.get $api_id) (i32.const -1))
                 (then
+                  ;; Any thread can get here: reserve the index process-wide.
+                  (global.set $num_thunks (call $thunk_reserve))
                   (local.set $thunk_wa (i32.add (global.get $THUNK_BASE)
                     (i32.mul (global.get $num_thunks) (i32.const 8))))
                   (i32.store (local.get $thunk_wa)
@@ -305,11 +364,15 @@
               (return)))
           ;; Found matching DLL — resolve export by name
           (local.set $resolved (call $resolve_name_export (local.get $i) (local.get $name_wa)))
-          (if (local.get $resolved)
-            (then
-              (i32.store offset=0 (global.get $reg_base) (local.get $resolved))
-              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
-              (return)))))
+          ;; An absent export belongs to this module's answer too. Falling
+          ;; through invents global APIs inside unrelated loaded DLLs, so a
+          ;; caller probing optional CRT exports patches functions that the
+          ;; module never exported (SmartHeap probing C4dll-R).
+          (if (i32.eqz (local.get $resolved))
+            (then (global.set $last_error (i32.const 127))))
+          (i32.store offset=0 (global.get $reg_base) (local.get $resolved))
+          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+          (return)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan_dll)))
     ;; Not a loaded DLL — create thunk as before (Win32 API). Win32 stubs are
@@ -324,7 +387,15 @@
     (call $memcpy (i32.add (local.get $v_wa) (i32.const 2))
     (local.get $name_wa) (i32.add (local.get $tmp) (i32.const 1)))
     ;; Look up api_id — if unknown (0xFFFF), return NULL instead of creating broken thunk
-    (local.set $i (call $lookup_api_id (i32.add (local.get $v_wa) (i32.const 2))))
+    (local.set $i (i32.const -1))
+    (local.set $api_id (call $static_sys_dll_from_handle (local.get $arg0)))
+    (if (local.get $api_id) (then
+      (if (call $str_eq
+          (call $static_sys_dll_name_at (i32.sub (local.get $api_id) (i32.const 1)))
+          "glide3x")
+        (then (local.set $i (call $glide3_named_api (local.get $name_wa)))))))
+    (if (i32.eq (local.get $i) (i32.const -1))
+      (then (local.set $i (call $lookup_api_id (i32.add (local.get $v_wa) (i32.const 2))))))
     (if (i32.eq (local.get $i) (i32.const 0xFFFF))
       (then (br $gpa))) ;; return 0 — function not found
     ;; Create thunk: store RVA and api_id at THUNK_BASE + num_thunks*8.
@@ -359,70 +430,449 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
+  ;; Write one host wall-clock record (kind 0/1: 16-byte SYSTEMTIME, kind 2:
+  ;; 8-byte FILETIME) to the guest's own buffer at $ga. The host writes $len
+  ;; contiguous bytes, and one $g2w translation is only good for one guest
+  ;; page -- a SYSTEMTIME straddling two sparse pages would spill its tail
+  ;; into unrelated memory. So the host fills a span that is linear by
+  ;; construction (the guest's bytes when they already are, else a gathered
+  ;; copy) and $guest_span_writeback scatters it back page by page. A NULL
+  ;; buffer gets no span and the host writes nothing.
+  (func $wall_clock_to_guest (param $ga i32) (param $kind i32) (param $len i32)
+    (local $wa i32)
+    (local.set $wa (call $guest_span_in (local.get $ga) (local.get $len)))
+    (if (i32.eqz (local.get $wa)) (then (return)))
+    (drop (call $host_wall_clock (local.get $wa) (local.get $kind)))
+    (call $guest_span_writeback (local.get $ga) (local.get $wa) (local.get $len)))
+
   ;; 6: GetLocalTime(lpSystemTime) — host wall clock in the local time zone.
   (func $handle_GetLocalTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (drop (call $host_wall_clock (call $g2w (local.get $arg0)) (i32.const 1)))
+    (call $wall_clock_to_guest (local.get $arg0) (i32.const 1) (i32.const 16))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
-  ;; 7: GetTimeFormatA(Locale, dwFlags, lpTime, lpFormat, lpTimeStr, cchTime) — 6 args stdcall
-  (func $handle_GetTimeFormatA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $buf i32) (local $cch i32)
-    (local.set $cch (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (local.set $buf (call $g2w (local.get $arg4)))
-    (if (i32.and (i32.ne (local.get $arg4) (i32.const 0)) (i32.ge_u (local.get $cch) (i32.const 12)))
+  ;; ---- Calendar and date/time picture formatting --------------------------
+  ;;
+  ;; GetDateFormatA / GetTimeFormatA, GetLocaleInfo's calendar LCTypes,
+  ;; EnumDateFormatsA / EnumTimeFormatsA, the time-zone APIs and the CRT's
+  ;; time()/localtime() all answer from here, so the en-US picture strings,
+  ;; day and month names and the local-time bias cannot disagree between them.
+
+  ;; One host wall-clock read through a heap scratch: kind 2 is the UTC
+  ;; FILETIME, kind 3 the current Win32 Bias in minutes (low dword, signed).
+  ;; A heap allocation rather than a fixed scratch because guest threads each
+  ;; run their own instance over one memory.
+  (func $wall_clock_read64 (param $kind i32) (result i64)
+    (local $scratch i32) (local $value i64)
+    (local.set $scratch (call $heap_alloc (i32.const 16)))
+    (if (i32.eqz (local.get $scratch)) (then (return (i64.const 0))))
+    (call $gs64 (local.get $scratch) (i64.const 0))
+    (drop (call $host_wall_clock (call $g2w (local.get $scratch)) (local.get $kind)))
+    (local.set $value (i64.or
+      (i64.extend_i32_u (call $gl32 (local.get $scratch)))
+      (i64.shl (i64.extend_i32_u (call $gl32 (i32.add (local.get $scratch) (i32.const 4))))
+        (i64.const 32))))
+    (call $heap_free (local.get $scratch))
+    (local.get $value))
+
+  ;; Win32 Bias of the zone GetLocalTime reports in: UTC = local + Bias.
+  (func $tz_bias_minutes (result i32)
+    (i32.wrap_i64 (call $wall_clock_read64 (i32.const 3))))
+
+  ;; Current UTC time as a CRT time_t (seconds since 1970-01-01).
+  (func $wall_clock_time_t (result i32)
+    (i32.wrap_i64 (i64.div_u
+      (i64.sub (call $wall_clock_read64 (i32.const 2)) (i64.const 116444736000000000))
+      (i64.const 10000000))))
+
+  (func $cal_is_leap (param $y i32) (result i32)
+    (i32.or
+      (i32.eqz (i32.rem_u (local.get $y) (i32.const 400)))
+      (i32.and
+        (i32.eqz (i32.rem_u (local.get $y) (i32.const 4)))
+        (i32.ne (i32.rem_u (local.get $y) (i32.const 100)) (i32.const 0)))))
+
+  (func $cal_days_in_month (param $y i32) (param $m i32) (result i32)
+    (if (i32.eq (local.get $m) (i32.const 2))
+      (then (return (i32.add (i32.const 28) (call $cal_is_leap (local.get $y))))))
+    (if (i32.or (i32.or (i32.eq (local.get $m) (i32.const 4)) (i32.eq (local.get $m) (i32.const 6)))
+          (i32.or (i32.eq (local.get $m) (i32.const 9)) (i32.eq (local.get $m) (i32.const 11))))
+      (then (return (i32.const 30))))
+    (i32.const 31))
+
+  ;; Day of week, 0 = Sunday (Sakamoto). The month offsets 0,3,2,5,0,3,5,1,
+  ;; 4,6,2,4 are packed one per nibble, January lowest.
+  (func $cal_day_of_week (param $y i32) (param $m i32) (param $d i32) (result i32)
+    (if (i32.lt_u (local.get $m) (i32.const 3))
+      (then (local.set $y (i32.sub (local.get $y) (i32.const 1)))))
+    (i32.rem_u
+      (i32.add
+        (i32.add
+          (i32.sub
+            (i32.add (local.get $y) (i32.div_u (local.get $y) (i32.const 4)))
+            (i32.div_u (local.get $y) (i32.const 100)))
+          (i32.div_u (local.get $y) (i32.const 400)))
+        (i32.add (local.get $d)
+          (i32.wrap_i64 (i64.and
+            (i64.shr_u (i64.const 0x426415305230)
+              (i64.extend_i32_u (i32.shl (i32.sub (local.get $m) (i32.const 1)) (i32.const 2))))
+            (i64.const 0xF)))))
+      (i32.const 7)))
+
+  ;; Days since 1970-01-01 (non-negative) to a civil date, packed as
+  ;; year<<9 | month<<5 | day (Hinnant's civil_from_days).
+  (func $cal_civil_from_days (param $z i32) (result i32)
+    (local $era i32) (local $doe i32) (local $yoe i32) (local $doy i32)
+    (local $mp i32) (local $y i32) (local $m i32) (local $d i32)
+    (local.set $z (i32.add (local.get $z) (i32.const 719468)))
+    (local.set $era (i32.div_u (local.get $z) (i32.const 146097)))
+    (local.set $doe (i32.sub (local.get $z) (i32.mul (local.get $era) (i32.const 146097))))
+    (local.set $yoe (i32.div_u
+      (i32.sub
+        (i32.add (i32.sub (local.get $doe) (i32.div_u (local.get $doe) (i32.const 1460)))
+          (i32.div_u (local.get $doe) (i32.const 36524)))
+        (i32.div_u (local.get $doe) (i32.const 146096)))
+      (i32.const 365)))
+    (local.set $y (i32.add (local.get $yoe) (i32.mul (local.get $era) (i32.const 400))))
+    (local.set $doy (i32.sub (local.get $doe)
+      (i32.sub
+        (i32.add (i32.mul (local.get $yoe) (i32.const 365)) (i32.div_u (local.get $yoe) (i32.const 4)))
+        (i32.div_u (local.get $yoe) (i32.const 100)))))
+    (local.set $mp (i32.div_u (i32.add (i32.mul (local.get $doy) (i32.const 5)) (i32.const 2))
+      (i32.const 153)))
+    (local.set $d (i32.add
+      (i32.sub (local.get $doy)
+        (i32.div_u (i32.add (i32.mul (local.get $mp) (i32.const 153)) (i32.const 2)) (i32.const 5)))
+      (i32.const 1)))
+    (local.set $m (if (result i32) (i32.lt_u (local.get $mp) (i32.const 10))
+      (then (i32.add (local.get $mp) (i32.const 3)))
+      (else (i32.sub (local.get $mp) (i32.const 9)))))
+    (if (i32.le_u (local.get $m) (i32.const 2))
+      (then (local.set $y (i32.add (local.get $y) (i32.const 1)))))
+    (i32.or (i32.shl (local.get $y) (i32.const 9))
+      (i32.or (i32.shl (local.get $m) (i32.const 5)) (local.get $d))))
+
+  ;; The $n-th NUL-separated entry of a packed name list (a WAT literal).
+  (func $cal_nth_name (param $list i32) (param $n i32) (result i32)
+    (block $found (loop $skip
+      (br_if $found (i32.eqz (local.get $n)))
+      (block $end (loop $walk
+        (local.set $list (i32.add (local.get $list) (i32.const 1)))
+        (br_if $end (i32.eqz (i32.load8_u (i32.sub (local.get $list) (i32.const 1)))))
+        (br $walk)))
+      (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+      (br $skip)))
+    (local.get $list))
+
+  ;; en-US names. $dow is 0 = Sunday, $month is 0 = January.
+  (func $cal_day_name (param $dow i32) (param $abbrev i32) (result i32)
+    (call $cal_nth_name
+      (select "Sun\0Mon\0Tue\0Wed\0Thu\0Fri\0Sat"
+        "Sunday\0Monday\0Tuesday\0Wednesday\0Thursday\0Friday\0Saturday"
+        (local.get $abbrev))
+      (i32.rem_u (local.get $dow) (i32.const 7))))
+
+  (func $cal_month_name (param $month i32) (param $abbrev i32) (result i32)
+    (call $cal_nth_name
+      (select "Jan\0Feb\0Mar\0Apr\0May\0Jun\0Jul\0Aug\0Sep\0Oct\0Nov\0Dec"
+        "January\0February\0March\0April\0May\0June\0July\0August\0September\0October\0November\0December"
+        (local.get $abbrev))
+      (i32.rem_u (local.get $month) (i32.const 12))))
+
+  ;; en-US picture strings: 0 LOCALE_SSHORTDATE, 1 LOCALE_SLONGDATE,
+  ;; 2 LOCALE_STIMEFORMAT, 3 the DATE_YEARMONTH form.
+  (func $dtf_default_picture (param $which i32) (result i32)
+    (if (i32.eq (local.get $which) (i32.const 1)) (then (return "dddd, MMMM d, yyyy")))
+    (if (i32.eq (local.get $which) (i32.const 2)) (then (return "h:mm:ss tt")))
+    (if (i32.eq (local.get $which) (i32.const 3)) (then (return "MMMM, yyyy")))
+    "M/d/yy")
+
+  ;; Output primitives. Nothing is written at or past $cap, so a $cap of 0
+  ;; only counts; every one returns the advanced position.
+  (func $dtf_put (param $out_g i32) (param $cap i32) (param $pos i32) (param $ch i32) (result i32)
+    (if (i32.lt_u (local.get $pos) (local.get $cap))
+      (then (call $gs8 (i32.add (local.get $out_g) (local.get $pos)) (local.get $ch))))
+    (i32.add (local.get $pos) (i32.const 1)))
+
+  (func $dtf_put_str (param $out_g i32) (param $cap i32) (param $pos i32) (param $wa i32) (result i32)
+    (local $ch i32)
+    (block $done (loop $copy
+      (local.set $ch (i32.load8_u (local.get $wa)))
+      (br_if $done (i32.eqz (local.get $ch)))
+      (local.set $pos (call $dtf_put (local.get $out_g) (local.get $cap) (local.get $pos) (local.get $ch)))
+      (local.set $wa (i32.add (local.get $wa) (i32.const 1)))
+      (br $copy)))
+    (local.get $pos))
+
+  ;; Decimal $n, zero-padded to at least $width digits.
+  (func $dtf_put_num (param $out_g i32) (param $cap i32) (param $pos i32) (param $n i32) (param $width i32) (result i32)
+    (local $digits i32) (local $scale i32) (local $k i32)
+    (local.set $digits (i32.const 1))
+    (local.set $scale (i32.const 1))
+    (block $sized (loop $size
+      (br_if $sized (i32.and
+        (i32.lt_u (i32.div_u (local.get $n) (local.get $scale)) (i32.const 10))
+        (i32.ge_u (local.get $digits) (local.get $width))))
+      (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+      (local.set $scale (i32.mul (local.get $scale) (i32.const 10)))
+      (br $size)))
+    (block $done (loop $emit
+      (local.set $pos (call $dtf_put (local.get $out_g) (local.get $cap) (local.get $pos)
+        (i32.add (i32.const 0x30)
+          (i32.rem_u (i32.div_u (local.get $n) (local.get $scale)) (i32.const 10)))))
+      (br_if $done (i32.le_u (local.get $scale) (i32.const 1)))
+      (local.set $scale (i32.div_u (local.get $scale) (i32.const 10)))
+      (br $emit)))
+    (local.get $pos))
+
+  (func $dtf_pic_char (param $pic i32) (param $guest i32) (param $i i32) (result i32)
+    ;; A picture string longer than any real one is treated as ended, so an
+    ;; unterminated guest buffer cannot run the formatter away.
+    (if (i32.ge_u (local.get $i) (i32.const 1024)) (then (return (i32.const 0))))
+    (if (result i32) (local.get $guest)
+      (then (call $gl8 (i32.add (local.get $pic) (local.get $i))))
+      (else (i32.load8_u (i32.add (local.get $pic) (local.get $i))))))
+
+  ;; Expand a GetDateFormat ($time = 0: d M y g) or GetTimeFormat ($time = 1:
+  ;; h H m s t) picture over the SYSTEMTIME at wasm address $st. Characters
+  ;; of the other family, and anything else outside quotes, are literal;
+  ;; 'text' is literal and '' inside it is one quote. TIME_NOSECONDS,
+  ;; TIME_NOMINUTESORSECONDS and TIME_NOTIMEMARKER drop their element together
+  ;; with the separator in front of it (or, leading, the one after it), so
+  ;; "h:mm:ss tt" becomes "h:mm tt" / "h tt" / "h:mm:ss". Returns the length
+  ;; without the NUL; writes only below $cap.
+  (func $dtf_format (param $st i32) (param $pic i32) (param $pic_guest i32)
+      (param $time i32) (param $flags i32) (param $out_g i32) (param $cap i32) (result i32)
+    (local $i i32) (local $ch i32) (local $n i32) (local $pos i32) (local $v i32)
+    (local $field_end i32) (local $drop i32) (local $is_field i32) (local $skip i32)
+    (block $done (loop $scan
+      (local.set $ch (call $dtf_pic_char (local.get $pic) (local.get $pic_guest) (local.get $i)))
+      (br_if $done (i32.eqz (local.get $ch)))
+      (if (i32.eq (local.get $ch) (i32.const 0x27)) ;; quoted literal
+        (then
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (block $qend (loop $q
+            (local.set $ch (call $dtf_pic_char (local.get $pic) (local.get $pic_guest) (local.get $i)))
+            (br_if $qend (i32.eqz (local.get $ch)))
+            (if (i32.eq (local.get $ch) (i32.const 0x27))
+              (then
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br_if $qend (i32.ne
+                  (call $dtf_pic_char (local.get $pic) (local.get $pic_guest) (local.get $i))
+                  (i32.const 0x27)))))
+            (if (i32.eqz (local.get $drop))
+              (then (local.set $pos (call $dtf_put (local.get $out_g) (local.get $cap)
+                (local.get $pos) (local.get $ch)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $q)))
+          (br $scan)))
+      (local.set $is_field
+        (if (result i32) (local.get $time)
+          (then (i32.or
+            (i32.or (i32.eq (local.get $ch) (i32.const 0x68)) (i32.eq (local.get $ch) (i32.const 0x48))) ;; h H
+            (i32.or (i32.eq (local.get $ch) (i32.const 0x6D))                                          ;; m
+              (i32.or (i32.eq (local.get $ch) (i32.const 0x73)) (i32.eq (local.get $ch) (i32.const 0x74)))))) ;; s t
+          (else (i32.or
+            (i32.or (i32.eq (local.get $ch) (i32.const 0x64)) (i32.eq (local.get $ch) (i32.const 0x4D))) ;; d M
+            (i32.or (i32.eq (local.get $ch) (i32.const 0x79)) (i32.eq (local.get $ch) (i32.const 0x67))))))) ;; y g
+      (if (i32.eqz (local.get $is_field))
+        (then
+          (if (i32.eqz (local.get $drop))
+            (then (local.set $pos (call $dtf_put (local.get $out_g) (local.get $cap)
+              (local.get $pos) (local.get $ch)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $scan)))
+      ;; A run of one element character: its length picks the form.
+      (local.set $n (i32.const 1))
+      (block $run_end (loop $run
+        (br_if $run_end (i32.ne
+          (call $dtf_pic_char (local.get $pic) (local.get $pic_guest)
+            (i32.add (local.get $i) (local.get $n)))
+          (local.get $ch)))
+        (local.set $n (i32.add (local.get $n) (i32.const 1)))
+        (br $run)))
+      (local.set $i (i32.add (local.get $i) (local.get $n)))
+      (local.set $skip (i32.and (local.get $time)
+        (i32.or
+          (i32.and (i32.eq (local.get $ch) (i32.const 0x73))                       ;; s
+            (i32.ne (i32.and (local.get $flags) (i32.const 3)) (i32.const 0)))
+          (i32.or
+            (i32.and (i32.eq (local.get $ch) (i32.const 0x6D))                     ;; m
+              (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0)))
+            (i32.and (i32.eq (local.get $ch) (i32.const 0x74))                     ;; t
+              (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0)))))))
+      (if (local.get $skip)
+        (then
+          (local.set $pos (local.get $field_end))
+          (local.set $drop (i32.eqz (local.get $field_end)))
+          (br $scan)))
+      (local.set $drop (i32.const 0))
+      (if (i32.eq (local.get $ch) (i32.const 0x64)) ;; d
+        (then
+          (if (i32.le_u (local.get $n) (i32.const 2))
+            (then (local.set $pos (call $dtf_put_num (local.get $out_g) (local.get $cap) (local.get $pos)
+              (i32.load16_u offset=6 (local.get $st)) (local.get $n))))
+            (else (local.set $pos (call $dtf_put_str (local.get $out_g) (local.get $cap) (local.get $pos)
+              (call $cal_day_name (i32.load16_u offset=4 (local.get $st))
+                (i32.eq (local.get $n) (i32.const 3)))))))))
+      (if (i32.eq (local.get $ch) (i32.const 0x4D)) ;; M
+        (then
+          (if (i32.le_u (local.get $n) (i32.const 2))
+            (then (local.set $pos (call $dtf_put_num (local.get $out_g) (local.get $cap) (local.get $pos)
+              (i32.load16_u offset=2 (local.get $st)) (local.get $n))))
+            (else (local.set $pos (call $dtf_put_str (local.get $out_g) (local.get $cap) (local.get $pos)
+              (call $cal_month_name (i32.sub (i32.load16_u offset=2 (local.get $st)) (i32.const 1))
+                (i32.eq (local.get $n) (i32.const 3)))))))))
+      (if (i32.eq (local.get $ch) (i32.const 0x79)) ;; y
+        (then
+          (local.set $v (i32.load16_u offset=0 (local.get $st)))
+          (local.set $pos (call $dtf_put_num (local.get $out_g) (local.get $cap) (local.get $pos)
+            (select (i32.rem_u (local.get $v) (i32.const 100)) (local.get $v)
+              (i32.le_u (local.get $n) (i32.const 2)))
+            (select (local.get $n) (i32.const 1) (i32.le_u (local.get $n) (i32.const 2)))))))
+      ;; g/gg (era): the Gregorian calendar of this locale has no era text.
+      (if (i32.or (i32.eq (local.get $ch) (i32.const 0x68)) (i32.eq (local.get $ch) (i32.const 0x48))) ;; h H
+        (then
+          (local.set $v (i32.load16_u offset=8 (local.get $st)))
+          (if (i32.and (i32.eq (local.get $ch) (i32.const 0x68))
+                (i32.eqz (i32.and (local.get $flags) (i32.const 8)))) ;; not TIME_FORCE24HOURFORMAT
+            (then
+              (local.set $v (i32.rem_u (local.get $v) (i32.const 12)))
+              (if (i32.eqz (local.get $v)) (then (local.set $v (i32.const 12))))))
+          (local.set $pos (call $dtf_put_num (local.get $out_g) (local.get $cap) (local.get $pos)
+            (local.get $v) (select (i32.const 2) (i32.const 1) (i32.ge_u (local.get $n) (i32.const 2)))))))
+      (if (i32.or (i32.eq (local.get $ch) (i32.const 0x6D)) (i32.eq (local.get $ch) (i32.const 0x73))) ;; m s
+        (then
+          (local.set $pos (call $dtf_put_num (local.get $out_g) (local.get $cap) (local.get $pos)
+            (select (i32.load16_u offset=10 (local.get $st)) (i32.load16_u offset=12 (local.get $st))
+              (i32.eq (local.get $ch) (i32.const 0x6D)))
+            (select (i32.const 2) (i32.const 1) (i32.ge_u (local.get $n) (i32.const 2)))))))
+      (if (i32.eq (local.get $ch) (i32.const 0x74)) ;; t
+        (then
+          (local.set $v (select "AM" "PM"
+            (i32.lt_u (i32.load16_u offset=8 (local.get $st)) (i32.const 12))))
+          (if (i32.eq (local.get $n) (i32.const 1))
+            (then (local.set $pos (call $dtf_put (local.get $out_g) (local.get $cap) (local.get $pos)
+              (i32.load8_u (local.get $v)))))
+            (else (local.set $pos (call $dtf_put_str (local.get $out_g) (local.get $cap) (local.get $pos)
+              (local.get $v)))))))
+      (local.set $field_end (local.get $pos))
+      (br $scan)))
+    (local.get $pos))
+
+  ;; Fill the 16-byte SYSTEMTIME at guest $st from the caller's $src, or with
+  ;; the current local time when $src is NULL, and validate the members the
+  ;; call uses: the date for GetDateFormat (whose wDayOfWeek Windows ignores
+  ;; and recomputes), the time for GetTimeFormat. 0 = ERROR_INVALID_PARAMETER.
+  (func $dtf_load_time (param $src i32) (param $st i32) (param $time i32) (result i32)
+    (local $i i32) (local $wa i32) (local $y i32) (local $m i32) (local $d i32)
+    (local.set $wa (call $g2w (local.get $st)))
+    (if (local.get $src)
       (then
-        ;; Write "12:00:00 AM\0".
-        (i32.store (local.get $buf) (i32.const 0x303a3231))
-        (i32.store (i32.add (local.get $buf) (i32.const 4)) (i32.const 0x30303a30))
-        (i32.store (i32.add (local.get $buf) (i32.const 8)) (i32.const 0x004d4120))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 12))
-      )
-      (else
-        (i32.store offset=0 (global.get $reg_base) (i32.const 12))
-      ))
+        (block $copied (loop $copy
+          (br_if $copied (i32.ge_u (local.get $i) (i32.const 16)))
+          (i32.store16 (i32.add (local.get $wa) (local.get $i))
+            (call $gl16 (i32.add (local.get $src) (local.get $i))))
+          (local.set $i (i32.add (local.get $i) (i32.const 2)))
+          (br $copy))))
+      (else (drop (call $host_wall_clock (local.get $wa) (i32.const 1)))))
+    (if (local.get $time)
+      (then
+        (return (i32.and
+          (i32.and (i32.lt_u (i32.load16_u offset=8 (local.get $wa)) (i32.const 24))
+            (i32.lt_u (i32.load16_u offset=10 (local.get $wa)) (i32.const 60)))
+          (i32.and (i32.lt_u (i32.load16_u offset=12 (local.get $wa)) (i32.const 60))
+            (i32.lt_u (i32.load16_u offset=14 (local.get $wa)) (i32.const 1000)))))))
+    (local.set $y (i32.load16_u offset=0 (local.get $wa)))
+    (local.set $m (i32.load16_u offset=2 (local.get $wa)))
+    (local.set $d (i32.load16_u offset=6 (local.get $wa)))
+    (if (i32.or
+          (i32.or (i32.lt_u (local.get $y) (i32.const 1601)) (i32.gt_u (local.get $y) (i32.const 30827)))
+          (i32.or
+            (i32.or (i32.eqz (local.get $m)) (i32.gt_u (local.get $m) (i32.const 12)))
+            (i32.or (i32.eqz (local.get $d))
+              (i32.gt_u (local.get $d) (call $cal_days_in_month (local.get $y) (local.get $m))))))
+      (then (return (i32.const 0))))
+    (i32.store16 offset=4 (local.get $wa)
+      (call $cal_day_of_week (local.get $y) (local.get $m) (local.get $d)))
+    (i32.const 1))
+
+  ;; The body of GetDateFormatA ($time = 0) and GetTimeFormatA ($time = 1).
+  ;; Returns the API result and sets the last error on failure. $cch == 0 is
+  ;; the size query (characters including the NUL; $out is not touched); a
+  ;; buffer that is too small is left untouched too.
+  (func $dtf_api (param $flags i32) (param $src i32) (param $pic i32)
+      (param $out i32) (param $cch i32) (param $time i32) (result i32)
+    (local $valid i32) (local $pic_guest i32) (local $st i32) (local $len i32)
+    (if (i32.or (i32.lt_s (local.get $cch) (i32.const 0))
+          (i32.and (i32.ne (local.get $cch) (i32.const 0)) (i32.eqz (local.get $out))))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (return (i32.const 0))))
+    ;; LOCALE_NOUSEROVERRIDE and LOCALE_USE_CP_ACP, plus TIME_* (1|2|4|8) or
+    ;; DATE_SHORTDATE, DATE_LONGDATE, DATE_USE_ALT_CALENDAR, DATE_YEARMONTH,
+    ;; DATE_LTRREADING, DATE_RTLREADING (1..0x20). Short and long together are
+    ;; contradictory.
+    (local.set $valid (select (i32.const 0xC000000F) (i32.const 0xC000003F) (local.get $time)))
+    (if (i32.or
+          (i32.ne (i32.and (local.get $flags) (i32.xor (local.get $valid) (i32.const -1))) (i32.const 0))
+          (i32.and (i32.eqz (local.get $time))
+            (i32.eq (i32.and (local.get $flags) (i32.const 3)) (i32.const 3))))
+      (then
+        (global.set $last_error (i32.const 1004)) ;; ERROR_INVALID_FLAGS
+        (return (i32.const 0))))
+    (local.set $pic_guest (i32.ne (local.get $pic) (i32.const 0)))
+    (if (i32.eqz (local.get $pic))
+      (then (local.set $pic (call $dtf_default_picture
+        (if (result i32) (local.get $time)
+          (then (i32.const 2))
+          (else (if (result i32) (i32.and (local.get $flags) (i32.const 2))  ;; DATE_LONGDATE
+            (then (i32.const 1))
+            (else (select (i32.const 3) (i32.const 0)
+              (i32.ne (i32.and (local.get $flags) (i32.const 8)) (i32.const 0)))))))))))  ;; DATE_YEARMONTH
+    (local.set $st (call $heap_alloc (i32.const 16)))
+    (if (i32.eqz (local.get $st))
+      (then
+        (global.set $last_error (i32.const 8)) ;; ERROR_NOT_ENOUGH_MEMORY
+        (return (i32.const 0))))
+    (if (i32.eqz (call $dtf_load_time (local.get $src) (local.get $st) (local.get $time)))
+      (then
+        (call $heap_free (local.get $st))
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (return (i32.const 0))))
+    (local.set $len (call $dtf_format (call $g2w (local.get $st)) (local.get $pic) (local.get $pic_guest)
+      (local.get $time) (local.get $flags) (i32.const 0) (i32.const 0)))
+    (if (i32.eqz (local.get $cch))
+      (then
+        (call $heap_free (local.get $st))
+        (return (i32.add (local.get $len) (i32.const 1)))))
+    (if (i32.lt_u (local.get $cch) (i32.add (local.get $len) (i32.const 1)))
+      (then
+        (call $heap_free (local.get $st))
+        (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
+        (return (i32.const 0))))
+    (drop (call $dtf_format (call $g2w (local.get $st)) (local.get $pic) (local.get $pic_guest)
+      (local.get $time) (local.get $flags) (local.get $out) (local.get $cch)))
+    (call $gs8 (i32.add (local.get $out) (local.get $len)) (i32.const 0))
+    (call $heap_free (local.get $st))
+    (i32.add (local.get $len) (i32.const 1)))
+
+  ;; 7: GetTimeFormatA(Locale, dwFlags, lpTime, lpFormat, lpTimeStr, cchTime) — 6 args stdcall.
+  ;; Every locale formats as en-US, the only one this Win98 installs.
+  (func $handle_GetTimeFormatA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $dtf_api
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args + ret
   )
 
-  ;; 8: GetDateFormatA(Locale, dwFlags, lpDate, lpFormat, lpDateStr, cchDateStr) — 6 args stdcall
+  ;; 8: GetDateFormatA(Locale, dwFlags, lpDate, lpFormat, lpDateStr, cchDate) — 6 args stdcall
   (func $handle_GetDateFormatA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $buf i32) (local $cch i32) (local $long i32)
-    ;; Read cchDateStr from stack (6th arg at esp+24)
-    (local.set $cch (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (local.set $long (i32.ne
-      (i32.and (local.get $arg1) (i32.const 2)) (i32.const 0))) ;; DATE_LONGDATE
-    ;; EnumDateFormats callers pass the format explicitly. The stable long
-    ;; pattern starts with 'd'; the stable short pattern starts with 'M'.
-    (if (local.get $arg3)
-      (then
-        (if (i32.eq (i32.load8_u (call $g2w (local.get $arg3))) (i32.const 0x64))
-          (then (local.set $long (i32.const 1))))))
-    (local.set $buf (call $g2w (local.get $arg4)))
-    (if (i32.and (local.get $long)
-          (i32.and (i32.ne (local.get $arg4) (i32.const 0)) (i32.ge_u (local.get $cch) (i32.const 24))))
-      (then
-        ;; "Monday, January 1, 2001\0"
-        (i32.store (local.get $buf) (i32.const 0x646e6f4d))
-        (i32.store (i32.add (local.get $buf) (i32.const 4)) (i32.const 0x202c7961))
-        (i32.store (i32.add (local.get $buf) (i32.const 8)) (i32.const 0x756e614a))
-        (i32.store (i32.add (local.get $buf) (i32.const 12)) (i32.const 0x20797261))
-        (i32.store (i32.add (local.get $buf) (i32.const 16)) (i32.const 0x32202c31))
-        (i32.store (i32.add (local.get $buf) (i32.const 20)) (i32.const 0x00313030))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 24))
-      )
-      (else
-        (if (i32.and (i32.ne (local.get $arg4) (i32.const 0)) (i32.ge_u (local.get $cch) (i32.const 7)))
-          (then
-            ;; "1/1/01\0"
-            (i32.store (local.get $buf) (i32.const 0x2f312f31))
-            (i32.store16 (i32.add (local.get $buf) (i32.const 4)) (i32.const 0x3130))  ;; ASCII "01", not an address
-            (i32.store8 (i32.add (local.get $buf) (i32.const 6)) (i32.const 0)))
-          (else
-            (i32.store offset=0 (global.get $reg_base) (select (i32.const 24) (i32.const 7) (local.get $long)))
-            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
-            (return)))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 7))
-      ))
+    (i32.store offset=0 (global.get $reg_base) (call $dtf_api
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args + ret
   )
 
@@ -430,9 +880,11 @@
   ;; callback per call. Callers such as Win98 WordPad request short and long
   ;; date formats separately, so one representative for each flag is enough
   ;; to populate their Date and Time dialog without inventing locale state.
+  ;; The picture is the one GetDateFormatA/GetTimeFormatA and GetLocaleInfo
+  ;; use as the default, so the three can never disagree.
   (func $locale_format_enum_a (param $callback i32) (param $flags i32)
         (param $ret_addr i32) (param $is_time i32)
-    (local $text i32) (local $wa i32)
+    (local $text i32) (local $wa i32) (local $src i32) (local $i i32)
     (if (i32.eqz (local.get $callback))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
@@ -441,25 +893,18 @@
     (local.set $text (call $heap_alloc (i32.const 32)))
     (local.set $wa (call $g2w (local.get $text)))
     (call $zero_memory (local.get $wa) (i32.const 32))
-    (if (local.get $is_time)
-      (then
-        ;; "h:mm:ss tt"
-        (i32.store (local.get $wa) (i32.const 0x3a6d3a68))
-        (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0x74207373))
-        (i32.store16 (i32.add (local.get $wa) (i32.const 8)) (i32.const 0x0074)))
-      (else
-        (if (i32.and (local.get $flags) (i32.const 2)) ;; DATE_LONGDATE
-          (then
-            ;; "dddd, MMMM d, yyyy"
-            (i32.store (local.get $wa) (i32.const 0x64646464))
-            (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0x4d4d202c))
-            (i32.store (i32.add (local.get $wa) (i32.const 8)) (i32.const 0x64204d4d))
-            (i32.store (i32.add (local.get $wa) (i32.const 12)) (i32.const 0x7979202c))
-            (i32.store16 (i32.add (local.get $wa) (i32.const 16)) (i32.const 0x7979)))
-          (else
-            ;; "M/d/yy"
-            (i32.store (local.get $wa) (i32.const 0x2f642f4d))
-            (i32.store16 (i32.add (local.get $wa) (i32.const 4)) (i32.const 0x7979))))))
+    (local.set $src (call $dtf_default_picture
+      (if (result i32) (local.get $is_time)
+        (then (i32.const 2))
+        (else (select (i32.const 1) (i32.const 0)
+          (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0))))))) ;; DATE_LONGDATE
+    (block $copied (loop $copy
+      (br_if $copied (i32.eqz (i32.load8_u (i32.add (local.get $src) (local.get $i)))))
+      (br_if $copied (i32.ge_u (local.get $i) (i32.const 31)))
+      (i32.store8 (i32.add (local.get $wa) (local.get $i))
+        (i32.load8_u (i32.add (local.get $src) (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
     ;; Preserve the API caller return address above the callback's stdcall
     ;; frame. CACA0011 is a generic one-callback continuation: it restores this
     ;; address after the callback has popped its LPSTR argument.
@@ -516,23 +961,62 @@
 
   ;; Release the ANSI copy of a named PE resource after its callback has
   ;; returned. Integer MAKEINTRESOURCE names never allocate this buffer.
+  ;; Enumeration owns one image pin across all guest callbacks. Saved frames
+  ;; retain the outer invocation's pin, independently of lookup context pins.
+  (global $enum_rsrc_pin (mut i32) (i32.const 0))
   (func $enum_rsrc_release_name
     (if (global.get $enum_rsrc_namebuf)
       (then
         (call $heap_free (global.get $enum_rsrc_namebuf))
         (global.set $enum_rsrc_namebuf (i32.const 0)))))
 
-  ;; Complete EnumResourceNamesA after exhausting the directory or after its
+  ;; Complete an ANSI enumeration after exhausting the directory or after its
   ;; callback asks us to stop. The saved API return address is the one word
-  ;; left on the stack after ENUMRESNAMEPROC's RET 16.
+  ;; left on the stack after the callback's stdcall return.
   (func $enum_rsrc_finish (param $success i32)
+    (local $frame i32) (local $released_pin i32)
+    (local.set $released_pin (global.get $enum_rsrc_pin))
+    (call $dll_unpin_module_index (global.get $enum_rsrc_pin))
     (call $enum_rsrc_release_name)
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (global.set $eip (global.get $enum_rsrc_ret))
-    (global.set $enum_rsrc_depth (i32.const 0))
-    (i32.store offset=0 (global.get $reg_base) (local.get $success)))
+    (local.set $frame (global.get $enum_rsrc_frame))
+    (global.set $enum_rsrc_module (call $gl32 (i32.add (local.get $frame) (i32.const 4))))
+    (global.set $enum_rsrc_type (call $gl32 (i32.add (local.get $frame) (i32.const 8))))
+    (global.set $enum_rsrc_cb (call $gl32 (i32.add (local.get $frame) (i32.const 12))))
+    (global.set $enum_rsrc_lparam (call $gl32 (i32.add (local.get $frame) (i32.const 16))))
+    (global.set $enum_rsrc_ret (call $gl32 (i32.add (local.get $frame) (i32.const 20))))
+    (global.set $enum_rsrc_dir (call $gl32 (i32.add (local.get $frame) (i32.const 24))))
+    (global.set $enum_rsrc_index (call $gl32 (i32.add (local.get $frame) (i32.const 28))))
+    (global.set $enum_rsrc_count (call $gl32 (i32.add (local.get $frame) (i32.const 32))))
+    (global.set $enum_rsrc_namebuf (call $gl32 (i32.add (local.get $frame) (i32.const 36))))
+    (global.set $enum_rsrc_depth (call $gl32 (i32.add (local.get $frame) (i32.const 40))))
+    (global.set $enum_rsrc_kind (call $gl32 (i32.add (local.get $frame) (i32.const 44))))
+    (global.set $enum_rsrc_name (call $gl32 (i32.add (local.get $frame) (i32.const 48))))
+    (global.set $enum_rsrc_pin (call $gl32 (i32.add (local.get $frame) (i32.const 52))))
+    (global.set $enum_rsrc_frame (call $gl32 (local.get $frame)))
+    (call $heap_free (local.get $frame))
+    (i32.store offset=0 (global.get $reg_base) (local.get $success))
+    (if (local.get $released_pin)
+      (then (call $dll_unload_yield (i32.const 0) (i32.const 3) (i32.const 0)))))
 
-  ;; Invoke ENUMRESNAMEPROCA for the current type-directory entry. PE named
+  ;; ExitThread abandons callbacks, so their host-owned enumeration frames,
+  ;; names and mapping pins must be released without resuming guest code.
+  (func $enum_rsrc_thread_cleanup
+    (local $frame i32)
+    (block $done (loop $frames
+      (br_if $done (i32.eqz (global.get $enum_rsrc_frame)))
+      (call $enum_rsrc_release_name)
+      (call $dll_unpin_module_index (global.get $enum_rsrc_pin))
+      (local.set $frame (global.get $enum_rsrc_frame))
+      (global.set $enum_rsrc_namebuf (call $gl32 (i32.add (local.get $frame) (i32.const 36))))
+      (global.set $enum_rsrc_pin (call $gl32 (i32.add (local.get $frame) (i32.const 52))))
+      (global.set $enum_rsrc_frame (call $gl32 (local.get $frame)))
+      (call $heap_free (local.get $frame))
+      (br $frames)))
+    (global.set $enum_rsrc_depth (i32.const 0)))
+
+  ;; Invoke the callback for the current directory entry. PE named
   ;; entries are length-prefixed UTF-16; Win32's A API instead supplies a
   ;; temporary NUL-terminated ANSI name. Integer IDs pass through unchanged.
   (func $enum_rsrc_dispatch
@@ -554,14 +1038,18 @@
         (local.set $len (i32.load16_u (local.get $name_wa)))
         (global.set $enum_rsrc_namebuf
           (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+        (if (i32.eqz (global.get $enum_rsrc_namebuf))
+          (then
+            (call $pop_rsrc_ctx)
+            (global.set $last_error (i32.const 8))
+            (call $enum_rsrc_finish (i32.const 0))
+            (return)))
         (block $copied (loop $copy
           (br_if $copied (i32.ge_u (local.get $i) (local.get $len)))
           (local.set $ch (i32.load16_u (i32.add (local.get $name_wa)
             (i32.add (i32.const 2) (i32.mul (local.get $i) (i32.const 2))))))
-          ;; The embedded resources ScummVM enumerates use ASCII names. Keep
-          ;; the A conversion bounded and deterministic for other PE names.
-          (if (i32.gt_u (local.get $ch) (i32.const 0xff))
-            (then (local.set $ch (i32.const 0x3f))))
+          ;; Use the same Windows-1252 conversion as other ANSI entry points.
+          (local.set $ch (call $dpw_encode1252 (local.get $ch)))
           (call $gs8 (i32.add (global.get $enum_rsrc_namebuf) (local.get $i))
             (local.get $ch))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -572,13 +1060,19 @@
       (else
         (local.set $name (i32.and (local.get $eid) (i32.const 0xffff)))))
     (call $pop_rsrc_ctx)
-    ;; ENUMRESNAMEPROCA(hModule, lpType, lpName, lParam), stdcall.
+    ;; stdcall callbacks: module, [type, [name,]] enumerated value, lParam.
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_rsrc_lparam))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $name))
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_rsrc_type))
+    (if (i32.eq (global.get $enum_rsrc_kind) (i32.const 2))
+      (then
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_rsrc_name))))
+    (if (global.get $enum_rsrc_kind)
+      (then
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_rsrc_type))))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_rsrc_module))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
@@ -586,67 +1080,126 @@
     (global.set $eip (global.get $enum_rsrc_cb))
     (global.set $steps (i32.const 0)))
 
-  ;; CACA0030: ENUMRESNAMEPROC returned. FALSE requests early termination;
-  ;; TRUE advances to the next name in the same type directory.
+  ;; CACA0030: callback returned. FALSE requests early termination;
+  ;; TRUE advances to the next entry in this invocation's directory.
   (func $enum_rsrc_continue
     (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
-      (then (call $enum_rsrc_finish (i32.const 0)) (return)))
+      (then
+        ;; Windows 98/XP report ERROR_SUCCESS for callback-requested stop.
+        (global.set $last_error (i32.const 0))
+        (call $enum_rsrc_finish (i32.const 0)) (return)))
     (global.set $enum_rsrc_index
       (i32.add (global.get $enum_rsrc_index) (i32.const 1)))
     (call $enum_rsrc_dispatch))
 
-  ;; EnumResourceNamesA(hModule, lpType, lpEnumFunc, lParam). Suspend the API
-  ;; frame while each guest callback runs, preserving Win32's integer-vs-name
-  ;; representation and callback-controlled early stop.
-  (func $handle_EnumResourceNamesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $ret i32) (local $subdir i32) (local $dir_wa i32) (local $count i32)
-    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-    ;; A callback cannot safely replace the process-global state of an outer
-    ;; enumeration. Refuse that unusual re-entrant case without disturbing it.
-    (if (i32.or (i32.eqz (local.get $arg2)) (global.get $enum_rsrc_depth))
+  ;; Shared ANSI resource walk: kind 0=types, 1=names, 2=languages.
+  ;; Resolve the directory before invoking guest code; never retain the shared
+  ;; resource lookup context across callbacks. Each invocation owns its state.
+  (func $enum_rsrc_begin (param $kind i32) (param $module i32)
+      (param $type i32) (param $name i32) (param $cb i32)
+      (param $lparam i32) (param $ret i32)
+    (local $idx i32) (local $dir i32) (local $subdir i32)
+    (local $dir_wa i32) (local $count i32) (local $frame i32)
+    (local $stride i32) (local $error i32) (local $pin i32)
+    (global.set $eip (local.get $ret))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (i32.eqz (local.get $cb))
+      (then (global.set $last_error (i32.const 87)) (return)))
+    ;; push_rsrc_ctx intentionally falls back for unknown handles. Enumeration
+    ;; must reject those, and must not enumerate the EXE for a resource-less DLL.
+    (if (i32.and (i32.ne (local.get $module) (i32.const 0))
+                 (i32.ne (local.get $module) (global.get $image_base)))
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eip (local.get $ret))
-        (return)))
-    (call $push_rsrc_ctx (local.get $arg0))
-    (local.set $subdir
-      (call $rsrc_find_entry (call $r_rva) (local.get $arg1)))
-    (if (i32.eqz (i32.and (local.get $subdir) (i32.const 0x80000000)))
-      (then
-        (call $pop_rsrc_ctx)
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (global.set $last_error (i32.const 1813)) ;; ERROR_RESOURCE_TYPE_NOT_FOUND
-        (global.set $eip (local.get $ret))
-        (return)))
-    (global.set $enum_rsrc_dir (i32.add (call $r_rva)
-      (i32.and (local.get $subdir) (i32.const 0x7fffffff))))
-    (local.set $dir_wa (call $g2w
-      (i32.add (call $r_base) (global.get $enum_rsrc_dir))))
-    (local.set $count (i32.add
-      (i32.load16_u (i32.add (local.get $dir_wa) (i32.const 12)))
-      (i32.load16_u (i32.add (local.get $dir_wa) (i32.const 14)))))
+        (local.set $pin (call $dll_pin_module (local.get $module)))
+        (local.set $idx (i32.sub (local.get $pin) (i32.const 1)))
+        (if (i32.eqz (local.get $pin))
+          (then (global.set $last_error (i32.const 6)) (return)))
+        (if (i32.eqz (i32.load (i32.add (global.get $DLL_RSRC_TABLE)
+              (i32.mul (local.get $idx) (i32.const 8)))))
+          (then (call $dll_unpin_module_index (local.get $pin)) (global.set $last_error (i32.const 1812)) (return)))))
+    (call $push_rsrc_ctx (local.get $module))
+    (local.set $stride (global.get $rsrc_name_char_stride))
+    (global.set $rsrc_name_char_stride (i32.const 1))
+    (block $resolved
+      (local.set $error (i32.const 1812))
+      (br_if $resolved (i32.eqz (call $r_rva)))
+      (local.set $dir (call $r_rva))
+      (if (local.get $kind)
+        (then
+          (local.set $error (i32.const 1813))
+          (local.set $subdir (call $rsrc_find_entry (local.get $dir) (local.get $type)))
+          (br_if $resolved (i32.eqz (i32.and (local.get $subdir) (i32.const 0x80000000))))
+          (local.set $dir (i32.add (call $r_rva) (i32.and (local.get $subdir) (i32.const 0x7fffffff))))))
+      (if (i32.eq (local.get $kind) (i32.const 2))
+        (then
+          (local.set $error (i32.const 1814))
+          (local.set $subdir (call $rsrc_find_entry (local.get $dir) (local.get $name)))
+          (br_if $resolved (i32.eqz (i32.and (local.get $subdir) (i32.const 0x80000000))))
+          (local.set $dir (i32.add (call $r_rva) (i32.and (local.get $subdir) (i32.const 0x7fffffff))))))
+      (local.set $dir_wa (call $g2w (i32.add (call $r_base) (local.get $dir))))
+      (local.set $count (i32.add (i32.load16_u offset=12 (local.get $dir_wa))
+                                (i32.load16_u offset=14 (local.get $dir_wa))))
+      (local.set $error (i32.add (i32.const 1813) (local.get $kind)))
+      (br_if $resolved (i32.eqz (local.get $count)))
+      (local.set $error (i32.const 0)))
+    (global.set $rsrc_name_char_stride (local.get $stride))
     (call $pop_rsrc_ctx)
-    (if (i32.eqz (local.get $count))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (global.set $last_error (i32.const 1813))
-        (global.set $eip (local.get $ret))
-        (return)))
-    (global.set $enum_rsrc_module (local.get $arg0))
-    (global.set $enum_rsrc_type (local.get $arg1))
-    (global.set $enum_rsrc_cb (local.get $arg2))
-    (global.set $enum_rsrc_lparam (local.get $arg3))
+    (if (local.get $error)
+      (then (call $dll_unpin_module_index (local.get $pin)) (global.set $last_error (local.get $error)) (return)))
+    (local.set $frame (call $heap_alloc (i32.const 56)))
+    (if (i32.eqz (local.get $frame))
+      (then (call $dll_unpin_module_index (local.get $pin)) (global.set $last_error (i32.const 8)) (return)))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 0)) (global.get $enum_rsrc_frame))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 4)) (global.get $enum_rsrc_module))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 8)) (global.get $enum_rsrc_type))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 12)) (global.get $enum_rsrc_cb))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 16)) (global.get $enum_rsrc_lparam))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 20)) (global.get $enum_rsrc_ret))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 24)) (global.get $enum_rsrc_dir))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 28)) (global.get $enum_rsrc_index))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 32)) (global.get $enum_rsrc_count))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 36)) (global.get $enum_rsrc_namebuf))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 40)) (global.get $enum_rsrc_depth))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 44)) (global.get $enum_rsrc_kind))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 48)) (global.get $enum_rsrc_name))
+    (call $gs32 (i32.add (local.get $frame) (i32.const 52)) (global.get $enum_rsrc_pin))
+    (global.set $enum_rsrc_pin (local.get $pin))
+    (global.set $enum_rsrc_frame (local.get $frame))
+    (global.set $enum_rsrc_namebuf (i32.const 0))
+    (global.set $enum_rsrc_dir (local.get $dir))
+    (global.set $enum_rsrc_module (local.get $module))
+    (global.set $enum_rsrc_type (local.get $type))
+    (global.set $enum_rsrc_name (local.get $name))
+    (global.set $enum_rsrc_kind (local.get $kind))
+    (global.set $enum_rsrc_cb (local.get $cb))
+    (global.set $enum_rsrc_lparam (local.get $lparam))
     (global.set $enum_rsrc_ret (local.get $ret))
     (global.set $enum_rsrc_index (i32.const 0))
     (global.set $enum_rsrc_count (local.get $count))
     (global.set $enum_rsrc_depth (i32.const 1))
     (global.set $last_error (i32.const 0))
-    ;; Retain the API caller below every callback frame until enumeration ends.
+    ;; Keep one saved return word below the callback's stdcall argument frame.
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret))
     (call $enum_rsrc_dispatch))
+
+  (func $handle_EnumResourceTypesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ret i32)
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (call $enum_rsrc_begin (i32.const 0) (local.get $arg0) (i32.const 0) (i32.const 0) (local.get $arg1) (local.get $arg2) (local.get $ret)))
+
+  (func $handle_EnumResourceNamesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ret i32)
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (call $enum_rsrc_begin (i32.const 1) (local.get $arg0) (local.get $arg1) (i32.const 0) (local.get $arg2) (local.get $arg3) (local.get $ret)))
+
+  (func $handle_EnumResourceLanguagesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ret i32)
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    (call $enum_rsrc_begin (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $ret)))
 
   ;; 9: GetProfileStringA(appName, keyName, default, retBuf, nSize) → chars copied
   (func $handle_GetProfileStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -799,11 +1352,96 @@
     (call $locale_put_ascii (local.get $out_g) (i32.const 13) (i32.const 0) (local.get $wide))
     (i32.const 14))
 
+  ;; The calendar half of the en-US locale: separators, the three picture
+  ;; strings GetDateFormatA/GetTimeFormatA default to, their I* flag digits,
+  ;; the AM/PM designators and the day and month names the formatter prints.
+  ;; A WAT literal, or 0 for an LCType that is not one of these.
+  (func $locale_calendar_text (param $base i32) (result i32)
+    (if (i32.eq (local.get $base) (i32.const 0x1D)) (then (return "/")))   ;; LOCALE_SDATE
+    (if (i32.eq (local.get $base) (i32.const 0x1E)) (then (return ":")))   ;; LOCALE_STIME
+    (if (i32.eq (local.get $base) (i32.const 0x1F))                        ;; LOCALE_SSHORTDATE
+      (then (return (call $dtf_default_picture (i32.const 0)))))
+    (if (i32.eq (local.get $base) (i32.const 0x20))                        ;; LOCALE_SLONGDATE
+      (then (return (call $dtf_default_picture (i32.const 1)))))
+    (if (i32.eq (local.get $base) (i32.const 0x1003))                      ;; LOCALE_STIMEFORMAT
+      (then (return (call $dtf_default_picture (i32.const 2)))))
+    (if (i32.eq (local.get $base) (i32.const 0x28)) (then (return "AM")))  ;; LOCALE_S1159
+    (if (i32.eq (local.get $base) (i32.const 0x29)) (then (return "PM")))  ;; LOCALE_S2359
+    ;; IDATE/ILDATE (M-D-Y), ITIME (12-hour), ICENTURY, ITLZERO, IDAYLZERO,
+    ;; IMONLZERO: all "0" for M/d/yy and h:mm:ss tt.
+    (if (i32.and (i32.ge_u (local.get $base) (i32.const 0x21))
+          (i32.le_u (local.get $base) (i32.const 0x27)))
+      (then (return "0")))
+    (if (i32.or (i32.eq (local.get $base) (i32.const 0x1005))              ;; ITIMEMARKPOSN: suffix
+          (i32.or (i32.eq (local.get $base) (i32.const 0x100B))            ;; IOPTIONALCALENDAR
+            (i32.eq (local.get $base) (i32.const 0x100D))))                ;; IFIRSTWEEKOFYEAR
+      (then (return "0")))
+    (if (i32.eq (local.get $base) (i32.const 0x1009)) (then (return "1"))) ;; ICALENDARTYPE: Gregorian
+    (if (i32.eq (local.get $base) (i32.const 0x100C)) (then (return "6"))) ;; IFIRSTDAYOFWEEK: Sunday
+    ;; SDAYNAME1..7 and SABBREVDAYNAME1..7 start the week on Monday.
+    (if (i32.and (i32.ge_u (local.get $base) (i32.const 0x2A))
+          (i32.le_u (local.get $base) (i32.const 0x30)))
+      (then (return (call $cal_day_name (i32.sub (local.get $base) (i32.const 0x29)) (i32.const 0)))))
+    (if (i32.and (i32.ge_u (local.get $base) (i32.const 0x31))
+          (i32.le_u (local.get $base) (i32.const 0x37)))
+      (then (return (call $cal_day_name (i32.sub (local.get $base) (i32.const 0x30)) (i32.const 1)))))
+    (if (i32.and (i32.ge_u (local.get $base) (i32.const 0x38))
+          (i32.le_u (local.get $base) (i32.const 0x43)))
+      (then (return (call $cal_month_name (i32.sub (local.get $base) (i32.const 0x38)) (i32.const 0)))))
+    (if (i32.and (i32.ge_u (local.get $base) (i32.const 0x44))
+          (i32.le_u (local.get $base) (i32.const 0x4F)))
+      (then (return (call $cal_month_name (i32.sub (local.get $base) (i32.const 0x44)) (i32.const 1)))))
+    (i32.const 0))
+
+  ;; Write one $locale_calendar_text value with GetLocaleInfo's contract.
+  ;; LOCALE_RETURN_NUMBER is honoured for the numeric (single-digit) values
+  ;; and returns a DWORD, whose size in characters is 4 (A) or 2 (W).
+  (func $locale_write_text (param $text i32) (param $flags i32) (param $out_g i32)
+      (param $cch i32) (param $wide i32) (result i32)
+    (local $len i32) (local $i i32) (local $numeric i32) (local $need i32)
+    (local $as_number i32)
+    (local.set $as_number                                   ;; LOCALE_RETURN_NUMBER, bit 29
+      (i32.and (i32.shr_u (local.get $flags) (i32.const 29)) (i32.const 1)))
+    (local.set $numeric (i32.and
+      (i32.lt_u (i32.sub (i32.load8_u (local.get $text)) (i32.const 0x30)) (i32.const 10))
+      (i32.eqz (i32.load8_u offset=1 (local.get $text)))))
+    (if (i32.or
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x1FFFFFFF)) (i32.const 0))
+          (i32.and (local.get $as_number) (i32.eqz (local.get $numeric))))
+      (then
+        (global.set $last_error (i32.const 1004)) ;; ERROR_INVALID_FLAGS
+        (return (i32.const 0))))
+    (if (local.get $as_number)
+      (then
+        (local.set $need (select (i32.const 2) (i32.const 4) (local.get $wide)))
+        (if (i32.eqz (local.get $cch)) (then (return (local.get $need))))
+        (if (i32.lt_u (local.get $cch) (local.get $need))
+          (then
+            (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
+            (return (i32.const 0))))
+        (call $gs32 (local.get $out_g)
+          (i32.sub (i32.load8_u (local.get $text)) (i32.const 0x30)))
+        (return (local.get $need))))
+    (local.set $len (i32.add (call $strlen_a (local.get $text)) (i32.const 1)))
+    (if (i32.eqz (local.get $cch)) (then (return (local.get $len))))
+    (if (i32.lt_u (local.get $cch) (local.get $len))
+      (then
+        (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
+        (return (i32.const 0))))
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+      (call $locale_put_ascii (local.get $out_g) (local.get $i)
+        (i32.load8_u (i32.add (local.get $text) (local.get $i))) (local.get $wide))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (local.get $len))
+
   ;; Return a small, internally consistent en-US locale surface. The A/W
   ;; spellings share character counts, including the terminating NUL.
   (func $locale_info (param $lctype i32) (param $out_g i32) (param $cch i32)
       (param $wide i32) (result i32)
     (local $ch i32) (local $base i32) (local $flags i32) (local $override i32)
+    (local $text i32)
     (if (i32.lt_s (local.get $cch) (i32.const 0))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
@@ -842,6 +1480,10 @@
           (local.get $base) (local.get $out_g) (local.get $cch) (local.get $wide)))
         (if (i32.ne (local.get $override) (i32.const -1))
           (then (return (local.get $override))))))
+    (local.set $text (call $locale_calendar_text (local.get $base)))
+    (if (local.get $text)
+      (then (return (call $locale_write_text (local.get $text) (local.get $flags)
+        (local.get $out_g) (local.get $cch) (local.get $wide)))))
     (local.set $ch (i32.const 0x30))                                   ;; "0"
     (if (i32.eq (local.get $base) (i32.const 0x0E))                    ;; LOCALE_SDECIMAL
       (then (local.set $ch (i32.const 0x2E))))                         ;; "."
@@ -961,9 +1603,35 @@
   ;; FreeLibrary starts a new lifetime for that module. The loader keeps PE
   ;; images mapped, so the handle is deliberately reused; without clearing
   ;; this sentinel the next legitimate unload is mistaken for a repeated free.
+  ;; Static dispatch modules have no PE to retire. Track explicit loads
+  ;; independently; GetModuleHandle never contributes a releasable reference.
+  (func $dll_synthetic_reference (param $module i32) (result i32)
+    (local $index i32)
+    (if (i32.eq (local.get $module) (global.get $image_base))
+      (then (return (global.get $DLL_SYNTHETIC_REFS))))
+    (local.set $index (call $static_sys_dll_from_handle (local.get $module)))
+    (if (i32.or (i32.eqz (local.get $index)) (i32.ge_u (local.get $index) (i32.const 64)))
+      (then (return (i32.const 0))))
+    (i32.add (global.get $DLL_SYNTHETIC_REFS) (i32.shl (local.get $index) (i32.const 2))))
   (func $freelib_mark_loaded (param $module i32)
-    (if (i32.eq (local.get $module) (global.get $freelib_last_handle))
-      (then (global.set $freelib_last_handle (i32.const 0)))))
+    (local $cell i32) (local $count i32)
+    (local.set $cell (call $dll_synthetic_reference (local.get $module)))
+    (if (i32.eqz (local.get $cell)) (then (return)))
+    (call $dll_load_lock_begin)
+    (local.set $count (i32.load (local.get $cell)))
+    (if (i32.eq (local.get $count) (i32.const -1)) (then (unreachable)))
+    (i32.store (local.get $cell) (i32.add (local.get $count) (i32.const 1)))
+    (call $lock_release (global.get $DLL_LOAD_LOCK)))
+  (func (export "release_synthetic_dll_reference") (param $module i32) (result i32)
+    (local $cell i32) (local $count i32)
+    (local.set $cell (call $dll_synthetic_reference (local.get $module)))
+    (if (i32.eqz (local.get $cell)) (then (return (i32.const 0))))
+    (call $dll_load_lock_begin)
+    (local.set $count (i32.load (local.get $cell)))
+    (if (local.get $count)
+      (then (i32.store (local.get $cell) (i32.sub (local.get $count) (i32.const 1)))))
+    (call $lock_release (global.get $DLL_LOAD_LOCK))
+    (i32.ne (local.get $count) (i32.const 0)))
 
   ;; 12: LoadLibraryA
   (global $loadlib_normalized_name (mut i32) (i32.const 0))
@@ -1000,19 +1668,84 @@
         (i32.store8 (i32.add (local.get $dst) (i32.add (local.get $length) (i32.const 4))) (i32.const 0))))
     (global.get $loadlib_normalized_name))
 
+  ;; True when guest path $name lives directly in $dir (a WAT string with no
+  ;; trailing separator), compared case-insensitively with '/' read as '\'.
+  (func $loadlib_path_in_dir (param $name i32) (param $dir i32) (result i32)
+    (local $i i32) (local $sep i32) (local $c i32) (local $d i32)
+    (local.set $sep (i32.const -1))
+    (block $end (loop $scan
+      (local.set $c (call $gl8 (i32.add (local.get $name) (local.get $i))))
+      (br_if $end (i32.eqz (local.get $c)))
+      (if (i32.or (i32.eq (local.get $c) (i32.const 92)) (i32.eq (local.get $c) (i32.const 47)))
+        (then (local.set $sep (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $end (i32.ge_u (local.get $i) (i32.const 260)))
+      (br $scan)))
+    (if (i32.lt_s (local.get $sep) (i32.const 1)) (then (return (i32.const 0))))
+    (local.set $i (i32.const 0))
+    (block $done (loop $cmp
+      (br_if $done (i32.ge_u (local.get $i) (local.get $sep)))
+      (local.set $c (call $tolower (call $gl8 (i32.add (local.get $name) (local.get $i)))))
+      (if (i32.eq (local.get $c) (i32.const 47)) (then (local.set $c (i32.const 92))))
+      (local.set $d (call $tolower (i32.load8_u (i32.add (local.get $dir) (local.get $i)))))
+      (if (i32.ne (local.get $c) (local.get $d)) (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $cmp)))
+    (i32.eqz (i32.load8_u (i32.add (local.get $dir) (local.get $sep)))))
+
+  ;; A path into the system or Windows directory names the module installed
+  ;; there, which for a built-in DLL is the one we dispatch: Win98's loader
+  ;; finds C:\WINDOWS\SYSTEM\kernel32.dll already mapped. Wise installer
+  ;; scripts (Die Hard: Nakatomi Plaza) load kernel32 by exactly that path to
+  ;; call it, and abort setup when the answer is NULL.
+  (func $loadlib_path_in_system_dirs (param $name i32) (result i32)
+    (i32.or (call $loadlib_path_in_dir (local.get $name) "c:\\windows\\system")
+            (call $loadlib_path_in_dir (local.get $name) "c:\\windows")))
+
+  ;; Optional modules a stock Win98 box does not have, by bare name. Each one
+  ;; must fail to load with ERROR_MOD_NOT_FOUND rather than take the
+  ;; image_base handle below, because programs probe for them and take a
+  ;; different path when they are there:
+  ;; - msi.dll: Wise's MSI bootstrap (Arcanum's Setup.exe), see below.
+  ;; - a3d.dll: Aureal's A3D audio driver, installed only with an Aureal card.
+  ;;   Trespasser loads it, finds no A3dCreate in our handle, frees it and
+  ;;   calls through NULL; with a NULL module it uses DirectSound.
+  (func $loadlib_absent_on_win98 (param $name i32) (result i32)
+    (i32.or (call $dll_name_match (local.get $name) "msi.dll")
+            (call $dll_name_match (local.get $name) "a3d.dll")))
+
   (func $handle_LoadLibraryA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $src i32) (local $dst i32) (local $ch i32) (local $name_wa i32)
+    ;; Cached loads participate in callback serialization too. Park at the
+    ;; unchanged thunk/argument frame rather than synchronously waiting on a
+    ;; worker whose nested byte lookup may need this event loop.
+    (local.set $tmp (i32.atomic.load (region.addr $DLL_LOAD_LOCK 16)))
+    (if (i32.and (i32.ne (local.get $tmp) (i32.const 0))
+          (i32.ne (local.get $tmp) (call $lock_owner_id)))
+      (then (call $spin_park (i32.const 9)) (return)))
     (local.set $arg0 (call $loadlib_normalize_name (local.get $arg0)))
     (if (i32.eqz (local.get $arg0))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (global.set $last_error (i32.const 126))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)))
+    (call $dll_load_lock_begin)
     (local.set $tmp (call $find_loaded_dll (local.get $arg0)))
+    ;; Another thread is still in this module's DLL_PROCESS_ATTACH: park on
+    ;; the thunk (the critical-section contract, yield 9) and look again.
+    (if (i32.and (i32.ge_s (local.get $tmp) (i32.const 0))
+          (call $dll_row_init_pending (local.get $tmp)))
+      (then (call $lock_release (global.get $DLL_LOAD_LOCK))
+        (call $spin_park (i32.const 9)) (return)))
     (if (i32.ge_s (local.get $tmp) (i32.const 0))
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.load (i32.add (global.get $DLL_TABLE) (i32.mul (local.get $tmp) (i32.const 32)))))
-        (call $freelib_mark_loaded (i32.load offset=0 (global.get $reg_base)))
+        (if (call $dll_retain_locked (local.get $tmp))
+          (then (i32.store offset=0 (global.get $reg_base)
+            (i32.load (i32.add (global.get $DLL_TABLE) (i32.shl (local.get $tmp) (i32.const 5))))))
+          (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (global.set $last_error (i32.const 1114))))
+        (call $lock_release (global.get $DLL_LOAD_LOCK))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
+    (call $lock_release (global.get $DLL_LOAD_LOCK))
     ;; LoadLibrary of the running program is a handle request, not a load:
     ;; Windows finds the module already mapped and returns its base with the
     ;; reference count bumped. Winamp's NSIS installer takes this path -- its
@@ -1045,13 +1778,49 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
+    ;; Windows Installer is not part of a stock Win98 box: instmsi.exe puts
+    ;; msi.dll in the system directory, and from then on the VFS test above
+    ;; loads that real file. Wise's MSI bootstrap (Arcanum's Setup.exe) probes
+    ;; with exactly this LoadLibrary; the image_base fallback below told it MSI
+    ;; was present, so it skipped instmsi and shell-executed the .msi into
+    ;; nothing.
+    (if (call $loadlib_absent_on_win98 (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (global.set $last_error (i32.const 126)) ;; ERROR_MOD_NOT_FOUND
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
     (local.set $tmp (call $guest_name_is_static_system_dll (local.get $arg0)))
     ;; Not a system module by name and not a file we hold: a module whose name
     ;; is not a .dll at all has no static dispatch behind it, so report the
     ;; load failure Windows would rather than hand back a handle that resolves
     ;; to nothing.
+    ;; A qualified path names one file on disk, and $host_has_dll_file already
+    ;; said it is not there, so the load fails. Only a bare name may stand for
+    ;; a component we dispatch by API name (dynamic d3d9.dll). Winamp's NSIS
+    ;; installer unregisters a previous install's plug-ins by full path; a
+    ;; handle here sent it into DllUnregisterServer on our own image.
+    (local.set $src (i32.const 0))
+    (local.set $dst (i32.const 0))
+    (if (i32.eqz (local.get $tmp))
+      (then
+        (block $end (loop $scan
+          (local.set $ch (call $gl8 (i32.add (local.get $arg0) (local.get $src))))
+          (br_if $end (i32.eqz (local.get $ch)))
+          (if (i32.or (i32.eq (local.get $ch) (i32.const 92))
+                      (i32.or (i32.eq (local.get $ch) (i32.const 47))
+                              (i32.eq (local.get $ch) (i32.const 58))))
+            (then (local.set $dst (i32.const 1)) (br $end)))
+          (local.set $src (i32.add (local.get $src) (i32.const 1)))
+          (br $scan)))))
+    ;; ...except a path into the system/Windows directory, which stands for the
+    ;; bare name there exactly as a stem does.
+    (if (i32.and (i32.eq (local.get $dst) (i32.const 1))
+                 (call $loadlib_path_in_system_dirs (local.get $arg0)))
+      (then (local.set $dst (i32.const 0))))
     (if (i32.and (i32.eqz (local.get $tmp))
-                 (i32.eqz (call $guest_name_has_dll_ext (local.get $arg0))))
+                 (i32.or (i32.eq (local.get $dst) (i32.const 1))
+                         (i32.eqz (call $guest_name_has_dll_ext (local.get $arg0)))))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $last_error (i32.const 126))
@@ -1076,6 +1845,11 @@
         (call $handle_LoadLibraryA
           (local.get $name) (local.get $hfile) (local.get $flags)
           (i32.const 0) (i32.const 0) (i32.const 0))))
+    ;; Parked on the thunk (module still initializing on another thread): the
+    ;; frame stays whole for the retry.
+    (if (i32.and (i32.eq (global.get $yield_reason) (i32.const 9))
+          (i32.eq (global.get $eip) (global.get $current_thunk_eip)))
+      (then (return)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_LoadLibraryExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1641,8 +2415,306 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
+  ;; ---- Virtual Program Manager: DDE XTYP_EXECUTE command strings ----
+  ;; Win9x Explorer answers the PROGMAN DDE service by turning Program Manager
+  ;; commands into Start Menu folders and shortcuts. Installers of the era
+  ;; (MindVision VISE, older InstallShield) create their program groups only
+  ;; this way, so acknowledging the transaction without doing it left Myth: The
+  ;; Fallen Lords' installer with no shortcut -- and the browser desktop, which
+  ;; turns an installer's Start Menu .lnk into an icon, with nothing to offer.
+  ;; Implemented: CreateGroup, ShowGroup, AddItem, ReplaceItem, DeleteItem and
+  ;; DeleteGroup (empty groups). Anything else is reported DDE_FNOTPROCESSED.
+  (global $progman_group (mut i32) (i32.const 0)) ;; guest buffer, 264 bytes
+  (global $PROGMAN_ARG_SLOT i32 (i32.const 264))
+  (global $PROGMAN_ARG_MAX i32 (i32.const 10))
+
+  ;; Case-insensitive compare of a guest span with a WASM-literal ASCII name.
+  (func $progman_name_eq (param $ga i32) (param $len i32) (param $lit i32) (result i32)
+    (local $i i32)
+    (block $no (loop $cmp
+      (if (i32.ge_u (local.get $i) (local.get $len))
+        (then (return (i32.eqz (i32.load8_u (i32.add (local.get $lit) (local.get $i)))))))
+      (br_if $no (i32.ne (call $tolower (call $gl8 (i32.add (local.get $ga) (local.get $i))))
+        (call $tolower (i32.load8_u (i32.add (local.get $lit) (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $cmp)))
+    (i32.const 0))
+
+  ;; Append a NUL-terminated string (guest, or WASM when $src_is_wasm) to the
+  ;; guest buffer $dst at offset $at, keeping room for the terminator inside
+  ;; $cap. Returns the new offset; always leaves $dst terminated.
+  (func $progman_append (param $dst i32) (param $at i32) (param $cap i32)
+      (param $src i32) (param $src_is_wasm i32) (result i32)
+    (local $c i32)
+    (block $end (loop $copy
+      (br_if $end (i32.ge_u (i32.add (local.get $at) (i32.const 1)) (local.get $cap)))
+      (local.set $c (select (i32.load8_u (local.get $src)) (call $gl8 (local.get $src))
+        (local.get $src_is_wasm)))
+      (br_if $end (i32.eqz (local.get $c)))
+      (call $gs8 (i32.add (local.get $dst) (local.get $at)) (local.get $c))
+      (local.set $at (i32.add (local.get $at) (i32.const 1)))
+      (local.set $src (i32.add (local.get $src) (i32.const 1)))
+      (br $copy)))
+    (call $gs8 (i32.add (local.get $dst) (local.get $at)) (i32.const 0))
+    (local.get $at))
+
+  ;; "C:\WINDOWS\Start Menu\Programs\<group>[\<item>.lnk]" into guest $dst.
+  (func $progman_path (param $dst i32) (param $group i32) (param $item i32)
+    (local $at i32)
+    (local.set $at (call $progman_append (local.get $dst) (i32.const 0) (i32.const 600)
+      (call $csidl_win98_path (i32.const 0x02)) (i32.const 1)))
+    (local.set $at (call $progman_append (local.get $dst) (local.get $at) (i32.const 600)
+      "\\" (i32.const 1)))
+    (local.set $at (call $progman_append (local.get $dst) (local.get $at) (i32.const 600)
+      (local.get $group) (i32.const 0)))
+    (if (local.get $item)
+      (then
+        (local.set $at (call $progman_append (local.get $dst) (local.get $at) (i32.const 600)
+          "\\" (i32.const 1)))
+        (local.set $at (call $progman_append (local.get $dst) (local.get $at) (i32.const 600)
+          (local.get $item) (i32.const 0)))
+        (drop (call $progman_append (local.get $dst) (local.get $at) (i32.const 600)
+          ".lnk" (i32.const 1))))))
+
+  ;; Optional signed decimal; empty or garbage reads as 0.
+  (func $progman_atoi (param $s i32) (result i32)
+    (local $v i32) (local $neg i32) (local $c i32)
+    (if (i32.eq (call $gl8 (local.get $s)) (i32.const 0x2D))
+      (then (local.set $neg (i32.const 1)) (local.set $s (i32.add (local.get $s) (i32.const 1)))))
+    (block $end (loop $digits
+      (local.set $c (call $gl8 (local.get $s)))
+      (br_if $end (i32.or (i32.lt_u (local.get $c) (i32.const 0x30)) (i32.gt_u (local.get $c) (i32.const 0x39))))
+      (local.set $v (i32.add (i32.mul (local.get $v) (i32.const 10)) (i32.sub (local.get $c) (i32.const 0x30))))
+      (local.set $s (i32.add (local.get $s) (i32.const 1)))
+      (br $digits)))
+    (select (i32.sub (i32.const 0) (local.get $v)) (local.get $v) (local.get $neg)))
+
+  ;; [AddItem(CmdLine[,Name[,IconPath[,IconIndex[,xPos,yPos[,DefDir...]]]]])]
+  ;; CmdLine may be an unquoted path with spaces ("C:\Program Files\x.exe"):
+  ;; the program ends at the first .exe/.com/.bat/.pif followed by a space or
+  ;; the end, and anything after it is the arguments.
+  (func $progman_add_item (param $argv i32) (param $argc i32) (param $path i32) (result i32)
+    (local $cmd i32) (local $len i32) (local $i i32) (local $split i32) (local $c i32)
+    (local $args i32) (local $name i32) (local $icon i32) (local $work i32) (local $slash i32)
+    (local $base i32) (local $dot i32)
+    (if (i32.or (i32.eqz (global.get $progman_group)) (i32.eqz (local.get $argc)))
+      (then (return (i32.const 0))))
+    (local.set $cmd (local.get $argv))
+    (local.set $len (call $guest_strlen (local.get $cmd)))
+    (if (i32.eqz (local.get $len)) (then (return (i32.const 0))))
+    (local.set $split (local.get $len))
+    (block $found (loop $scan
+      (br_if $found (i32.gt_u (i32.add (local.get $i) (i32.const 4)) (local.get $len)))
+      (if (i32.and
+            (i32.eq (call $gl8 (i32.add (local.get $cmd) (local.get $i))) (i32.const 0x2E))
+            (i32.or (i32.eq (i32.add (local.get $i) (i32.const 4)) (local.get $len))
+              (i32.eq (call $gl8 (i32.add (local.get $cmd) (i32.add (local.get $i) (i32.const 4)))) (i32.const 0x20))))
+        (then
+          (if (i32.or (i32.or
+                (call $progman_name_eq (i32.add (local.get $cmd) (local.get $i)) (i32.const 4) ".exe")
+                (call $progman_name_eq (i32.add (local.get $cmd) (local.get $i)) (i32.const 4) ".com"))
+              (i32.or
+                (call $progman_name_eq (i32.add (local.get $cmd) (local.get $i)) (i32.const 4) ".bat")
+                (call $progman_name_eq (i32.add (local.get $cmd) (local.get $i)) (i32.const 4) ".pif")))
+            (then (local.set $split (i32.add (local.get $i) (i32.const 4))) (br $found)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (if (i32.lt_u (local.get $split) (local.get $len))
+      (then
+        (call $gs8 (i32.add (local.get $cmd) (local.get $split)) (i32.const 0))
+        (local.set $args (i32.add (local.get $cmd) (i32.add (local.get $split) (i32.const 1))))
+        (block $ws (loop $skip
+          (br_if $ws (i32.ne (call $gl8 (local.get $args)) (i32.const 0x20)))
+          (local.set $args (i32.add (local.get $args) (i32.const 1)))
+          (br $skip)))
+        (if (i32.eqz (call $gl8 (local.get $args))) (then (local.set $args (i32.const 0))))))
+    ;; Target directory (working-directory default) and file stem (name default).
+    (local.set $work (i32.add (local.get $argv) (i32.mul (i32.const 9) (global.get $PROGMAN_ARG_SLOT))))
+    (drop (call $progman_append (local.get $work) (i32.const 0) (global.get $PROGMAN_ARG_SLOT)
+      (local.get $cmd) (i32.const 0)))
+    (local.set $slash (i32.const -1))
+    (local.set $i (i32.const 0))
+    (block $end (loop $dirs
+      (local.set $c (call $gl8 (i32.add (local.get $work) (local.get $i))))
+      (br_if $end (i32.eqz (local.get $c)))
+      (if (i32.eq (local.get $c) (i32.const 0x5C)) (then (local.set $slash (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $dirs)))
+    (local.set $name
+      (if (result i32) (i32.and (i32.ge_u (local.get $argc) (i32.const 2))
+            (i32.ne (call $gl8 (i32.add (local.get $argv) (global.get $PROGMAN_ARG_SLOT))) (i32.const 0)))
+        (then (i32.add (local.get $argv) (global.get $PROGMAN_ARG_SLOT)))
+        (else
+          (local.set $base (i32.add (local.get $argv) (i32.mul (i32.const 8) (global.get $PROGMAN_ARG_SLOT))))
+          (local.set $dot (call $progman_append (local.get $base) (i32.const 0) (global.get $PROGMAN_ARG_SLOT)
+            (i32.add (local.get $work) (i32.add (local.get $slash) (i32.const 1))) (i32.const 0)))
+          (block $stem (loop $back
+            (br_if $stem (i32.eqz (local.get $dot)))
+            (local.set $dot (i32.sub (local.get $dot) (i32.const 1)))
+            (if (i32.eq (call $gl8 (i32.add (local.get $base) (local.get $dot))) (i32.const 0x2E))
+              (then (call $gs8 (i32.add (local.get $base) (local.get $dot)) (i32.const 0)) (br $stem)))
+            (br $back)))
+          (local.get $base))))
+    (if (i32.and (i32.ge_u (local.get $argc) (i32.const 7))
+          (i32.ne (call $gl8 (i32.add (local.get $argv) (i32.mul (i32.const 6) (global.get $PROGMAN_ARG_SLOT)))) (i32.const 0)))
+      (then (local.set $work (i32.add (local.get $argv) (i32.mul (i32.const 6) (global.get $PROGMAN_ARG_SLOT)))))
+      (else
+        (if (i32.ge_s (local.get $slash) (i32.const 0))
+          (then (call $gs8 (i32.add (local.get $work) (select (local.get $slash) (i32.add (local.get $slash) (i32.const 1))
+            (i32.ne (local.get $slash) (i32.const 2)))) (i32.const 0)))
+          (else (local.set $work (i32.const 0))))))
+    (if (i32.and (i32.ge_u (local.get $argc) (i32.const 3))
+          (i32.ne (call $gl8 (i32.add (local.get $argv) (i32.mul (i32.const 2) (global.get $PROGMAN_ARG_SLOT)))) (i32.const 0)))
+      (then (local.set $icon (i32.add (local.get $argv) (i32.mul (i32.const 2) (global.get $PROGMAN_ARG_SLOT))))))
+    (call $progman_path (local.get $path) (global.get $progman_group) (local.get $name))
+    (i32.eq (call $shell_link_write (call $g2w (local.get $path)) (i32.const 0)
+      (local.get $cmd) (local.get $args) (local.get $work) (local.get $name) (local.get $icon)
+      (select (call $progman_atoi (i32.add (local.get $argv) (i32.mul (i32.const 3) (global.get $PROGMAN_ARG_SLOT))))
+        (i32.const 0) (i32.ge_u (local.get $argc) (i32.const 4))))
+      (i32.const 1)))
+
+  ;; One parsed command. $path is a 600-byte guest scratch buffer.
+  (func $progman_command (param $name i32) (param $nlen i32) (param $argv i32) (param $argc i32)
+      (param $path i32) (result i32)
+    (if (call $progman_name_eq (local.get $name) (local.get $nlen) "CreateGroup")
+      (then
+        (if (i32.eqz (local.get $argc)) (then (return (i32.const 0))))
+        (if (i32.eqz (global.get $progman_group))
+          (then (global.set $progman_group (call $heap_alloc (global.get $PROGMAN_ARG_SLOT)))))
+        (if (i32.eqz (global.get $progman_group)) (then (return (i32.const 0))))
+        (drop (call $progman_append (global.get $progman_group) (i32.const 0) (global.get $PROGMAN_ARG_SLOT)
+          (local.get $argv) (i32.const 0)))
+        (call $progman_path (local.get $path) (global.get $progman_group) (i32.const 0))
+        (drop (call $host_fs_create_directory (call $g2w (local.get $path)) (i32.const 0)))
+        (return (i32.ne (call $host_fs_get_file_attributes (call $g2w (local.get $path)) (i32.const 0)) (i32.const -1)))))
+    (if (call $progman_name_eq (local.get $name) (local.get $nlen) "ShowGroup")
+      (then (return (i32.ne (local.get $argc) (i32.const 0)))))
+    (if (call $progman_name_eq (local.get $name) (local.get $nlen) "AddItem")
+      (then (return (call $progman_add_item (local.get $argv) (local.get $argc) (local.get $path)))))
+    (if (i32.or (call $progman_name_eq (local.get $name) (local.get $nlen) "ReplaceItem")
+          (call $progman_name_eq (local.get $name) (local.get $nlen) "DeleteItem"))
+      (then
+        (if (i32.or (i32.eqz (local.get $argc)) (i32.eqz (global.get $progman_group)))
+          (then (return (i32.const 0))))
+        (call $progman_path (local.get $path) (global.get $progman_group) (local.get $argv))
+        (drop (call $host_fs_delete_file (call $g2w (local.get $path)) (i32.const 0)))
+        (return (i32.const 1))))
+    (if (call $progman_name_eq (local.get $name) (local.get $nlen) "DeleteGroup")
+      (then
+        (if (i32.eqz (local.get $argc)) (then (return (i32.const 0))))
+        (call $progman_path (local.get $path) (local.get $argv) (i32.const 0))
+        (return (i32.ne (call $host_fs_remove_directory (call $g2w (local.get $path)) (i32.const 0)) (i32.const 0)))))
+    (i32.const 0))
+
+  ;; Execute a command string of [Cmd(arg, "arg", ...)] groups. $cmd is a guest
+  ;; address; reading stops at $len or the first NUL. 1 only if every command
+  ;; was understood and carried out.
+  (func $progman_execute (param $cmd i32) (param $len i32) (result i32)
+    (local $argv i32) (local $path i32) (local $pos i32) (local $c i32) (local $ok i32)
+    (local $name i32) (local $nlen i32) (local $argc i32) (local $slot i32) (local $alen i32)
+    (local $quoted i32)
+    (local.set $argv (call $heap_alloc (i32.mul (global.get $PROGMAN_ARG_MAX) (global.get $PROGMAN_ARG_SLOT))))
+    (local.set $path (call $heap_alloc (i32.const 600)))
+    (if (i32.or (i32.eqz (local.get $argv)) (i32.eqz (local.get $path)))
+      (then
+        (if (local.get $argv) (then (call $heap_free (local.get $argv))))
+        (if (local.get $path) (then (call $heap_free (local.get $path))))
+        (return (i32.const 0))))
+    (local.set $ok (i32.const 1))
+    (block $done (loop $commands
+      ;; whitespace between commands
+      (block $ws (loop $skip
+        (br_if $done (i32.ge_u (local.get $pos) (local.get $len)))
+        (local.set $c (call $gl8 (i32.add (local.get $cmd) (local.get $pos))))
+        (br_if $done (i32.eqz (local.get $c)))
+        (br_if $ws (i32.gt_u (local.get $c) (i32.const 0x20)))
+        (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+        (br $skip)))
+      (if (i32.ne (local.get $c) (i32.const 0x5B)) ;; '['
+        (then (local.set $ok (i32.const 0)) (br $done)))
+      (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+      (local.set $name (i32.add (local.get $cmd) (local.get $pos)))
+      (local.set $nlen (i32.const 0))
+      (block $nend (loop $nloop
+        (br_if $nend (i32.ge_u (local.get $pos) (local.get $len)))
+        (local.set $c (call $gl8 (i32.add (local.get $cmd) (local.get $pos))))
+        (br_if $nend (i32.or (i32.or (i32.eqz (local.get $c)) (i32.eq (local.get $c) (i32.const 0x28)))
+          (i32.or (i32.eq (local.get $c) (i32.const 0x5D)) (i32.eq (local.get $c) (i32.const 0x20)))))
+        (local.set $nlen (i32.add (local.get $nlen) (i32.const 1)))
+        (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+        (br $nloop)))
+      (local.set $argc (i32.const 0))
+      (if (i32.eq (local.get $c) (i32.const 0x28)) ;; '('
+        (then
+          (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+          (block $aend (loop $args
+            (block $sp (loop $sps
+              (br_if $sp (i32.ge_u (local.get $pos) (local.get $len)))
+              (br_if $sp (i32.ne (call $gl8 (i32.add (local.get $cmd) (local.get $pos))) (i32.const 0x20)))
+              (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+              (br $sps)))
+            (local.set $slot (i32.add (local.get $argv)
+              (i32.mul (select (local.get $argc) (i32.sub (global.get $PROGMAN_ARG_MAX) (i32.const 1))
+                (i32.lt_u (local.get $argc) (global.get $PROGMAN_ARG_MAX))) (global.get $PROGMAN_ARG_SLOT))))
+            (local.set $alen (i32.const 0))
+            (local.set $quoted (i32.eq (call $gl8 (i32.add (local.get $cmd) (local.get $pos))) (i32.const 0x22)))
+            (if (local.get $quoted) (then (local.set $pos (i32.add (local.get $pos) (i32.const 1)))))
+            (block $vend (loop $value
+              (if (i32.ge_u (local.get $pos) (local.get $len))
+                (then (local.set $ok (i32.const 0)) (br $done)))
+              (local.set $c (call $gl8 (i32.add (local.get $cmd) (local.get $pos))))
+              (if (i32.eqz (local.get $c)) (then (local.set $ok (i32.const 0)) (br $done)))
+              (if (local.get $quoted)
+                (then (if (i32.eq (local.get $c) (i32.const 0x22))
+                  (then (local.set $pos (i32.add (local.get $pos) (i32.const 1))) (br $vend))))
+                (else (br_if $vend (i32.or (i32.eq (local.get $c) (i32.const 0x2C))
+                  (i32.eq (local.get $c) (i32.const 0x29))))))
+              (if (i32.lt_u (local.get $alen) (i32.sub (global.get $PROGMAN_ARG_SLOT) (i32.const 1)))
+                (then
+                  (call $gs8 (i32.add (local.get $slot) (local.get $alen)) (local.get $c))
+                  (local.set $alen (i32.add (local.get $alen) (i32.const 1)))))
+              (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+              (br $value)))
+            ;; Trailing blanks of an unquoted value are not part of it.
+            (if (i32.eqz (local.get $quoted))
+              (then (block $trimmed (loop $trim
+                (br_if $trimmed (i32.eqz (local.get $alen)))
+                (br_if $trimmed (i32.ne (call $gl8 (i32.add (local.get $slot) (i32.sub (local.get $alen) (i32.const 1)))) (i32.const 0x20)))
+                (local.set $alen (i32.sub (local.get $alen) (i32.const 1)))
+                (br $trim)))))
+            (call $gs8 (i32.add (local.get $slot) (local.get $alen)) (i32.const 0))
+            (if (i32.lt_u (local.get $argc) (global.get $PROGMAN_ARG_MAX))
+              (then (local.set $argc (i32.add (local.get $argc) (i32.const 1)))))
+            (block $sp2 (loop $sps2
+              (br_if $sp2 (i32.ge_u (local.get $pos) (local.get $len)))
+              (br_if $sp2 (i32.ne (call $gl8 (i32.add (local.get $cmd) (local.get $pos))) (i32.const 0x20)))
+              (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+              (br $sps2)))
+            (if (i32.ge_u (local.get $pos) (local.get $len)) (then (local.set $ok (i32.const 0)) (br $done)))
+            (local.set $c (call $gl8 (i32.add (local.get $cmd) (local.get $pos))))
+            (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+            (br_if $args (i32.eq (local.get $c) (i32.const 0x2C)))
+            (br_if $aend (i32.eq (local.get $c) (i32.const 0x29)))
+            (local.set $ok (i32.const 0)) (br $done)))))
+      ;; closing ']'
+      (block $close (loop $cl
+        (if (i32.ge_u (local.get $pos) (local.get $len)) (then (local.set $ok (i32.const 0)) (br $done)))
+        (local.set $c (call $gl8 (i32.add (local.get $cmd) (local.get $pos))))
+        (local.set $pos (i32.add (local.get $pos) (i32.const 1)))
+        (br_if $close (i32.eq (local.get $c) (i32.const 0x5D)))
+        (if (i32.ne (local.get $c) (i32.const 0x20)) (then (local.set $ok (i32.const 0)) (br $done)))
+        (br $cl)))
+      (if (i32.eqz (call $progman_command (local.get $name) (local.get $nlen)
+            (local.get $argv) (local.get $argc) (local.get $path)))
+        (then (local.set $ok (i32.const 0))))
+      (br $commands)))
+    (call $heap_free (local.get $argv))
+    (call $heap_free (local.get $path))
+    (local.get $ok))
+
   (func $handle_DdeClientTransaction (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $result_ptr i32) (local $type i32) (local $conv i32) (local $owner i32)
+    (local $data i32) (local $cmd i32) (local $cmd_len i32)
     ;; The dispatcher exposes five fast arguments; read the remaining three
     ;; stdcall arguments from their original stack positions.
     (local.set $type (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -1665,12 +2737,32 @@
           (i32.and
             (i32.and (i32.ne (local.get $arg0) (i32.const 0))
               (i32.ne (local.get $arg1) (i32.const 0)))
-            (i32.and (i32.eqz (local.get $arg3)) (i32.eqz (local.get $arg4)))))
+            ;; hszItem must be 0. wFmt is ignored for an execute: VISE sends
+            ;; CF_TEXT (1), and Explorer's Progman server carries it out.
+            (i32.eqz (local.get $arg3))))
       (then
-        (if (local.get $result_ptr)
-          (then (call $gs32 (local.get $result_ptr) (i32.const 0x8000)))) ;; DDE_FACK
-        (call $dde32_set_error (local.get $owner) (i32.const 0))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+        ;; cbData -1 passes an HDDEDATA from DdeCreateDataHandle instead of bytes.
+        (if (i32.eq (local.get $arg1) (i32.const -1))
+          (then
+            (local.set $data (call $dde32_data_find (local.get $arg0)))
+            (local.set $cmd (select (call $gl32 (i32.add (local.get $data) (i32.const 8))) (i32.const 0)
+              (i32.ne (local.get $data) (i32.const 0))))
+            (local.set $cmd_len (select (call $gl32 (i32.add (local.get $data) (i32.const 12))) (i32.const 0)
+              (i32.ne (local.get $data) (i32.const 0)))))
+          (else
+            (local.set $cmd (local.get $arg0))
+            (local.set $cmd_len (local.get $arg1))))
+        (if (i32.and (i32.ne (local.get $cmd) (i32.const 0))
+              (call $progman_execute (local.get $cmd) (local.get $cmd_len)))
+          (then
+            (if (local.get $result_ptr)
+              (then (call $gs32 (local.get $result_ptr) (i32.const 0x8000)))) ;; DDE_FACK
+            (call $dde32_set_error (local.get $owner) (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+          (else
+            ;; DDE_FNOTPROCESSED: the result word stays 0, and so does the return.
+            (call $dde32_set_error (local.get $owner) (i32.const 0x4009)) ;; DMLERR_NOTPROCESSED
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0)))))
       (else
         (call $dde32_set_error (local.get $owner) (i32.const 0x4009))
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
@@ -2468,9 +3560,24 @@
 
   ;; 13: DeleteFileA(lpFileName) — 1 arg stdcall
   (func $handle_DeleteFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_fs_delete_file (call $g2w (local.get $arg0)) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $fs_path_result
+      (call $host_fs_delete_file (call $g2w (local.get $arg0)) (i32.const 0))
+      (local.get $arg0) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
+
+  ;; A path operation's BOOL, with the failure's last error set the way
+  ;; Windows does: a name that does not exist is ERROR_FILE_NOT_FOUND, one
+  ;; that exists and still refused is ERROR_ACCESS_DENIED. Callers branch on
+  ;; that code — SetupAPI's DelFiles skips a missing file and reports any other
+  ;; error, so a stale last error turns "nothing to delete" into a failure.
+  (func $fs_path_result (param $ok i32) (param $path i32) (param $wide i32) (result i32)
+    (if (i32.eqz (local.get $ok))
+      (then (global.set $last_error
+        (select (i32.const 2) (i32.const 5)
+          (i32.eq (call $host_fs_get_file_attributes (call $g2w (local.get $path)) (local.get $wide))
+                  (i32.const -1))))))
+    (local.get $ok))
 
   ;; 14: CreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecAttr, dwCreation, dwFlags, hTemplate) — 7 args
   (func $console_device_name (param $name i32) (param $wide i32) (result i32)
@@ -2509,6 +3616,8 @@
     (local $wa_esp i32) (local $creation i32) (local $flags i32) (local $device i32) (local $path_wa i32)
     (local.set $path_wa (call $g2w (local.get $arg0)))
     (local.set $device (call $console_device_name (local.get $path_wa) (i32.const 0)))
+    (if (call $quartz_vxd_name (local.get $path_wa) (i32.const 0))
+      (then (local.set $device (global.get $QUARTZ_VXD_HANDLE))))
     (if (local.get $device)
       (then
         (i32.store offset=0 (global.get $reg_base) (local.get $device))
@@ -2518,15 +3627,15 @@
     (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $creation (local.get $arg4))
     (local.set $flags (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
-    (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_file
+    (global.set $last_error (call $host_fs_create_file_result
       (local.get $path_wa)           ;; pathWA
       (local.get $arg1)               ;; access
       (local.get $creation)            ;; creation disposition
       (local.get $flags)               ;; flags and attributes
-      (i32.const 0)))                  ;; isWide=0
-    (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
-      (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
+      (i32.const 0) (global.get $reg_base))) ;; isWide=0; handle output in EAX
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))  ;; 7 args + ret
+    (if (i32.eq (global.get $last_error) (i32.const 997))
+      (then (call $io_block (i32.const 32))))
   )
 
   ;; 15: FindFirstFileA(lpFileName, lpFindFileData) — 2 args stdcall
@@ -2536,6 +3645,25 @@
     (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
       (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+  )
+
+  ;; FindFirstFileExA(lpFileName, fInfoLevelId, lpFindFileData, fSearchOp,
+  ;; lpSearchFilter, dwAdditionalFlags). FindExInfoStandard (0) and
+  ;; FindExInfoBasic (1, which only leaves cAlternateFileName empty) fill the
+  ;; same WIN32_FIND_DATAA as FindFirstFileA; FindExSearchLimitToDirectories
+  ;; is advisory in Win32 and FindExSearchNameMatch is the plain search, so both
+  ;; take the FindFirstFileA path. Pocket Tanks calls this from its LAN Create
+  ;; Game screen. Other levels, search operations and filters fail loudly.
+  (func $handle_FindFirstFileExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.or (i32.or (i32.gt_u (local.get $arg1) (i32.const 1))
+                        (i32.gt_u (local.get $arg3) (i32.const 1)))
+                (i32.ne (local.get $arg4) (i32.const 0)))
+      (then (call $crash_unimplemented (local.get $name_ptr))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_find_first_file
+      (call $g2w (local.get $arg0)) (local.get $arg2) (i32.const 0)))
+    (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
+      (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 16: FindClose(hFindFile) — 1 arg stdcall
@@ -2660,12 +3788,21 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; 2 args + ret
   )
 
-  ;; 20: _lopen — STUB: unimplemented
+  ;; 20: _lopen(lpPathName, iReadWrite) — 2 args stdcall. The low two bits of
+  ;; iReadWrite are OF_READ (0), OF_WRITE (1) or OF_READWRITE (2); the share
+  ;; bits above them do not change what this handle may do. Opening everything
+  ;; read-only made every write through it fail: DOS INT 21h AH=3Dh routes here,
+  ;; and InstallShield's 16-bit self-extractor reopens each file it creates
+  ;; that way before writing it.
   (func $handle__lopen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; _lopen(lpPathName, iReadWrite) — 2 args stdcall
+    (local $mode i32)
+    (local.set $mode (i32.and (local.get $arg1) (i32.const 3)))
     (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_legacy_file
       (call $g2w (local.get $arg0))
-      (i32.const 0x80000000)  ;; GENERIC_READ
+      (select (i32.const 0x40000000)                  ;; OF_WRITE: GENERIC_WRITE
+        (select (i32.const 0xC0000000) (i32.const 0x80000000)
+          (i32.eq (local.get $mode) (i32.const 2)))    ;; OF_READWRITE / OF_READ
+        (i32.eq (local.get $mode) (i32.const 1)))
       (i32.const 3)           ;; OPEN_EXISTING
       (i32.const 0x80)        ;; FILE_ATTRIBUTE_NORMAL
       (i32.const 0)))         ;; isWide=0
@@ -2822,7 +3959,12 @@
   ;; operations onto the VFS. SZDD decompression can be added separately if a
   ;; caller needs it.
   (func $handle_LZOpenFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $handle i32) (local $of_wa i32) (local $access i32) (local $creation i32)
+    (local $handle i32) (local $of_wa i32) (local $access i32) (local $creation i32) (local $hf i32)
+    ;; The open a parked call left behind; its fill is done by now.
+    (if (global.get $lz_open_parked)
+      (then
+        (drop (call $host_fs_close_handle (global.get $lz_open_parked)))
+        (global.set $lz_open_parked (i32.const 0))))
     ;; OF_READ=0, OF_WRITE=1, OF_READWRITE=2, OF_CREATE=0x1000.
     (local.set $access (i32.const 0x80000000))
     (if (i32.eq (i32.and (local.get $arg2) (i32.const 3)) (i32.const 1))
@@ -2838,6 +3980,22 @@
       (local.get $creation)
       (i32.const 0x80)        ;; FILE_ATTRIBUTE_NORMAL
       (i32.const 0)))         ;; ANSI path
+    ;; A read-only open goes through LZInit, so an SZDD file reads expanded.
+    (if (i32.and (i32.ne (local.get $handle) (i32.const -1))
+          (i32.eqz (i32.and (local.get $arg2) (i32.const 0x1003))))
+      (then
+        (local.set $hf (local.get $handle))
+        (local.set $handle (call $lz_init (local.get $handle)))
+        ;; A lazily mounted file whose bytes are not here yet: run the whole
+        ;; call again once the host has them. The pending read belongs to this
+        ;; handle and closing it would cancel the fill, so it stays open until
+        ;; the retry, which closes it (see the top of this function).
+        (if (i32.eq (local.get $handle) (global.get $LZ_PARK))
+          (then
+            (global.set $lz_open_parked (local.get $hf))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+            (call $io_block (i32.const 16))
+            (return)))))
     (if (local.get $arg1)
       (then
         (local.set $of_wa (call $g2w (local.get $arg1)))
@@ -2849,19 +4007,247 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
+  ;; SZDD (COMPRESS.EXE) streams. LZInit expands a compressed file whole into
+  ;; a guest heap buffer and answers an LZ handle, 0x400 + slot as in LZ32, so
+  ;; LZRead/LZSeek/LZClose can tell it from a file handle. Slot records are
+  ;; 16 bytes in a lazily allocated guest table: source file handle, buffer,
+  ;; expanded size, read position. Daytona USA Deluxe ships 72 of its
+  ;; Resource\ files this way and reads them all through LZInit/LZRead.
+  (global $LZ_MAX_STATES i32 (i32.const 16))
+  ;; $lz_init's answer when a read hit a lazily mounted file's missing bytes
+  ;; (host error 997): not an LZERROR_* code, the caller parks and retries.
+  (global $LZ_PARK i32 (i32.const -997))
+  (global $lz_open_parked (mut i32) (i32.const 0))
+  (global $LZ_MIN_HANDLE i32 (i32.const 0x400))
+  (global $lz_states_g (mut i32) (i32.const 0))
+
+  ;; Guest address of the live slot record for LZ handle $h, or 0.
+  (func $lz_state (param $h i32) (result i32)
+    (local $slot i32) (local $rec i32)
+    (if (i32.eqz (global.get $lz_states_g)) (then (return (i32.const 0))))
+    (local.set $slot (i32.sub (local.get $h) (global.get $LZ_MIN_HANDLE)))
+    (if (i32.ge_u (local.get $slot) (global.get $LZ_MAX_STATES))
+      (then (return (i32.const 0))))
+    (local.set $rec (i32.add (global.get $lz_states_g)
+      (i32.shl (local.get $slot) (i32.const 4))))
+    (if (i32.eqz (call $gl32 (i32.add (local.get $rec) (i32.const 4))))
+      (then (return (i32.const 0))))
+    (local.get $rec))
+
+  ;; Expand SZDD LZSS data: a 4 KB ring prefilled with spaces and written
+  ;; from 4096-16. Each control byte's bits, low first, select a literal (1)
+  ;; or a 2-byte back reference (0): 12-bit ring offset, 4-bit length - 3.
+  ;; Returns the number of bytes written to $out (at most $out_size).
+  (func $lz_expand_szdd
+        (param $src i32) (param $src_len i32) (param $out i32) (param $out_size i32)
+        (param $ring i32) (result i32)
+    (local $in i32) (local $n i32) (local $pos i32) (local $ctl i32)
+    (local $bit i32) (local $b i32) (local $b2 i32) (local $off i32)
+    (local $len i32) (local $k i32)
+    (block $fill_done (loop $fill
+      (br_if $fill_done (i32.ge_u (local.get $k) (i32.const 4096)))
+      (call $gs8 (i32.add (local.get $ring) (local.get $k)) (i32.const 0x20))
+      (local.set $k (i32.add (local.get $k) (i32.const 1)))
+      (br $fill)))
+    (local.set $pos (i32.const 4080))
+    (block $done (loop $blocks
+      (br_if $done (i32.ge_u (local.get $in) (local.get $src_len)))
+      (br_if $done (i32.ge_u (local.get $n) (local.get $out_size)))
+      (local.set $ctl (call $gl8 (i32.add (local.get $src) (local.get $in))))
+      (local.set $in (i32.add (local.get $in) (i32.const 1)))
+      (local.set $bit (i32.const 0))
+      (block $bits_done (loop $bits
+        (br_if $bits_done (i32.ge_u (local.get $bit) (i32.const 8)))
+        (br_if $done (i32.ge_u (local.get $in) (local.get $src_len)))
+        (br_if $done (i32.ge_u (local.get $n) (local.get $out_size)))
+        (if (i32.and (local.get $ctl) (i32.shl (i32.const 1) (local.get $bit)))
+          (then
+            (local.set $b (call $gl8 (i32.add (local.get $src) (local.get $in))))
+            (local.set $in (i32.add (local.get $in) (i32.const 1)))
+            (call $gs8 (i32.add (local.get $out) (local.get $n)) (local.get $b))
+            (local.set $n (i32.add (local.get $n) (i32.const 1)))
+            (call $gs8 (i32.add (local.get $ring) (local.get $pos)) (local.get $b))
+            (local.set $pos (i32.and (i32.add (local.get $pos) (i32.const 1)) (i32.const 0xFFF))))
+          (else
+            (br_if $done (i32.ge_u (i32.add (local.get $in) (i32.const 1)) (local.get $src_len)))
+            (local.set $b (call $gl8 (i32.add (local.get $src) (local.get $in))))
+            (local.set $b2 (call $gl8 (i32.add (local.get $src) (i32.add (local.get $in) (i32.const 1)))))
+            (local.set $in (i32.add (local.get $in) (i32.const 2)))
+            (local.set $off (i32.or (local.get $b)
+              (i32.shl (i32.and (local.get $b2) (i32.const 0xF0)) (i32.const 4))))
+            (local.set $len (i32.add (i32.and (local.get $b2) (i32.const 0x0F)) (i32.const 3)))
+            (local.set $k (i32.const 0))
+            (block $copy_done (loop $copy
+              (br_if $copy_done (i32.ge_u (local.get $k) (local.get $len)))
+              (br_if $done (i32.ge_u (local.get $n) (local.get $out_size)))
+              (local.set $b (call $gl8 (i32.add (local.get $ring)
+                (i32.and (i32.add (local.get $off) (local.get $k)) (i32.const 0xFFF)))))
+              (call $gs8 (i32.add (local.get $out) (local.get $n)) (local.get $b))
+              (local.set $n (i32.add (local.get $n) (i32.const 1)))
+              (call $gs8 (i32.add (local.get $ring) (local.get $pos)) (local.get $b))
+              (local.set $pos (i32.and (i32.add (local.get $pos) (i32.const 1)) (i32.const 0xFFF)))
+              (local.set $k (i32.add (local.get $k) (i32.const 1)))
+              (br $copy)))))
+        (local.set $bit (i32.add (local.get $bit) (i32.const 1)))
+        (br $bits)))
+      (br $blocks)))
+    (local.get $n))
+
+  ;; LZInit's body: $hf itself for an ordinary file (rewound), an LZ handle
+  ;; for an SZDD file, or a negative LZERROR_* code.
+  (func $lz_init (param $hf i32) (result i32)
+    (local $hdr i32) (local $nread i32) (local $file_size i32) (local $comp i32)
+    (local $comp_len i32) (local $out_size i32) (local $out i32) (local $ring i32)
+    (local $slot i32) (local $rec i32) (local $got i32)
+    (if (i32.eq (local.get $hf) (i32.const -1)) (then (return (i32.const -1)))) ;; LZERROR_BADINHANDLE
+    (local.set $hdr (call $heap_alloc (i32.const 20)))
+    (if (i32.eqz (local.get $hdr)) (then (return (i32.const -5))))            ;; LZERROR_GLOBALLOC
+    (local.set $nread (i32.add (local.get $hdr) (i32.const 16)))
+    (drop (call $host_fs_set_file_pointer (local.get $hf) (i32.const 0) (i32.const 0)))
+    (call $gs32 (local.get $nread) (i32.const 0))
+    ;; A header read that has to wait for the bytes must not be taken for
+    ;; "not SZDD": the file would then read back compressed.
+    (if (i32.and
+          (i32.eqz (call $host_fs_read_file (local.get $hf) (local.get $hdr) (i32.const 14) (local.get $nread)))
+          (i32.eq (call $host_fs_read_pending) (i32.const 1)))
+      (then
+        (call $heap_free (local.get $hdr))
+        (return (global.get $LZ_PARK))))
+    (if (i32.or
+          (i32.ne (call $gl32 (local.get $nread)) (i32.const 14))
+          (i32.or
+            (i32.ne (call $gl32 (local.get $hdr)) (i32.const 0x44445A53))   ;; "SZDD"
+            (i32.ne (call $gl32 (i32.add (local.get $hdr) (i32.const 4))) (i32.const 0x3327F088))))
+      (then
+        (call $heap_free (local.get $hdr))
+        (drop (call $host_fs_set_file_pointer (local.get $hf) (i32.const 0) (i32.const 0)))
+        (return (local.get $hf))))
+    (local.set $out_size (call $gl32 (i32.add (local.get $hdr) (i32.const 10))))
+    (call $heap_free (local.get $hdr))
+    ;; Find a free slot before allocating the buffers.
+    (if (i32.eqz (global.get $lz_states_g))
+      (then
+        (global.set $lz_states_g (call $heap_alloc
+          (i32.shl (global.get $LZ_MAX_STATES) (i32.const 4))))
+        (if (i32.eqz (global.get $lz_states_g)) (then (return (i32.const -5))))
+        (call $zero_memory (call $g2w (global.get $lz_states_g))
+          (i32.shl (global.get $LZ_MAX_STATES) (i32.const 4)))))
+    (local.set $slot (i32.const 0))
+    (block $found (loop $scan
+      (if (i32.ge_u (local.get $slot) (global.get $LZ_MAX_STATES))
+        (then (return (i32.const -5))))
+      (local.set $rec (i32.add (global.get $lz_states_g)
+        (i32.shl (local.get $slot) (i32.const 4))))
+      (br_if $found (i32.eqz (call $gl32 (i32.add (local.get $rec) (i32.const 4)))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (local.set $file_size
+      (call $host_fs_set_file_pointer (local.get $hf) (i32.const 0) (i32.const 2)))
+    (local.set $comp_len (i32.sub (local.get $file_size) (i32.const 14)))
+    (if (i32.lt_s (local.get $comp_len) (i32.const 0)) (then (return (i32.const -3)))) ;; LZERROR_READ
+    (local.set $comp (call $heap_alloc (i32.add (local.get $comp_len) (i32.const 4))))
+    (local.set $ring (call $heap_alloc (i32.const 4096)))
+    (local.set $out (call $heap_alloc (select (local.get $out_size) (i32.const 1)
+      (i32.ne (local.get $out_size) (i32.const 0)))))
+    (if (i32.or (i32.eqz (local.get $comp))
+          (i32.or (i32.eqz (local.get $ring)) (i32.eqz (local.get $out))))
+      (then
+        (if (local.get $comp) (then (call $heap_free (local.get $comp))))
+        (if (local.get $ring) (then (call $heap_free (local.get $ring))))
+        (if (local.get $out) (then (call $heap_free (local.get $out))))
+        (return (i32.const -5))))
+    (drop (call $host_fs_set_file_pointer (local.get $hf) (i32.const 14) (i32.const 0)))
+    (call $gs32 (i32.add (local.get $comp) (local.get $comp_len)) (i32.const 0))
+    (if (i32.eqz (call $host_fs_read_file (local.get $hf) (local.get $comp)
+          (local.get $comp_len) (i32.add (local.get $comp) (local.get $comp_len))))
+      (then
+        (call $heap_free (local.get $comp))
+        (call $heap_free (local.get $ring))
+        (call $heap_free (local.get $out))
+        (return (select (global.get $LZ_PARK) (i32.const -3)
+          (i32.eq (call $host_fs_read_pending) (i32.const 1))))))
+    (local.set $got (call $gl32 (i32.add (local.get $comp) (local.get $comp_len))))
+    (drop (call $lz_expand_szdd (local.get $comp) (local.get $got)
+      (local.get $out) (local.get $out_size) (local.get $ring)))
+    (call $heap_free (local.get $comp))
+    (call $heap_free (local.get $ring))
+    (call $gs32 (local.get $rec) (local.get $hf))
+    (call $gs32 (i32.add (local.get $rec) (i32.const 4)) (local.get $out))
+    (call $gs32 (i32.add (local.get $rec) (i32.const 8)) (local.get $out_size))
+    (call $gs32 (i32.add (local.get $rec) (i32.const 12)) (i32.const 0))
+    (i32.add (global.get $LZ_MIN_HANDLE) (local.get $slot)))
+
+  ;; LZInit(hfSource)
+  (func $handle_LZInit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $r i32)
+    (local.set $r (call $lz_init (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $r))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (if (i32.eq (local.get $r) (global.get $LZ_PARK))
+      (then (call $io_block (i32.const 8)))))
+
   (func $handle_LZRead (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $bytes_ga i32) (local $bytes_wa i32)
+    (local $rec i32) (local $pos i32) (local $n i32) (local $buf i32) (local $i i32)
+    (local.set $rec (call $lz_state (local.get $arg0)))
+    (if (local.get $rec)
+      (then
+        (local.set $buf (call $gl32 (i32.add (local.get $rec) (i32.const 4))))
+        (local.set $pos (call $gl32 (i32.add (local.get $rec) (i32.const 12))))
+        (local.set $n (i32.sub (call $gl32 (i32.add (local.get $rec) (i32.const 8))) (local.get $pos)))
+        (if (i32.lt_s (local.get $arg2) (i32.const 0))
+          (then (local.set $n (i32.const -7)))                                ;; LZERROR_BADVALUE
+          (else
+            (if (i32.lt_u (local.get $arg2) (local.get $n)) (then (local.set $n (local.get $arg2))))
+            (block $done (loop $copy
+              (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+              (call $gs8 (i32.add (local.get $arg1) (local.get $i))
+                (call $gl8 (i32.add (local.get $buf) (i32.add (local.get $pos) (local.get $i)))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $copy)))
+            (call $gs32 (i32.add (local.get $rec) (i32.const 12))
+              (i32.add (local.get $pos) (local.get $n)))))
+        (i32.store offset=0 (global.get $reg_base) (local.get $n))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
     (i32.store (local.get $bytes_wa) (i32.const 0))
+    ;; A plain file read like ReadFile, including its lazy-mount park: the
+    ;; Trespasser demo opens its level, data\DEMO.SCN, with LZOpenFile and
+    ;; checks a 0x30-byte header with LZRead. Streamed in the browser, the read
+    ;; used to fail outright and the game said "Scene File Invalid."
     (if (call $host_fs_read_file
           (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $bytes_ga))
       (then (i32.store offset=0 (global.get $reg_base) (i32.load (local.get $bytes_wa))))
-      (else (i32.store offset=0 (global.get $reg_base) (i32.const -1))))
+      (else
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (local.set $i (i32.eq (call $host_fs_read_pending) (i32.const 1)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (if (local.get $i)
+      (then (call $io_block (i32.const 16))))
   )
 
   (func $handle_LZSeek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $rec i32) (local $base i32) (local $new i32)
+    (local.set $rec (call $lz_state (local.get $arg0)))
+    (if (local.get $rec)
+      (then
+        (local.set $base
+          (if (result i32) (i32.eq (local.get $arg2) (i32.const 1))
+            (then (call $gl32 (i32.add (local.get $rec) (i32.const 12))))
+            (else (if (result i32) (i32.eq (local.get $arg2) (i32.const 2))
+              (then (call $gl32 (i32.add (local.get $rec) (i32.const 8))))
+              (else (i32.const 0))))))
+        (local.set $new (i32.add (local.get $base) (local.get $arg1)))
+        (if (i32.or (i32.gt_u (local.get $arg2) (i32.const 2))
+              (i32.or (i32.lt_s (local.get $new) (i32.const 0))
+                (i32.gt_s (local.get $new) (call $gl32 (i32.add (local.get $rec) (i32.const 8))))))
+          (then (local.set $new (i32.const -7)))                              ;; LZERROR_BADVALUE
+          (else (call $gs32 (i32.add (local.get $rec) (i32.const 12)) (local.get $new))))
+        (i32.store offset=0 (global.get $reg_base) (local.get $new))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (i32.store offset=0 (global.get $reg_base) (call $legacy_file_seek
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (i32.const -7)))       ;; LZERROR_BADVALUE
@@ -2908,9 +4294,32 @@
   )
 
   (func $handle_LZClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $rec i32)
+    (local.set $rec (call $lz_state (local.get $arg0)))
+    (if (local.get $rec)
+      (then
+        (drop (call $host_fs_close_handle (call $gl32 (local.get $rec))))
+        (call $heap_free (call $gl32 (i32.add (local.get $rec) (i32.const 4))))
+        (call $gs32 (local.get $rec) (i32.const 0))
+        (call $gs32 (i32.add (local.get $rec) (i32.const 4)) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
     (drop (call $host_fs_close_handle (local.get $arg0)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+  )
+
+  ;; 4093: _hwrite — the LONG-count spelling of _lwrite (Myth demo's VISE installer).
+  (func $handle__hwrite (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.lt_s (local.get $arg2) (i32.const 0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
+    (call $handle__lwrite
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; 938: _hread — the LONG-count spelling of _lread.
@@ -2942,15 +4351,25 @@
   ;; SleepEx dispatches completed I/O only on its submitting thread and only
   ;; when alertable. Otherwise it uses the ordinary cooperative sleep path.
   (func $handle_SleepEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ret i32)
     (if (local.get $arg1) (then
       (if (call $io_apc_start (i32.const 12)) (then (return)))))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (global.set $yield_flag (i32.const 1))
     (if (local.get $arg0)
       (then
         (global.set $sleep_yielded (i32.const 1))
-        (global.set $sleep_timeout (local.get $arg0))))
+        (global.set $sleep_timeout (local.get $arg0))
+        ;; An alertable sleep that parks: an APC queued to this thread before
+        ;; it resumes is run at the resumption ($apc_resume_alert_sleep), and
+        ;; QueueUserAPC's thread_alert cuts the sleep short.
+        (if (local.get $arg1)
+          (then
+            (global.set $apc_alert_sleep (i32.const 1))
+            (global.set $apc_alert_ret (local.get $ret))
+            (global.set $apc_alert_esp (i32.load offset=16 (global.get $reg_base)))))))
   )
 
   ;; A token handle close has to run before the generic host-file fallback:
@@ -2980,6 +4399,22 @@
   ;; 26: CloseHandle(hObject) — 1 arg stdcall
   (func $handle_CloseHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $console_result i32)
+    (local.set $console_result (call $toolhelp_close (local.get $arg0)))
+    (if (i32.ge_s (local.get $console_result) (i32.const 0)) (then
+      (call $toolhelp_return (local.get $console_result) (i32.const 1)) (return)))
+    (if (i32.eq (local.get $arg0) (global.get $QUARTZ_VXD_HANDLE))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
+    (local.set $console_result (call $pipe_close (local.get $arg0)))
+    (if (i32.ge_s (local.get $console_result) (i32.const 0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (local.get $console_result))
+        (if (i32.eqz (local.get $console_result))
+          (then (global.set $last_error (i32.const 6)))) ;; ERROR_INVALID_HANDLE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
     (local.set $console_result (call $token_close_handle (local.get $arg0)))
     (if (i32.ge_s (local.get $console_result) (i32.const 0))
       (then
@@ -3013,8 +4448,9 @@
     ;; the file nor the port, and a stale one would send a later request's
     ;; completion to a handle the guest has already reused.
     (call $iocp_assoc_drop (local.get $arg0))
-    (drop (call $host_fs_close_handle (local.get $arg0)))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_close_handle (local.get $arg0)))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+      (then (global.set $last_error (i32.const 6)))) ;; ERROR_INVALID_HANDLE
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
@@ -3026,6 +4462,20 @@
     (global.set $last_error (i32.const 1008)) ;; ERROR_NO_TOKEN
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+  )
+
+  ;; SetThreadToken(Thread, Token). A NULL token ends impersonation, which for
+  ;; threads that never have a token (see OpenThreadToken) is already the
+  ;; state: success. Installing a token would need real impersonation, so that
+  ;; fails the way Win9x's ADVAPI32 fails every call. msi.dll drops its
+  ;; impersonation this way around each registry probe.
+  (func $handle_SetThreadToken (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg1)
+      (then
+        (global.set $last_error (i32.const 120)) ;; ERROR_CALL_NOT_IMPLEMENTED
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; Shared access-token state.  TOKEN_OBJECTS begins with an initialization
@@ -3757,6 +5207,7 @@
     (local.set $result (call $host_wait_single (local.get $arg0) (local.get $arg1)))
     (if (i32.eq (local.get $result) (i32.const 0xFFFF))
       (then
+        (global.set $wait_alertable (i32.ne (local.get $arg2) (i32.const 0)))
         (global.set $yield_reason (i32.const 1))
         (global.set $wait_handle (local.get $arg0))
         (global.set $wait_timeout (local.get $arg1))
@@ -3824,10 +5275,11 @@
 
   ;; 33: HeapCreate(flOptions, dwInitialSize, dwMaximumSize) — 3 args stdcall
   (func $handle_HeapCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (i32.const 8)))
     (if (i32.load offset=0 (global.get $reg_base))
       (then
-        (call $gs32 (i32.load offset=0 (global.get $reg_base)) (global.get $PRIVATE_HEAP_MAGIC)))
+        (call $gs32 (i32.load offset=0 (global.get $reg_base)) (global.get $PRIVATE_HEAP_MAGIC))
+        (call $toolhelp_heap_add (i32.load offset=0 (global.get $reg_base))))
       (else (global.set $last_error (i32.const 8)))) ;; ERROR_NOT_ENOUGH_MEMORY
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
@@ -3838,6 +5290,7 @@
           (i32.ne (local.get $arg0) (global.get $PROCESS_HEAP_HANDLE))
           (call $heap_api_handle_valid (local.get $arg0)))
       (then
+        (call $toolhelp_heap_remove (local.get $arg0))
         (call $gs32 (local.get $arg0) (i32.const 0))
         (call $heap_free (local.get $arg0))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
@@ -3849,13 +5302,18 @@
 
   ;; 35: HeapAlloc
   (func $handle_HeapAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $record i32) (local $ptr i32)
     (if (i32.eqz (call $heap_api_handle_valid (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
-    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $arg2)))
+    (local.set $record (call $toolhelp_alloc_reserve (local.get $arg0) (i32.const 0)))
+    (if (local.get $record) (then
+      (local.set $ptr (call $heap_alloc (local.get $arg2)))
+      (call $toolhelp_alloc_commit (local.get $record) (local.get $arg0) (local.get $ptr) (local.get $arg2))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $ptr))
     ;; Zero memory if HEAP_ZERO_MEMORY (0x08) — skip on OOM (eax=0)
     (if (i32.and (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
                  (i32.ne (i32.and (local.get $arg1) (i32.const 0x08)) (i32.const 0)))
@@ -3872,6 +5330,9 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
+    (if (i32.eqz (call $toolhelp_alloc_remove (local.get $arg0) (local.get $arg2))) (then
+      (global.set $last_error (i32.const 87))
+      (call $toolhelp_return (i32.const 0) (i32.const 3)) (return)))
     (call $heap_free (local.get $arg2))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
@@ -3893,13 +5354,16 @@
   ;; those out) and has no header to read, so it keeps the old best-effort
   ;; copy — there is nothing better to be had without knowing its size.
   (func $handle_HeapReAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $tmp i32) (local $old_usable i32) (local $copy i32)
+    (local $tmp i32) (local $old_usable i32) (local $copy i32) (local $record i32)
     (if (i32.eqz (call $heap_api_handle_valid (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
+    (local.set $record (call $toolhelp_alloc_reserve (local.get $arg0) (local.get $arg2)))
+    (if (i32.eqz (local.get $record)) (then
+      (call $toolhelp_return (i32.const 0) (i32.const 4)) (return)))
     (block $done
       (if (i32.eqz (local.get $arg2))
         (then
@@ -3945,9 +5409,25 @@
                 (call $g2w (i32.add (local.get $tmp) (local.get $copy)))
                 (i32.sub (local.get $arg3) (local.get $copy)))))
       (call $heap_free (local.get $arg2)))
+    (call $toolhelp_alloc_commit (local.get $record) (local.get $arg0) (local.get $tmp) (local.get $arg3))
     (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
+
+  ;; Is guest [$ga, $ga + $size) wholly inside one $GUEST_FIXED_POOL_* hole?
+  (func $guest_fixed_pool_of (param $ga i32) (param $size i32) (result i32)
+    (local $wa i32)
+    (local.set $wa (i32.add (i32.sub (local.get $ga) (global.get $image_base)) (global.get $GUEST_BASE)))
+    (i32.or (i32.or
+      (i32.and (i32.ge_u (local.get $wa) (region.addr $GUEST_FIXED_POOL_A 0))
+        (i32.le_u (i32.add (local.get $wa) (local.get $size)) (region.end $GUEST_FIXED_POOL_A)))
+      (i32.and (i32.ge_u (local.get $wa) (region.addr $GUEST_FIXED_POOL_B 0))
+        (i32.le_u (i32.add (local.get $wa) (local.get $size)) (region.end $GUEST_FIXED_POOL_B))))
+      (i32.or
+        (i32.and (i32.ge_u (local.get $wa) (region.addr $GUEST_FIXED_POOL_C 0))
+          (i32.le_u (i32.add (local.get $wa) (local.get $size)) (region.end $GUEST_FIXED_POOL_C)))
+        (i32.and (i32.ge_u (local.get $wa) (region.addr $GUEST_FIXED_POOL_D 0))
+          (i32.le_u (i32.add (local.get $wa) (local.get $size)) (region.end $GUEST_FIXED_POOL_D))))))
 
   ;; 38: VirtualAlloc(lpAddr, dwSize, flAllocType, flProtect)
   ;; NULL reserves return 64KB-granularity bases; commits are page-aligned.
@@ -3959,6 +5439,18 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
+    ;; A given address names every page holding a byte of [lpAddress,
+    ;; lpAddress + dwSize): Windows rounds the base down and the end up, and
+    ;; returns the rounded base. Rounding the size alone left an unaligned
+    ;; commit one page short. Trespasser's page manager commits from its access
+    ;; violation filter at the faulting address less 16 (0x17530ff0, 0x1000),
+    ;; so the page it had just touched never mapped and it faulted again until
+    ;; the process died with 0xC0000005.
+    (if (local.get $arg0)
+      (then
+        (local.set $arg1 (i32.sub (i32.add (local.get $arg0) (local.get $arg1))
+          (i32.and (local.get $arg0) (i32.const 0xFFFFF000))))
+        (local.set $arg0 (i32.and (local.get $arg0) (i32.const 0xFFFFF000)))))
     ;; Round size up to page boundary
     (local.set $size (i32.and (i32.add (local.get $arg1) (i32.const 0xFFF)) (i32.const 0xFFFFF000)))
     (if (i32.eqz (local.get $size))
@@ -3966,6 +5458,37 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
+    ;; A fixed reserve or commit wholly inside one of the declared fixed guest
+    ;; pools is real guest memory at exactly that address (00-regions.wat).
+    (if (i32.and (i32.ne (local.get $arg0) (i32.const 0))
+          (call $guest_fixed_pool_of (local.get $arg0) (local.get $size)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (return)))
+    ;; A MEM_RESERVE at a fixed low address names guest space that is free in a
+    ;; Win98 process but is not ours to give: below the sparse arena, only the
+    ;; image's own window [image_base, image_base + GUEST_BASE size) is guest
+    ;; memory, and past it the direct window translates straight into the heap,
+    ;; the stack and emulator tables. Windows fails a reservation it cannot
+    ;; place exactly, and so do we -- it must not quietly hand out emulator
+    ;; memory, and it must not move either: Crusaders of Might and Magic
+    ;; reserves 0x04000000, 0x06000000 and 0x08000000 because its level files
+    ;; are memory images with pointers already relocated to those bases. The
+    ;; first of those used to "succeed" onto the window title table.
+    (if (i32.and (i32.ne (local.get $arg0) (i32.const 0))
+          (i32.and (i32.ne (i32.and (local.get $arg2) (i32.const 0x2000)) (i32.const 0))
+            (i32.lt_u (local.get $arg0) (call $virtual_alloc_min))))
+      (then
+        (if (i32.and (i32.ge_u (local.get $arg0) (global.get $image_base))
+              (i32.gt_u
+                (i32.add (i32.sub (local.get $arg0) (global.get $image_base)) (local.get $size))
+                (i32.sub (region.end $GUEST_BASE) (global.get $GUEST_BASE))))
+          (then
+            (global.set $last_error (i32.const 487)) ;; ERROR_INVALID_ADDRESS
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+            (return)))))
     (if (local.get $arg0)
       (then
         (if (i32.ge_u (local.get $arg0) (call $virtual_alloc_min))
@@ -3985,24 +5508,22 @@
         ;; Reserve from a sparse high guest-address arena, separate from
         ;; HeapAlloc's upward-growing low heap. MEM_RESERVE is address-space
         ;; bookkeeping; real backing is added only by MEM_COMMIT.
-        (local.set $new_top (call $virtual_reserve_down (local.get $size)))
+        (local.set $new_top (call $virtual_reserve_place (local.get $size)
+          (select (i32.const 2) (i32.const 0)
+            (i32.ne (i32.and (local.get $arg2) (i32.const 0x100000)) (i32.const 0)))
+          (local.get $arg3)))
         (if (i32.eqz (local.get $new_top))
           (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
           (else
             (if (i32.and (local.get $arg2) (i32.const 0x1000))
-              (then (i32.store offset=0 (global.get $reg_base) (call $virtual_map_commit_protect
-                (local.get $new_top) (local.get $size) (local.get $arg3))))
+              (then
+                (i32.store offset=0 (global.get $reg_base) (call $virtual_map_commit_protect
+                  (local.get $new_top) (local.get $size) (local.get $arg3)))
+                (if (i32.eqz (i32.load (global.get $reg_base)))
+                  (then (drop (call $virtual_map_release (local.get $new_top))))))
               (else
-                ;; A reservation with no commit owns address space that no map
-                ;; record describes, and nothing tells us when the guest drops
-                ;; it. $virtual_reserve_reclaim_locked recovers released address
-                ;; space by taking the minimum over the record table, which
-                ;; cannot see this range — so remember the lowest such range
-                ;; ever handed out and let the reclaim stop there. Everything
-                ;; below it stays permanently spoken for, which costs address
-                ;; space; handing it out twice would cost correctness.
-                (call $virtual_reserve_record
-                  (local.get $new_top) (local.get $size) (local.get $arg3))
+                ;; Ownership was published atomically during placement; a
+                ;; reserve-only request consumes no physical backing.
                 (i32.store offset=0 (global.get $reg_base) (local.get $new_top))))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
@@ -4098,10 +5619,11 @@
         (i32.store offset=16 (global.get $reg_base)
           (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
-    ;; MEM_DECOMMIT. The mapping stays -- decommit is not release, and the guest
-    ;; may commit the same addresses again -- but the pages it gets back then
-    ;; are zero on Windows, so the backing has to be cleared now. See
-    ;; $virtual_map_decommit_zero for the app that proved this matters.
+    ;; MEM_DECOMMIT. The record and its backing stay -- decommit is not release,
+    ;; and the guest may commit the same addresses again -- but the pages stop
+    ;; translating (touching one is an access violation on Windows) and come
+    ;; back zero on the next commit, so the backing is cleared now. See
+    ;; $virtual_map_decommit_zero for the apps that proved both matter.
     (if (i32.and
           (i32.ge_u (local.get $arg0) (call $virtual_alloc_min))
           (i32.ne (i32.and (local.get $arg2) (i32.const 0x4000)) (i32.const 0)))
@@ -4588,6 +6110,11 @@
   ;; 50: GetFileType(hFile) — FILE_TYPE_CHAR=2 for console, FILE_TYPE_DISK=1 for files
   (func $handle_GetFileType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $resolved i32)
+    (if (call $pipe_slot (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 3)) ;; FILE_TYPE_PIPE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
     (local.set $resolved (call $console_handle_resolve (local.get $arg0)))
     (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.or
             (i32.and (i32.ge_u (local.get $resolved) (i32.const 1))
@@ -4601,6 +6128,10 @@
   ;; 51: WriteFile(hFile, lpBuffer, nBytesToWrite, lpBytesWritten, lpOverlapped) — 5 args
   (func $handle_WriteFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $saved_pos i32) (local $ok i32) (local $written i32)
+    ;; Anonymous pipes (09d7-pipes.wat) finish or park the call themselves.
+    (if (call $pipe_write_file (local.get $arg0) (local.get $arg1)
+          (local.get $arg2) (local.get $arg3))
+      (then (return)))
     ;; Output screen-buffer handles route through the same active/inactive cell
     ;; store as WriteConsoleA; stdin retains the historical compatibility no-op.
     (if (call $console_buffer_record (local.get $arg0))
@@ -4629,14 +6160,14 @@
         (drop (call $host_fs_set_file_pointer (local.get $arg0)
           (call $gl32 (i32.add (local.get $arg4) (i32.const 8)))
           (i32.const 0))) ;; FILE_BEGIN
-        (local.set $ok (call $host_fs_write_file
+        (local.set $ok (call $host_fs_write_file_result
           (local.get $arg0) (local.get $arg1) (local.get $arg2)
           (i32.add (local.get $arg4) (i32.const 4))))
         (drop (call $host_fs_set_file_pointer
           (local.get $arg0) (local.get $saved_pos) (i32.const 0)))
-        (if (i32.eqz (local.get $ok))
+        (if (local.get $ok)
           (then
-            (global.set $last_error (i32.const 29)) ;; ERROR_WRITE_FAULT
+            (global.set $last_error (local.get $ok))
             (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
             (return)))
@@ -4649,8 +6180,10 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; File handles — delegate to virtual FS
-    (i32.store offset=0 (global.get $reg_base) (call $host_fs_write_file
+    (local.set $ok (call $host_fs_write_file_result
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
+    (if (local.get $ok) (then (global.set $last_error (local.get $ok))))
+    (i32.store offset=0 (global.get $reg_base) (i32.eqz (local.get $ok)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
@@ -4732,7 +6265,7 @@
       (then (call $gs16 (local.get $p_g) (local.get $ch)))
       (else (call $gs8 (local.get $p_g) (local.get $ch)))))
 
-  (func $handle_GetModuleFileNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $handle_GetModuleFileNameA_locked (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $path_g i32)
     (local.set $idx (call $static_sys_dll_from_handle (local.get $arg0)))
     (if (local.get $idx)
@@ -4743,7 +6276,7 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (local.set $idx (i32.const 0))
     (block $not_loaded (loop $scan_loaded
-      (br_if $not_loaded (i32.ge_u (local.get $idx) (global.get $dll_count)))
+      (br_if $not_loaded (i32.ge_u (local.get $idx) (i32.atomic.load (global.get $DLL_SHARED))))
       (if (i32.eq (local.get $arg0)
             (i32.load (i32.add (global.get $DLL_TABLE)
               (i32.mul (local.get $idx) (i32.const 32)))))
@@ -4758,6 +6291,14 @@
               (return)))))
       (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
       (br $scan_loaded)))
+    ;; A retired/unknown nonzero handle must not alias the executable.
+    (if (i32.and (i32.ne (local.get $arg0) (i32.const 0))
+          (i32.ne (local.get $arg0) (global.get $image_base)))
+      (then
+        (global.set $last_error (i32.const 6))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (i32.store offset=0 (global.get $reg_base) (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
@@ -4816,7 +6357,22 @@
   )
 
   ;; 57: TerminateProcess
+  ;; Only this process's own handles end this process. A child that
+  ;; CreateProcess started (09d7-pipes.wat) is stopped by its host -- this
+  ;; used to call host_exit for any handle, so a parent killing its engine
+  ;; killed itself.
   (func $handle_TerminateProcess (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $pid i32)
+    (local.set $pid (call $pipe_child_pid (local.get $arg0)))
+    (if (local.get $pid)
+      (then
+        (if (i32.eq (call $host_process_ctl (i32.const 1) (local.get $pid) (local.get $arg1)) (i32.const 1))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+          (else
+            (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (return)))
     (call $host_exit (local.get $arg1)) (global.set $eip (i32.const 0)) (global.set $steps (i32.const 0)) (return)
   )
 
@@ -4862,6 +6418,7 @@
     (if (call $clock_spin_step (global.get $tick_count))
       (then
         (if (call $clock_spin_arm (global.get $tick_count)) (then (return)))))
+    (call $clock_spin_note_raw (global.get $tick_count) (i32.const 0))
     (i32.store offset=0 (global.get $reg_base) (global.get $tick_count))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
@@ -4919,28 +6476,48 @@
 
   ;; 63: RtlUnwind
   (func $handle_RtlUnwind (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Unlink SEH chain: set FS:[0] = TargetFrame->next
-    (if (i32.ne (local.get $arg0) (i32.const 0))
-    (then (call $gs32 (global.get $fs_base) (call $gl32 (local.get $arg0)))))
-    (i32.store offset=0 (global.get $reg_base) (local.get $arg3)) ;; ReturnValue
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
+    ;; Calls every frame handler above TargetFrame with EXCEPTION_UNWINDING and
+    ;; unlinks it, then returns to the caller; see $rtl_unwind_begin (11-seh).
+    ;; The stdcall frame is popped here; the walk owns EIP from now ($steps = 0).
+    (local $ret i32)
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (call $rtl_unwind_begin (local.get $arg0) (local.get $arg2) (local.get $arg3) (local.get $ret))
   )
 
-  ;; 64: FreeLibrary — STUB: unimplemented
+  ;; The yield is copied into an invocation-owned host operation before any
+  ;; callback runs. A nested unload may then reuse these pending globals.
+  (global $dll_unload_kind (mut i32) (i32.const 0))
+  (global $dll_unload_module (mut i32) (i32.const 0))
+  (global $dll_unload_exit_code (mut i32) (i32.const 0))
+  (func (export "take_dll_unload_kind") (result i32)
+    (local $kind i32)
+    (local.set $kind (global.get $dll_unload_kind))
+    (global.set $dll_unload_kind (i32.const 0))
+    (local.get $kind))
+  (func (export "get_dll_unload_module") (result i32) (global.get $dll_unload_module))
+  (func (export "get_dll_unload_exit_code") (result i32) (global.get $dll_unload_exit_code))
+  (func $dll_unload_yield (param $module i32) (param $kind i32) (param $code i32)
+    (global.set $dll_unload_module (local.get $module))
+    (global.set $dll_unload_kind (local.get $kind))
+    (global.set $dll_unload_exit_code (local.get $code))
+    (global.set $loadlib_name_ptr (i32.const 0))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $yield_reason (i32.const 5))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $steps (i32.const 0)))
+  ;; FreeLibrary returns only after the real release/detach/retirement completes.
   (func $handle_FreeLibrary (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; FreeLibrary returns TRUE on success (first call), FALSE if already freed
-    ;; This handles the NSIS pattern: while(FreeLibrary(h)) {}
-    (if (i32.or (i32.eqz (local.get $arg0))
-                (i32.eq (local.get $arg0) (global.get $freelib_last_handle)))
-      (then
-        ;; Same handle freed again — already unloaded, return FALSE
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
-      (else
-        ;; First free of this handle — succeed and remember it
-        (global.set $freelib_last_handle (local.get $arg0))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
-  )
+    (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (call $dll_unload_yield (local.get $arg0) (i32.const 1) (i32.const 0)))
+  ;; No read, decode, or restoration of the guest return address: it can lie
+  ;; inside the image retired by this operation.
+  (func $handle_FreeLibraryAndExitThread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; Park on the permanent API thunk, not a guest return address. Scheduler
+    ;; EIP=0 means terminal teardown and must only become visible after detach.
+    (global.set $eip (global.get $current_thunk_eip))
+    (call $dll_unload_yield (local.get $arg0) (i32.const 2) (local.get $arg1)))
 
   ;; Measure an ANSI FAT volume label without reading beyond its documented
   ;; 11-character maximum plus the required terminator. -1 is an inaccessible
@@ -5010,3 +6587,35 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; One coherent registry read, with no guest callback or host import held.
+  (func $handle_GetModuleHandleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+
+    (call $dll_load_lock_begin)
+    (call $handle_GetModuleHandleA_locked (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $lock_release (global.get $DLL_LOAD_LOCK))
+    )
+
+  ;; One coherent registry read, with no guest callback or host import held.
+  (func $handle_GetModuleFileNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+
+    (call $dll_load_lock_begin)
+    (call $handle_GetModuleFileNameA_locked (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $lock_release (global.get $DLL_LOAD_LOCK))
+    )
+
+  (func $handle_GetProcAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $pin i32)
+    (local.set $pin (call $dll_pin_module (local.get $arg0)))
+    ;; Only the executable, known static aliases, or a generation pinned
+    ;; image may enter the export/API resolver. FREE rows are not handles.
+    (if (i32.and (i32.eqz (local.get $pin))
+          (i32.and (i32.ne (local.get $arg0) (global.get $image_base))
+            (i32.eqz (call $static_sys_dll_from_handle (local.get $arg0)))))
+      (then
+        (global.set $last_error (i32.const 6))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (return)))
+    (call $handle_GetProcAddress_pinned (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $dll_unpin_module_index (local.get $pin)))

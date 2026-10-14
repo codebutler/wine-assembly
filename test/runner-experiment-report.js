@@ -344,11 +344,6 @@ function reportExperiments({ BLOCK_EXEC, BLOCK_EXEC_STATS, BLOCK_CHAIN, TRACE_LO
           e.get_loop_lut_bounded_matches(), 'runs', e.get_loop_lut_runs(),
           'bytes', String(e.get_loop_lut_bytes()));
       }
-      if (e.get_loop_lut16_runs) {
-        log(`loopmatch: ${label} RGB565 LUT matches`,
-          e.get_loop_lut16_matches(), 'runs', e.get_loop_lut16_runs(),
-          'pixels', String(e.get_loop_lut16_bytes()));
-      }
       if (e.get_tree_fold_runs) {
         // `matches` is blocks the predicate accepted, counted even with the
         // gate off; `runs` is entries into the super-op; `iters` is guest
@@ -400,34 +395,20 @@ function reportExperiments({ BLOCK_EXEC, BLOCK_EXEC_STATS, BLOCK_CHAIN, TRACE_LO
           'runs', e.get_x87_affine_prepare_runs()
             + e.get_x87_affine_finish_runs());
       }
-      if (e.get_lut_span_runs) {
-        log(`loopmatch: ${label} fixed LUT spans`,
-          e.get_lut_span_matches(), 'runs', e.get_lut_span_runs(),
-          'bytes', String(e.get_lut_span_bytes()));
-      }
       if (e.get_loop_aoe_fill_runs) {
         log(`loopmatch: ${label} AoE grid fills`,
           e.get_loop_aoe_fill_matches(), 'runs', e.get_loop_aoe_fill_runs(),
           'bytes', String(e.get_loop_aoe_fill_bytes()));
       }
+      if (e.get_mmx_fill64_runs) {
+        log(`loopmatch: ${label} MMX qword fills`,
+          e.get_mmx_fill64_matches(), 'runs', e.get_mmx_fill64_runs(),
+          'qwords', String(e.get_mmx_fill64_qwords()),
+          'bulk', String(e.get_mmx_fill64_bulk_qwords()));
+      }
       if (e.get_loop_aoe_span_runs) {
         log(`loopmatch: ${label} AoE span prefixes`,
           e.get_loop_aoe_span_matches(), 'runs', e.get_loop_aoe_span_runs());
-      }
-      // The two stream-idiom folds. `levels`/`tokens` are guest iterations,
-      // so multiplying them by the per-iteration op cost in §20 of the design
-      // note gives the ops a --handler-hist no longer sees.
-      if (e.get_smk_tree_runs) {
-        log(`loopmatch: ${label} SMK_TREE blocks`,
-          e.get_smk_tree_matches(), 'armed', e.get_smk_tree() ? 'yes' : 'no',
-          'runs', e.get_smk_tree_runs(),
-          'levels', String(e.get_smk_tree_levels()));
-      }
-      if (e.get_pcx_run_runs) {
-        log(`loopmatch: ${label} PCX_RUN blocks`,
-          e.get_pcx_run_matches(), 'armed', e.get_pcx_run() ? 'yes' : 'no',
-          'runs', e.get_pcx_run_runs(),
-          'tokens', String(e.get_pcx_run_tokens()));
       }
       if (e.get_implode_cmp_run_runs) {
         log(`loopmatch: ${label} IMPLODE_CMP_RUN blocks`,

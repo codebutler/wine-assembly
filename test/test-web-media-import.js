@@ -126,24 +126,21 @@ async function main() {
     // ---- pass 1: session import, through the dialog, to a window ----------
     const page = await openPage(browser, base, 'session');
 
-    // Desktop furniture rule: the button shows with the desktop and hides
-    // with it — a fullscreen surface must not have a DOM button floating on
-    // top of the game.
-    const btnDisplay = (cls) => page.evaluate((toggled) => {
-      const body = document.body;
-      const had = body.className;
-      if (toggled) body.className = `${had} ${toggled}`.trim();
-      const display = getComputedStyle(
-        document.querySelector('.wa-media-import-btn')).display;
-      body.className = had;
-      return display;
-    }, cls);
-    assert.notStrictEqual(await btnDisplay(''), 'none',
-      'the + Add a game button shows on the idle desktop');
-    assert.strictEqual(await btnDisplay('exclusive-fullscreen'), 'none',
-      'the button hides over an exclusive-fullscreen surface');
-    assert.strictEqual(await btnDisplay('single-app app-running'), 'none',
-      'the button hides while a single-app page runs its app');
+    // Adding a game lives in the Start menu now, not in a DOM button floating
+    // on the desktop corner, and it opens the same picker.
+    const startAdd = await page.evaluate(() => {
+      let opened = 0;
+      const real = window.wineMedia.openPicker;
+      window.wineMedia.openPicker = () => { opened++; };
+      try {
+        document.getElementById('start-add-game-item').click();
+      } finally {
+        window.wineMedia.openPicker = real;
+      }
+      return { opened, cornerButton: !!document.querySelector('.wa-media-import-btn') };
+    });
+    assert.strictEqual(startAdd.opened, 1, 'Start > Add a Game... opens the file picker');
+    assert.strictEqual(startAdd.cornerButton, false, 'no corner + Add a game button on the desktop');
 
     // A kept CUE set is several OPFS files under one catalog row. Exercise
     // that storage shape independently of the ZIP launch below: original
@@ -515,13 +512,17 @@ async function main() {
         appId: runningApps[0].name,
         badge: icon ? icon.dataset.mediaBadge : null,
         iconLabel: icon ? icon.querySelector('.icon-label').textContent : null,
+        iconTitle: icon ? icon.title : null,
+        dashed: icon ? icon.classList.contains('wa-session') : false,
         mounted: [...vfs.files.keys()].filter(p => p.includes('notepad-game')),
         sessionCount: window.wineMedia.sessionItems.size,
       };
     });
     assert.strictEqual(session.badge, 'session',
       'a session import is badged as one, because it is gone on reload');
-    assert.match(session.iconLabel, /^\(~\)/, `the (~) badge is on the icon: ${session.iconLabel}`);
+    assert.ok(session.dashed, 'a session icon wears the dashed outline');
+    assert.match(session.iconTitle, /session only/, `its tooltip says so: ${session.iconTitle}`);
+    assert.doesNotMatch(session.iconLabel, /^\(/, `the badge is not part of the name: ${session.iconLabel}`);
     assert.ok(session.mounted.some(p => /notepad\.exe$/.test(p)),
       `the archive really mounted: ${JSON.stringify(session.mounted)}`);
     assert.ok(session.mounted.some(p => /readme\.txt$/.test(p)),
@@ -594,12 +595,16 @@ async function main() {
       const icon = document.querySelector('.desktop-icon[data-media-badge="kept"]');
       return {
         label: icon.querySelector('.icon-label').textContent,
+        title: icon.title,
+        dashed: icon.classList.contains('wa-session'),
         appId: icon.dataset.app,
         registered: !!window.wineMedia.keptItems.size,
         sessionCount: window.wineMedia.sessionItems.size,
       };
     });
-    assert.match(restored.label, /^\(o\)/, `kept media wears the (o) badge: ${restored.label}`);
+    assert.ok(!restored.dashed, 'kept media wears the solid outline');
+    assert.match(restored.title, /Kept/, `kept media says so in its tooltip: ${restored.title}`);
+    assert.doesNotMatch(restored.label, /^\(/, `the badge is not part of the name: ${restored.label}`);
     assert.strictEqual(restored.sessionCount, 0,
       'a reload really did drop the session import -- the badge was honest');
 

@@ -27,7 +27,7 @@ const extraWat = `
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (local.get $result))
   (func (export "test_clip") (param $dc i32)
-    (drop (call $host_gdi_intersect_clip_rect (local.get $dc)
+    (drop (call $gdi_native_intersect_clip_rect (local.get $dc)
       (i32.const 5) (i32.const 6) (i32.const 12) (i32.const 14))))
   (func (export "test_erase16") (param $h i32) (param $dc i32) (param $brush i32) (result i32)
     (call $win16_seg_set (i32.const 1) (i32.const 0x100000) (i32.const 65536) (i32.const 0) (i32.const 1))
@@ -55,7 +55,7 @@ const extraWat = `
   const bmi = e.guest_alloc(40), out = e.guest_alloc(4);
   e.guest_write32(bmi, 40); e.guest_write32(bmi + 4, 32); e.guest_write32(bmi + 8, -24);
   e.guest_write16(bmi + 12, 1); e.guest_write16(bmi + 14, 32);
-  const bitmap = e.test_call_CreateDIBSection(0, bmi, out);
+  const bitmap = e.test_call_CreateDIBSection(0, bmi, 0, out, 0, 0);
   const dc = e.test_call_CreateCompatibleDC(0);
   e.test_call_SelectObject(dc, bitmap);
   const brush = e.test_call_CreateSolidBrush(0x000000ff); // red COLORREF

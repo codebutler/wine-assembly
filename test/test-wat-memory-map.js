@@ -155,6 +155,7 @@ const requiredRegions = [
   'CP437_TO_CP1252',
   'D3DIM_MATRICES',
   'D3DIM_AUX',
+  'D3DIM_EB_CACHE_PTRS',
   'DX_VTBL_REGISTRY',
   'DX_OBJECTS',
   'COM_WRAPPERS',
@@ -190,7 +191,10 @@ const highFixedAliases = new Map(Object.entries({
   LOCK_WND: { owner: 'LOCK_TABLE' },
   COM_AUX_NEXT_SHARED: { owner: 'LOCK_TABLE' },
   VSOCK_NEXT_PORT_SHARED: { owner: 'LOCK_TABLE' },
+  VSOCK_ASYNC_SHARED: { owner: 'LOCK_TABLE' },
+  WSA_STARTED_SHARED: { owner: 'LOCK_TABLE' },
   THUNK_NEXT_SHARED: { owner: 'LOCK_TABLE' },
+  THREAD_APC_QUEUES: { owner: 'LOCK_TABLE' },
   console_text_base: { owner: 'CONSOLE_TEXT' },
   console_attr_base: { owner: 'CONSOLE_ATTR' },
   CONSOLE_BUFFER_TABLE: { owner: 'CONSOLE_INPUT' },
@@ -200,7 +204,6 @@ const highFixedAliases = new Map(Object.entries({
   D3DIM_MATRIX_USED: { owner: 'D3DIM_AUX' },
   D3DIM_UNIMPL_EXEC_OP: { owner: 'D3DIM_AUX' },
   D3DIM_UNIMPL_DRAW: { owner: 'D3DIM_AUX' },
-  D3DIM_EB_CACHE_PTRS: { owner: 'D3DIM_AUX' },
   D3DIM_STATEBLOCKS: { owner: 'D3DIM_AUX' },
   GDI_BITMAP_FONT_SYSTEM_PATH: { owner: 'GDI_BITMAP_FONT_STATIC' },
   GDI_BITMAP_FONT_SYSTEM_STATE: { owner: 'GDI_BITMAP_FONT_STATIC' },
@@ -220,6 +223,18 @@ const highFixedAliases = new Map(Object.entries({
   TT_SUBST_TIMES_NEW_ROMAN: { owner: 'TT_FONT_STRING_STORAGE' },
   TT_FONT_DIR_PATTERN: { owner: 'TT_FONT_STRING_STORAGE' },
   TT_FONT_DIR_PREFIX: { owner: 'TT_FONT_STRING_STORAGE' },
+  // Mutable: the render Worker points its rasterizer at private scratch.
+  gl_sw_scratch: { owner: 'GL_SW_SCRATCH' },
+  gl_sw_st: { owner: 'GL_SW_STATE' },
+  // Mutable: $init_thread points each instance at its own tid slice.
+  OP_INDEX: { owner: 'OP_INDEX_REGION' },
+  // The winmm timer thread record lives in TIMER_SHARED's tail.
+  MM_TIMER_THREAD: { owner: 'TIMER_SHARED' },
+  // The process-wide QPC count lives at SHARED_COUNTERS+16.
+  QPC_SHARED: { owner: 'SHARED_COUNTERS' },
+  // LOCK-prefix atomic mode (+32) and its split-lock mutex (+36).
+  LOCK_MODE: { owner: 'SHARED_COUNTERS' },
+  LOCK_MUTEX: { owner: 'SHARED_COUNTERS' },
 }));
 
 const regionByName = new Map(regions.map(region => [region.name, region]));

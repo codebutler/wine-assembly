@@ -24,6 +24,17 @@ const extraWat = String.raw`
     (i32.store offset=12 (local.get $p) (local.get $dwuser))
     (i32.store offset=16 (local.get $p) (local.get $last))
     (i32.store offset=20 (local.get $p) (local.get $oneshot)))
+  ;; TIME_CALLBACK_EVENT_SET (0x10) / _PULSE (0x20): lpTimeProc is an event
+  ;; handle. A due one is signalled inside $mm_timer_due_slot and must never be
+  ;; returned to a callback path, which would jump to the handle as code.
+  (func (export "test_mm_timer_event_kind") (param $flags i32) (result i32)
+    (call $test_clear_slots)
+    (global.set $tick_count (i32.const 1000))
+    (call $test_set_slot (i32.const 0) (i32.const 9) (i32.const 10)
+      (i32.const 0x000E0005) (i32.const 0) (i32.const 0) (local.get $flags))
+    (call $mm_timer_due_slot))
+  (func (export "test_mm_timer_slot_id") (result i32)
+    (i32.load (call $mm_timer_slot (i32.const 0))))
   (func (export "test_mm_timer_consume_tick")
     (param $last i32) (param $interval i32) (param $now i32) (result i32)
     (call $test_clear_slots)
@@ -128,7 +139,25 @@ const extraWat = String.raw`
 `;
 
 (async () => {
-  const { exports: wat } = await bootRenderHarness({ extraWat });
+  const events = [];
+  const { exports: wat } = await bootRenderHarness({
+    extraWat,
+    extraHostOverrides: {
+      set_event: h => { events.push(['set', h >>> 0]); return 1; },
+      reset_event: h => { events.push(['reset', h >>> 0]); return 1; },
+    },
+  });
+
+  assert.strictEqual(wat.test_mm_timer_event_kind(0x10), 0,
+    'a due TIME_CALLBACK_EVENT_SET timer is never handed to a callback path');
+  assert.deepStrictEqual(events, [['set', 0xE0005]], 'it sets its event handle');
+  assert.strictEqual(wat.test_mm_timer_slot_id(), 9, 'a periodic event timer stays armed');
+  events.length = 0;
+  assert.strictEqual(wat.test_mm_timer_event_kind(0x20 | 1), 0);
+  assert.deepStrictEqual(events, [['set', 0xE0005], ['reset', 0xE0005]],
+    'TIME_CALLBACK_EVENT_PULSE sets then resets the event');
+  assert.strictEqual(wat.test_mm_timer_slot_id(), 0, 'a one-shot event timer retires');
+  events.length = 0;
 
   assert.strictEqual(wat.test_mm_timer_consume_tick(100, 5, 156), 155,
     'late periodic delivery retains the original 5ms phase');

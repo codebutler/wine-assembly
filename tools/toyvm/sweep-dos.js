@@ -106,6 +106,8 @@ async function runOne(exe, o) {
           // a corpus gate that asks whether cutting slices to the dates the
           // clock owes moved any picture. See docs/toyvm-irq-schedule.md.
           irqSchedule: o.irqSchedule,
+          intFast: o.intFast,
+          edgeLookup: o.edgeLookup,
           regionJit: o.regionJit ? {
             sampleAfter: Math.floor(o.budget / 4), profileFor: Math.floor(o.budget / 4),
             gateAt: 0, log: quiet,
@@ -143,6 +145,10 @@ async function runOne(exe, o) {
     const any = [...seen.values()][0].r;
     row.dispatched = any.dispatched;
     row.handbacks = any.handbacks;
+    // Why each of those handbacks happened (DosSession.exitKinds).
+    row.exitKinds = any.exitKinds;
+    row.intsFast = any.intsFast;
+    row.earlySites = any.earlySites;
     row.pixels = any.pixels;
     row.frame = any.frame;
     // What the budget bought in the guest's own time, and every video mode the
@@ -204,7 +210,9 @@ function child(exe, o) {
       ...(o.treeFoldHot ? [`--tree-fold-hot=${o.treeFoldHot}`] : []),
       ...(o.treeFoldRelax ? [`--tree-fold-relax=${o.treeFoldRelax.join(',') || 'none'}`] : []),
       ...(o.latticeClock ? ['--lattice-clock'] : []),
-      ...(o.irqSchedule ? [] : ['--no-irq-schedule'])];
+      ...(o.irqSchedule ? [] : ['--no-irq-schedule']),
+      ...(o.intFast ? [] : ['--no-int-fast']),
+      ...(o.edgeLookup ? [] : ['--no-edge-lookup'])];
     const p = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '', err = '';
     p.stdout.on('data', (d) => { out += d; });
@@ -462,6 +470,8 @@ async function main() {
     // difference the JIT did not cause.
     latticeClock: flag('lattice-clock'),
     irqSchedule: !flag('no-irq-schedule'),
+    intFast: !flag('no-int-fast'),
+    edgeLookup: !flag('no-edge-lookup'),
   };
 
   const one = arg('one');

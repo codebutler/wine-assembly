@@ -199,6 +199,9 @@ const fastBtn = byLabel('Fast');
 events.length = 0;
 fastBtn.dispatch('touchstart', touchEvent([touch(1)]));
 fastBtn.dispatch('touchend', touchEvent([touch(1)]));
+assert.deepStrictEqual(events, [['down', FAST_VK], ['char', FAST_CHAR]],
+  'the release waits out the minimum key hold');
+TouchControls.releaseAll();   // delivers the deferred release now
 assert.deepStrictEqual(events, [['down', FAST_VK], ['char', FAST_CHAR], ['up', FAST_VK]],
   'tapping Fast sends the WM_CHAR the game reads, not only the virtual key ' +
   'it discards — and sends it exactly once per tap');

@@ -62,7 +62,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bitsOut = alloc(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert(bitmap && hdc, 'memory DC creation failed');
   assert.notStrictEqual(wat.test_call_SelectObject(hdc, bitmap) | 0, -1);
@@ -80,7 +80,7 @@ const RegionMap = require('../lib/region-map.generated.js');
   for (const [index, character] of [...'Arial'].entries()) {
     wat.guest_write16(face + index * 2, character.charCodeAt(0));
   }
-  const font = wat.test_call_CreateFontW(-24, 400, 0, face) >>> 0;
+  const font = wat.test_call_CreateFontW(-24, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, face) >>> 0;
   assert(font, 'CreateFontW Arial failed');
   assert.notStrictEqual(wat.test_call_SelectObject(hdc, font) | 0, -1);
 

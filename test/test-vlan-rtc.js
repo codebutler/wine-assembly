@@ -395,8 +395,11 @@ async function main() {
     });
 
     await check('presence liveness comes from the store, not the record', async () => {
-      const rec = await alpha.signaling.read(beta.userId, beta.presenceKey);
-      assert.ok(rec.updatedAt, 'the store must stamp the record');
+      // Berrry stamps updated_at in the publisher list; a single read
+      // answers the bare value, so the list is where the clock comes from.
+      const list = await alpha.signaling.publishers(beta.presenceKey);
+      const rec = list.users.find(u => u.userId === beta.userId);
+      assert.ok(rec && rec.updatedAt, 'the store must stamp the record');
       assert.ok(!('at' in rec.value), 'a client clock must not be in the body');
       assert.ok(Number.isFinite(Date.parse(rec.updatedAt)));
     });
@@ -454,7 +457,7 @@ async function main() {
       const inbox = await inboxKeyFor(alpha.scope, beta.userId);
       // Gamma publishes into beta's inbox but claims to be alpha.
       const gamma = client();
-      await gamma._json('PUT', `/api/data/${encodeURIComponent(inbox)}?visibility=public`,
+      await gamma._json('POST', `/api/data/${encodeURIComponent(inbox)}?visibility=public`,
         Object.assign({ from: alpha.userId, publicKey: alphaSeen.publicKey },
           await sealed(betaKey, { role: 'offer', sdp: 'IMPOSTOR' })));
       const got = await beta._readInbox(inbox, alphaSeen, betaKey, 'offer');
@@ -610,6 +613,188 @@ async function main() {
       assert.strictEqual(ch.closed, true);
       assert.strictEqual(wire.send(frame(1)), false);
     });
+
+    // ---- the unordered datagram channel -----------------------------------
+    //
+    // A lost UDP packet on the reliable channel stalls everything behind it
+    // while SCTP retransmits it; datagrams get a channel of their own.
+    const vln = (type, n) => {
+      const b = frame(n);
+      const dv = new DataView(b.buffer);
+      dv.setUint32(0, 0x314E4C56, true);
+      dv.setUint32(4, type, true);
+      return b;
+    };
+    const DGRAM = 6, DATA = 3;
+    const withDatagrams = () => {
+      const ch = new FakeChannel();
+      const dg = new FakeChannel();
+      const made = [];
+      const pc = Object.assign(new FakePeerConnection(), {
+        createDataChannel(label, opts) { made.push({ label, opts }); return dg; },
+      });
+      const wire = new RtcWire(ch, pc);
+      wire.openDatagramChannel();
+      return { ch, dg, wire, made };
+    };
+
+    await check('the datagram channel is unordered and never retransmits', () => {
+      const { made } = withDatagrams();
+      assert.deepStrictEqual(made, [{ label: 'vln-dg', opts: { ordered: false, maxRetransmits: 0 } }]);
+    });
+
+    await check('a datagram takes the datagram channel, a stream frame does not', () => {
+      const { ch, dg, wire } = withDatagrams();
+      assert.strictEqual(wire.send(vln(DGRAM, 8)), true);
+      assert.strictEqual(wire.send(vln(DATA, 8)), true);
+      assert.strictEqual(dg.sent.length, 1);
+      assert.strictEqual(new DataView(dg.sent[0].buffer).getUint32(4, true), DGRAM);
+      assert.strictEqual(ch.sent.length, 1);
+      assert.strictEqual(new DataView(ch.sent[0].buffer).getUint32(4, true), DATA);
+    });
+
+    await check('a datagram waits for nothing: a full datagram channel drops it', () => {
+      const { ch, dg, wire } = withDatagrams();
+      dg.bufferedAmount = 1 << 20;
+      assert.strictEqual(wire.send(vln(DGRAM, 8)), true);
+      assert.strictEqual(dg.sent.length + ch.sent.length, 0);
+      assert.strictEqual(wire.droppedFrames, 1);
+    });
+
+    await check('until the datagram channel opens, datagrams use the reliable one', () => {
+      const { ch, dg, wire } = withDatagrams();
+      dg.readyState = 'connecting';
+      wire.send(vln(DGRAM, 8));
+      assert.strictEqual(ch.sent.length, 1);
+      assert.strictEqual(dg.sent.length, 0);
+    });
+
+    await check('losing the datagram channel is not losing the peer', () => {
+      const { ch, dg, wire } = withDatagrams();
+      let fired = 0;
+      wire.onClosed = () => { fired++; };
+      dg.hangUp();
+      assert.strictEqual(fired, 0);
+      assert.strictEqual(wire.closed, false);
+      assert.strictEqual(wire.send(vln(DGRAM, 8)), true);
+      assert.strictEqual(ch.sent.length, 1);
+    });
+
+    await check('a datagram arriving on its channel reaches the guest', () => {
+      const { dg, wire } = withDatagrams();
+      dg.arrive(vln(DGRAM, 4));
+      assert.strictEqual(wire.pending, 1);
+    });
+
+    await check('closing the wire closes both channels', () => {
+      const { ch, dg, wire } = withDatagrams();
+      wire.close();
+      assert.strictEqual(ch.closed && dg.closed, true);
+    });
+
+    // ---- answering offers -------------------------------------------------
+    //
+    // An offer outlives its author: a tab closed while waiting for an answer
+    // leaves it in the inbox, and nobody else can withdraw it. The handshake
+    // is faked here only far enough to tell a live offer from a dead one --
+    // a live offerer opens the data channel once answered, a dead one never.
+    {
+      const made = [];
+      class HandshakePC {
+        constructor() {
+          this.iceGatheringState = 'complete';
+          this.connectionState = 'new';
+          this.closed = false;
+          made.push(this);
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        async setRemoteDescription(d) { this.remote = d; }
+        async createAnswer() { return { type: 'answer', sdp: `answer to ${this.remote.sdp}` }; }
+        async setLocalDescription(d) {
+          this.localDescription = d;
+          if (/LIVE/.test(this.remote.sdp)) {
+            setTimeout(() => { if (!this.closed && this.ondatachannel) this.ondatachannel({ channel: new FakeChannel() }); }, 10);
+          }
+          // A current offerer adds the datagram channel after the stream one.
+          if (/LIVE/.test(this.remote.sdp) && /DGRAM/.test(this.remote.sdp)) {
+            setTimeout(() => {
+              if (this.closed || !this.ondatachannel) return;
+              this.dg = Object.assign(new FakeChannel(), { label: 'vln-dg' });
+              this.ondatachannel({ channel: this.dg });
+            }, 30);
+          }
+        }
+        close() { this.closed = true; }
+      }
+      const realPC = global.RTCPeerConnection;
+      global.RTCPeerConnection = HandshakePC;
+      const joinAs = name => joinNetwork({ exe: 'accept.exe', name, signaling: client() });
+      const host = await joinAs('host');
+      const ghost = await joinAs('ghost');
+      const live = await joinAs('live');
+      host.answerTimeoutMs = 400;
+      const offerFrom = async (net, sdp) => {
+        const hostSeen = (await net.peers()).find(p => p.userId === host.userId);
+        const key = await sharedKeyWith(net.identity, hostSeen.publicKey);
+        await net._post(await inboxKeyFor(net.scope, host.userId),
+          Object.assign({ from: net.userId, publicKey: net.identity.publicKey },
+            await sealed(key, { role: 'offer', sdp, at: Date.now() })));
+      };
+      const released = [];
+      const serveOnce = timeoutMs => host.accept({
+        timeoutMs, keepGoing: true,
+        answerExtra: peer => ({ seat: peer.name }),
+        release: extra => released.push(extra.seat),
+      });
+      try {
+        await offerFrom(ghost, 'v=0 GHOST');
+        await offerFrom(live, 'v=0 LIVE');
+
+        await check('a live joiner is admitted while a dead offer is still being answered', async () => {
+          const t0 = Date.now();
+          const got = await serveOnce(5000);
+          assert.strictEqual(got.peer.name, 'live');
+          assert.deepStrictEqual(got.extra, { seat: 'live' });
+          assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0}ms`);
+          got.wire.close();
+        });
+
+        await check('answering a dead offer gives up on its own, and frees what it reserved', async () => {
+          const end = Date.now() + 3000;
+          while (!released.length && Date.now() < end) await new Promise(r => setTimeout(r, 20));
+          assert.deepStrictEqual(released, ['ghost']);
+          assert.ok(made.find(pc => /GHOST/.test(pc.remote.sdp)).closed, 'the dead attempt kept its connection');
+        });
+
+        await check('a dead offer is answered once, not again on every poll', async () => {
+          const before = made.length;
+          await assert.rejects(serveOnce(2500), /nobody tried to connect/);
+          assert.strictEqual(made.length, before, 'the same offer was answered again');
+        });
+
+        await check('the same peer offering again is a new attempt', async () => {
+          await offerFrom(ghost, 'v=0 LIVE again');
+          const got = await serveOnce(5000);
+          assert.strictEqual(got.peer.name, 'ghost');
+          got.wire.close();
+        });
+
+        await check('an answerer joins the late datagram channel to the stream wire', async () => {
+          await offerFrom(live, 'v=0 LIVE DGRAM');
+          const got = await serveOnce(5000);
+          const pc = made.find(p => /DGRAM/.test(p.remote.sdp));
+          const end = Date.now() + 2000;
+          while (!got.wire.dgChannel && Date.now() < end) await new Promise(r => setTimeout(r, 10));
+          assert.strictEqual(got.wire.dgChannel, pc.dg, 'the datagram channel was not attached');
+          assert.notStrictEqual(got.wire.channel, pc.dg, 'the datagram channel became the stream');
+          got.wire.close();
+        });
+      } finally {
+        global.RTCPeerConnection = realPC;
+        await Promise.all([host.leave(), ghost.leave(), live.leave()]);
+      }
+    }
 
     // ---- the other player leaving ---------------------------------------
     //

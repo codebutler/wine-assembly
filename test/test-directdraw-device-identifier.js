@@ -4,6 +4,11 @@
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
+// ddraw.h: szDriver[MAX_DDDEVICEID_STRING] and szDescription[MAX_DDDEVICEID_STRING]
+// with MAX_DDDEVICEID_STRING 512 (not MAX_PATH), then liDriverVersion, four
+// PCI ids and a GUID: 1064 bytes. Expendable's launcher reads szDescription at
+// +512 as the driver name and kept Play disabled while it read an empty string.
+
 const extraWat = String.raw`
   (func (export "test_device_identifier") (param $out i32) (result i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x00430000))
@@ -27,14 +32,17 @@ function cString(wat, address, limit) {
 (async () => {
   const { exports: wat } = await bootRenderHarness({ extraWat });
   const out = 0x00440000;
-  for (let i = 0; i < 560; i++) wat.guest_write8(out + i, 0xa5);
+  for (let i = 0; i < 1068; i++) wat.guest_write8(out + i, 0xa5);
 
   assert.strictEqual(wat.test_device_identifier(out) >>> 0, 0,
     'IDirectDraw4 GetDeviceIdentifier succeeds');
-  assert.strictEqual(cString(wat, out, 260), 'wine-assembly');
-  assert.strictEqual(cString(wat, out + 260, 260), 'Wine Assembly DirectDraw');
-  assert.strictEqual(wat.guest_read32(out + 556) >>> 0, 0,
+  assert.strictEqual(cString(wat, out, 512), 'wine-assembly');
+  assert.strictEqual(cString(wat, out + 512, 512), 'Wine Assembly DirectDraw',
+    'szDescription sits after the 512-byte szDriver');
+  assert.strictEqual(wat.guest_read32(out + 1060) >>> 0, 0,
     'the complete DX6 structure is initialized');
+  assert.strictEqual(wat.guest_read32(out + 1064) >>> 0, 0xa5a5a5a5,
+    'an IDirectDraw4 caller\'s 1064-byte buffer is not overrun');
   assert.strictEqual(wat.test_device_identifier_esp() >>> 0, 0x00430010,
     'GetDeviceIdentifier uses the three-argument stdcall ABI');
 

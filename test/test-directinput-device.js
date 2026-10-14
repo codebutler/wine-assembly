@@ -86,6 +86,9 @@ const extraWat = `
   (func (export "test_di_mouse_seed_overflow") (param $dx i32) (param $dy i32)
     (i32.atomic.store offset=272 (global.get $DI_MOUSE_INPUT_STATE) (local.get $dx))
     (i32.atomic.store offset=276 (global.get $DI_MOUSE_INPUT_STATE) (local.get $dy)))
+  (func (export "test_di_mouse_seed_wheel_overflow") (param $dz i32)
+    (i32.atomic.store offset=280 (global.get $DI_MOUSE_INPUT_STATE) (local.get $dz))
+    (drop (i32.atomic.rmw.add offset=284 (global.get $DI_MOUSE_INPUT_STATE) (local.get $dz))))
   (func (export "test_di_mouse_queue_event") (param $event i32)
     (local $tail i32)
     (local.set $tail (i32.atomic.load offset=12 (global.get $DI_MOUSE_INPUT_STATE)))
@@ -161,6 +164,13 @@ const extraWat = `
       (local.get $obj) (local.get $property_id) (local.get $property)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_di_get_state_sized")
+        (param $obj i32) (param $cb i32) (param $buffer i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+    (call $handle_IDirectInputDevice_GetDeviceState
+      (local.get $obj) (local.get $cb) (local.get $buffer)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_di_buffer_size") (param $obj i32) (result i32)
     (i32.load offset=12 (call $dx_from_this (local.get $obj))))
 `;
@@ -171,7 +181,7 @@ const extraWat = `
     4,
     'EnumObjects metadata includes this + callback + ref + flags'
   );
-  const { exports: wat } = await bootRenderHarness({ extraWat });
+  const { exports: wat, renderer } = await bootRenderHarness({ extraWat });
   const stack = 0x074ff000;
 
   assert.strictEqual(
@@ -215,27 +225,39 @@ const extraWat = `
     }
   };
 
-  // DirectInput requires format + cooperative level before acquisition, and
-  // acquisition is a Boolean state rather than a reference count.
+  // DirectInput requires a data format before acquisition; the cooperative
+  // level defaults to DISCL_NONEXCLUSIVE|DISCL_BACKGROUND (as in Wine).
+  // Acquisition is a Boolean state rather than a reference count.
   assert.strictEqual(wat.test_di_acquire(mouse) >>> 0, 0x80070057,
-    'Acquire rejects a device without a data format or cooperative level');
+    'Acquire rejects a device without a data format');
   assert.strictEqual(wat.test_di_poll(mouse) >>> 0, 0x8007000c,
     'Poll rejects an unacquired device');
   assert.strictEqual(wat.test_di_set_data_format(mouse, 0) >>> 0, 0x80070057,
     'SetDataFormat rejects a null descriptor');
   writeFormat(mouseFormat, mouseObjects, 'mouse');
-  wat.guest_write32(mouseObjects + 4, 4);
+  wat.guest_write32(mouseObjects + 4, 2);
   assert.strictEqual(wat.test_di_set_data_format(mouse, mouseFormat) >>> 0, 0x80070057,
-    'SetDataFormat rejects a nonstandard object offset');
+    'SetDataFormat rejects an axis that is not DWORD-aligned');
   wat.guest_write32(mouseObjects + 4, 0);
   assert.strictEqual(wat.test_di_set_data_format(mouse, mouseFormat) >>> 0, 0,
     'SetDataFormat accepts the standard DIMOUSESTATE layout');
-  assert.strictEqual(wat.test_di_acquire(mouse) >>> 0, 0x80070057,
-    'Acquire still requires a cooperative level');
+  assert.strictEqual(wat.test_di_acquire(mouse) >>> 0, 0,
+    'Acquire uses the default background nonexclusive level when none was set '
+    + '(Midtown Madness never sets one on its keyboard)');
+  assert.strictEqual(wat.test_di_unacquire(mouse) >>> 0, 0);
   assert.strictEqual(wat.test_di_set_cooperative_level(mouse, 0xdead, 6) >>> 0,
     0x80070006, 'SetCooperativeLevel rejects an invalid top-level HWND');
   assert.strictEqual(wat.test_di_set_cooperative_level(mouse, 0x10000, 0) >>> 0,
     0x80070057, 'cooperative flags require one choice from each pair');
+  assert.strictEqual(wat.test_di_set_cooperative_level(mouse, 0, 6) >>> 0,
+    0x80070006, 'a NULL HWND is refused for foreground access');
+  assert.strictEqual(wat.test_di_acquire(mouse) >>> 0, 0,
+    'a refused SetCooperativeLevel leaves the default level in place');
+  assert.strictEqual(wat.test_di_unacquire(mouse) >>> 0, 0);
+  // NULL with exactly DISCL_NONEXCLUSIVE|DISCL_BACKGROUND binds the desktop
+  // (Populous: The Beginning's input threads; Wine does the same).
+  assert.strictEqual(wat.test_di_set_cooperative_level(mouse, 0, 0x0A) >>> 0, 0,
+    'background nonexclusive access accepts a NULL HWND');
   assert.strictEqual(wat.test_di_set_cooperative_level(mouse, 0x10000, 6) >>> 0, 0,
     'foreground nonexclusive access is accepted for the desktop window');
   assert.strictEqual(wat.test_di_acquire(mouse) >>> 0, 0);
@@ -353,12 +375,24 @@ const extraWat = `
     wat.guest_read32(info), wat.guest_read32(info + 4) >>> 0,
     wat.guest_read32(info + 36) >>> 0,
   ], [580, 0x6f1d2b60, 0x0202], 'GetDeviceInfo returns the same system-mouse identity');
-  wat.guest_write32(caps, 44);
-  assert.strictEqual(wat.test_di_get_caps(mouse, caps) >>> 0, 0);
-  assert.deepStrictEqual([
-    wat.guest_read32(caps), wat.guest_read32(caps + 8) >>> 0,
-    wat.guest_read32(caps + 12), wat.guest_read32(caps + 20),
-  ], [44, 0x0202, 3, 3], 'GetCapabilities reports legacy mouse type, axes, and buttons');
+  // Both DX3 and DX5 structures must identify the enumerated system devices
+  // as attached. Hype tests this flag before ever polling the keyboard.
+  for (const size of [24, 44]) {
+    for (const [device, type, axes, buttons] of [
+      [mouse, 0x0202, 3, 3], [keyboard, 0x0403, 0, 256],
+    ]) {
+      for (let offset = 0; offset < size + 4; offset += 4)
+        wat.guest_write32(caps + offset, 0xfeedface);
+      wat.guest_write32(caps, size);
+      assert.strictEqual(wat.test_di_get_caps(device, caps) >>> 0, 0);
+      assert.deepStrictEqual(Array.from({length:6}, (_, i) => wat.guest_read32(caps+i*4) >>> 0),
+        [size, 1, type, axes, buttons, 0], 'attached device, correct buttons field, no POV hats');
+      for (let offset = 24; offset < size; offset += 4)
+        assert.strictEqual(wat.guest_read32(caps + offset), 0, 'no force-feedback capability');
+      assert.strictEqual(wat.guest_read32(caps + size) >>> 0, 0xfeedface,
+        'capabilities preserve bytes beyond caller structure');
+    }
+  }
 
   // Microsoft defines GetObjectInfo as a lookup over the current data-format
   // offset, the dwType returned by EnumObjects, or packed HID usage. These
@@ -486,6 +520,48 @@ const extraWat = `
   wat.test_di_mouse_get_data(mouse, data, count, 0);
   assert.deepStrictEqual([wat.guest_read32(data), wat.guest_read32(data + 4) | 0], [12, 0]);
 
+  // The middle button and the wheel. Black & White 2's buffered mouse format
+  // has objects at lZ (8) and rgbButtons[2] (14); before these, neither was
+  // ever reported, through GetDeviceData or GetDeviceState. Queued through
+  // the renderer's own entry points, as a browser middle click and wheel do.
+  const diMemory = renderer.wasmMemory;
+  assert.ok(diMemory, 'harness renderer has the shared memory');
+  assert.ok(renderer._queueDirectInputMouseButton(diMemory, 0x10, true), 'middle press is queued');
+  assert.ok(renderer._queueDirectInputMouseWheel(diMemory, 240), 'two wheel notches away are queued');
+  assert.ok(renderer._queueDirectInputMouseButton(diMemory, 0x10, false), 'middle release is queued');
+  assert.ok(renderer._queueDirectInputMouseWheel(diMemory, -120), 'one notch back is queued');
+  wat.guest_write32(count, 8);
+  assert.strictEqual(wat.test_di_mouse_get_data(mouse, data, count, 0) >>> 0, 0);
+  assert.strictEqual(wat.guest_read32(count), 4, 'four records: press, wheel, release, wheel');
+  assert.deepStrictEqual([0, 16, 32, 48].map(o => [wat.guest_read32(data + o), wat.guest_read32(data + o + 4) | 0]),
+    [[14, 0x80], [8, 240], [14, 0], [8, -120]],
+    'middle edges at rgbButtons[2], wheel deltas at lZ, in the order they happened');
+  // A wheel burst while the ring is nearly full coalesces into the overflow
+  // word and still reaches the guest, after the queued records.
+  wat.test_di_mouse_seed_wheel_overflow(360);
+  wat.guest_write32(count, 4);
+  wat.test_di_mouse_get_data(mouse, 0, count, 1);
+  assert.strictEqual(wat.guest_read32(count), 1, 'count-only peek includes coalesced wheel motion');
+  wat.guest_write32(count, 4);
+  wat.test_di_mouse_get_data(mouse, data, count, 0);
+  assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4) | 0],
+    [1, 8, 360], 'coalesced wheel motion is one lZ record');
+  // GetDeviceState: lZ is the wheel since the last poll; rgbButtons[2] the
+  // live middle button.
+  renderer._mouseButtonsMask = 0x10;
+  wat.test_di_mouse_seed_delta(0, 0);
+  assert.strictEqual(wat.test_di_mouse_get_state(mouse, data) >>> 0, 0);
+  assert.deepStrictEqual([wat.guest_read32(data + 8) | 0, wat.guest_read32(data + 12) >>> 0],
+    [480, 0x00800000], 'GetDeviceState: lZ = 240 - 120 + 360, middle button down');
+  assert.strictEqual(wat.test_di_mouse_get_state(mouse, data) >>> 0, 0);
+  assert.strictEqual(wat.guest_read32(data + 8) | 0, 0, 'lZ is consumed by the poll that reads it');
+  renderer._mouseButtonsMask = 0;
+  // The live-state fallback (no queue) also reports a middle edge.
+  wat.guest_write32(count, 4);
+  wat.test_di_mouse_get_data(mouse, data, count, 0);
+  assert.strictEqual(wat.guest_read32(count), 0,
+    'nothing new to report once the middle release was delivered');
+
   // Motion coalesced after a saturated browser ring remains visible after
   // ordinary queued records drain, in X-before-Y order.
   wat.test_di_mouse_seed_overflow(37, -21);
@@ -526,21 +602,37 @@ const extraWat = `
     'GetProperty round-trips the configured queue capacity');
   assert.strictEqual(wat.test_di_set_buffer_size(mouse, 2, property) >>> 0, 0x80070057,
     'DIPROP_AXISMODE rejects the buffer value 2 as invalid');
-  wat.guest_write32(property + 16, 1); // DIPROPAXISMODE_ABS
+  wat.guest_write32(property + 16, 0); // DIPROPAXISMODE_ABS (UT2003, Midtown Madness)
   assert.strictEqual(wat.test_di_set_buffer_size(mouse, 2, property) >>> 0, 0,
     'SetProperty accepts absolute DIPROP_AXISMODE for the whole device');
   wat.guest_write32(property + 16, 0xfeedface);
   assert.strictEqual(wat.test_di_get_property(mouse, 2, property) >>> 0, 0,
     'GetProperty accepts DIPROP_AXISMODE');
-  assert.strictEqual(wat.guest_read32(property + 16), 1,
+  assert.strictEqual(wat.guest_read32(property + 16), 0,
     'GetProperty round-trips absolute axis mode');
-  wat.guest_write32(property + 16, 0); // DIPROPAXISMODE_REL
+  // An absolute mouse reports the accumulated position, not the last delta.
+  const absBefore = [];
+  wat.test_di_mouse_seed_delta(0, 0);
+  assert.strictEqual(wat.test_di_mouse_get_state(mouse, data) >>> 0, 0);
+  absBefore.push(wat.guest_read32(data) | 0, wat.guest_read32(data + 4) | 0);
+  wat.test_di_mouse_seed_delta(5, -3);
+  assert.strictEqual(wat.test_di_mouse_get_state(mouse, data) >>> 0, 0);
+  wat.test_di_mouse_seed_delta(2, 1);
+  assert.strictEqual(wat.test_di_mouse_get_state(mouse, data) >>> 0, 0);
+  assert.deepStrictEqual([wat.guest_read32(data) | 0, wat.guest_read32(data + 4) | 0],
+    [absBefore[0] + 7, absBefore[1] - 2],
+    'absolute axis mode accumulates the deltas into a position');
+  wat.guest_write32(property + 16, 1); // DIPROPAXISMODE_REL
   assert.strictEqual(wat.test_di_set_buffer_size(mouse, 2, property) >>> 0, 0,
-    'SetProperty accepts relative DIPROP_AXISMODE used by UT2003');
+    'SetProperty accepts relative DIPROP_AXISMODE');
   wat.guest_write32(property + 16, 0xfeedface);
   assert.strictEqual(wat.test_di_get_property(mouse, 2, property) >>> 0, 0);
-  assert.strictEqual(wat.guest_read32(property + 16), 0,
+  assert.strictEqual(wat.guest_read32(property + 16), 1,
     'GetProperty round-trips relative axis mode');
+  wat.test_di_mouse_seed_delta(4, 4);
+  assert.strictEqual(wat.test_di_mouse_get_state(mouse, data) >>> 0, 0);
+  assert.deepStrictEqual([wat.guest_read32(data) | 0, wat.guest_read32(data + 4) | 0], [4, 4],
+    'relative axis mode reports the delta since the last read');
   assert.strictEqual(wat.test_di_get_property(mouse, 3, property) >>> 0, 0x80004001,
     'an unmodeled DirectInput property fails honestly with DIERR_UNSUPPORTED');
   wat.guest_write32(property + 12, 1); // DIPH_BYOFFSET is invalid for buffer size
@@ -566,6 +658,85 @@ const extraWat = `
     'buffered read cannot deliver more records than DIPROP_BUFFERSIZE');
   assert.strictEqual(wat.guest_read32(data + 32) >>> 0, 0xfeedface,
     'buffered read leaves memory after the configured record array intact');
+
+  // Immediate device reads must ignore stale Win32 mouse-message snapshots.
+  for (const [live, message, expected] of [[1, 0, 0x80], [0, 1, 0], [3, 0, 0x8080]]) {
+    renderer._mouseButtonsMask = live;
+    renderer._activeInputEvent = {type:'mouse', hwnd:0x77777, mouseButtons:message};
+    assert.strictEqual(wat.test_di_mouse_get_state(mouse, data) >>> 0, 0);
+    assert.strictEqual(wat.guest_read32(data + 12) & 0xffff, expected,
+      'DirectInput returns current physical buttons, not an unrelated queued message');
+    assert.strictEqual(renderer.getMouseButtons(), message,
+      'message snapshot remains unchanged for message consumers');
+  }
+  renderer._mouseButtonsMask = 0;
+  renderer._activeInputEvent = null;
+
+  // Application-defined data formats, in LithTech's (Blood 2) shape: first a
+  // format with no objects, then one naming only the bound keys by the dwType
+  // EnumObjects reported, at dwOfs = 4*i. The game reads dwOfs/4 back as an
+  // index into its own binding table; before this, SetDataFormat refused
+  // both, the game released the device, and no key ever reached the player.
+  const lith = wat.test_di_keyboard_create() >>> 0;
+  const lithFormat = 0x00415000;
+  const lithObjects = 0x00415100;
+  const guidKey = 0x00415200;
+  [0x55728220, 0x11cfd33c, 0x4544c7bf, 0x00005453]
+    .forEach((word, i) => wat.guest_write32(guidKey + 4 * i, word));
+  const setLithFormat = objects => {
+    wat.guest_write32(lithFormat, 24);
+    wat.guest_write32(lithFormat + 4, 16);
+    wat.guest_write32(lithFormat + 8, 2);
+    wat.guest_write32(lithFormat + 12, objects.length * 4);
+    wat.guest_write32(lithFormat + 16, objects.length);
+    wat.guest_write32(lithFormat + 20, lithObjects);
+    objects.forEach(([guid, type], i) => {
+      wat.guest_write32(lithObjects + i * 16, guid);
+      wat.guest_write32(lithObjects + i * 16 + 4, i * 4);
+      wat.guest_write32(lithObjects + i * 16 + 8, type >>> 0);
+      wat.guest_write32(lithObjects + i * 16 + 12, 0);
+    });
+    return wat.test_di_set_data_format(lith, lithFormat) >>> 0;
+  };
+  const DIK_UP = 0xc8, DIK_LCONTROL = 0x1d;
+  assert.strictEqual(setLithFormat([]), 0, 'a format with no objects is accepted');
+  assert.strictEqual(setLithFormat([[guidKey, 0x04 | (DIK_UP << 8)], [0, 0x0c | (DIK_LCONTROL << 8)]]), 0,
+    'a format naming keys by GUID_Key and DIDFT instance is accepted');
+  assert.strictEqual(setLithFormat([[0, 0x0c | (0x54 << 8)]]), 0x80070057,
+    'a required object the keyboard does not have refuses the format');
+  assert.strictEqual(setLithFormat([[0, (0x8000000c | (0x54 << 8)) >>> 0], [guidKey, 0x04 | (DIK_UP << 8)]]), 0,
+    'a DIDFT_OPTIONAL object the keyboard lacks is skipped');
+  assert.strictEqual(setLithFormat([[guidKey, 0x04 | (DIK_UP << 8)], [0, 0x0c | (DIK_LCONTROL << 8)]]), 0);
+  assert.strictEqual(setLithFormat([[0, 0x01 | (DIK_UP << 8)]]), 0x80070057,
+    'an axis type never matches a key');
+  assert.strictEqual(wat.test_di_set_cooperative_level(lith, 0x10000, 6) >>> 0, 0);
+  assert.strictEqual(wat.test_di_acquire(lith) >>> 0, 0,
+    'the refused format left the previous custom format in force');
+
+  renderer.pokeAsyncKeyState(0x26, true); // VK_UP
+  renderer.pokeAsyncKeyState(0x41, true); // 'A' -- not in the format
+  wat.guest_write32(count, 8);
+  assert.strictEqual(wat.test_di_mouse_get_data(lith, data, count, 0) >>> 0, 0);
+  assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4)],
+    [1, 0, 0x80], 'Up is reported at its format offset 0 and A, outside the format, not at all');
+  renderer.pokeAsyncKeyState(0x11, true); // VK_CONTROL (DIK_LCONTROL)
+  wat.guest_write32(count, 8);
+  wat.test_di_mouse_get_data(lith, data, count, 0);
+  assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4)],
+    [1, 4, 0x80], 'the second format object is reported at dwOfs 4');
+  wat.guest_write32(data, 0xffffffff);
+  wat.guest_write32(data + 4, 0xffffffff);
+  assert.strictEqual(wat.test_di_get_state_sized(lith, 8, data) >>> 0, 0);
+  assert.deepStrictEqual([wat.guest_read32(data) >>> 0, wat.guest_read32(data + 4) >>> 0], [0x80, 0x80],
+    'GetDeviceState lays the held keys out at their format offsets');
+  renderer.pokeAsyncKeyState(0x26, false);
+  renderer.pokeAsyncKeyState(0x41, false);
+  renderer.pokeAsyncKeyState(0x11, false);
+  wat.guest_write32(count, 8);
+  wat.test_di_mouse_get_data(lith, data, count, 0);
+  assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4),
+    wat.guest_read32(data + 16), wat.guest_read32(data + 20)],
+  [2, 4, 0, 0, 0], 'releases come back at the same offsets, again without A');
 
   console.log('PASS  DirectInput enumerates Win98 devices/objects and preserves browser input');
 })().catch(error => {

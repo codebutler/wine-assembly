@@ -56,6 +56,45 @@
   ;; Sits in the same reserved 0xFFFE_xxxx space as $WNDPROC_BUILTIN.
   (global $WNDPROC_SYSCLASS i32 (i32.const 0xFFFE0100))
 
+  ;; Native control kind K, as a wndproc value: what GetWindowLong(GWL_WNDPROC)
+  ;; shows for an unsubclassed native control. On Windows that value is the
+  ;; control's real code in USER, and an app may build a class on it:
+  ;; Civilization II MGE creates a throwaway EDIT, reads its GWL_WNDPROC,
+  ;; registers "MSEditBoxClass" with it and makes its name fields from that.
+  ;; The generic $WNDPROC_CTRL_NATIVE says nothing about which control it was,
+  ;; so those fields came up with no edit state and swallowed every keystroke.
+  ;; This marker is never stored as a window's proc -- SetWindowLong,
+  ;; CreateWindowEx, dialog creation and CallWindowProc turn it back into
+  ;; $WNDPROC_CTRL_NATIVE -- so it dispatches exactly as that marker does,
+  ;; unlike $WNDPROC_SYSCLASS, whose chained calls route notifications as tail
+  ;; calls for a window USER never classified.
+  (global $WNDPROC_CTRL_KIND i32 (i32.const 0xFFFF0100))
+
+  (func $wndproc_public (param $hwnd i32) (param $proc i32) (result i32)
+    (local $class i32)
+    (if (i32.ne (local.get $proc) (global.get $WNDPROC_CTRL_NATIVE)) (then (return (local.get $proc))))
+    (local.set $class (call $ctrl_table_get_class (local.get $hwnd)))
+    (if (i32.or (i32.eqz (local.get $class)) (i32.gt_u (local.get $class) (i32.const 0xFF)))
+      (then (return (local.get $proc))))
+    (i32.or (global.get $WNDPROC_CTRL_KIND) (local.get $class)))
+
+  ;; The control kind a $WNDPROC_CTRL_KIND marker names, or 0 for any other value.
+  (func $wndproc_ctrl_kind (param $proc i32) (result i32)
+    (if (result i32) (i32.eq (i32.and (local.get $proc) (i32.const 0xFFFFFF00)) (global.get $WNDPROC_CTRL_KIND))
+      (then (i32.and (local.get $proc) (i32.const 0xFF)))
+      (else (i32.const 0))))
+
+  ;; HWND is now run by native control KIND: classify it if nothing has, and
+  ;; give it the creation the native control missed.
+  (func $wndproc_adopt_ctrl_kind (param $hwnd i32) (param $kind i32)
+    (local $slot i32)
+    (if (call $ctrl_table_get_class (local.get $hwnd)) (then (return)))
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.eq (local.get $slot) (i32.const -1)) (then (return)))
+    (call $ctrl_table_set (local.get $slot) (local.get $kind)
+      (call $ctrl_table_get_id (local.get $hwnd)))
+    (call $sysclass_replay_create (local.get $hwnd) (local.get $slot)))
+
   ;; Give a newly adopted control the WM_CREATE it never received.
   ;;
   ;; Every control proc allocates its state block in WM_CREATE, and a window
@@ -97,6 +136,92 @@
   (global $windowpos_depth (mut i32) (i32.const 0))
   (global $WINDOWPOS_SLOT i32 (i32.const 32))   ;; 28-byte struct, padded
   (global $WINDOWPOS_DEPTH_MAX i32 (i32.const 8))
+
+  ;; DefWindowProc's sizing negotiation owns one MINMAXINFO per synchronous
+  ;; invocation. Never lend a singleton struct to a reentrant guest wndproc.
+  (global $windowpos_minmax_depth (mut i32) (i32.const 0))
+  (func $windowpos_guest_span_valid (param $p i32) (param $n i32) (result i32)
+    (local $i i32)
+    (if (i32.or (i32.eqz (local.get $p))
+          (i32.gt_u (local.get $p) (i32.sub (i32.const -1) (i32.sub (local.get $n) (i32.const 1)))))
+      (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (if (i32.eq (call $g2w (i32.add (local.get $p) (local.get $i))) (global.get $NULL_SENTINEL))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 1))
+
+  (func $windowpos_defproc_minmax (param $hwnd i32) (param $pos i32)
+    (local $style i32) (local $info i32) (local $i i32)
+    (local $min_x i32) (local $min_y i32) (local $max_x i32) (local $max_y i32)
+    (local $cx i32) (local $cy i32)
+    (if (i32.or (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+          (i32.eqz (call $windowpos_guest_span_valid (local.get $pos) (i32.const 28))))
+      (then (return)))
+    (if (i32.or (i32.ne (call $gl32 (local.get $pos)) (local.get $hwnd))
+          (i32.and (call $gl32 (i32.add (local.get $pos) (i32.const 24))) (i32.const 1)))
+      (then (return))) ;; SWP_NOSIZE
+    (local.set $style (call $wnd_get_style (local.get $hwnd)))
+    ;; Overlapped windows, sizing frames, and captioned popup/child windows
+    ;; receive the default minimum-size query; borderless controls do not.
+    (if (i32.eqz (i32.or
+          (i32.eqz (i32.and (local.get $style) (i32.const 0xC0000000)))
+          (i32.or (i32.and (local.get $style) (i32.const 0x00040000))
+            (i32.eq (i32.and (local.get $style) (i32.const 0x00C00000)) (i32.const 0x00C00000)))))
+      (then (return)))
+    ;; This sender posts far Win16 procedures asynchronously. Do not hand it
+    ;; temporary storage whose lifetime ends when this near call returns.
+    (if (i32.and (global.get $code16) (call $win16_is_far_proc (call $wnd_table_get (local.get $hwnd))))
+      (then (return)))
+    (if (i32.ge_u (global.get $windowpos_minmax_depth) (global.get $WINDOWPOS_DEPTH_MAX))
+      (then (return)))
+    (local.set $info (call $heap_alloc (i32.const 40)))
+    (if (i32.eqz (local.get $info)) (then (return)))
+    (global.set $windowpos_minmax_depth (i32.add (global.get $windowpos_minmax_depth) (i32.const 1)))
+    (loop $clear
+      (call $gs32 (i32.add (local.get $info) (local.get $i)) (i32.const 0))
+      (local.set $i (i32.add (local.get $i) (i32.const 4)))
+      (br_if $clear (i32.lt_u (local.get $i) (i32.const 40))))
+    (call $gs32 (i32.add (local.get $info) (i32.const 8)) (call $screen_metric_w))
+    (call $gs32 (i32.add (local.get $info) (i32.const 12)) (call $screen_work_bottom))
+    (call $gs32 (i32.add (local.get $info) (i32.const 24)) (call $system_metric (i32.const 34)))
+    (call $gs32 (i32.add (local.get $info) (i32.const 28)) (call $system_metric (i32.const 35)))
+    (call $gs32 (i32.add (local.get $info) (i32.const 32)) (call $system_metric (i32.const 59)))
+    (call $gs32 (i32.add (local.get $info) (i32.const 36)) (call $system_metric (i32.const 60)))
+    (drop (call $wnd_send_message (local.get $hwnd) (i32.const 0x0024) (i32.const 0) (local.get $info)))
+    (block $release
+      ;; An incomplete bounded callback is not a valid MINMAXINFO response.
+      (br_if $release (i32.eqz (global.get $wnd_send_completed)))
+      (br_if $release (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0)))
+      (br_if $release (i32.eqz (call $windowpos_guest_span_valid (local.get $pos) (i32.const 28))))
+      (br_if $release (i32.eqz (call $windowpos_guest_span_valid (local.get $info) (i32.const 40))))
+      (br_if $release (i32.ne (call $gl32 (local.get $pos)) (local.get $hwnd)))
+      (br_if $release (i32.and (call $gl32 (i32.add (local.get $pos) (i32.const 24))) (i32.const 1)))
+      (local.set $min_x (call $gl32 (i32.add (local.get $info) (i32.const 24))))
+      (local.set $min_y (call $gl32 (i32.add (local.get $info) (i32.const 28))))
+      (local.set $max_x (call $gl32 (i32.add (local.get $info) (i32.const 32))))
+      (local.set $max_y (call $gl32 (i32.add (local.get $info) (i32.const 36))))
+      ;; A negative minimum is not a dimension: leave the proposal untouched.
+      (br_if $release (i32.or (i32.lt_s (local.get $min_x) (i32.const 0)) (i32.lt_s (local.get $min_y) (i32.const 0))))
+      ;; A maximum below the minimum is raised to it, as USER does (Wine's
+      ;; WINPOS_GetMinMaxInfo: ptMaxTrackSize = max(ptMaxTrackSize,
+      ;; ptMinTrackSize)) -- the minimum wins. Runenlegen asks for a 656x449
+      ;; minimum, wider than the default ptMaxTrackSize on a 640x480 screen;
+      ;; rejecting that left its main window at its 8x45 frame.
+      (local.set $max_x (select (local.get $min_x) (local.get $max_x) (i32.lt_s (local.get $max_x) (local.get $min_x))))
+      (local.set $max_y (select (local.get $min_y) (local.get $max_y) (i32.lt_s (local.get $max_y) (local.get $min_y))))
+      (local.set $cx (call $gl32 (i32.add (local.get $pos) (i32.const 16))))
+      (local.set $cy (call $gl32 (i32.add (local.get $pos) (i32.const 20))))
+      (local.set $cx (select (local.get $min_x) (local.get $cx) (i32.lt_s (local.get $cx) (local.get $min_x))))
+      (local.set $cy (select (local.get $min_y) (local.get $cy) (i32.lt_s (local.get $cy) (local.get $min_y))))
+      (call $gs32 (i32.add (local.get $pos) (i32.const 16))
+        (select (local.get $max_x) (local.get $cx) (i32.gt_s (local.get $cx) (local.get $max_x))))
+      (call $gs32 (i32.add (local.get $pos) (i32.const 20))
+        (select (local.get $max_y) (local.get $cy) (i32.gt_s (local.get $cy) (local.get $max_y)))))
+    (call $heap_free (local.get $info))
+    (global.set $windowpos_minmax_depth (i32.sub (global.get $windowpos_minmax_depth) (i32.const 1))))
 
   ;; Allocate one reentrant guest-visible WINDOWPOS and send the mutable
   ;; WM_WINDOWPOSCHANGING half of USER's positioning transaction. The same
@@ -241,6 +366,36 @@
   ;; An external result WINDOWPOS lets the Win16 far continuation own its
   ;; notifications while sharing every geometry/paint commit below. Zero
   ;; retains the ordinary Win32 changing/changed transaction.
+  ;; A visible child that moved or changed size uncovers part of its old
+  ;; rectangle. USER invalidates that area of the parent, erase included, so
+  ;; the parent background and any sibling beneath repaint it. Children own no
+  ;; surface here -- they paint into the parent's -- so without this the old
+  ;; pixels stay: Tetravex's dragged tile left a copy of itself in the supply
+  ;; slot it came from. SWP_NOREDRAW (also MoveWindow's bRepaint = FALSE)
+  ;; suppresses it, as on Windows. $old_xy is parent-client x|y<<16 and
+  ;; $old_wh w|h<<16, read before the move.
+  (func $windowpos_expose_vacated (param $hwnd i32) (param $old_xy i32) (param $old_wh i32) (param $flags i32)
+    (local $style i32) (local $parent i32) (local $l i32) (local $t i32)
+    (local.set $style (call $wnd_get_style (local.get $hwnd)))
+    (if (i32.or (i32.or
+          (i32.eqz (i32.and (local.get $style) (i32.const 0x40000000)))   ;; WS_CHILD
+          (i32.eqz (i32.and (local.get $style) (i32.const 0x10000000))))  ;; WS_VISIBLE
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x0008)) (i32.const 0))) ;; SWP_NOREDRAW
+      (then (return)))
+    (if (i32.and
+          (i32.eq (call $ctrl_get_xy_packed (local.get $hwnd)) (local.get $old_xy))
+          (i32.eq (call $ctrl_get_wh_packed (local.get $hwnd)) (local.get $old_wh)))
+      (then (return)))
+    (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    (if (i32.eqz (local.get $parent)) (then (return)))
+    (local.set $l (i32.shr_s (i32.shl (local.get $old_xy) (i32.const 16)) (i32.const 16)))
+    (local.set $t (i32.shr_s (local.get $old_xy) (i32.const 16)))
+    (call $invalidate_rect_core (local.get $parent)
+      (local.get $l) (local.get $t)
+      (i32.add (local.get $l) (i32.and (local.get $old_wh) (i32.const 0xFFFF)))
+      (i32.add (local.get $t) (i32.shr_u (local.get $old_wh) (i32.const 16)))
+      (i32.const 1)))
+
   (func $set_window_pos_core
     (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32)
     (param $cy i32) (param $uFlags i32) (param $result_pos i32) (result i32)
@@ -358,6 +513,7 @@
     (call $host_move_window (local.get $arg0) (local.get $x) (local.get $y) (local.get $cx) (local.get $cy) (local.get $uFlags))
     (if (i32.and (i32.eqz (i32.and (local.get $uFlags) (i32.const 0x0004))) (i32.eqz (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000)))) (then (call $host_set_window_zorder (local.get $arg0) (local.get $insert_after))))
     (call $ctrl_geom_sync (local.get $arg0) (local.get $x) (local.get $y) (local.get $cx) (local.get $cy) (local.get $uFlags))
+    (call $windowpos_expose_vacated (local.get $arg0) (local.get $old_xy) (local.get $old_wh) (local.get $uFlags))
     (if (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000))
       (then (local.set $new_wh (call $ctrl_get_wh_packed (local.get $arg0))))
       (else

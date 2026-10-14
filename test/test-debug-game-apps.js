@@ -3,8 +3,16 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+// files[]/dlls[] entries may be strings or objects: lib/apps.js stamps
+// generated sizes onto large files ({url, size}), so read URLs through appFileUrl.
 const { APPS, DESKTOP_APPS, LOCAL_CANDIDATE_APPS, DEBUG_ONLY_APPS,
-  resolveRunSlice } = require('../lib/apps');
+  appFileUrl, resolveRunSlice } = require('../lib/apps');
+// Undo the size stamp so exact list comparisons see the entry as written.
+const asWritten = file => {
+  if (typeof file === 'string') return file;
+  const { size, ...rest } = file;
+  return Object.keys(rest).length === 1 && rest.url ? rest.url : rest;
+};
 const { hasPageScript } = require('./browser-runtime-scripts');
 
 const root = path.join(__dirname, '..');
@@ -16,7 +24,6 @@ const expectedLocalCandidates = new Map([
   ['jardinains', 'test/binaries/candidates/jardinains/installed/jardinains.exe'],
   ['nethack_win32', 'test/binaries/candidates/nethack-win32/installed/NetHackW.exe'],
   ['jazz2_demo', 'test/binaries/candidates/jazz-jackrabbit-2-demo-installer/installed/jazz2.exe'],
-  ['quake2_demo', 'test/binaries/candidates/quake-2-demo-installer/installed-extracted/Install/Data/quake2.exe'],
   ['quake2_demo_installer', 'test/binaries/candidates/quake-2-demo-installer/q2-314-demo-x86.exe'],
   ['heroes3_demo', 'test/binaries/candidates/heroes-3-demo-installer/installed-extracted/Program_Files/h3demo.exe'],
   ['heroes3_demo_installer', 'test/binaries/candidates/heroes-3-demo-installer/installer-engine/_ins5576._mp'],
@@ -57,7 +64,7 @@ assert.strictEqual(APPS.elasto_mania.localFileManifest,
 assert.deepStrictEqual(APPS.elasto_mania.persistFiles,
   ['c:\\state.dat', 'c:\\stats.txt', 'c:\\Rec\\*.rec']);
 assert.strictEqual(APPS.jazz2_demo.requiredFiles, true);
-assert(APPS.jazz2_demo.files.some(file => file.endsWith('/share1.j2l')),
+assert(APPS.jazz2_demo.files.some(file => appFileUrl(file).endsWith('/share1.j2l')),
   'Jazz Jackrabbit 2 mounts its playable shareware level');
 assert.strictEqual(APPS.jazz2_demo.args, 'Share1.j2l -nonetwork',
   'Jazz Jackrabbit 2 skips the long intro and loads the playable shareware level');
@@ -91,10 +98,10 @@ for (const binding of [
 ]) {
   assert(quake2Controls.includes(binding), `Quake II modern controls include ${binding}`);
 }
-assert(APPS.quake2_demo.dlls.some(file => file.endsWith('/ref_gl.dll')),
+assert(APPS.quake2_demo.dlls.some(file => appFileUrl(file).endsWith('/ref_gl.dll')),
   'Quake II preloads its authentic OpenGL renderer for runtime selection');
 assert(APPS.quake2_demo.files.some(file =>
-  typeof file === 'string' && file.endsWith('/ref_gl.dll')),
+  appFileUrl(file).endsWith('/ref_gl.dll') && !file.vfsPath && !file.vfsPaths),
   'Quake II mounts ref_gl.dll at C:\\ref_gl.dll for LoadLibrary');
 assert.strictEqual(APPS.halflife_uplink.requiredFiles, true);
 assert.strictEqual(APPS.halflife_uplink.windowlessGraceMs, 60000,
@@ -115,13 +122,13 @@ assert(APPS.halflife_uplink.files.some(file =>
 'Half-Life Uplink mounts its MCI intro video at the runtime path');
 assert.strictEqual(APPS.diablo2_demo.requiredFiles, true);
 assert.strictEqual(APPS.diablo2_demo.fileConcurrency, 10);
-assert(APPS.diablo2_demo.dlls.some(file => file.endsWith('/d2ddraw.dll')),
+assert(APPS.diablo2_demo.dlls.some(file => appFileUrl(file).endsWith('/d2ddraw.dll')),
   'Diablo II preloads its selected DirectDraw renderer');
-assert(APPS.diablo2_demo.files.some(file => file.endsWith('/d2data.mpq')),
+assert(APPS.diablo2_demo.files.some(file => appFileUrl(file).endsWith('/d2data.mpq')),
   'Diablo II mounts its installer-produced data archive');
-assert(APPS.diablo2_demo.files.some(file => file.endsWith('/d2music.mpq')),
+assert(APPS.diablo2_demo.files.some(file => appFileUrl(file).endsWith('/d2music.mpq')),
   'Diablo II mounts its installer-produced music archive');
-for (const id of ['diablo_demo', 'diablo_shareware', 'worms2_demo', 'fallout_demo',
+for (const id of ['diablo_demo', 'worms2_demo', 'fallout_demo',
   'total_annihilation_demo', 'caesar3_demo', 'captain_claw_demo']) {
   assert(debugIds.has(id), `${id} is reachable from the debug app selector`);
   assert(APPS[id], `${id} has an app manifest`);
@@ -134,6 +141,13 @@ assert(desktopIds.has('heroes2_demo'), 'Heroes II is a desktop app');
 assert(!debugIds.has('heroes2_demo'), 'Heroes II is not listed twice');
 assert(APPS.heroes2_demo, 'heroes2_demo has an app manifest');
 assert(desktopIds.has('starcraft_shareware'), 'StarCraft Demo is a desktop app');
+// id's demo licence allows redistribution, so Quake II left the localhost-only
+// list for the desktop (7532955f); it still launches the pinned local payload.
+assert(desktopIds.has('quake2_demo'), 'Quake II Demo is a desktop app');
+assert.strictEqual(APPS.quake2_demo.exe,
+  'test/binaries/candidates/quake-2-demo-installer/installed-extracted/Install/Data/quake2.exe',
+  'quake2_demo launches the pinned local payload');
+assert(desktopIds.has('diablo_shareware'), 'Diablo Shareware is a desktop app');
 assert(!debugIds.has('starcraft_shareware'), 'StarCraft Demo is not listed twice');
 
 const starcraft = APPS.starcraft_shareware;
@@ -175,7 +189,12 @@ assert.deepStrictEqual(diabloShareware.dlls, [
   'test/binaries/candidates/diablo-shareware/installed/diabloui.dll',
   'test/binaries/candidates/diablo-shareware/installed/smackw32.dll',
 ]);
-assert.deepStrictEqual(diabloShareware.files, [
+// spawn.mpq streams by HTTP range with a measured preload (d04aed13).
+const spawnMpq = diabloShareware.files.find(file => typeof file === 'object');
+assert.strictEqual(spawnMpq.vfsPath, 'c:\\spawn.mpq');
+assert.strictEqual(spawnMpq.httpRange, true, 'spawn.mpq streams by range');
+assert(spawnMpq.preloadRanges.ranges.length > 0, 'spawn.mpq preloads its in-dialog reads');
+assert.deepStrictEqual(diabloShareware.files.map(file => file.url || file), [
   'test/binaries/candidates/diablo-shareware/installed/spawn.mpq',
   'test/binaries/candidates/diablo-shareware/installed/diablo.ini',
   'test/binaries/candidates/diablo-shareware/installed/battle.snp',
@@ -184,12 +203,12 @@ assert.deepStrictEqual(diabloShareware.files, [
 
 const diablo2Demo = APPS.diablo2_demo;
 for (const renderer of ['d2direct3d.dll', 'd2gdi.dll', 'd2glide.dll']) {
-  assert(!diablo2Demo.dlls.some(file => file.endsWith('/' + renderer)),
+  assert(!diablo2Demo.dlls.some(file => appFileUrl(file).endsWith('/' + renderer)),
     `${renderer} is an alternate renderer, not a startup DLL seed`);
-  assert(diablo2Demo.files.some(file => file.endsWith('/' + renderer)),
+  assert(diablo2Demo.files.some(file => appFileUrl(file).endsWith('/' + renderer)),
     `${renderer} remains available for on-demand LoadLibrary`);
 }
-assert(diablo2Demo.dlls.some(file => file.endsWith('/d2ddraw.dll')),
+assert(diablo2Demo.dlls.some(file => appFileUrl(file).endsWith('/d2ddraw.dll')),
   'the selected DirectDraw renderer remains in the startup dependency graph');
 
 const worms2 = APPS.worms2_demo;
@@ -210,7 +229,7 @@ assert(worms2.files.some(file =>
 
 const fallout = APPS.fallout_demo;
 assert(fallout.requiredFiles);
-assert.deepStrictEqual(fallout.files,
+assert.deepStrictEqual(fallout.files.map(asWritten),
   ['test/binaries/candidates/fallout-demo/falldemo/Falldemo.dat']);
 
 const heroes2 = APPS.heroes2_demo;
@@ -231,7 +250,7 @@ const totalAnnihilation = APPS.total_annihilation_demo;
 assert.strictEqual(totalAnnihilation.exe,
   'test/binaries/candidates/total-annihilation-demo/installed-fixed/cavedog/totala/demo/tademo.exe');
 assert.strictEqual(totalAnnihilation.requiredFiles, true);
-assert.deepStrictEqual(totalAnnihilation.files, [{
+assert.deepStrictEqual(totalAnnihilation.files.map(asWritten), [{
   url: 'test/binaries/candidates/total-annihilation-demo/installed-fixed/cavedog/totala/demo/tademo.hpi',
   vfsPath: 'c:\\tademo.hpi',
 }], 'Total Annihilation mounts the validated native-installer HPI at its runtime path');
@@ -257,7 +276,7 @@ assert.deepStrictEqual(captainClaw.dlls, [
   'test/binaries/candidates/captain-claw-demo/installed/mss32.dll',
 ]);
 assert.strictEqual(captainClaw.requiredFiles, true);
-assert.deepStrictEqual(captainClaw.files, [
+assert.deepStrictEqual(captainClaw.files.map(asWritten), [
   'test/binaries/candidates/captain-claw-demo/installed/clawdemo.rez',
 ]);
 const captainClawReg = new Map(captainClaw.startupRegistry.map(entry =>

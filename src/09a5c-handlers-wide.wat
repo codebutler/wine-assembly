@@ -22,7 +22,7 @@
   )
 
   ;; 284: GetModuleFileNameW — write L"C:\<exe_name>\0" as wide string
-  (func $handle_GetModuleFileNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $handle_GetModuleFileNameW_locked (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $path_g i32)
     (local.set $idx (call $static_sys_dll_from_handle (local.get $arg0)))
     (if (local.get $idx)
@@ -33,7 +33,7 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (local.set $idx (i32.const 0))
     (block $not_loaded (loop $scan_loaded
-      (br_if $not_loaded (i32.ge_u (local.get $idx) (global.get $dll_count)))
+      (br_if $not_loaded (i32.ge_u (local.get $idx) (i32.atomic.load (global.get $DLL_SHARED))))
       (if (i32.eq (local.get $arg0)
             (i32.load (i32.add (global.get $DLL_TABLE)
               (i32.mul (local.get $idx) (i32.const 32)))))
@@ -48,6 +48,14 @@
               (return)))))
       (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
       (br $scan_loaded)))
+    ;; A retired/unknown nonzero handle must not alias the executable.
+    (if (i32.and (i32.ne (local.get $arg0) (i32.const 0))
+          (i32.ne (local.get $arg0) (global.get $image_base)))
+      (then
+        (global.set $last_error (i32.const 6))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (i32.store offset=0 (global.get $reg_base) (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
@@ -159,6 +167,12 @@
 
   ;; 289: DefWindowProcW — same as DefWindowProcA
   (func $handle_DefWindowProcW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eq (local.get $arg1) (i32.const 0x0046))
+      (then
+        (call $windowpos_defproc_minmax (local.get $arg0) (local.get $arg3))
+        (i32.store (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (return)))
     (if (i32.eq (local.get $arg1) (i32.const 0x0047))
       (then
         (call $windowpos_defproc_geometry (local.get $arg0) (local.get $arg3))
@@ -204,8 +218,8 @@
           (i32.store offset=0 (global.get $reg_base) (i32.const 0))
           (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
           (return)))
-      (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
-        (then (global.set $quit_flag (i32.const 1))))
+      ;; Same main-window lifecycle as DestroyWindow; see DefWindowProcA.
+      (call $destroy_main_window_lifecycle (local.get $arg0))
       (if (i32.eq (local.get $arg0) (global.get $focus_hwnd))
         (then (global.set $focus_hwnd (i32.const 0))))
       (call $wnd_destroy_recursive (local.get $arg0))
@@ -428,3 +442,11 @@
     (call $handle_SendNotifyMessageA
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  ;; One coherent registry read, with no guest callback or host import held.
+  (func $handle_GetModuleFileNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+
+    (call $dll_load_lock_begin)
+    (call $handle_GetModuleFileNameW_locked (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (call $lock_release (global.get $DLL_LOAD_LOCK))
+    )

@@ -217,6 +217,9 @@ async function main() {
   assert.strictEqual(e.get_edx() & 0xff, 1,
     'fused SIB LEAs must preserve flags');
 
+  // Smacker's Huffman walk. Its whole-walk fold (H395) is retired -- the uop
+  // tier runs it (docs/uop-tier-design.md section 18) -- so these cases now
+  // hold the ordinary decode of the walk, and its FE/75 prefix fold, exact.
   const huffCode = imageBase + 0x1400;
   const huffCounter = scratch + 0x70;
   const huffTree = scratch + 0x100;
@@ -296,8 +299,9 @@ async function main() {
     e.set_esi(0x22222222);
     e.set_edi(0x33333333);
   });
-  assert.strictEqual(dv.getUint32((e.get_handler_hist_base() >>> 0) + 396 * 4, true), 1,
-    'exact Storm bit reader must use its superinstruction');
+  // Storm's PKWARE bit reader. Its whole-function fold (H396) is retired --
+  // the uop tier is as fast (docs/uop-tier-design.md section 18) -- so these
+  // cases now hold the ordinary decode of all three paths exact.
   assert.strictEqual(dv.getUint32(g2w(stormCtx + 0x14), true) >>> 0,
     0xa5a5a5a5 >>> 3, 'Storm fast path must shift the reservoir');
   assert.strictEqual(dv.getUint32(g2w(stormCtx + 0x18), true), 9,

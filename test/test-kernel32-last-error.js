@@ -48,18 +48,29 @@ async function main() {
 
   check('GetLastError starts at ERROR_SUCCESS', e.test_call_GetLastError() === 0);
 
+  // Public SetLastError is void: do not assert the test adapter's EAX snapshot.
+  // The adapter must nevertheless restore ESP, unlike the old handwritten
+  // helper which leaked the handler's eight-byte stdcall cleanup per call.
+  const savedEsp = e.get_esp();
+  for (const error of [0, 0x12345678, 0x80000000, 0xffffffff]) {
+    e.test_call_SetLastError(error);
+    check(`SetLastError preserves all DWORD bits (${error.toString(16)})`,
+      (e.test_call_GetLastError() >>> 0) === error);
+    check('SetLastError test adapter restores ESP', e.get_esp() === savedEsp);
+  }
+
   e.test_call_SetLastError(1234);
   check('SetLastError value is returned by GetLastError',
     e.test_call_GetLastError() === 1234,
     String(e.test_call_GetLastError()));
 
   const mutexName = writeAscii('WineAssemblyLastErrorSmoke');
-  check('OpenMutexA reports a missing named mutex', e.test_call_OpenMutexA(mutexName) === 0);
+  check('OpenMutexA reports a missing named mutex', e.test_call_OpenMutexA(0x001f0001, 0, mutexName) === 0);
   check('OpenMutexA sets ERROR_FILE_NOT_FOUND',
     e.test_call_GetLastError() === 2,
     String(e.test_call_GetLastError()));
 
-  check('CreateMutexA returns a fresh handle', e.test_call_CreateMutexA(mutexName) !== 0);
+  check('CreateMutexA returns a fresh handle', e.test_call_CreateMutexA(0, 0, mutexName) !== 0);
   check('CreateMutexA clears last error for a new mutex',
     e.test_call_GetLastError() === 0,
     String(e.test_call_GetLastError()));

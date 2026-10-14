@@ -101,6 +101,14 @@
           (then (return (call $wnd_send_message (local.get $owner)
                               (local.get $msg) (local.get $wParam) (local.get $lParam)))))
         (return (i32.const 0))))
+    ;; WM_MOUSEACTIVATE (0x0021): MA_NOACTIVATE. This shell is USER's
+    ;; ComboLBox, which never takes activation (Wine listbox.c answers the
+    ;; same for LBS_COMBOBOX); the inner list's own query reaches here through
+    ;; the parent-first default. Activating the popup deactivated the owner
+    ;; frame instead, and MFC answers that by closing its combo dropdowns:
+    ;; Paint's font-size list shut under the press on its own scrollbar.
+    (if (i32.eq (local.get $msg) (i32.const 0x0021))
+      (then (return (i32.const 3))))
     ;; WM_CAPTURECHANGED (0x0215): popup lost capture → close as cancel.
     (if (i32.eq (local.get $msg) (i32.const 0x0215))
       (then
@@ -373,6 +381,40 @@
 
     (local.set $field_h (i32.const 21))
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
+
+    ;; ---------- WM_WINDOWPOSCHANGING (0x0046) ----------
+    ;; A drop-down combo's window is only ever the closed field: the cy an app
+    ;; passes to MoveWindow/SetWindowPos is the *dropped* extent, exactly as
+    ;; at CreateWindowEx. Windows takes that height for the list and rewrites
+    ;; the WINDOWPOS to the field height here. Without this, a combo laid out
+    ;; after creation (SimCity 2000 Net's chat recipient list) grows to its
+    ;; dropped height, and every sibling the app placed below the field in
+    ;; the belief that the combo is 21 tall sits underneath it.
+    (if (i32.eq (local.get $msg) (i32.const 0x0046))
+      (then
+        (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+        (local.set $state_w (call $g2w (local.get $state)))
+        (if (i32.eq (call $cb_variant (local.get $state_w)) (i32.const 1))
+          (then (return (i32.const 0))))
+        (if (i32.and (call $gl32 (i32.add (local.get $lParam) (i32.const 24))) (i32.const 1))
+          (then (return (i32.const 0))))  ;; SWP_NOSIZE
+        (local.set $cy (call $gl32 (i32.add (local.get $lParam) (i32.const 20))))
+        (if (i32.le_s (local.get $cy) (local.get $field_h)) (then (return (i32.const 0))))
+        (local.set $lb (call $cb_lb_hwnd (local.get $state_w)))
+        (if (local.get $lb)
+          (then
+            (local.set $idx (call $wnd_table_find (local.get $lb)))
+            (if (i32.ge_s (local.get $idx) (i32.const 0))
+              (then
+                (local.set $sz (call $ctrl_get_xy_packed (local.get $lb)))
+                (call $ctrl_geom_set (local.get $idx)
+                  (i32.and (local.get $sz) (i32.const 0xFFFF))
+                  (i32.shr_u (local.get $sz) (i32.const 16))
+                  (call $gl32 (i32.add (local.get $lParam) (i32.const 16)))
+                  (select (i32.sub (local.get $cy) (local.get $field_h)) (i32.const 64)
+                    (i32.ge_s (i32.sub (local.get $cy) (local.get $field_h)) (i32.const 32))))))))
+        (call $gs32 (i32.add (local.get $lParam) (i32.const 20)) (local.get $field_h))
+        (return (i32.const 0))))
 
     ;; ---------- WM_CREATE ----------
     (if (i32.eq (local.get $msg) (i32.const 0x0001))
@@ -1093,46 +1135,46 @@
             ;; Toolbar-hosted CBS_DROPDOWN inner EDIT children are not
             ;; independently composited, so paint the field here for both
             ;; editable and read-only dropdown variants.
-            (drop (call $host_gdi_fill_rect (local.get $hdc)
+            (drop (call $gdi_native_fill_rect (local.get $hdc)
                     (i32.const 0) (i32.const 0)
                     (local.get $w) (local.get $h)
                     (i32.const 0x30010)))  ;; WHITE_BRUSH
-            (drop (call $host_gdi_draw_edge (local.get $hdc)
+            (drop (call $gdi_native_draw_edge (local.get $hdc)
                     (i32.const 0) (i32.const 0)
                     (local.get $w) (local.get $h)
                     (i32.const 0x0A) (i32.const 0x0F)))  ;; EDGE_SUNKEN | BF_RECT
             (local.set $arrow_x (i32.sub (local.get $w) (i32.const 18)))
-            (drop (call $host_gdi_fill_rect (local.get $hdc)
+            (drop (call $gdi_native_fill_rect (local.get $hdc)
                     (local.get $arrow_x) (i32.const 2)
                     (i32.sub (local.get $w) (i32.const 2))
                     (i32.sub (local.get $h) (i32.const 2))
                     (i32.const 0x30011)))  ;; LTGRAY_BRUSH
             ;; Arrow box edge: pressed (sunken) when dropped, raised when closed.
-            (drop (call $host_gdi_draw_edge (local.get $hdc)
+            (drop (call $gdi_native_draw_edge (local.get $hdc)
                     (local.get $arrow_x) (i32.const 2)
                     (i32.sub (local.get $w) (i32.const 2))
                     (i32.sub (local.get $h) (i32.const 2))
                     (select (i32.const 0x0A) (i32.const 0x05) (call $cb_is_dropped (local.get $state_w)))
                     (i32.const 0x0F)))
             ;; Triangle ▼
-            (drop (call $host_gdi_fill_rect (local.get $hdc)
+            (drop (call $gdi_native_fill_rect (local.get $hdc)
                     (i32.add (local.get $arrow_x) (i32.const 4)) (i32.const 9)
                     (i32.add (local.get $arrow_x) (i32.const 11)) (i32.const 10)
                     (i32.const 0x30014)))
-            (drop (call $host_gdi_fill_rect (local.get $hdc)
+            (drop (call $gdi_native_fill_rect (local.get $hdc)
                     (i32.add (local.get $arrow_x) (i32.const 5)) (i32.const 10)
                     (i32.add (local.get $arrow_x) (i32.const 10)) (i32.const 11)
                     (i32.const 0x30014)))
-            (drop (call $host_gdi_fill_rect (local.get $hdc)
+            (drop (call $gdi_native_fill_rect (local.get $hdc)
                     (i32.add (local.get $arrow_x) (i32.const 6)) (i32.const 11)
                     (i32.add (local.get $arrow_x) (i32.const 9)) (i32.const 12)
                     (i32.const 0x30014)))
-            (drop (call $host_gdi_fill_rect (local.get $hdc)
+            (drop (call $gdi_native_fill_rect (local.get $hdc)
                     (i32.add (local.get $arrow_x) (i32.const 7)) (i32.const 12)
                     (i32.add (local.get $arrow_x) (i32.const 8)) (i32.const 13)
                     (i32.const 0x30014)))
-            (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
-            (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 1)))
+            (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
+            (drop (call $gdi_native_set_bk_mode (local.get $hdc) (i32.const 1)))
             ;; CBS_DROPDOWN delegates text ownership to its inner EDIT. Paint
             ;; from that same state so WM_PAINT agrees with WM_GETTEXT.
             (local.set $paint_state_w (cast ptr<ControlTextState> (local.get $state_w)))
@@ -1149,7 +1191,7 @@
                   (i32.ne (local.get $paint_state_w) (i32.const 0))
                   (i32.ne (load.field ControlTextState text_buf_ptr (local.get $paint_state_w)) (i32.const 0)))
               (then
-                (drop (call $host_gdi_draw_text (local.get $hdc)
+                (drop (call $gdi_native_draw_text (local.get $hdc)
                         (call $g2w (load.field ControlTextState text_buf_ptr (local.get $paint_state_w)))
                         (load.field.memarg ControlTextState text_len (local.get $paint_state_w))
                         (call $paint_rect (i32.const 4) (i32.const 2)
@@ -1161,4 +1203,3 @@
     ;; Default
     (i32.const 0)
   )
-

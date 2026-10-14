@@ -4,14 +4,43 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  (func (export "test_retire_window") (param $h i32) (call $wnd_table_remove (local.get $h)))
+  (func (export "test_destroy_handle") (param $h16 i32)
+    (call $post_queue_reset)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (i32.const 0x90))
+    (call $gs16 (i32.const 0x110802) (i32.const 0xf))
+    (call $gs16 (i32.const 0x110804) (local.get $h16))
+    (call $win16_DestroyWindow))
+  (func (export "test_enabled") (param $h i32) (result i32)
+    (i32.eqz (call $ctrl_style_disabled (call $wnd_get_style (local.get $h)))))
+  (func (export "test_disable") (param $h i32)
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_EnableWindow (local.get $h) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end))
+  (func (export "test_open_modal") (param $template i32) (param $owner i32)
+        (param $proc i32) (param $modeless i32)
+    (call $post_queue_reset)
+    (global.set $yield_reason (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (i32.const 0x90))
+    (call $gs16 (i32.const 0x110802) (i32.const 0xf))
+    (call $gs16 (i32.const 0x110804) (local.get $proc))
+    (call $gs16 (i32.const 0x110806) (i32.const 0xf))
+    (call $gs16 (i32.const 0x110808) (call $win16_h16 (local.get $owner)))
+    (call $gs16 (i32.const 0x11080a) (select (i32.const 0) (local.get $template) (local.get $modeless)))
+    (call $gs16 (i32.const 0x11080c) (select (local.get $template) (i32.const 0) (local.get $modeless)))
+    (call $gs16 (i32.const 0x11080e) (i32.const 0))
+    (call $win16_DialogBoxIndirect (local.get $modeless)))
   (func (export "test_native_control") (param $h i32)
     (call $wnd_table_set (local.get $h) (global.get $WNDPROC_CTRL_NATIVE)))
   (func (export "test_modal_template") (result i32)
     (local $sel i32) (local $p i32)
     ;; Reserve the three synthetic code/stack/thunk segments before using the
     ;; real global allocator for an empty Win16 DLGTEMPLATE.
-    (if (i32.lt_u (global.get $win16_next_seg) (i32.const 4))
-      (then (global.set $win16_next_seg (i32.const 4))))
+    (if (i32.lt_u (call $win16_next_seg_get) (i32.const 4))
+      (then (call $win16_next_seg_set (i32.const 4))))
     (local.set $sel (call $win16_global_alloc (i32.const 32)))
     (local.set $p (call $win16_far_to_guest (local.get $sel) (i32.const 0)))
     (call $zero_memory (call $g2w (local.get $p)) (i32.const 32))
@@ -33,6 +62,7 @@ const extraWat = `
     (call $gs16 (i32.const 0x110800) (call $win16_h16 (local.get $dlg)))
     (call $gs16 (i32.const 0x110802) (i32.const 0x90))
     (call $gs16 (i32.const 0x110804) (i32.const 0x000f))
+    (call $gs32 (i32.const 0x110806) (i32.const 0))
     (call $win16_dlg_pump))
   (func (export "test_peek_thunk") (result i32)
     (call $win16_thunk_for (i32.const 2) (i32.const 109) (i32.const 0)))
@@ -54,6 +84,8 @@ const extraWat = `
     (call $win16_dlg_pump)
     (i32.add (i32.const 0x120000) (global.get $WIN16_DLG_PUMP)))
   (func (export "test_modal_step") (call $win16_dlg_pump))
+  (func (export "test_modal_parked") (result i32)
+    (i32.add (i32.const 0x120000) (global.get $WIN16_DLG_PUMP)))
   (func (export "test_mouse_pump") (param $peek i32) (param $remove i32) (param $min i32) (param $max i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
     (call $gs16 (i32.const 0x110800) (i32.const 0x90))
@@ -104,6 +136,7 @@ const extraWat = `
     (i32.or (i32.and (i32.load (global.get $reg_base)) (i32.const 0xFFFF))
       (i32.shl (i32.load offset=8 (global.get $reg_base)) (i32.const 16))))
   (func (export "test_init")
+    (global.set $is_win16 (i32.const 1))
     (global.set $WIN16_THUNK_SEL (call $win16_index_to_sel (i32.const 3)))
     (call $win16_seg_set (i32.const 1) (i32.const 0x100000) (i32.const 65536) (i32.const 0) (i32.const 1))
     (call $win16_seg_set (i32.const 2) (i32.const 0x110000) (i32.const 65536) (i32.const 1) (i32.const 2))
@@ -189,6 +222,7 @@ const extraWat = `
     (if (local.get $erase) (then (call $nc_flags_set (local.get $h) (i32.const 2)))))
   (func (export "test_visible") (param $h i32) (param $visible i32)
     (drop (call $wnd_set_style (local.get $h) (select (i32.const 0x10000000) (i32.const 0) (local.get $visible)))))
+  (func (export "test_clean") (param $h i32) (call $update_clear_hwnd (local.get $h)))
   (func (export "test_visible_bit") (param $h i32) (result i32)
     (i32.ne (i32.and (call $wnd_get_style (local.get $h)) (i32.const 0x10000000)) (i32.const 0)))
   (func (export "test_update") (param $h i32) (param $caller i32)
@@ -235,8 +269,25 @@ const extraWat = `
     (call $win16_rearm_visible_child_erases (local.get $h)))
   (func (export "test_erase_pending") (param $h i32) (result i32)
     (i32.and (call $nc_flags_test (local.get $h)) (i32.const 2)))
+  (func (export "test_as_dialog") (param $h i32)
+    (drop (call $dialog_proc_set (local.get $h) (call $wnd_table_get (local.get $h))))
+    (call $wnd_table_set (local.get $h) (global.get $WNDPROC_DIALOG)))
+  (func (export "test_post_reset") (call $post_queue_reset))
+  (func (export "test_main_get") (result i32) (global.get $main_hwnd))
+  (func (export "test_sound_ordinal") (param $pstr i32) (result i32)
+    (call $win16_sound_ordinal (call $g2w (local.get $pstr))))
+  (func (export "test_wait_sound") (param $state i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x110800))
+    (call $gs16 (i32.const 0x110800) (i32.const 0x90))
+    (call $gs16 (i32.const 0x110802) (i32.const 0xf))
+    (call $gs16 (i32.const 0x110804) (local.get $state))
+    (drop (call $win16_sound (i32.const 11))))
+  (func (export "test_main_size") (param $h i32) (param $size i32)
+    (global.set $main_hwnd (local.get $h))
+    (global.set $pending_wm_size (local.get $size)))
   (func (export "test_alive") (param $h i32) (result i32)
-    (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0)))
+    (i32.and (i32.ne (local.get $h) (i32.const 0))
+      (i32.ge_s (call $wnd_table_find (local.get $h)) (i32.const 0))))
 `;
 
 // Pascal far wndproc, recording {message,wParam,lParam} into SS:0904.
@@ -290,6 +341,21 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   const writeCode = (offset, code) => code.forEach((b, i) => e.guest_write8(0x100000 + offset + i, b));
   writeCode(0x200, recorder());
   const hwnd = e.test_window(0x200);
+  const unrelated = e.test_window(0x200), survivingChild = e.test_window(0x200);
+  e.test_as_child(survivingChild, unrelated);
+  const retired = e.test_window(0x200), stale = e.test_narrow(retired);
+  e.test_retire_window(retired);
+  assert.strictEqual(e.test_widen(stale), 0, 'retired narrow HWND widens to NULL');
+  for (const h of [0, stale, e.test_narrow(0x12345678)]) {
+    e.test_destroy_handle(h);
+    assert.strictEqual(e.get_eip(), 0x100090, 'invalid DestroyWindow returns without entering a wndproc');
+    assert.strictEqual(e.get_esp(), 0x110806, 'invalid DestroyWindow retires its Pascal arguments');
+    assert.strictEqual(e.test_long_result(), 0, 'invalid DestroyWindow returns FALSE');
+    for (const live of [hwnd, unrelated, survivingChild]) {
+      assert.strictEqual(e.test_alive(live), 1, 'invalid/stale HWND leaves unrelated windows alive');
+    }
+    assert.strictEqual(e.test_post_count(), 0, 'invalid HWND posts no destruction notifications');
+  }
   const pointer = 0x00170a00; // SS:0A00, not a flat address
   const flagsAt = 0x110a0c;
   // Poison WINDOWPOS's geometry: messages must describe committed client
@@ -483,8 +549,8 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     0x83, 0x7e, 0x0c, 0x0f, 0x75, paintBody([]).length, ...paintBody([])]));
   const eraseDoomed = e.test_window(0xb00);
   e.test_damage(eraseDoomed, 1);
-  assert.deepStrictEqual(runUpdate(eraseDoomed, 0x30), [0x0f, 0x14],
-    'destruction from the BeginPaint erase callback returns through both nested frames');
+  assert.deepStrictEqual(runUpdate(eraseDoomed, 0x30), [0x0f, 0x14, 0x02, 0x82],
+    'destruction from the BeginPaint erase callback sends WM_DESTROY/WM_NCDESTROY and returns through both nested frames');
   assert.strictEqual(e.test_alive(eraseDoomed), 0);
   assert.strictEqual(e.test_erase_pending(eraseDoomed), 0, 'declined erase cannot rearm a destroyed window');
   const runShow = (target, cmd, caller, includeActivation = false) => {
@@ -516,6 +582,17 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   runShow(showing, 0, 0x60);
   assert.strictEqual(e.test_visible_bit(showing), 0, 'hide clears WS_VISIBLE');
   runShow(showing, 0, 0x60); // Already hidden must return FALSE too.
+  // Hiding a child exposes what it covered: Civilization II hides its city
+  // screen on Exit, and the parent must get that rectangle back as damage.
+  const coverParent = e.test_window(0x900);
+  const cover = e.test_window(0x900);
+  e.test_as_child(cover, coverParent);
+  e.test_clean(coverParent);
+  e.test_clean(cover);
+  runShow(cover, 0, 0x60);
+  assert.strictEqual(e.test_visible_bit(cover), 0, 'hide clears the child\'s WS_VISIBLE');
+  assert.notStrictEqual(e.test_dirty(coverParent), 0, 'hiding a child invalidates the parent beneath it');
+  assert.strictEqual(e.test_dirty(cover), 0, 'the hidden child keeps no update region');
   runShow(showing, 8, 0x60);
   assert.strictEqual(e.test_visible_bit(showing), 1, 'nonactivating show sets WS_VISIBLE');
   const updateSelf = [0xff, 0x76, 0x0e, 0x9a, ...word(update), 0x1f, 0];
@@ -580,6 +657,69 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     assert.strictEqual(e.test_erase_pending(h), erase && !handled ? 2 : 0);
     assert.strictEqual(e.test_bridge_scratch(), 0x76543210, 'far callback does not borrow global bridge scratch');
     assert.deepStrictEqual([0, 1, 2, 3].map(i => e.guest_read32(0x110e04 + i * 2) & 0xffff), [3, 4, 12, 15]);
+  }
+  // A dialog's table procedure is the WNDPROC_DIALOG marker; its DLGPROC lives
+  // beside it. BeginPaint must offer WM_ERASEBKGND to that DLGPROC before it
+  // returns, and on FALSE do DefDlgProc's erase itself. Sending through the
+  // marker only queued the erase: Klotski's selector got it after EndPaint and
+  // the modal pump painted the background over the thumbnails.
+  for (const handled of [0, 7]) {
+    const off = 0x2000 + ordinal++ * 128;
+    const body = recorder();
+    body.splice(-7, 4, 0xb8, ...word(handled), 0x31, 0xd2);
+    writeCode(off, body);
+    const dlg = e.test_window(off);
+    e.test_as_dialog(dlg);
+    e.test_background(dlg, 16);
+    e.test_damage(dlg, 1);
+    e.test_post_reset();
+    e.guest_write32(0x110900, 0);
+    e.test_begin16(dlg, 0x90);
+    finishBegin();
+    assert.strictEqual(e.guest_read32(0x110900), 1, `the DLGPROC gets WM_ERASEBKGND inside BeginPaint (returns ${handled})`);
+    const dc = e.guest_read32(0x110e00) & 0xffff;
+    assert.strictEqual(e.guest_read32(0x110904) & 0xffff, 0x14);
+    assert.strictEqual(e.guest_read32(0x110904) >>> 16, dc, 'with the paint DC');
+    assert(!Array.from({ length: e.test_post_count() }, (_, i) => e.test_post_msg(i)).includes(0x14),
+      'no WM_ERASEBKGND is left queued behind the paint');
+    assert.strictEqual(e.guest_read32(0x110e02) & 0xffff, 0, 'DefDlgProc erased: fErase is FALSE either way');
+    assert.strictEqual(e.test_erase_pending(dlg), 0, 'and no erase stays pending');
+  }
+  // The main window's first WM_SIZE is sent from inside ShowWindow, before
+  // the erase, as SIZE_RESTORED. Tut's Tomb keeps its client size only from
+  // WM_SIZE and lays out the pyramid in the UpdateWindow right after
+  // ShowWindow; a queued size arrived after that and the board sat at x=-35.
+  {
+    const savedMain = e.test_main_get();
+    const main = e.test_window(0x900);
+    e.test_visible(main, 0);
+    e.test_main_size(main, pack(610, 395));
+    const shown = runShow(main, 1, 0x40);
+    assert.deepStrictEqual(shown, [5, 0x14], 'WM_SIZE then the initial erase, both before ShowWindow returns');
+    const sizeAt = Array.from({ length: e.guest_read32(0x110900) }, (_, i) => i)
+      .find(i => (e.guest_read32(0x110904 + i * 8) & 0xffff) === 5);
+    assert.strictEqual(e.guest_read32(0x110904 + sizeAt * 8) >>> 16, 0, 'SIZE_RESTORED');
+    assert.strictEqual(e.guest_read32(0x110908 + sizeAt * 8) >>> 0, pack(610, 395), 'with the create-time client size');
+    const posted = Array.from({ length: e.test_post_count() }, (_, i) => e.test_post_msg(i));
+    assert(!posted.includes(5), `no WM_SIZE is left queued (${posted})`);
+    e.test_main_size(savedMain, 0);
+  }
+  // SOUND by name: Visual Basic's Declare is GetProcAddress by name, and a
+  // miss is "Sub or Function not defined" (TicTacDrop, on every drop).
+  {
+    const pstr = (s, at) => { e.guest_write8(at, s.length); [...s].forEach((c, i) => e.guest_write8(at + 1 + i, c.charCodeAt(0))); return at; };
+    const names = ['OPENSOUND', 'CLOSESOUND', 'SETVOICEQUEUESIZE', 'SETVOICENOTE', 'SETVOICEACCENT',
+      'SETVOICEENVELOPE', 'SETSOUNDNOISE', 'SETVOICESOUND', 'STARTSOUND', 'STOPSOUND', 'WAITSOUNDSTATE',
+      'SYNCALLVOICES', 'COUNTVOICENOTES', 'GETTHRESHOLDEVENT', 'GETTHRESHOLDSTATUS', 'SETVOICETHRESHOLD', 'DOBEEP'];
+    names.forEach((n, i) => assert.strictEqual(e.test_sound_ordinal(pstr(n, 0x110c00)), i + 1, `SOUND.${n}`));
+    for (const miss of ['OPENSOUN', 'OPENSOUNDX', 'SETVOICE', 'BEEP'])
+      assert.strictEqual(e.test_sound_ordinal(pstr(miss, 0x110c00)), 0, `${miss} is not a SOUND export`);
+    // Nothing is ever queued, so every wait state is already reached.
+    for (const [state, ax] of [[0, 0], [1, 0], [2, 0], [3, 0xfff0]]) {
+      e.test_wait_sound(state);
+      assert.strictEqual(e.test_result() & 0xffff, ax, `WaitSoundState(${state})`);
+      assert.strictEqual(e.get_esp(), 0x110806, 'WaitSoundState pops its one word');
+    }
   }
   const successProc = extra => {
     const body = recorder(extra);
@@ -659,7 +799,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
 
   const showDoomed = e.test_window(0xb00);
   e.test_visible(showDoomed, 0);
-  assert.deepStrictEqual(runShow(showDoomed, 1, 0x90), [0x14]);
+  assert.deepStrictEqual(runShow(showDoomed, 1, 0x90), [0x14, 0x02, 0x82]);
   assert.strictEqual(e.test_alive(showDoomed), 0);
   assert.strictEqual(e.test_erase_pending(showDoomed), 0, 'ShowWindow cannot rearm a destroyed HWND');
 
@@ -1139,6 +1279,48 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     0x8b, 0x46, 0x0e, 0x36, 0xa3, 0x46, 0x0f];
   writeCode(0xb800, recorder([0x81, 0x7e, 0x0c, 0x10, 1,
     0x75, nestedEnd.length, ...nestedEnd]));
+  // Actual DialogBoxIndirect entry disables its owner before WM_INITDIALOG.
+  // EndDialog during init, nested dialogs, and failure must restore exactly
+  // the state owned by this call; CreateDialogIndirect stays modeless.
+  for (const [index, mode] of ['normal', 'pre-disabled', 'nested', 'destroy-owner', 'modeless', 'failed', 'cancel', 'ownerless'].entries()) {
+    const proc = 0xf000 + index * 0x100;
+    const owner = mode === 'ownerless' ? 0 : e.test_window(0x5000);
+    if (mode === 'pre-disabled') e.test_disable(owner);
+    const nested = mode === 'nested' ? [
+      0x6a, 0, 0x68, ...word(template), 0x68, ...word(e.test_narrow(owner)),
+      0x6a, 0x0f, 0x68, 0, 0xb8, 0x9a, ...word(e.test_user_thunk(218)), 0x1f, 0,
+      0x68, ...word(e.test_narrow(owner)), 0x9a, ...word(e.test_user_thunk(35)), 0x1f, 0,
+      0x36, 0xa3, 0x48, 0x0f,
+    ] : [];
+    const destroyOwner = mode === 'destroy-owner' ? [0x68, ...word(e.test_narrow(owner)),
+      0x9a, ...word(destroyThunk), 0x1f, 0] : [];
+    const finish = mode === 'modeless' ? [] : [...nested, ...destroyOwner, ...nestedEnd];
+    writeCode(proc, recorder([0x81, 0x7e, 0x0c, mode === 'cancel' ? 0x11 : 0x10, 1,
+      0x75, finish.length, ...finish]));
+    e.guest_write32(0x110900, 0);
+    e.guest_write32(0x110f48, 0xffff);
+    e.test_open_modal(mode === 'failed' ? 0 : template, owner, proc, mode === 'modeless' ? 1 : 0);
+    assert.strictEqual(e.test_enabled(owner), ['modeless', 'failed', 'ownerless'].includes(mode) ? 1 : 0,
+      `${mode}: owner disabled before WM_INITDIALOG can reenter USER`);
+    if (mode === 'cancel') {
+      for (let i = 0; e.get_eip() !== e.test_modal_parked() && i < 100; i++) e.run(100);
+      assert.strictEqual(e.get_eip(), e.test_modal_parked(), 'dialog enters its ordinary modal pump');
+      assert.strictEqual(e.test_enabled(owner), 0, 'owner stays disabled while modal pump runs');
+      const dlg = e.test_widen(e.guest_read32(e.get_esp()) & 0xffff);
+      e.post_message_q(dlg, 0x10, 0, 0); // WM_CLOSE -> IDCANCEL -> guest EndDialog.
+    }
+    e.set_bp(0x100090);
+    for (let i = 0; e.get_eip() !== 0x100090 && i < 100; i++) e.run(100);
+    e.set_bp(0);
+    assert.strictEqual(e.get_eip(), 0x100090, `${mode}: returns to caller`);
+    assert.strictEqual(e.get_esp(), mode === 'modeless' ? 0x110810 : 0x11080e,
+      `${mode}: complete Pascal and modal frames retired`);
+    if (mode === 'destroy-owner') assert.strictEqual(e.test_alive(owner), 0, 'destroyed owner stays destroyed');
+    else assert.strictEqual(e.test_enabled(owner), mode === 'pre-disabled' ? 0 : 1,
+      `${mode}: restores prior owner state`);
+    if (mode === 'nested') assert.strictEqual(e.guest_read32(0x110f48) & 0xffff, 0,
+      'inner DialogBox must leave the outer owner disabled');
+  }
   const modes = ['owner', 'redirect', 'surviving-focus', 'nested-dialog', 'activate-owner', 'main-fallback'];
   for (const [index, mode] of modes.entries()) {
     const off = 0xb000 + index * 0x100;
@@ -1164,7 +1346,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
     for (let i = 0; e.get_eip() !== 0x100090 && i < 50; i++) e.run(100);
     e.set_bp(0);
     assert.strictEqual(e.get_eip(), 0x100090, 'modal close returns to its far caller');
-    assert.strictEqual(e.get_esp(), 0x110806, 'modal and focus continuation frames retired');
+    assert.strictEqual(e.get_esp(), 0x11080a, 'modal and focus continuation frames retired');
     assert.strictEqual(e.test_long_result(), 42, 'focus callbacks preserve outer result');
     assert.strictEqual(e.test_alive(dlg), 0, 'retiring dialog removed');
     assert.strictEqual(e.test_alive(child), 0, 'retiring focused child removed');

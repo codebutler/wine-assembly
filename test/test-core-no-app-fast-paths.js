@@ -19,6 +19,21 @@ const handlersWat = allHandlerWat;
 const gdiHandlersWat = allHandlerWat;
 const hostImports = fs.readFileSync(path.join(ROOT, 'lib', 'host-imports.js'), 'utf8');
 
+// Dispatch exceptions must name APIs, not duplicate api_table.json indexes.
+const dispatchWat = fs.readFileSync(path.join(ROOT, 'src', '09b-dispatch.wat'), 'utf8');
+assert(!/\(i32\.(?:eq|ne)\s+(?:\(local\.get \$api_id\)\s+\(i32\.const\b|\(i32\.const\s+[^)]+\)\s+\(local\.get \$api_id\))/.test(dispatchWat),
+  'dispatch API comparisons must use generated named IDs, not numeric literals');
+const generatedDispatch = fs.readFileSync(path.join(ROOT, 'src', '09b2-dispatch-table.generated.wat'), 'utf8');
+const apiTable = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'api_table.json'), 'utf8'));
+for (const name of ['GetTickCount', 'timeGetTime', 'PeekMessageA', 'PeekMessageW', 'MsgWaitForMultipleObjects']) {
+  const matches = apiTable.filter(api => api.name === name);
+  assert.strictEqual(matches.length, 1, `${name} must have one API table entry`);
+  assert(generatedDispatch.includes(`(global $API_ID_${name} i32 (i32.const ${matches[0].id}))`),
+    `${name} dispatch constant must agree with the API table`);
+  assert(dispatchWat.includes(`(global.get $API_ID_${name})`),
+    `${name} dispatch special case must consume its named constant`);
+}
+
 assert(!/\$?is_winamp\b|winamp_/i.test(exportsWat),
   'main run loop should not contain Winamp-specific helpers');
 
@@ -69,11 +84,46 @@ for (const helper of [
 }
 assert(gdiHandlersWat.includes('(call $gdi_line_desc'),
   'LineTo must route its canonical surface descriptor through the WAT raster kernel');
-assert(!gdiHandlersWat.includes('(call $host_gdi_line_to'),
+assert(!gdiHandlersWat.includes('(call $gdi_native_line_to'),
   'LineTo must not retain a Canvas geometry fallback');
 assert(handlersWat.includes('(call $gdi_polyline_try'),
   'Polyline APIs must try the atomic WAT path raster kernel first');
 assert(!handlersWat.includes('(call $host_gdi_polyline'),
   'Polyline must not retain a Canvas geometry fallback');
 
-console.log('PASS  core has no app-specific run-loop fast paths');
+// Retired import-era adapters had no production references; two pixel-read
+// probes now call the identical native helper directly. Keep the obsolete
+// entry points absent across source moves, not only from 01-header.wat.
+const allWat = fs.readdirSync(path.join(ROOT, 'src'))
+  .filter(f => /\.watx?$/.test(f))
+  .map(f => fs.readFileSync(path.join(ROOT, 'src', f), 'utf8')).join('\n');
+const watSymbols = new Set(allWat.match(/\$\w+/g));
+for (const name of [
+  "create_pen",
+  "create_bitmap",
+  "create_dib_bitmap",
+  "get_object_bits",
+  "get_object_storage",
+  "get_object_bpp",
+  "rectangle",
+  "create_rect_rgn",
+  "set_rect_rgn",
+  "combine_rgn",
+  "offset_rgn",
+  "ext_select_clip_rgn",
+  "exclude_clip_rect",
+  "get_rgn_box",
+  "polygon",
+  "polyline",
+  "polyline_to",
+  "get_line_descriptor",
+  "get_clip_box",
+  "frame_rect",
+  "get_pixel",
+  "ext_flood_fill"
+]) {
+  assert(!watSymbols.has('$host_gdi_' + name),
+    `retired GDI adapter ${name} must not return`);
+}
+
+console.log('PASS  core has no app-specific run-loop fast paths or retired GDI adapters');

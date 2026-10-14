@@ -53,6 +53,13 @@
   ;; the one currently displayed.
   (global $menu_open_dynamic_hmenu (mut i32) (i32.const 0))
 
+  ;; TPM_RETURNCMD: USER runs the menu loop inside TrackPopupMenu and returns
+  ;; the picked id instead of posting WM_COMMAND. The call parks on its thunk
+  ;; while the popup is open. State 0 = no such call, 1 = popup open, 2 = the
+  ;; popup closed and $menu_track_result holds the id (0 = dismissed).
+  (global $menu_track_state (mut i32) (i32.const 0))
+  (global $menu_track_result (mut i32) (i32.const 0))
+
   ;; Resource menus are stored as immutable-layout paint blobs, but Win32
   ;; still lets applications mutate an HMENU returned for a cascading popup.
   ;; Keep those second-level popup handles in a small heap-backed binding list
@@ -242,7 +249,7 @@
   ;; 04ef:635a), so keeping the pointer left every title reading as whatever
   ;; was loaded into that buffer last.
   (func $dynamic_menu_take_text (param $rec i32)
-    (local $flags i32) (local $text i32) (local $chars i32) (local $copy i32)
+    (local $flags i32) (local $text i32) (local $copy i32)
     (local.set $flags (i32.load (local.get $rec)))
     (local.set $text (i32.load offset=16 (local.get $rec)))
     (if (i32.or (i32.eqz (local.get $text))
@@ -251,11 +258,8 @@
             (i32.ne (i32.and (local.get $flags) (global.get $DYNAMIC_MENU_OWNS_TEXT))
                     (i32.const 0))))
       (then (return)))
-    (local.set $chars (call $guest_strlen (local.get $text)))
-    (local.set $copy (call $heap_alloc (i32.add (local.get $chars) (i32.const 1))))
+    (local.set $copy (call $guest_strdup (local.get $text)))
     (if (i32.eqz (local.get $copy)) (then (return)))
-    (call $guest_strncpy (local.get $copy) (local.get $text)
-      (i32.add (local.get $chars) (i32.const 1)))
     (i32.store offset=16 (local.get $rec) (local.get $copy))
     (i32.store (local.get $rec)
       (i32.or (local.get $flags) (global.get $DYNAMIC_MENU_OWNS_TEXT))))
@@ -467,21 +471,20 @@
         (local.set $text (call $gl32 (i32.add (local.get $mii) (i32.const 36))))
         (if (local.get $text)
           (then
-            (local.set $chars
-              (if (result i32) (local.get $wide)
-                (then (call $guest_wcslen (local.get $text)))
-                (else (call $guest_strlen (local.get $text)))))
-            (local.set $ansi_text
-              (call $heap_alloc (i32.add (local.get $chars) (i32.const 1))))
-            (if (i32.eqz (local.get $ansi_text))
-              (then (return (i32.const 0))))
             (if (local.get $wide)
-              (then (drop (call $wide_to_ansi
-                (local.get $text) (local.get $ansi_text)
-                (i32.add (local.get $chars) (i32.const 1)))))
-              (else (call $guest_strncpy
-                (local.get $ansi_text) (local.get $text)
-                (i32.add (local.get $chars) (i32.const 1)))))))))
+              (then
+                (local.set $chars (call $guest_wcslen (local.get $text)))
+                (local.set $ansi_text
+                  (call $heap_alloc (i32.add (local.get $chars) (i32.const 1))))
+                (if (i32.eqz (local.get $ansi_text))
+                  (then (return (i32.const 0))))
+                (drop (call $wide_to_ansi
+                  (local.get $text) (local.get $ansi_text)
+                  (i32.add (local.get $chars) (i32.const 1)))))
+              (else
+                (local.set $ansi_text (call $guest_strdup (local.get $text)))
+                (if (i32.eqz (local.get $ansi_text))
+                  (then (return (i32.const 0))))))))))
     ;; A string replacement, or a type transition away from string, retires the
     ;; previous owned copy. MIIM_DATA is independent and never changes text.
     (local.set $drop_text
@@ -638,15 +641,24 @@
     (local.get $flags))
 
   (func $dynamic_menu_destroy (param $hmenu i32) (result i32)
-    (local $sw i32)
+    (local $sw i32) (local $i i32) (local $count i32) (local $rec i32)
     (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
     (if (i32.eqz (local.get $sw)) (then (return (i32.const 0))))
-    (drop (call $resource_submenu_binding_forget_handle (local.get $hmenu)))
-    (call $dynamic_menu_owned_texts_release (local.get $sw))
-    ;; Retire the handle before returning its block to the heap. The allocator
-    ;; does not scrub payload bytes, so leaving "MNUD" behind made IsMenu and a
-    ;; second DestroyMenu accept a freed handle until that block was reused.
+    ;; Retire before descending so repeated/cyclic child links cannot recurse
+    ;; into this menu twice. Keep the record allocated until its children and
+    ;; owned labels have been released.
     (i32.store (local.get $sw) (i32.const 0))
+    (drop (call $menu_detached_take (local.get $hmenu)))
+    (drop (call $resource_submenu_binding_forget_handle (local.get $hmenu)))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    (block $done (loop $children
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (if (i32.and (i32.load (local.get $rec)) (i32.const 0x10))
+        (then (drop (call $dynamic_menu_destroy (i32.load offset=12 (local.get $rec))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $children)))
+    (call $dynamic_menu_owned_texts_release (local.get $sw))
     (call $heap_free (local.get $hmenu))
     (i32.const 1))
 
@@ -1094,11 +1106,61 @@
       (br $scan)))
     (i32.const 0))
 
+  ;; Is $h the dynamic menu $root or one of its popup descendants? Depth is
+  ;; bounded the way the blob writer bounds it.
+  (func $dynamic_menu_contains (param $root i32) (param $h i32) (param $depth i32) (result i32)
+    (local $sw i32) (local $count i32) (local $i i32) (local $rec i32)
+    (if (i32.eq (local.get $root) (local.get $h)) (then (return (i32.const 1))))
+    (if (i32.gt_u (local.get $depth) (i32.const 3)) (then (return (i32.const 0))))
+    (local.set $sw (call $dynamic_menu_state_w (local.get $root)))
+    (if (i32.eqz (local.get $sw)) (then (return (i32.const 0))))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (if (i32.and (i32.load (local.get $rec)) (i32.const 0x10))
+        (then
+          (if (call $dynamic_menu_contains (i32.load offset=12 (local.get $rec))
+                (local.get $h) (i32.add (local.get $depth) (i32.const 1)))
+            (then (return (i32.const 1))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; A window's menu bar blob is a snapshot built by SetMenu from its dynamic
+  ;; tree, but USER reads the live HMENU: a CheckMenuItem or EnableMenuItem on
+  ;; one of the bar's popups shows the next time that popup opens, with no
+  ;; DrawMenuBar. Rebuild the snapshot of every window whose attached dynamic
+  ;; bar contains $hmenu. VB1 builds its menus this way (CreateMenu/AppendMenu,
+  ;; then SetMenu); JigSawed's Options checks never reached the drawn menu.
+  (global $menu_refresh_in_place (mut i32) (i32.const 0))
+  (func $dynamic_menu_refresh_attached (param $hmenu i32)
+    (local $i i32) (local $hwnd i32) (local $src i32)
+    (if (i32.eqz (call $dynamic_menu_state_w (local.get $hmenu))) (then (return)))
+    (block $done (loop $wins
+      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
+      (if (local.get $hwnd)
+        (then
+          (local.set $src (call $menu_source_get (local.get $hwnd)))
+          (if (i32.and (i32.ne (local.get $src) (i32.const 0))
+                (i32.ne (call $dynamic_menu_state_w (local.get $src)) (i32.const 0)))
+            (then
+              (if (call $dynamic_menu_contains (local.get $src) (local.get $hmenu) (i32.const 0))
+                (then
+                  (global.set $menu_refresh_in_place (i32.const 1))
+                  (drop (call $menu_set_bar_from_dynamic
+                    (local.get $hwnd) (local.get $src)))
+                  (global.set $menu_refresh_in_place (i32.const 0))))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $wins))))
+
   ;; Rebuild the compact paint view after a mutation of a bound cascade. The
   ;; public handle remains the MNUD object; this copy exists only because the
   ;; menu compositor consumes the common resource/dynamic blob representation.
   (func $resource_submenu_binding_refresh (param $hmenu i32)
     (local $bw i32) (local $old i32) (local $measurements i32)
+    (call $dynamic_menu_refresh_attached (local.get $hmenu))
     (local.set $bw (call $resource_submenu_binding_find_handle (local.get $hmenu)))
     (if (i32.eqz (local.get $bw)) (then (return)))
     (local.set $old (i32.load offset=20 (local.get $bw)))
@@ -1488,9 +1550,13 @@
       (i32.add (local.get $neww) (i32.const 8))
       (local.get $src_wa) (local.get $len))
     (i32.store (local.get $tbl) (i32.add (local.get $newg) (i32.const 8)))
-    (call $defwndproc_do_nccalcsize (local.get $hwnd))
-    ;; A new menu on an MDI frame is dressed for its maximized child again.
-    (call $mdi_frame_menu_reattach (local.get $hwnd)))
+    ;; A refresh of an already attached bar (an item checked/greyed under it)
+    ;; keeps the same bar, so it must not touch window geometry.
+    (if (i32.eqz (global.get $menu_refresh_in_place))
+      (then
+        (call $defwndproc_do_nccalcsize (local.get $hwnd))
+        ;; A new menu on an MDI frame is dressed for its maximized child again.
+        (call $mdi_frame_menu_reattach (local.get $hwnd)))))
 
   ;; Browser hosts do not carry a JS guest-address translator. Let them fill a
   ;; temporary guest allocation through guest_write8 and translate it here.
@@ -2091,7 +2157,7 @@
                        (result i32)
     (local $rect i32)
     (local.set $rect (call $paint_rect (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
-    (drop (call $host_gdi_draw_text (local.get $hdc)
+    (drop (call $gdi_native_draw_text (local.get $hdc)
             (local.get $text_wa) (local.get $len)
             (local.get $rect)
             (i32.const 0xC20) (i32.const 0)))
@@ -2109,7 +2175,7 @@
     (local $width i32) (local $sc_len i32) (local $old_font i32)
     (if (i32.eqz (local.get $hdr)) (then (return (i32.const 0))))
     (local.set $old_font
-      (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
+      (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
     (local.set $count (i32.load (local.get $hdr)))
     (local.set $width (i32.const 180))
     (local.set $i (i32.const 0))
@@ -2141,7 +2207,7 @@
             (then (local.set $width (local.get $candidate))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
-    (drop (call $host_gdi_select_object (local.get $hdc) (local.get $old_font)))
+    (drop (call $gdi_native_select_object (local.get $hdc) (local.get $old_font)))
     (local.get $width))
 
   ;; ============================================================
@@ -2201,14 +2267,14 @@
     (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 2)))
     (if (i32.eqz (local.get $hdc)) (then (return (i32.const 0))))
     ;; Background fill (menuBg = LTGRAY = 0xC0C0C0 = LTGRAY_BRUSH 0x30011).
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (local.get $x) (local.get $y)
             (i32.add (local.get $x) (local.get $w))
             (i32.add (local.get $y) (i32.const 18))
             (i32.const 0x30011)))
     ;; Font + transparent bk (so highlight or face shows through).
-    (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
-    (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 1)))
+    (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
+    (drop (call $gdi_native_set_bk_mode (local.get $hdc) (i32.const 1)))
 
     (local.set $i (i32.const 0))
     (block $done (loop $scan
@@ -2230,21 +2296,21 @@
           ;; Highlight rectangle if this is the open menu.
           (if (i32.eq (local.get $i) (local.get $open_idx))
             (then
-              (drop (call $host_gdi_fill_rect (local.get $hdc)
+              (drop (call $gdi_native_fill_rect (local.get $hdc)
                       (local.get $cur_x) (local.get $y)
                       (i32.add (local.get $cur_x) (local.get $iw))
                       (i32.add (local.get $y) (i32.const 18))
                       (i32.const 14))) ;; COLOR_HIGHLIGHT brush (navy)
-              (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0xFFFFFF))))
+              (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0xFFFFFF))))
             (else
-              (drop (call $host_gdi_set_text_color (local.get $hdc)
+              (drop (call $gdi_native_set_text_color (local.get $hdc)
                 (select (i32.const 0x808080) (i32.const 0x000000)
                   (i32.ne (i32.and (local.get $flags) (i32.const 0x3)) (i32.const 0)))))))
           ;; Draw label (gdi_draw_text handles & accelerator underline now).
           ;; DT_LEFT(0)|DT_VCENTER(4)|DT_SINGLELINE(0x20) = 0x24
           (if (local.get $text_wa)
             (then
-              (drop (call $host_gdi_draw_text (local.get $hdc)
+              (drop (call $gdi_native_draw_text (local.get $hdc)
                       (local.get $text_wa) (local.get $text_len)
                       (call $paint_rect (i32.add (local.get $cur_x) (i32.const 6))
                                         (local.get $y)
@@ -2254,7 +2320,7 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     ;; Bottom 1px shadow line (btnShadow 0x808080).
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (local.get $x) (i32.add (local.get $y) (i32.const 17))
             (i32.add (local.get $x) (local.get $w))
             (i32.add (local.get $y) (i32.const 18))
@@ -2279,7 +2345,7 @@
       (then (return (i32.const -1))))
     (local.set $count (call $menu_bar_count (local.get $hwnd)))
     (local.set $hdc (call $gdi_menu_overlay_ensure))
-    (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
+    (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
     (local.set $bar_w (call $menu_bar_width (local.get $hwnd)))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
@@ -2301,7 +2367,7 @@
     (local $hdc i32)
     (if (i32.eqz (call $menu_blob_w (local.get $hwnd))) (then (return (i32.const 0))))
     (local.set $hdc (call $gdi_menu_overlay_ensure))
-    (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
+    (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
     (call $menu_bar_item_left (local.get $hwnd) (local.get $hdc) (local.get $idx)
       (call $menu_bar_width (local.get $hwnd))))
 
@@ -2596,7 +2662,7 @@
     (if (i32.eqz (local.get $it)) (then (return (i32.const 0))))
     (i32.load offset=4 (local.get $it)))
 
-  ;; Set/clear the "checked" flag bit (bit2, value 0x04) on every item in
+  ;; Set/clear the "checked" flag bit (bit2, value 0x04) on the first match in
   ;; one child header, recursing into cascading submenus. Returns the first
   ;; matched item's previous state (MF_CHECKED=8 or MF_UNCHECKED=0), or -1
   ;; if nothing matched.
@@ -2624,7 +2690,8 @@
       (br_if $done (i32.ge_u (local.get $i) (local.get $cc)))
       (local.set $it (i32.add (local.get $hdr)
                        (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 28)))))
-      (if (i32.eq (i32.load offset=20 (local.get $it)) (local.get $id))
+      (if (i32.and (i32.eqz (i32.load offset=24 (local.get $it)))
+            (i32.eq (i32.load offset=20 (local.get $it)) (local.get $id)))
         (then
           (local.set $flags (i32.load offset=16 (local.get $it)))
           (if (i32.eq (local.get $prev) (i32.const -1))
@@ -2635,7 +2702,8 @@
           (if (local.get $check)
             (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x04))))
             (else (local.set $flags (i32.and (local.get $flags) (i32.const -5)))))
-          (i32.store offset=16 (local.get $it) (local.get $flags))))
+          (i32.store offset=16 (local.get $it) (local.get $flags))
+          (return (local.get $prev))))
       (local.set $child_off (i32.load offset=24 (local.get $it)))
       (if (i32.and
             (i32.ne (local.get $child_off) (i32.const 0))
@@ -2653,12 +2721,12 @@
           (if (i32.and
                 (i32.eq (local.get $prev) (i32.const -1))
                 (i32.ne (local.get $r) (i32.const -1)))
-            (then (local.set $prev (local.get $r))))))
+            (then (return (local.get $r))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (local.get $prev))
 
-  ;; Set/clear the "checked" flag bit (bit2, value 0x04) on every child
+  ;; Set/clear the "checked" flag bit (bit2, value 0x04) on the first child
   ;; item in this blob whose command id matches $id. Returns the item's
   ;; previous checked state (MF_CHECKED=8 or MF_UNCHECKED=0) for the
   ;; first match, or -1 if nothing matched.
@@ -2692,7 +2760,7 @@
           (if (i32.and
                 (i32.eq (local.get $prev) (i32.const -1))
                 (i32.ne (local.get $r) (i32.const -1)))
-            (then (local.set $prev (local.get $r))))))
+            (then (return (local.get $r))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $bar)))
     (local.get $prev))
@@ -2719,9 +2787,19 @@
       (if (local.get $hwnd)
         (then
           (local.set $blob (call $menu_blob_w (local.get $hwnd)))
-          (if (local.get $blob)
+          ;; Every window's bar is visited, so the dropdown and the position
+          ;; must both exist in THIS bar before a child record is addressed:
+          ;; $child_item_w trusts its indices, and a bar with fewer dropdowns
+          ;; than $tidx would hand it an offset read from past the bar table.
+          (if (i32.and (i32.ne (local.get $blob) (i32.const 0))
+                (i32.lt_u (local.get $tidx) (i32.load (local.get $blob))))
             (then
-              (local.set $it (call $child_item_w (local.get $blob) (local.get $tidx) (local.get $pos)))
+              (local.set $it (call $child_hdr_w (local.get $blob) (local.get $tidx)))
+              (if (i32.and (i32.ne (local.get $it) (i32.const 0))
+                    (i32.lt_u (local.get $pos) (i32.load (local.get $it))))
+                (then (local.set $it (call $child_item_w
+                  (local.get $blob) (local.get $tidx) (local.get $pos))))
+                (else (local.set $it (i32.const 0))))
               (if (local.get $it)
                 (then
                   (local.set $flags (i32.load offset=16 (local.get $it)))
@@ -2739,37 +2817,28 @@
 
   (func $menu_check_position_global (export "menu_check_position_global")
         (param $hmenu i32) (param $pos i32) (param $check i32) (result i32)
-    (local $i i32) (local $hwnd i32) (local $blob i32) (local $it i32)
-    (local $tidx i32) (local $id i32) (local $r i32) (local $prev i32)
-    (local.set $prev (i32.const -1))
-    (local.set $tidx (i32.sub (i32.shr_u (local.get $hmenu) (i32.const 16)) (i32.const 1)))
-    (if (i32.lt_s (local.get $tidx) (i32.const 0)) (then (return (local.get $prev))))
-    (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
-      (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
-      (if (local.get $hwnd)
-        (then
-          (local.set $blob (call $menu_blob_w (local.get $hwnd)))
-          (if (local.get $blob)
-            (then
-              (local.set $it (call $child_item_w (local.get $blob) (local.get $tidx) (local.get $pos)))
-              (if (local.get $it)
-                (then
-                  ;; Resolve MF_BYPOSITION to the command id, then use the
-                  ;; same blob walker as MF_BYCOMMAND. The old direct store
-                  ;; returned the right prior state without persisting the
-                  ;; checked bit in resource-backed Viewer menus.
-                  (local.set $id (i32.load offset=20 (local.get $it)))
-                  (local.set $r (call $menu_blob_set_check
-                    (local.get $blob) (call $menu_blob_size (local.get $hwnd))
-                    (local.get $id) (local.get $check)))
-                  (if (i32.ne (local.get $r) (i32.const -1))
-                    (then
-                      (call $invalidate_hwnd (local.get $hwnd))
-                      (return (local.get $r))))))))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $scan)))
-    (local.get $prev))
+    (local $hwnd i32) (local $blob i32) (local $it i32) (local $top i32) (local $flags i32)
+    (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
+    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
+    (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
+    ;; Menu-bar items cannot carry check marks.
+    (if (i32.lt_s (local.get $top) (i32.const 0)) (then (return (i32.const -1))))
+    (if (i32.ge_u (local.get $top) (call $menu_bar_count (local.get $hwnd)))
+      (then (return (i32.const -1))))
+    (if (i32.ge_u (local.get $pos) (call $menu_child_count (local.get $hwnd) (local.get $top)))
+      (then (return (i32.const -1))))
+    (local.set $blob (call $menu_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const -1))))
+    (local.set $it (call $child_item_w (local.get $blob) (local.get $top) (local.get $pos)))
+    (if (i32.eqz (local.get $it)) (then (return (i32.const -1))))
+    ;; Position identifies exactly this record, even with duplicate command IDs.
+    (local.set $flags (i32.load offset=16 (local.get $it)))
+    (i32.store offset=16 (local.get $it)
+      (select (i32.or (local.get $flags) (i32.const 4))
+        (i32.and (local.get $flags) (i32.const -5)) (local.get $check)))
+    (call $invalidate_hwnd (local.get $hwnd))
+    (select (i32.const 8) (i32.const 0)
+      (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0))))
 
   ;; Resource menu enable/disable state. Internal flag bit1 is rendered as
   ;; MF_GRAYED; return values use the public MF_GRAYED/MF_ENABLED constants.
@@ -2777,7 +2846,7 @@
         (param $blob i32) (param $hdr i32) (param $id i32) (param $disabled i32)
         (result i32)
     (local $count i32) (local $i i32) (local $it i32) (local $flags i32)
-    (local $ret i32)
+    (local $ret i32) (local $child_off i32) (local $r i32)
     (local.set $ret (i32.const -1))
     (local.set $count (i32.load (local.get $hdr)))
     (block $done (loop $scan
@@ -2795,6 +2864,16 @@
             (select (i32.or (local.get $flags) (i32.const 2))
                     (i32.and (local.get $flags) (i32.const -3))
                     (local.get $disabled)))))
+      ;; By command id reaches cascaded popups too (Daytona USA Deluxe greys
+      ;; its Settings > Screen mode items one level below the dropdown).
+      (local.set $child_off (i32.load offset=24 (local.get $it)))
+      (if (local.get $child_off)
+        (then
+          (local.set $r (call $menu_group_set_disabled
+            (local.get $blob) (i32.add (local.get $blob) (local.get $child_off))
+            (local.get $id) (local.get $disabled)))
+          (if (i32.eq (local.get $ret) (i32.const -1))
+            (then (local.set $ret (local.get $r))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (return (local.get $ret))
@@ -2981,36 +3060,35 @@
       (br $loop)))
     (select (i32.const 1) (i32.const 0) (local.get $changed)))
 
-  ;; Walk every window that has a menu blob and toggle the check state
-  ;; of the first matching id. Invalidates any hwnd whose menu changed
-  ;; so the next dropdown paint reflects the new state. Returns the
+  ;; Resolve the requested resource menu and change its first matching id.
+  ;; A dropdown handle searches only that subtree, never sibling dropdowns
+  ;; or another window. Invalidates the owning window. Returns the
   ;; original state (MF_UNCHECKED=0, MF_CHECKED=8) or -1 if no match.
   (func $menu_check_item_global (export "menu_check_item_global")
-        (param $id i32) (param $check i32) (result i32)
-    (local $i i32) (local $hwnd i32) (local $blob_w i32) (local $blob_size i32)
-    (local $r i32) (local $prev i32)
-    (local.set $prev (i32.const -1))
-    (local.set $i (i32.const 0))
-    (block $done (loop $loop
-      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
-      (local.set $hwnd (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))))
-      (if (local.get $hwnd)
-        (then
-          (local.set $blob_w (call $menu_blob_w (local.get $hwnd)))
-          (if (local.get $blob_w)
-            (then
-              (local.set $blob_size (call $menu_blob_size (local.get $hwnd)))
-              (local.set $r (call $menu_blob_set_check
-                              (local.get $blob_w) (local.get $blob_size)
-                              (local.get $id) (local.get $check)))
-              (if (i32.ne (local.get $r) (i32.const -1))
-                (then
-                  (if (i32.eq (local.get $prev) (i32.const -1))
-                    (then (local.set $prev (local.get $r))))
-                  (call $invalidate_hwnd (local.get $hwnd))))))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $loop)))
-    (local.get $prev))
+        (param $hmenu i32) (param $id i32) (param $check i32) (result i32)
+    (local $hwnd i32) (local $blob i32) (local $size i32)
+    (local $top i32) (local $off i32) (local $r i32)
+    (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
+    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
+    (local.set $blob (call $menu_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const -1))))
+    (local.set $size (call $menu_blob_size (local.get $hwnd)))
+    (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
+    (if (i32.lt_s (local.get $top) (i32.const 0))
+      (then (local.set $r (call $menu_blob_set_check
+        (local.get $blob) (local.get $size) (local.get $id) (local.get $check))))
+      (else
+        (if (i32.ge_u (local.get $top) (i32.load (local.get $blob)))
+          (then (return (i32.const -1))))
+        (local.set $off (i32.load offset=12
+          (i32.add (local.get $blob) (i32.mul (local.get $top) (i32.const 16)))))
+        (if (i32.eqz (local.get $off)) (then (return (i32.const -1))))
+        (local.set $r (call $menu_group_set_check
+          (local.get $blob) (local.get $size) (i32.add (local.get $blob) (local.get $off))
+          (local.get $id) (local.get $check)))))
+    (if (i32.ne (local.get $r) (i32.const -1))
+      (then (call $invalidate_hwnd (local.get $hwnd))))
+    (local.get $r))
 
   ;; Accel-char (uppercase ASCII) for top-level item $idx, or 0 if none.
   ;; The accel char is the byte after the first un-doubled '&'.
@@ -3088,12 +3166,12 @@
     ;; edge for a '>' character. The i32.store8 is what says so, and it is why
     ;; the codemod declines this site rather than converting it.
     (i32.store8 (local.get $glyph) (i32.const 0x3E))
-    (drop (call $host_gdi_set_text_color (local.get $hdc)
+    (drop (call $gdi_native_set_text_color (local.get $hdc)
             (if (result i32) (local.get $hover)
               (then (i32.const 0xFFFFFF))
               (else (i32.const 0x000000)))))
     ;; DT_CENTER|DT_VCENTER|DT_SINGLELINE = 0x25
-    (drop (call $host_gdi_draw_text (local.get $hdc)
+    (drop (call $gdi_native_draw_text (local.get $hdc)
             (local.get $glyph) (i32.const 1)
             (call $paint_rect (i32.add (local.get $dx)
                                 (i32.sub (local.get $dw) (i32.const 16)))
@@ -3105,29 +3183,29 @@
 
   (func $menu_draw_check_glyph (param $hdc i32) (param $dx i32)
                                (param $iy i32) (param $hover i32)
-    (drop (call $host_gdi_select_object (local.get $hdc)
+    (drop (call $gdi_native_select_object (local.get $hdc)
             (if (result i32) (local.get $hover)
               (then (i32.const 0x30016))   ;; WHITE_PEN on hover
               (else (i32.const 0x30017))))) ;; BLACK_PEN otherwise
-    (drop (call $host_gdi_move_to (local.get $hdc)
+    (drop (call $gdi_native_move_to (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 5))
             (i32.add (local.get $iy) (i32.const 10))))
-    (drop (call $host_gdi_line_to (local.get $hdc)
+    (drop (call $gdi_native_line_to (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 8))
             (i32.add (local.get $iy) (i32.const 14))))
-    (drop (call $host_gdi_line_to (local.get $hdc)
+    (drop (call $gdi_native_line_to (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 14))
             (i32.add (local.get $iy) (i32.const 6))))
-    (drop (call $host_gdi_move_to (local.get $hdc)
+    (drop (call $gdi_native_move_to (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 5))
             (i32.add (local.get $iy) (i32.const 11))))
-    (drop (call $host_gdi_line_to (local.get $hdc)
+    (drop (call $gdi_native_line_to (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 8))
             (i32.add (local.get $iy) (i32.const 15))))
-    (drop (call $host_gdi_line_to (local.get $hdc)
+    (drop (call $gdi_native_line_to (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 14))
             (i32.add (local.get $iy) (i32.const 7))))
-    (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021))))
+    (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021))))
 
   ;; WordPad's formatting toolbar supplies seventeen MF_OWNERDRAW entries with
   ;; command ids 0x800e..0x801e and no strings. Its menu is destroyed as soon as
@@ -3138,23 +3216,23 @@
         (param $iy i32) (param $id i32)
     (local $brush i32)
     ;; A black frame keeps white and silver visible against COLOR_MENU.
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 19))
             (i32.add (local.get $iy) (i32.const 2))
             (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 19)))
             (i32.add (local.get $iy) (i32.const 18))
             (i32.const 0x30014))) ;; BLACK_BRUSH
     (local.set $brush
-      (call $host_gdi_create_solid_brush
+      (call $gdi_native_create_solid_brush
         (call $wordpad_colorref_for_index
           (i32.sub (local.get $id) (i32.const 0x800e)))))
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (i32.add (local.get $dx) (i32.const 20))
             (i32.add (local.get $iy) (i32.const 3))
             (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 20)))
             (i32.add (local.get $iy) (i32.const 17))
             (local.get $brush)))
-    (drop (call $host_gdi_delete_object (local.get $brush))))
+    (drop (call $gdi_native_delete_object (local.get $brush))))
 
   ;; ============================================================
   ;; $menu_paint_dropdown — draw the dropdown for top-level item
@@ -3190,19 +3268,19 @@
       (call $menu_submenu_width (local.get $hwnd) (local.get $tidx) (local.get $cidx)))
     (local.set $dh
       (call $menu_submenu_height (local.get $hwnd) (local.get $tidx) (local.get $cidx)))
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (local.get $dx) (local.get $dy)
             (i32.add (local.get $dx) (local.get $dw))
             (i32.add (local.get $dy) (local.get $dh))
             (i32.const 0x30011)))
-    (drop (call $host_gdi_draw_edge (local.get $hdc)
+    (drop (call $gdi_native_draw_edge (local.get $hdc)
             (local.get $dx) (local.get $dy)
             (i32.add (local.get $dx) (local.get $dw))
             (i32.add (local.get $dy) (local.get $dh))
             (i32.const 0x05) (i32.const 0x0F)))
 
-    (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
-    (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 1)))
+    (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
+    (drop (call $gdi_native_set_bk_mode (local.get $hdc) (i32.const 1)))
 
     (local.set $iy (i32.add (local.get $dy) (i32.const 2)))
     (local.set $i (i32.const 0))
@@ -3215,7 +3293,7 @@
         (local.get $parent_blob) (local.get $tidx) (local.get $cidx) (local.get $i)))
       (if (i32.and (local.get $flags) (i32.const 0x01))
         (then
-          (drop (call $host_gdi_fill_rect (local.get $hdc)
+          (drop (call $gdi_native_fill_rect (local.get $hdc)
                   (i32.add (local.get $dx) (i32.const 4))
                   (i32.add (local.get $iy) (i32.const 9))
                   (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 4)))
@@ -3224,16 +3302,16 @@
         (else
           (if (i32.eq (local.get $i) (local.get $hover_sidx))
             (then
-              (drop (call $host_gdi_fill_rect (local.get $hdc)
+              (drop (call $gdi_native_fill_rect (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 2)) (local.get $iy)
                       (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 2)))
                       (i32.add (local.get $iy) (local.get $ih))
                       (i32.const 14)))
-              (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0xFFFFFF))))
+              (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0xFFFFFF))))
             (else
               (if (i32.and (local.get $flags) (i32.const 0x02))
-                (then (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x808080))))
-                (else (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x000000)))))))
+                (then (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x808080))))
+                (else (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x000000)))))))
           (local.set $label_wa (i32.add (local.get $blob) (i32.load (local.get $it))))
           (local.set $label_len (i32.load offset=4 (local.get $it)))
           (if (i32.and (local.get $flags) (i32.const 0x04))
@@ -3241,7 +3319,7 @@
               (call $menu_draw_check_glyph
                 (local.get $hdc) (local.get $dx) (local.get $iy)
                 (i32.eq (local.get $i) (local.get $hover_sidx)))))
-          (drop (call $host_gdi_draw_text (local.get $hdc)
+          (drop (call $gdi_native_draw_text (local.get $hdc)
                   (local.get $label_wa) (local.get $label_len)
                   (call $paint_rect (i32.add (local.get $dx) (i32.const 20))
                                     (local.get $iy)
@@ -3253,7 +3331,7 @@
             (then
               (local.set $sc_wa (i32.add (local.get $blob)
                                   (i32.load offset=8 (local.get $it))))
-              (drop (call $host_gdi_draw_text (local.get $hdc)
+              (drop (call $gdi_native_draw_text (local.get $hdc)
                       (local.get $sc_wa) (local.get $sc_len)
                       (call $paint_rect (i32.add (local.get $dx) (i32.const 20))
                                         (local.get $iy)
@@ -3298,19 +3376,19 @@
       (call $menu_header_width (local.get $blob) (local.get $hdr) (local.get $hdc)))
     (local.set $dh (i32.add (i32.mul (local.get $count) (i32.const 20)) (i32.const 4)))
     ;; Background + outset border.
-    (drop (call $host_gdi_fill_rect (local.get $hdc)
+    (drop (call $gdi_native_fill_rect (local.get $hdc)
             (local.get $dx) (local.get $dy)
             (i32.add (local.get $dx) (local.get $dw))
             (i32.add (local.get $dy) (local.get $dh))
             (i32.const 0x30011)))
-    (drop (call $host_gdi_draw_edge (local.get $hdc)
+    (drop (call $gdi_native_draw_edge (local.get $hdc)
             (local.get $dx) (local.get $dy)
             (i32.add (local.get $dx) (local.get $dw))
             (i32.add (local.get $dy) (local.get $dh))
             (i32.const 0x05) (i32.const 0x0F)))
 
-    (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))
-    (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 1)))
+    (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))
+    (drop (call $gdi_native_set_bk_mode (local.get $hdc) (i32.const 1)))
 
     (local.set $iy (i32.add (local.get $dy) (i32.const 2)))
     (local.set $i (i32.const 0))
@@ -3322,7 +3400,7 @@
       (if (i32.and (local.get $flags) (i32.const 0x01))
         (then
           ;; Separator: 1px shadow line in the middle of the row.
-          (drop (call $host_gdi_fill_rect (local.get $hdc)
+          (drop (call $gdi_native_fill_rect (local.get $hdc)
                   (i32.add (local.get $dx) (i32.const 4))
                   (i32.add (local.get $iy) (i32.const 9))
                   (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 4)))
@@ -3332,45 +3410,45 @@
           ;; Hover highlight.
           (if (i32.eq (local.get $i) (local.get $hover_cidx))
             (then
-              (drop (call $host_gdi_fill_rect (local.get $hdc)
+              (drop (call $gdi_native_fill_rect (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 2)) (local.get $iy)
                       (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 2)))
                       (i32.add (local.get $iy) (i32.const 20))
                       (i32.const 14))) ;; COLOR_HIGHLIGHT brush
-              (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0xFFFFFF))))
+              (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0xFFFFFF))))
             (else
               (if (i32.and (local.get $flags) (i32.const 0x02))
-                (then (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x808080))))
-                (else (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x000000)))))))
+                (then (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x808080))))
+                (else (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x000000)))))))
           ;; Check glyph — two-stroke V drawn with BLACK_PEN/WHITE_PEN in the
           ;; left margin when MF_CHECKED (bit2) is set. Second pass offset by
           ;; +1 row gives a 2-px thick check. Font is re-selected after so
           ;; DrawText below keeps working.
           (if (i32.and (local.get $flags) (i32.const 0x04))
             (then
-              (drop (call $host_gdi_select_object (local.get $hdc)
+              (drop (call $gdi_native_select_object (local.get $hdc)
                       (if (result i32) (i32.eq (local.get $i) (local.get $hover_cidx))
                         (then (i32.const 0x30016))   ;; WHITE_PEN on hover
                         (else (i32.const 0x30017))))) ;; BLACK_PEN otherwise
-              (drop (call $host_gdi_move_to (local.get $hdc)
+              (drop (call $gdi_native_move_to (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 5))
                       (i32.add (local.get $iy) (i32.const 10))))
-              (drop (call $host_gdi_line_to (local.get $hdc)
+              (drop (call $gdi_native_line_to (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 8))
                       (i32.add (local.get $iy) (i32.const 14))))
-              (drop (call $host_gdi_line_to (local.get $hdc)
+              (drop (call $gdi_native_line_to (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 14))
                       (i32.add (local.get $iy) (i32.const 6))))
-              (drop (call $host_gdi_move_to (local.get $hdc)
+              (drop (call $gdi_native_move_to (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 5))
                       (i32.add (local.get $iy) (i32.const 11))))
-              (drop (call $host_gdi_line_to (local.get $hdc)
+              (drop (call $gdi_native_line_to (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 8))
                       (i32.add (local.get $iy) (i32.const 15))))
-              (drop (call $host_gdi_line_to (local.get $hdc)
+              (drop (call $gdi_native_line_to (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 14))
                       (i32.add (local.get $iy) (i32.const 7))))
-              (drop (call $host_gdi_select_object (local.get $hdc) (i32.const 0x30021)))))
+              (drop (call $gdi_native_select_object (local.get $hdc) (i32.const 0x30021)))))
           (if (i32.and
                 (i32.ne (i32.and (local.get $flags) (i32.const 0x08)) (i32.const 0))
                 (i32.and
@@ -3385,7 +3463,7 @@
               (local.set $label_wa (i32.add (local.get $blob) (i32.load (local.get $it))))
               (local.set $label_len (i32.load offset=4 (local.get $it)))
               ;; DT_LEFT|DT_VCENTER|DT_SINGLELINE = 0x24
-              (drop (call $host_gdi_draw_text (local.get $hdc)
+              (drop (call $gdi_native_draw_text (local.get $hdc)
                       (local.get $label_wa) (local.get $label_len)
                       (call $paint_rect (i32.add (local.get $dx) (i32.const 20))
                                         (local.get $iy)
@@ -3399,7 +3477,7 @@
               (local.set $sc_wa (i32.add (local.get $blob)
                                   (i32.load offset=8 (local.get $it))))
               ;; DT_RIGHT(2)|DT_VCENTER(4)|DT_SINGLELINE(0x20) = 0x26
-              (drop (call $host_gdi_draw_text (local.get $hdc)
+              (drop (call $gdi_native_draw_text (local.get $hdc)
                       (local.get $sc_wa) (local.get $sc_len)
                       (call $paint_rect (i32.add (local.get $dx) (i32.const 20))
                                         (local.get $iy)
@@ -4387,6 +4465,68 @@
         (global.set $detached_menus (local.get $node))))
     (local.get $built))
 
+  ;; The alias already built for an integer LoadMenu handle, or 0. Never
+  ;; builds one: SetMenu asks this so a menu the app edited while unattached
+  ;; (Unreal localizes its ID_* labels through SetMenuItemInfo before SetMenu)
+  ;; is attached as edited, while an untouched handle keeps the resource path.
+  (func $menu_detached_existing (param $hmenu i32) (result i32)
+    (local $id i32) (local $node i32) (local $nw i32)
+    (if (i32.ne (i32.and (local.get $hmenu) (i32.const 0xFFFF0000))
+                (i32.const 0x00BE0000))
+      (then (return (i32.const 0))))
+    (local.set $id (i32.and (local.get $hmenu) (i32.const 0xFFFF)))
+    (local.set $node (global.get $detached_menus))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $node)))
+      (local.set $nw (call $g2w (local.get $node)))
+      (if (i32.eq (i32.load offset=4 (local.get $nw)) (local.get $id))
+        (then (return (i32.load offset=8 (local.get $nw)))))
+      (local.set $node (i32.load (local.get $nw)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; MENUITEMINFO calls address the canonical dynamic tree: a heap menu as
+  ;; is, an unattached LoadMenu handle through its detached alias (built on
+  ;; first use, as EnableMenuItem/CheckMenuItem do). Attached resource bars
+  ;; keep their window-backed representation and stay unsupported here.
+  (func $menu_item_info_target (param $hmenu i32) (result i32)
+    (local $alias i32)
+    (if (call $dynamic_menu_state_w (local.get $hmenu))
+      (then (return (local.get $hmenu))))
+    (if (call $menu_hwnd_from_handle (local.get $hmenu))
+      (then (return (local.get $hmenu))))
+    (local.set $alias (call $menu_detached_handle (local.get $hmenu)))
+    (select (local.get $alias) (local.get $hmenu) (i32.ne (local.get $alias) (i32.const 0))))
+
+  ;; Unlink an existing detached alias without materializing a new menu.
+  ;; Accept either its tagged resource handle or its canonical dynamic root.
+  ;; The caller owns destruction of the returned root.
+  (func $menu_detached_take (param $hmenu i32) (result i32)
+    (local $node i32) (local $nw i32) (local $prev i32)
+    (local $next i32) (local $root i32) (local $tagged i32)
+    (local.set $tagged (i32.eq
+      (i32.and (local.get $hmenu) (i32.const 0xFFFF0000)) (i32.const 0x00BE0000)))
+    (local.set $node (global.get $detached_menus))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $node)))
+      (local.set $nw (call $g2w (local.get $node)))
+      (local.set $next (i32.load (local.get $nw)))
+      (local.set $root (i32.load offset=8 (local.get $nw)))
+      (if (i32.or (i32.eq (local.get $root) (local.get $hmenu))
+            (i32.and (local.get $tagged)
+              (i32.eq (i32.load offset=4 (local.get $nw))
+                (i32.and (local.get $hmenu) (i32.const 0xFFFF)))))
+        (then
+          (if (local.get $prev)
+            (then (i32.store (local.get $prev) (local.get $next)))
+            (else (global.set $detached_menus (local.get $next))))
+          (call $heap_free (local.get $node))
+          (return (local.get $root))))
+      (local.set $prev (local.get $nw))
+      (local.set $node (local.get $next))
+      (br $scan)))
+    (i32.const 0))
+
   ;; ---- Menu handle queries (GetMenuItemCount / GetMenuItemID / GetMenuState)
   ;;
   ;; A menu handle here is the window's own menu id, and GetSubMenu turns that
@@ -4566,12 +4706,72 @@
   ;; Our item flags are internal (bit 1 = disabled, bit 2 = checked); Windows
   ;; wants MF_GRAYED 1 / MF_DISABLED 2 / MF_CHECKED 8. Translate rather than
   ;; leak the internal encoding through the API.
+  ;; Bit 0 (separator) is MF_SEPARATOR 0x800: MFC's OnUpdateFileSendMail
+  ;; removes Send... and then one of the separators around it only when
+  ;; GetMenuState reports both neighbours as separators, so without this bit
+  ;; Paint's File menu kept two adjacent separators.
   (func $menu_flags_to_mf (param $flags i32) (result i32)
     (i32.or
-      (select (i32.const 3) (i32.const 0)
-        (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0)))
-      (select (i32.const 8) (i32.const 0)
-        (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0)))))
+      (i32.or
+        (select (i32.const 3) (i32.const 0)
+          (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0)))
+        (select (i32.const 8) (i32.const 0)
+          (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0))))
+      (select (i32.const 0x800) (i32.const 0)
+        (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0)))))
+
+  ;; Return the canonical dynamic record once, whether the public handle is
+  ;; a heap menu or an unattached LoadMenu alias. Attached resource menus keep
+  ;; their window-backed representation.
+  (func $menu_query_dynamic_w (param $hmenu i32) (result i32)
+    (local $sw i32)
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (if (local.get $sw) (then (return (local.get $sw))))
+    (if (call $menu_hwnd_from_handle (local.get $hmenu))
+      (then (return (i32.const 0))))
+    (call $dynamic_menu_state_w (call $menu_detached_handle (local.get $hmenu))))
+
+  ;; GetMenuState uses public MF bits, not the painter's compact flags. For
+  ;; popup rows the high byte contains the child count and the low byte flags.
+  (func $dynamic_menu_query_state
+        (param $sw i32) (param $item i32) (param $bypos i32) (result i32)
+    (local $i i32) (local $count i32) (local $rec i32) (local $flags i32)
+    (local $sub i32) (local $r i32)
+    (if (i32.eqz (local.get $sw)) (then (return (i32.const -1))))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    (if (local.get $bypos)
+      (then
+        (if (i32.ge_u (local.get $item) (local.get $count))
+          (then (return (i32.const -1))))
+        (local.set $i (local.get $item))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (local.set $flags (i32.and (i32.load (local.get $rec)) (i32.const 0x7FFFFFFF)))
+      (local.set $sub (i32.const 0))
+      (if (i32.and (local.get $flags) (i32.const 0x10))
+        (then (local.set $sub
+          (call $dynamic_menu_state_w (i32.load offset=12 (local.get $rec))))))
+      (if (i32.or (local.get $bypos)
+            (i32.and (i32.eqz (i32.and (local.get $flags) (i32.const 0x10)))
+              (i32.eq (i32.load offset=4 (local.get $rec)) (local.get $item))))
+        (then
+          (if (i32.and (local.get $flags) (i32.const 0x10))
+            (then
+              (if (i32.eqz (local.get $sub)) (then (return (i32.const -1))))
+              (return (i32.or (i32.and (local.get $flags) (i32.const 0xFF))
+                (i32.shl (i32.and (i32.load offset=4 (local.get $sub)) (i32.const 0xFF))
+                  (i32.const 8))))))
+          (return (local.get $flags))))
+      (if (local.get $sub)
+        (then
+          (local.set $r (call $dynamic_menu_query_state
+            (local.get $sub) (local.get $item) (i32.const 0)))
+          (if (i32.ne (local.get $r) (i32.const -1))
+            (then (return (local.get $r))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const -1))
 
   ;; GetMenuState of a dynamic menu's item: its MF_* type and state bits, and
   ;; for a popup the popup's item count in the high byte, as USER answers.
@@ -4591,9 +4791,11 @@
 
   (func $menu_handle_item_state (export "menu_handle_item_state")
         (param $hmenu i32) (param $pos i32) (result i32)
-    (local $hwnd i32) (local $top i32)
-    (if (call $dynamic_menu_state_w (local.get $hmenu))
-      (then (return (call $dynamic_menu_item_state (local.get $hmenu) (local.get $pos) (i32.const 1)))))
+    (local $hwnd i32) (local $top i32) (local $sw i32)
+    (local.set $sw (call $menu_query_dynamic_w (local.get $hmenu)))
+    (if (local.get $sw)
+      (then (return (call $dynamic_menu_query_state
+        (local.get $sw) (local.get $pos) (i32.const 1)))))
     (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
     (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
@@ -4607,9 +4809,12 @@
   (func $menu_handle_state_by_id (export "menu_handle_state_by_id")
         (param $hmenu i32) (param $id i32) (result i32)
     (local $hwnd i32) (local $bar i32) (local $bars i32)
-    (local $i i32) (local $n i32)
-    (if (call $dynamic_menu_state_w (local.get $hmenu))
-      (then (return (call $dynamic_menu_item_state (local.get $hmenu) (local.get $id) (i32.const 0)))))
+    (local $i i32) (local $n i32) (local $sw i32)
+    (local $blob i32) (local $hdr i32) (local $flags i32)
+    (local.set $sw (call $menu_query_dynamic_w (local.get $hmenu)))
+    (if (local.get $sw)
+      (then (return (call $dynamic_menu_query_state
+        (local.get $sw) (local.get $id) (i32.const 0)))))
     (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
     ;; Every dropdown in the blob, whatever the bar's arrangement.
@@ -4629,6 +4834,46 @@
           (br $items)))
         (local.set $bar (i32.add (local.get $bar) (i32.const 1)))
         (br $tops)))
+    ;; Not a dropdown item: by command id also searches cascaded popups.
+    (local.set $blob (call $menu_dropdown_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const -1))))
+    (local.set $bar (i32.const 0))
+    (block $cdone
+      (loop $ctops
+        (br_if $cdone (i32.ge_s (local.get $bar) (local.get $bars)))
+        (local.set $hdr (call $child_hdr_w (local.get $blob) (local.get $bar)))
+        (if (local.get $hdr)
+          (then
+            (local.set $flags (call $menu_group_find_flags
+              (local.get $blob) (local.get $hdr) (local.get $id)))
+            (if (i32.ne (local.get $flags) (i32.const -1))
+              (then (return (call $menu_flags_to_mf (local.get $flags)))))))
+        (local.set $bar (i32.add (local.get $bar) (i32.const 1)))
+        (br $ctops)))
+    (i32.const -1))
+
+  ;; Blob flags of the item with command id $id in the popup at $hdr or any
+  ;; popup cascaded below it, or -1.
+  (func $menu_group_find_flags
+        (param $blob i32) (param $hdr i32) (param $id i32) (result i32)
+    (local $count i32) (local $i i32) (local $it i32) (local $child_off i32)
+    (local $r i32)
+    (local.set $count (i32.load (local.get $hdr)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $it (i32.add (local.get $hdr)
+        (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 28)))))
+      (if (i32.eq (i32.load offset=20 (local.get $it)) (local.get $id))
+        (then (return (i32.load offset=16 (local.get $it)))))
+      (local.set $child_off (i32.load offset=24 (local.get $it)))
+      (if (local.get $child_off)
+        (then
+          (local.set $r (call $menu_group_find_flags
+            (local.get $blob) (i32.add (local.get $blob) (local.get $child_off))
+            (local.get $id)))
+          (if (i32.ne (local.get $r) (i32.const -1)) (then (return (local.get $r))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
     (i32.const -1))
 
   ;; Resolve a handle+item pair to (top index, child index). Returns -1 in the
@@ -4760,6 +5005,7 @@
   ;; popup blob TrackPopupMenu uses.
   (func $menu_open (export "menu_open") (param $hwnd i32) (param $pos i32)
     (local $top i32) (local $e i32) (local $hmenu i32)
+    (call $menu_track_finish)
     (if (global.get $menu_open_popup_blob)
       (then
         (call $heap_free (global.get $menu_open_popup_blob))
@@ -4824,9 +5070,9 @@
     (local $menu_id i32) (local $top_idx i32)
     (call $utrace (i32.const 2) "track popup (menu, flags, hwnd)"
       (local.get $hmenu) (local.get $flags) (local.get $hwnd))
-    ;; TPM_RETURNCMD asks USER32 to return the selected command synchronously.
-    ;; We do not run a nested modal menu loop yet, so report no selection.
-    (if (i32.and (local.get $flags) (i32.const 0x0100)) (then (return (i32.const 0))))
+    ;; A new popup replaces any open one. An outstanding TPM_RETURNCMD call
+    ;; then completes as dismissed, the way USER ends one menu loop.
+    (call $menu_track_finish)
     (if (call $dynamic_menu_state_w (local.get $hmenu))
       (then
         (if (global.get $menu_open_popup_blob)
@@ -4875,33 +5121,20 @@
       (call $menu_dropdown_height (local.get $hwnd) (local.get $top_idx)))
     (i32.const 1))
 
-  (func (export "menu_track_popup_open_module")
-        (param $hwnd i32) (param $hInstance i32) (param $menu_id i32) (param $top_idx i32) (param $x i32) (param $y i32)
-        (result i32)
-    (if (i32.or (i32.eqz (local.get $hwnd)) (i32.lt_s (local.get $top_idx) (i32.const 0)))
-      (then (return (i32.const 0))))
-    (if (global.get $menu_open_popup_blob)
-      (then
-        (call $heap_free (global.get $menu_open_popup_blob))
-        (global.set $menu_open_popup_blob (i32.const 0))))
-    (global.set $menu_open_dynamic_hmenu (i32.const 0))
-    (call $push_rsrc_ctx (local.get $hInstance))
-    (call $menu_load (local.get $hwnd) (local.get $menu_id))
-    (call $pop_rsrc_ctx)
-    (if (i32.eqz (call $menu_child_count (local.get $hwnd) (local.get $top_idx)))
-      (then (return (i32.const 0))))
-    (global.set $menu_open_hwnd  (local.get $hwnd))
-    (global.set $menu_open_top   (local.get $top_idx))
-    (global.set $menu_open_bar_pos (i32.const -1))
-    (global.set $menu_open_hover (i32.const -1))
-    (global.set $menu_open_sub_hover (i32.const -1))
-    (global.set $menu_open_x     (local.get $x))
-    (global.set $menu_open_y     (local.get $y))
-    (i32.const 1))
+  ;; An open TPM_RETURNCMD popup is closing, with or without a pick.
+  (func $menu_track_finish
+    (if (i32.eq (global.get $menu_track_state) (i32.const 1))
+      (then (global.set $menu_track_state (i32.const 2)))))
+
+  ;; Is the guest parked in a TPM_RETURNCMD TrackPopupMenu? Hosts exempt that
+  ;; wait from their stalled-wire cap: it lasts as long as the user looks.
+  (func (export "menu_track_parked") (result i32)
+    (i32.eq (global.get $menu_track_state) (i32.const 1)))
 
   (func $menu_close (export "menu_close")
     (call $utrace (i32.const 2) "menu close (hwnd, bar position, popup menu)"
       (global.get $menu_open_hwnd) (global.get $menu_open_bar_pos) (global.get $menu_open_dynamic_hmenu))
+    (call $menu_track_finish)
     (if (global.get $menu_open_popup_blob)
       (then
         (call $heap_free (global.get $menu_open_popup_blob))
@@ -5300,10 +5533,19 @@
   ;; Internal: enqueue a posted message for hwnd. This is a UI-originated
   ;; command and may be produced outside the owning guest instance, so always
   ;; use the shared per-thread queue rather than the local post-count global.
+  ;;
+  ;; Real USER tracks a menu synchronously inside the owner's DefWindowProc;
+  ;; ours runs on host input while the guest may be busy elsewhere, so the
+  ;; result can sit in the queue until some unrelated pump -- typically a
+  ;; modal loop that has just disabled the owner -- retrieves it. The tag
+  ;; lets retrieval discard it then, as Windows discards input aimed at a
+  ;; disabled window (Civ2 Win16: Save Game ran nested inside the AI news
+  ;; box's modal and wedged it).
   (func $menu_post (param $hwnd i32) (param $msg i32)
                     (param $wp i32) (param $lp i32)
-    (drop (call $shared_post_queue_enqueue
-      (local.get $hwnd) (local.get $msg) (local.get $wp) (local.get $lp))))
+    (drop (call $shared_post_queue_enqueue_flags
+      (local.get $hwnd) (local.get $msg) (local.get $wp) (local.get $lp)
+      (global.get $USER_QUEUE_FLAG_MENU))))
 
   ;; Activate the currently-hovered child of the open menu. Posts a
   ;; WM_COMMAND to the parent hwnd, then closes the menu. Returns the command
@@ -5329,21 +5571,26 @@
           (then (return (i32.const 0))))
         (local.set $id (call $menu_subchild_id
                          (local.get $hwnd) (local.get $top) (local.get $hover) (local.get $sub)))
-        (if (i32.and (i32.eq (call $menu_pick_message) (i32.const 0x0111))
-                     (call $menu_try_edit_command (local.get $id)))
-          (then (nop))
-          (else (call $menu_post (local.get $hwnd) (call $menu_pick_message) (local.get $id) (i32.const 0))))
+        (call $menu_deliver_command (local.get $hwnd) (local.get $id))
         (call $menu_close)
         (return (local.get $id))))
     (local.set $id (call $menu_child_id (local.get $hwnd) (local.get $top) (local.get $hover)))
     (call $utrace (i32.const 2) "menu pick (hwnd, id, message)"
       (local.get $hwnd) (local.get $id) (call $menu_pick_message))
+    (call $menu_deliver_command (local.get $hwnd) (local.get $id))
+    (call $menu_close)
+    (local.get $id))
+
+  ;; A picked command goes back to a TPM_RETURNCMD caller as its return value
+  ;; and is not posted; otherwise it is an edit command or a WM_COMMAND.
+  (func $menu_deliver_command (param $hwnd i32) (param $id i32)
+    (if (i32.eq (global.get $menu_track_state) (i32.const 1))
+      (then (global.set $menu_track_result (local.get $id)) (return)))
+    ;; A pick from a system menu is a WM_SYSCOMMAND, never a menu command.
     (if (i32.and (i32.eq (call $menu_pick_message) (i32.const 0x0111))
                  (call $menu_try_edit_command (local.get $id)))
       (then (nop))
-      (else (call $menu_post (local.get $hwnd) (call $menu_pick_message) (local.get $id) (i32.const 0))))
-    (call $menu_close)
-    (local.get $id))
+      (else (call $menu_post (local.get $hwnd) (call $menu_pick_message) (local.get $id) (i32.const 0)))))
 
   ;; Find the bar item index whose accelerator char (uppercase ASCII)
   ;; matches $ch, or -1.
@@ -5439,6 +5686,9 @@
 
   ;; 84: DestroyMenu(hMenu) — 1 arg stdcall, return TRUE
   (func $handle_DestroyMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $detached i32)
+    (local.set $detached (call $menu_detached_take (local.get $arg0)))
+    (if (local.get $detached) (then (local.set $arg0 (local.get $detached))))
     (if (call $dynamic_menu_destroy (local.get $arg0))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
       (else (i32.store offset=0 (global.get $reg_base) (call $host_menu_destroy (local.get $arg0)))))
@@ -5640,7 +5890,30 @@
   ;; EnableMenuItem(hMenu, uIDEnableItem, uEnable). MF_BYPOSITION is 0x400 and
   ;; has to be honoured: it is how MFC addresses items while walking a popup,
   ;; and treating a position as a command id put the state on the wrong item.
+  ;;
+  ;; A CreateMenu/CreatePopupMenu handle is a guest heap pointer, and it has to
+  ;; be recognised before the encoded-submenu paths below read its high word
+  ;; as a bar index. Civilization II builds every popup this way and greys
+  ;; items by position: 0x7EF0xxxx read as dropdown 0x7EEF sent
+  ;; $menu_enable_position_global half a megabyte past the bar blob for a
+  ;; child offset, and wrote a flags word wherever that pointed -- nothing in
+  ;; a fresh session, where the far heap is still zero, and a trap or quiet
+  ;; corruption once a long session had filled it.
   (func $handle_EnableMenuItem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $dynamic i32)
+    (local.set $dynamic (local.get $arg0))
+    (if (i32.eqz (call $dynamic_menu_state_w (local.get $dynamic)))
+      (then
+        (local.set $dynamic (i32.const 0))
+        (if (i32.eqz (call $menu_hwnd_from_handle (local.get $arg0)))
+          (then (local.set $dynamic (call $menu_detached_handle (local.get $arg0)))))))
+    (if (local.get $dynamic)
+      (then
+        (i32.store (global.get $reg_base) (call $dynamic_menu_enable
+          (local.get $dynamic) (local.get $arg1) (local.get $arg2)))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.and (local.get $arg2) (i32.const 0x400))
         (then (call $menu_enable_position_global
           (local.get $arg0) (local.get $arg1)
@@ -5659,19 +5932,111 @@
       (local.get $arg3) (local.get $arg4)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
-  ;; 122: CheckMenuItem(hMenu, uIDCheckItem, uCheck) → previous state
-  ;; We don't track HMENU-to-window mapping directly, so walk every
-  ;; window with a menu blob and toggle the first matching command id.
-  ;; uCheck combines MF_BYCOMMAND/MF_BYPOSITION with MF_CHECKED (8) or
-  ;; MF_UNCHECKED (0); MF_BYPOSITION isn't supported here — in practice
-  ;; callers use MF_BYCOMMAND, which is what our id-based walk matches.
+  ;; Check a canonical dynamic tree, including detached LoadMenu trees.
+  ;; By-position addresses this level only; by-command descends into popup
+  ;; children and stops at the first match. Never search unrelated menus.
+  (func $dynamic_menu_check
+        (param $hmenu i32) (param $item i32) (param $flags i32) (result i32)
+    (local $sw i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $old i32) (local $r i32)
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (if (i32.eqz (local.get $sw)) (then (return (i32.const -1))))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    (if (i32.and (local.get $flags) (i32.const 0x400))
+      (then
+        (if (i32.ge_u (local.get $item) (local.get $count))
+          (then (return (i32.const -1))))
+        (local.set $i (local.get $item))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (local.set $old (i32.load (local.get $rec)))
+      (if (i32.or
+            (i32.ne (i32.and (local.get $flags) (i32.const 0x400)) (i32.const 0))
+            (i32.and
+              (i32.eqz (i32.and (local.get $old) (i32.const 0x10)))
+              (i32.eq (i32.load offset=4 (local.get $rec)) (local.get $item))))
+        (then
+          (i32.store (local.get $rec)
+            (i32.or (i32.and (local.get $old) (i32.const -9))
+              (i32.and (local.get $flags) (i32.const 8))))
+          (call $resource_submenu_binding_refresh (local.get $hmenu))
+          (return (i32.and (local.get $old) (i32.const 8)))))
+      (if (i32.and (local.get $old) (i32.const 0x10))
+        (then
+          (local.set $r (call $dynamic_menu_check
+            (i32.load offset=12 (local.get $rec)) (local.get $item) (local.get $flags)))
+          (if (i32.ne (local.get $r) (i32.const -1))
+            (then (return (local.get $r))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const -1))
+
+  ;; EnableMenuItem on a dynamic menu: set MF_GRAYED|MF_DISABLED (0x3) of the
+  ;; item named by position (MF_BYPOSITION 0x400) or by command id, searching
+  ;; popups by id as dynamic_menu_check does. Answers the previous state bits,
+  ;; or -1 when there is no such item.
+  (func $dynamic_menu_enable
+        (param $hmenu i32) (param $item i32) (param $flags i32) (result i32)
+    (local $sw i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $old i32) (local $r i32)
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (if (i32.eqz (local.get $sw)) (then (return (i32.const -1))))
+    (local.set $count (i32.load offset=4 (local.get $sw)))
+    (if (i32.and (local.get $flags) (i32.const 0x400))
+      (then
+        (if (i32.ge_u (local.get $item) (local.get $count))
+          (then (return (i32.const -1))))
+        (local.set $i (local.get $item))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (call $dmb_item_w (local.get $sw) (local.get $i)))
+      (local.set $old (i32.load (local.get $rec)))
+      (if (i32.or
+            (i32.ne (i32.and (local.get $flags) (i32.const 0x400)) (i32.const 0))
+            (i32.and
+              (i32.eqz (i32.and (local.get $old) (i32.const 0x10)))
+              (i32.eq (i32.load offset=4 (local.get $rec)) (local.get $item))))
+        (then
+          (i32.store (local.get $rec)
+            (i32.or (i32.and (local.get $old) (i32.const -4))
+              (i32.and (local.get $flags) (i32.const 3))))
+          (call $resource_submenu_binding_refresh (local.get $hmenu))
+          (return (i32.and (local.get $old) (i32.const 3)))))
+      (if (i32.and (local.get $old) (i32.const 0x10))
+        (then
+          (local.set $r (call $dynamic_menu_enable
+            (i32.load offset=12 (local.get $rec)) (local.get $item) (local.get $flags)))
+          (if (i32.ne (local.get $r) (i32.const -1))
+            (then (return (local.get $r))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const -1))
+
+  ;; 122: CheckMenuItem(hMenu, uIDCheckItem, uCheck) → previous state.
+  ;; Attached resource blobs retain their legacy path below; dynamic and
+  ;; detached menus must update their canonical tree before popup tracking.
   (func $handle_CheckMenuItem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $dynamic i32)
+    (local.set $dynamic (local.get $arg0))
+    (if (i32.eqz (call $dynamic_menu_state_w (local.get $dynamic)))
+      (then
+        (local.set $dynamic (i32.const 0))
+        (if (i32.eqz (call $menu_hwnd_from_handle (local.get $arg0)))
+          (then (local.set $dynamic (call $menu_detached_handle (local.get $arg0)))))))
+    (if (local.get $dynamic)
+      (then
+        (i32.store (global.get $reg_base) (call $dynamic_menu_check
+          (local.get $dynamic) (local.get $arg1) (local.get $arg2)))
+        (i32.store offset=16 (global.get $reg_base)
+          (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (if (i32.and (local.get $arg2) (i32.const 0x400))
       (then (i32.store offset=0 (global.get $reg_base) (call $menu_check_position_global
         (local.get $arg0) (local.get $arg1)
         (i32.and (local.get $arg2) (i32.const 8)))))
       (else (i32.store offset=0 (global.get $reg_base) (call $menu_check_item_global
-        (local.get $arg1)
+        (local.get $arg0) (local.get $arg1)
         (i32.and (local.get $arg2) (i32.const 8))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
@@ -5692,11 +6057,47 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
+  ;; TrackPopupMenu[Ex] core. Returns 1 when the call completed with EAX set
+  ;; (the handler then pops its frame), 0 when it parked. Without TPM_RETURNCMD the popup stays open after the call returns
+  ;; TRUE and a pick is posted as WM_COMMAND. With it (0x100) the call parks on
+  ;; its thunk until the popup closes and returns the picked id, or 0 when it
+  ;; was dismissed; SimCity 2000's palette fly-outs read that id.
+  (func $menu_track_call (param $hmenu i32) (param $flags i32) (param $x i32) (param $y i32)
+        (param $hwnd i32) (result i32)
+    (local $ret i32)
+    (block $done
+      (if (i32.eq (global.get $menu_track_state) (i32.const 2))
+        (then
+          (local.set $ret (global.get $menu_track_result))
+          (global.set $menu_track_state (i32.const 0))
+          (br $done)))
+      (if (i32.eq (global.get $menu_track_state) (i32.const 1))
+        (then (call $menu_track_park) (return (i32.const 0))))
+      (local.set $ret (call $menu_track_popup_open
+        (local.get $hmenu) (local.get $flags) (local.get $x) (local.get $y) (local.get $hwnd)))
+      (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x0100))) (then (br $done)))
+      (if (i32.eqz (local.get $ret)) (then (br $done)))
+      (global.set $menu_track_result (i32.const 0))
+      (global.set $menu_track_state (i32.const 1))
+      (call $menu_track_park)
+      (return (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $ret))
+    (i32.const 1))
+
+  ;; Leave the stdcall frame on the stack and re-enter this call on the next
+  ;; slice, the net-wait park: hosts clear the yield and resume at the thunk.
+  (func $menu_track_park
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $eip (global.get $current_thunk_eip))
+    (global.set $yield_reason (i32.const 8))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $steps (i32.const 0)))
+
   ;; 138: TrackPopupMenuEx(hMenu, uFlags, x, y, hWnd, lptpm)
   (func $handle_TrackPopupMenuEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $menu_track_popup_open
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+    (if (call $menu_track_call (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (local.get $arg4))
+      (then (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))))
   )
 
   ;; 292: LoadMenuW — ordinals share the A path; named resources keep the
@@ -5727,9 +6128,9 @@
     (local $wa_esp i32) (local $hwnd i32)
     (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $hwnd (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
-    (i32.store offset=0 (global.get $reg_base) (call $menu_track_popup_open
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $hwnd)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
+    (if (call $menu_track_call (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (local.get $hwnd))
+      (then (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))))
   )
 
   ;; 620: GetMenuItemID(hMenu, nPos). A NULL id, submenu, invalid menu, or
@@ -5743,7 +6144,7 @@
   ;; the supported type/state/id/submenu/data/string fields.
   (func $handle_SetMenuItemInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_set
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (call $menu_item_info_target (local.get $arg0)) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) ;; 4 args
   )
@@ -5752,7 +6153,7 @@
   ;; mask combinations return FALSE instead of claiming untouched output.
   (func $handle_GetMenuItemInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_get
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (call $menu_item_info_target (local.get $arg0)) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) ;; 4 args
   )
@@ -5762,14 +6163,14 @@
   ;; UTF-16 label on entry and Get widens it only into the caller's buffer.
   (func $handle_SetMenuItemInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_set
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (call $menu_item_info_target (local.get $arg0)) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   (func $handle_GetMenuItemInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_get
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (call $menu_item_info_target (local.get $arg0)) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
@@ -5790,9 +6191,20 @@
   ;; 650: DrawMenuBar. Menu chrome is WAT-owned, so redraw it synchronously and
   ;; tell the renderer that the non-client surface changed.
   (func $handle_DrawMenuBar (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $src i32)
     (if (i32.eq (call $wnd_table_find (local.get $arg0)) (i32.const -1))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
+        ;; A bar built from CreateMenu/AppendMenu is a snapshot taken at
+        ;; SetMenu. Apps edit the live menus afterwards and call DrawMenuBar
+        ;; to publish the change -- Civ2 rebuilds every popup with new command
+        ;; ids, so a stale snapshot sends WM_COMMAND ids its handler no longer
+        ;; knows. Re-serialize from the live tree before repainting.
+        (local.set $src (call $menu_source_get (local.get $arg0)))
+        (if (i32.ne (local.get $src) (i32.const 0))
+          (then (if (call $dynamic_menu_state_w (local.get $src))
+            (then (drop (call $menu_set_bar_from_dynamic
+              (local.get $arg0) (local.get $src)))))))
         (call $defwndproc_do_ncpaint (local.get $arg0))
         (call $host_invalidate_frame (local.get $arg0))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
@@ -6009,7 +6421,6 @@
       (then (drop (call $wide_to_ansi (local.get $text) (local.get $ansi) (local.get $len)))))
     (local.get $ansi))
 
-  ;; 674: GetMenuState — STUB: unimplemented
   ;; GetMenuState(hMenu, uId, uFlags) → MF_* state, or -1 when the item is not
   ;; there. MF_BYPOSITION is 0x400; without it uId is a command id.
   (func $handle_GetMenuState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6079,7 +6490,7 @@
               (then (return (i32.const 0))))
             (local.set $hdc (call $gdi_menu_overlay_ensure))
             (if (i32.eqz (local.get $hdc)) (then (return (i32.const 0))))
-            (drop (call $host_gdi_select_object
+            (drop (call $gdi_native_select_object
               (local.get $hdc) (i32.const 0x30021)))
             (local.set $left
               (i32.add

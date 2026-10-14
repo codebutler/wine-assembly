@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Rank functions by self time in a V8 .cpuprofile (node --cpu-prof output).
 // Usage: node tools/cpuprof-top.js <file.cpuprofile> [top=30] [--callers=NAME]
+//        [--names] [--wasm-only] [--incl=NAME[,NAME...]] [--lines=NAME]
 const fs = require('fs');
 
 const file = process.argv[2];
@@ -89,6 +90,27 @@ if (process.argv.includes('--wasm-only')) {
   }
 }
 
+// --incl=NAME[,NAME...]: inclusive time -- every sample with a frame whose
+// label contains NAME anywhere on its stack, each sample counted once. This
+// is the "x% incl" figure: a handler plus every helper it calls (an
+// x87 island body and its $g2w/$fpu_set_exc calls, say), which self time
+// scatters across the callees.
+const inclNames = (process.argv.find(a => a.startsWith('--incl=')) || '').slice(7).split(',').filter(Boolean);
+if (inclNames.length) {
+  console.log('--- inclusive time ---');
+  for (const name of inclNames) {
+    let ms = 0;
+    for (const [id, t] of self) {
+      for (let cur = id; cur !== undefined; cur = parent.get(cur)) {
+        const n = byId.get(cur);
+        if (n && label(n).includes(name)) { ms += t; break; }
+      }
+    }
+    console.log(`${ms.toFixed(1).padStart(9)} ms  ${(100 * ms / total).toFixed(1).padStart(5)}%` +
+      `  ${(100 * ms / (wasmMs || 1)).toFixed(1).padStart(5)}% of wasm  ${name}`);
+  }
+}
+
 if (callersOf) {
   const chains = new Map();
   for (const [id, ms] of self) {
@@ -106,5 +128,54 @@ if (callersOf) {
   console.log(`--- callers of ${callersOf} ---`);
   for (const [k, ms] of [...chains].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
     console.log(`${ms.toFixed(1).padStart(9)} ms  ${k}`);
+  }
+}
+
+// --lines=NAME: where inside one function its self time goes. V8 records
+// per-line tick counts (positionTicks) on each profile node; this sums them
+// over every node whose label contains NAME -- one function reached along many
+// call paths is many nodes -- and prints the hottest source lines with their
+// text. Reach for it when a single large JS function (a command decoder, a
+// draw-record parser) tops the self-time list and its name says nothing about
+// which part is slow. Ticks are samples, converted with the run's mean sample
+// interval; a node with no positionTicks contributes nothing, so the header
+// says how much of the function's self time the line table covers.
+const linesOf = (process.argv.find(a => a.startsWith('--lines=')) || '').slice(8);
+if (linesOf) {
+  const path = require('path');
+  const msPerTick = total / (prof.samples.length || 1);
+  const lines = new Map();   // "file:line" -> ticks
+  let covered = 0, selfMs = 0;
+  const files = new Map();
+  for (const n of prof.nodes) {
+    if (!label(n).includes(linesOf)) continue;
+    selfMs += self.get(n.id) || 0;
+    const url = (n.callFrame.url || '').replace(/^file:\/\//, '');
+    for (const { line, ticks } of n.positionTicks || []) {
+      const k = `${url}:${line}`;
+      lines.set(k, (lines.get(k) || 0) + ticks);
+      covered += ticks;
+    }
+  }
+  const source = (url, line) => {
+    if (!files.has(url)) {
+      // A profile taken in a since-deleted worktree names files that are
+      // gone; fall back to the same repo-relative path in this checkout by
+      // dropping leading directories until one exists.
+      let text = null;
+      const parts = url.split('/');
+      for (let i = 0; i < parts.length && text === null; i++) {
+        const candidate = i ? parts.slice(i).join('/') : url;
+        try { text = fs.readFileSync(candidate, 'utf8').split('\n'); } catch (_) {}
+      }
+      files.set(url, text);
+    }
+    const t = files.get(url);
+    return t && t[line - 1] !== undefined ? t[line - 1].trim().slice(0, 110) : '';
+  };
+  console.log(`--- lines of ${linesOf}: ${(covered * msPerTick).toFixed(1)} of ${selfMs.toFixed(1)} ms self has line ticks ---`);
+  for (const [k, ticks] of [...lines].sort((a, b) => b[1] - a[1]).slice(0, top)) {
+    const at = k.lastIndexOf(':'), url = k.slice(0, at), line = Number(k.slice(at + 1));
+    console.log(`${(ticks * msPerTick).toFixed(1).padStart(9)} ms  ${path.basename(url)}:${line}  ${source(url, line)}`);
   }
 }

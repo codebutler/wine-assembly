@@ -1,5 +1,27 @@
 # Black & White 2 demo
 
+## Plain-keyboard IME description query (2026-10-13)
+
+User's Safari 26.4 Boat run trapped at `ImmGetDescriptionA`, EIP `0x00b52fc0`,
+return address `0x00af3512`, HKL `0x04090409`, output `0x074ff6e4`, count 256.
+Both description variants were absent from the API table. Append A/W entries
+with three stdcall arguments, sharing the existing no-context query handler:
+this machine has no installed IME, so the query returns zero and preserves
+last error and caller memory. It does not invent a keyboard-layout description.
+
+References: [Microsoft API contract](https://learn.microsoft.com/en-us/windows/win32/api/imm/nf-imm-immgetdescriptiona)
+and [Wine's Windows-conformance tests](https://github.com/wine-mirror/wine/blob/master/dlls/imm32/tests/imm32.c)
+(`test_ImmGetDescription`: ordinary HKL and null HKL return zero, last error preserved).
+Dynamic lookup, ANSI/Unicode size queries, buffer canaries and exact stack
+cleanup are covered by the existing IME tests. These aliases must change if
+the machine gains real IME layouts or contexts.
+
+Full build and IME regressions pass. Local CLI proceeds to its renderer's
+pixel-shader capability warning; that is not gameplay verification. A 60-second
+local Chrome browser run remains running without an IME trap. Evidence:
+`scratch/runs/20261013-bw2-ime/`. Safari and complete gameplay are not yet
+requalified by this fix.
+
 ## Input and extraction (2026-09-09)
 
 `test/binaries/win98-games-a-d/Black and White 2-DX9-D3D.exe` is the
@@ -8283,3 +8305,461 @@ subtracted before any of this is read as what the browser feels.
   decode measured separately, so the harness share is known.
 - Levers still queued: strip-wide shader VM + four-component sampler for the
   software path; GL vertex-declaration element types for gameplay.
+
+## Software backend after the A4R4G4B4 host decode (box 1, 2026-09-28)
+
+`lib/d3d9-host.js` now samples D3DFMT_A4R4G4B4 (004a20fa). Before that, only
+the WAT create gate admitted format 26, and the JS draw path dropped any draw
+binding it. Driven over `ctl.js` on a quiet box with
+`--d3d9-renderer=software --memory-mb=2048 --batch-size=200000
+--tick-ms-per-batch=20 --trace-eip-range=0x00526d93-0x00526d97
+--trace-eip-detail --trace-eip-stream`:
+
+- **Every screen renders, with 0 `invalid texture` lines** in the whole run:
+  the GDI splash, the Lionhead intro, the profile dialog over the menu art,
+  the main menu, and the land picker with its fire preview.
+- **Intro skip from a control session.** The first `[EIP] 0x526d93` line
+  names the intro object in ESI (`0x074d6bdc` in both runs). Then
+  `ctl.js eval` writes `[o+36] = [o+32]-1` while a step is still running.
+  After that the recipe above works unchanged: home the DI cursor, move
+  `250,277`, `di-mousedown/up`, then Enter for New Game.
+- **The picker does not take the land click, again.** At 200 and at 20
+  ms/batch, neither spaced nor back-to-back `di-mousedown/up` pairs changed
+  anything. Counters on the poll entry `0x9b0880` and the DrawPrimitive
+  return `0xa4da46` read **0 polls against 1,430 draws over 300K batches**
+  (~6.5 draws/s of wall). The game cursor stayed at `+0xc4/+0xc8 = 311,345`,
+  where the profile click left it. So the input manager has not polled since
+  the picker came up. That is the not-polling state described in "The land
+  picker does not ignore the mouse", this time *before* any land click, and
+  it did not resume within ~3 min of wall.
+- A snapshot showing yield 16 with its one bridge request `done:true` is not
+  a stall. Wrapping `ctx.waitD3DRender` showed tokens advancing, about one
+  per 17 batches.
+
+### CORRECTION: the picker was the land build, and the flyover renders (same run)
+
+The "does not take the land click" bullet above is wrong. In that state the
+game was **building the land**, not ignoring input. Enter on New Game
+starts the build. Then:
+
+- Polls at `0x9b0880` resume at about batch 1.24M, ~750K batches (~9 min of
+  wall) after the picker appeared.
+- The intro flyover of the demo island renders correctly on the software
+  backend: terrain, trees, the ocean, buildings, the light shafts, and the
+  landing glow.
+- The bright ellipse in the flyover frames is the landing-spot glow. It is
+  not missing water.
+- The flyover is not skipped by `keydown:27` or `di-keydown:27` (held for
+  20K batches). It advances at ~12 input polls per 100K batches, roughly one
+  game frame per 10 s of wall. It was still playing at batch 1.9M, so
+  gameplay was not reached in this session.
+
+**Where the time goes** (box 1; main-thread V8 CPU profiles through
+`ctl.js eval` + inspector; `top -H` per thread):
+
+| phase | main thread | render worker | top of main profile |
+|---|---|---|---|
+| land build (batches ~0.5M) | 100% | ~72% | guest code: memory translation ~16% (`$guest_page_translate` + `$g2w` + `$gl32/$gs32` + `$page_resolve`; the 2 GB sparse heap lives outside the direct window), `$th_uop_enter` 5.8% + `$bx_hot_bump` 3.5%, `$run` 8.9% |
+| flyover (batch ~1.9M) | 100% CPU, but **52% idle** in the V8 profile | ~51% | the same guest mix in the other half |
+
+In the flyover, main and the raster worker each run about half the time,
+and the idle half is main waiting on the worker. So the software device
+serializes: main blocks on the frame the worker is rasterizing, instead of
+overlapping guest work with it. That makes the flyover gap a pipelining
+question before it is a raster-speed question. During the land build the
+worker is also still rasterizing every picker/loading frame at full cost
+(~6.5 draws/s of wall) while main is CPU-bound.
+
+## Normal-route revalidation on persistent-box migration (2026-10-09)
+
+The September14 drive52 notes above already prove an interactive scene and
+camera input. That historical route used the diagnostic intro finish-frame
+write; do not describe it as either "no gameplay ever" or proof of a complete
+ordinary launch. The current target is registered browser launch through
+normal keyboard/pointer input, with no guest-memory intro skip.
+
+Current fixture preflight has364 manifest companions plus the EXE/DLLs and
+manifest (366 unique archive paths,926680214 bytes). A bounded streaming
+transfer sends only those files to fresh no-env bx_75agndxm, avoiding a bulk
+archive on the nearly-full persistent disk. Files are rechecked against their
+manifest sizes and hashed before build. Source baseline ff0c1f07b,903 pins.
+Preparation is in `scratch/bw2-normal-route-20261009`; no runtime result yet.
+Declared bounds: transfer1800s, build900s, browser5400s, retrieval/cleanup300s;
+boat expires06:16:08.841Z. Long silent land loads are not evidence of a hang.
+
+### 2026-10-09 current-main first-slice exit
+
+Source ff0c1f07b builds successfully;903 source pins and366 fixtures verified.
+Original browser attempt exits before first window. Supplemental stdole2.tlb,
+msvcrt.dll and comctl32.dll exist locally and were subsequently transferred;
+DLL requests need binaries/ mapped to test/binaries/, not only the latter
+physical paths. Correcting that alias loads5 DLLs instead of3, but the same
+early exit remains. Standard local shlwapi/shell32/ole32 DLL files are absent,
+so built-in handlers remain the fallback; this is not proven causal.
+
+The bounded owning-Worker command observer confirms memory2147483648 bytes,
+load_pe entryAD9CA3/ESP074FFFFC, preserved through loadDlls. First slice runs
+6 blocks then returns EIP0, ESP074FFEE0 with stack returnAD9CC9. Original
+AD9CC3 is call[C122AC], the GetVersionExA import. No owning exit/fault import
+record occurs. NULL IAT is a hypothesis: next capture C122AC across load_pe,
+loadDlls and first slice, plus target bytes. Do not mistake the host zero
+register summary for owning registers or call this gameplay.
+
+Sealed runs:20261009T0326Z-black-white2-launch (25 artifacts) and
+20261009T0329Z-black-white2-startup-trace (68 artifacts). Private JS observers
+read only; runtime wasm SHA bb9d6e9621a06efb5498e2903fc0a3185967ac76cd33fc76b96c11d714c0a387.
+All four Chrome runs closed normally; temporary bx_75agndxm retained,
+expiry06:16:08Z. No native or browser processes on the persistent host.
+
+### 2026-10-09 Worker oversized-PE staging fix
+
+IAT capture proves C122AC and neighboring entries zero immediately after
+load_pe, unchanged by DLL loading. Worker host loadPe stages only8MiB of
+the20,656,128byte EXE. Cooperative stageAndLoadPe already maps section tails
+before WAT import loading. Factored stagePe for reuse by the Worker host,
+with placement getters read from owning Worker exports. No guest patch.
+
+Extended existing process-boot regression exercises the actual async Worker
+loadPe method, asserting tail bytes before load_pe; baseline fails zero vs
+expected bytes. Candidate passes that plus PE SFX overlay and oversized NE
+policies, existing process-boot yield suite, large-DLL suite and canonical build.
+Candidate uninstrumented browser creates LIONHEAD window; original stopped
+within6blocks without a window. Screen is still black at first capture and
+this does not qualify gameplay. Browser189048 remains live on bx_75agndxm
+with immutable05:05:50Z deadline. Evidence snapshot:
+20261009T0335Z-black-white2-staging-fix (91hashed artifacts, outcome running).
+
+### Candidate intro follow-up
+
+Current candidate reaches the visible Lionhead particle intro. Normal click
+and Escape events were delivered; no guest-memory skip. Earlier claims of
+an infinite attract loop are not sufficient: notes above establish normal
+frame-count completion at1787. Keep waiting within the declared90minute
+run budget rather than patching its finish counter.
+
+A30.048second HUD sample counts25 guest presentation events. This is an
+intro-only proxy (not gameplay/logical FPS), collected while the DisciplesII
+installer was transferring, so it is not an isolated performance benchmark.
+Raw31samples: scratch/runs/20261009T0335Z-black-white2-staging-fix/evidence/browser-candidate/intro-present-rate.json.
+A bounded capture monitor requests a screenshot every10minutes and stops
+after browser189048 terminates or its05:05:50Z deadline; no input automation.
+
+### Ordinary intro completion and relative input (2026-10-09)
+
+The same browser reached the profile dialog by 04:10:55Z, without changing
+guest memory or skipping the intro. Holding Enter for three seconds accepted
+the profile and reached the main menu. Text is visibly garbled. Short key
+pulses and pointer clicks did not reliably activate controls.
+
+The registry omitted `relativeMouse`, despite the game's DirectInput software
+cursor. A live host-only opt-in (`runningApps` entry's `relativeMouse=true`)
+followed by a trusted click obtained pointer lock and reached the burning-village
+land picker. `relative-capture.json` records the prior false setting, confirmed
+pointer lock, and unchanged 1000x800 viewport. The registry now opts in through
+the existing shared relative-input path; its JS regression and syntax check pass.
+This validates live input capture, not a fresh launch with the registry change
+or completed gameplay. Held Enter at the land picker did not advance it.
+
+Evidence remains `scratch/runs/20261009T0335Z-black-white2-staging-fix`:
+`interval-3`, `held-enter`, `relative-capture`, and `land-enter` images and
+receipts under `evidence/browser-candidate/`, with exact host-input scripts.
+The browser remains under its original 05:05:50Z deadline. Next: ordinary
+land selection and gameplay; preserve the garbled-font and input limitations.
+
+Read-only samples at 04:17–04:19Z identify the original static input manager
+at guest `0x1d733e8` through the owning Worker's `guest_to_wasm` export.
+Cursor fields remain `(-1,238)`. Ten trusted pointer-lock movement events of
+`(2,2)` increment the mapped `DI_MOUSE_INPUT_STATE` pending deltas from
+`(130,139)` to `(150,159)`, while 25 presentations occur. Thus browser input
+delivery is working, but this motion was not consumed during that sample.
+No further input is queued. Earlier notes describe a 36-minute land load with
+no input polls; this is a possible explanation, not a proven classification of
+the current run. Interval-4 at 04:20:55Z still shows the land preview.
+Evidence: `land-progress-sample`, `land-aim-step`, `land-motion-delivery`, and
+`interval-4` under the same run's `evidence/browser-candidate/` directory.
+
+### Normal-route island flyover and remaining rejected draws (2026-10-09)
+
+Interval-5 at 04:30:55Z shows the 3D island flyover. No additional land click
+or intro/cinematic memory write was needed: New Game had already started the
+land build. The right edge retains old menu pixels. Player control is not yet
+verified, and the original browser deadline remains 05:05:50Z.
+
+Seven read-only samples at 04:34:37–04:35:07Z show 890 additional render queue
+completions and two presentation events. The queue has no active error, but
+the bridge retains `D3D9 FVF 0 is not implemented`. A separate bounded
+30-second callback observer confirms eight *new* such errors, so this is not
+just a stale error string. Callback arguments, return value and receiver were
+forwarded, and the hook was restored after observation.
+
+A further bounded capture records four failed draw descriptors: opcode
+`0x30001`, triangle-list counts 630/126, index format101, vertex-shader pointer
+nonzero, but pixel shader/declaration/FVF all zero. Main owning-Worker
+declaration rejection count/mask and both rejection slots are zero. The old
+multi-stream/element-type fixes are present; these samples do not identify the
+producer of the absent binding or prove the visual impact of the rejected
+draws. Do not silently accept the invalid draw or reapply the historical fix.
+
+Evidence in the same run: `flyover-render-progress`, `flyover-render-errors`,
+`flyover-fvf-state` JSON/images and their exact scripts. Next is ordinary
+control verification after the cinematic. The rendering follow-up needs the
+binding producer, not another screenshot or an assumed declaration format.
+
+## ps_1_4 public: the vine shader latched the render queue (2026-10-10, boat A/B)
+
+Boat bx_3vevpk6s, `tools/black-white-software-probe.js --skip-intro
+--control-stdin --seconds=2900`, base arm = 03923630e~1 (`--wasm`), fix arm =
+03923630e (ps_1_4 public). Feeder by wall clock: refusal counters every 60 s,
+profile OK + Enter (New Game) at 450 s. Run `20261010T1445Z-bw2-land-gameplay-boat`.
+
+- **Refusals:** 68 (fix) vs 72 (base) by the profile dialog, as before; after
+  the land build and flyover, **125 (fix) vs 131 (base)**. That is six ps_1_4
+  shaders accepted, not thirteen. The first refused word on both is still
+  `0xffff0200` (ps_2_0) and `0xfffe0200` (vs_2_0).
+- **Regression:** at about 1072 s, during the land flyover, one fix-arm draw failed
+  `D3D9 software: shader exceeds native VM implementation`. The command
+  queue latches its first error (`lib/d3d-command-stream.js` `_retire` ->
+  `_cancelWaiting`), so every later command failed (1.37 M failures) and
+  every capture from 1083 s on has the same md5. The base arm went on into the tutorial (village,
+  god-hand beam) with 0 failures.
+- **Cause:** the effects ship compiled bytecode. `Data/effects/*.sdv` holds 42
+  version-token hits. Replaying each one through `d3d_shader_ir_compile` and
+  then `d3d_shader_vm_compile` found exactly one that the IR accepts but the VM refuses:
+  `Aligned_Vines.sdv` +0x5fb4, ps_1_4, 11 records, IR flags 2. Its coissue
+  pairs are `mul r3.a / +mad r0.rgb` and `add r2.a / +mul_x2 r0.rgb`. The VM's
+  pair rule (`$d3d_shader_vm_pair_destination`) is the ps_1_1..1_3 file,
+  r0/r1 and t0..t3. ps_1_4 pairs may write any temp r0..r5, and the
+  VM's execution already evaluates both packets before committing either, for
+  any register. The fix adds `$d3d_shader_vm_pair_destination14`.
+  CreatePixelShader never runs the VM, so the only symptom was at draw time.
+- The 43 shaders bound after the latch (20 ps_1_1, 22 vs_1_1, 1 ps_1_4) all
+  compile in the live process, so the latch was not a heap failure.
+- **Still refused, and plausibly too strict:** `grass.sdv` +0x5f84 (ps_1_4)
+  fails scan14 error 18 at word 86, a coissued `mul` whose pair reads four
+  distinct temps (r2, r4 | r1, r0). The rule (`09af` ~345) caps a pair at three
+  temps and three constants. fxc emitted this shader, so D3D's rule may be per
+  instruction. It needs a source before it is relaxed. The other four `.sdv`
+  ps_1_4 "refusals" are CTAB-comment false positives (0x14 after a real
+  shader, or garbage tokens within ten words).
+- Scanner and replay scripts: the run folder's `scripts/`. Drawn shaders were
+  captured live by wrapping `ctx.d3d9Bridge._submit` from an eval sent to the
+  probe's stdin pipe (`/proc/<pid>/fd/0`).
+
+### Re-run past the flyover: the fog gate, then the raster budget (2026-10-10)
+
+Boat bx_m6vzd3ud, same probe and route (`bw2-run6.sh`, plus a hook that records
+the first failed command). Run `20261010T1608Z-bw2-65e5905e8-fog-boat`.
+
+- **65e5905e8 alone:** the vine shader compiles, but the same draw at about
+  1073 s fails one gate later, on
+  `programmed pixel fog requires PS1.1-1.3`. The vine pass runs with vertex fog
+  (DRAW: ps_1_4 with 11 records, vs_1_1 with 29 records, which writes oFog), and three version lists
+  (`d3d9-software-backend.js`, `d3d9-backend.js`, `d3d9-fixed.js`) predated
+  public ps_1_4. ps_1_x fog is the fixed blend after the shader, applied
+  outside it on both backends, so 229fffacf adds 1.4 to the lists.
+- **With the fog fix:** 0 failed commands through the flyover and into the tutorial.
+  Every 120 s capture from 1081 s to 2163 s differs (village, god-hand beam,
+  camera moving over the island). Refusals: 125, all ps_2_0/vs_2_0.
+- **Then the raster budget:** at about 2214 s the queue latches
+  `native raster allocation budget exceeded`. That is the same failure the parent build hit at about 2150 s, so it
+  is independent of ps_1_4 and is now the first gameplay blocker on the software
+  backend. w6's 3a908f97b (raster budget streaming) is the candidate fix; this
+  run is its control. Until a run gets past it, camera input and player control are not
+  verified.
+
+### The tutorial's advisor dialogue outlasts a 3500 s run (2026-10-10)
+
+Boat bx_wn9q2edy, 47aafe16e, the same probe route, two arms (plain, and Esc
+three times at 2300 s). Run `20261010T1800Z-bw2-camera-after-dialogue-boat`.
+
+- Both advisors are still talking at 2600, 3050 and 3500 s in both arms. Esc
+  (WM key + DIK_ESCAPE) does not skip the dialogue.
+- During the dialogue the camera ignores Up (WM keydown 38 + DirectInput
+  DIK_UP held 40 s). The frame changes no more than in the 40 s idle windows
+  around it, and the terrain stays put while the advisors and villagers
+  animate. w6's 2900 s key test fell in the same scene.
+- So a camera test needs the dialogue to END, and that probably waits on a
+  player action, not on time. Find what the tutorial script waits for
+  before spending another long boat run on the key test.
+- Rendering stayed healthy on main: 0 failed commands in 725 samples per arm,
+  124 refusals.
+
+## The Land3 intro cinema: what it is and why it seems endless (2026-10-10)
+
+**Static.** The "advisor dialogue" is Land3's scripted intro cinema, script
+`Land3Intro` in `Scripts/BW2/Land3.chl` (LHVM v12, header `LHVM`/0x0c).
+`Data/Text/bw2text.bin` is a list of ASCII `BW2T_...` ids, each followed by
+NUL-terminated UTF-16LE text (`scripts/bw2text-dump.js` in the run folder).
+The intro is `BW2T_SCRIPT_03FINAL_ADVISORS_NEW_INTRO_10..70`:
+- an old Greek settlement;
+- Town Center, Storehouse and field;
+- "The green ring you see is the extent of your influence".
+
+Then `ADVISORS_INTRO_10..70`:
+- "Here are the people we saved! They're exiting the Portal!";
+- ... "75 people at least" ...;
+- ending in **"When you're ready to learn how to feed your people, click on
+  the Gold Scroll over the field, Leader."**
+
+That click starts `Land3Tutorials` (`ADVISORS_TUT_10`: "First, though, the
+survivors require food"). Each line is `say` + `wait until read`
+(ScriptLibraryR tokens T_SAY/T_READ). Cinemas are skippable only when the
+script enables it (`ENABLE_CINEMA_INTERRUBTIBLE`, `IS_CINEMA_SKIPPED`
+natives). The "refresher about how to move like a god?" line belongs to the
+full game's land 1 (`SCRIPT_01FINAL_HANDTUTORIAL_10`), not this demo.
+
+**Dynamic** (boat bx_m5u6ay78, 38c329897, run
+`20261010T1939Z-bw2-land3-intro-boat`):
+- **Not stuck, slow.** The 120 s captures follow the script order: the
+  village and green ring at about 1100-2040 s, the portal villagers from about
+  2250 s. That is about 2-5 min of wall time per line, with about 2.7
+  presents/s on the software D3D9 path. The intro was still running at 3420 s.
+  At this pace it ends somewhere past 4000 s.
+- **Audio is fine.** One 21504 B looping DirectSound buffer (flags 0x18000 =
+  GETCURRENTPOSITION2|GLOBALFOCUS, 44.1 kHz stereo 16-bit) that the game mixes
+  into itself, with no notifications. The host cursor (`ctx._voices.getPos`)
+  advances exactly at real-time rate.
+- **No skip.** Action click, right click, Space and Enter during the cinema
+  change nothing (Esc tested earlier too).
+- **Camera locked.** In the cinema, Up (WM key + DIK_UP) is
+  indistinguishable from idle, as expected.
+- **Next.** Reaching the Gold Scroll needs the intro to finish: either a
+  longer boat run (about 2 h, then click the scroll over the field near the
+  view centre and run the camera test), or a cheaper frame. Each frame renders
+  a 1280x960 target; a lower in-game resolution should multiply the game's
+  pace.
+
+## Software D3D9 render worker idled on setTimeout(0) (2026-10-11)
+
+The world crawled at about 0.1 fps because the main thread spent about 90% of wall time
+parked on the software render worker. That worker was only about 40% busy (top -H:
+WorkerThread 40.6%, main 2.4%; run `20261011T0030Z-bw2-render-park-ab-boat`).
+
+- **What parks main:** draws. About 130 parks/min took ~58 s of every 60, each time
+  the 32-draw in-flight window was full; the byte watermark fired only ~10/min.
+  Raising the cap to 128 killed the worker ("render worker exited", 2.4 GB RES).
+- **Why the worker idled:** `drawAsync` (lib/d3d9-software-backend.js) slices a
+  draw into ~4 ms native runs and rescheduled every slice, including each draw's
+  first, with `setTimeout(cb, 0)`. That is >=1 ms in Node and 4 ms once a browser
+  clamps nested timers.
+- **Fix:** the backend's `yieldTask` (setImmediate / MessageChannel), used by
+  `drawAsync`'s default and both render workers.
+- **Results:** in-world A/B on one boat, both arms in parallel, same inputs
+  (run `20261011T0127Z-bw2-render-yield-ab-boat`, 1100-1500 s):
+  - draws/min: 2771 -> 3678 (+32.7%);
+  - presents/min: 230.7 -> 306.2 (+32.7%);
+  - render WorkerThread: 76.8% -> 99.9% CPU;
+  - 0 failures in both arms.
+  That window ran about 12 draws per present; the heavier ~670-draw world frames
+  are what the next run measures.
+- **Local microbench**, 300 draws through drawAsync: 7.3-7.5 -> 4.8-5.2 ms/draw.
+
+## 2026-10-11: route to free play, and the camera does not move
+
+Two live runs on software D3D9, CLI probe with live input
+(`black-white-software-probe.js --skip-intro --control-stdin`):
+- `scratch/runs/20261011T0551Z-bw2-gold-scroll-camera-boat` on 514b36f38;
+- `20261011T1310Z-bw2-speech-camera-boat` on c8a2f25c3.
+
+**Route.**
+- **Boot inputs at 450 s:** `relmousemove:-2000:-2000`, `relmousemove:250:277`, `di-mousedown:1`/`di-mouseup:1`, then `keydown:13`.
+- **The in-world Land3 intro cannot be skipped.** Escape held 3 s (window key plus `di-keydown:27`) and a left click at ~1600 s change nothing.
+- **Intro end:** it runs to ~4200-4560 s, then the objective "Click on the Gold Scroll" appears.
+- **Moving the hand:** `relmousemove` moves it at about 0.65 capture px per unit in x and 1:1 in y. From the boot position, `relmousemove:205:-77` puts it on the scroll at about (405,225).
+- **After the click:** `di-mousedown:1`/`di-mouseup:1` consumes the scroll and a scripted camera pans over the field and storehouse.
+- **By ~5400 s:** "Re-establish this village", a food counter, and the good advisor's Field tooltip.
+- **By ~6300 s:** the advisor is gone and villagers walk through the village. This is free play.
+- The game image fills only the top-left 520x390 of the 640x480 capture.
+
+**The camera never moves.** These inputs leave the land pixel-identical while the hand cursor tracks the mouse, both during the Field tutorial and after it:
+- Left (37) held 5-6 s;
+- W (87) held 5 s;
+- held-left land drags (`di-mousedown:1`, three `relmousemove` steps, `di-mouseup:1`).
+
+Not yet tried:
+- right or middle button drags, or both buttons together;
+- the mouse wheel;
+- what the camera code actually polls. Trace `GetDeviceState`/`GetDeviceData` during a drag, and compare with what `lib/renderer-input.js` delivers for `di-mouse*` and `relmousemove`.
+
+## 2026-10-11: what the camera input path reads, and the gate in front of it
+
+**The input census** (bx_anbwyget, runs/20261011T1500Z-bw2-camera-input-trace-boat):
+- There is one DirectInput device, the mouse, read through buffered `GetDeviceData` (20-byte records).
+- There is no DirectInput keyboard. Keys come from `GetAsyncKeyState`.
+- Our DI mouse used to lack the wheel and the middle button. It has had both since 009c8ff11.
+
+**The gated trace** (bx_msdh4rte, runs/20261011T1707Z-bw2-gated-route-boat). The trace ran with `--trace-api-paused` and was switched on at about 4400 s, at the end of the Land3 intro:
+- The only call is `GetDeviceData`, once per game frame from ret `0x009b0933`.
+- There is no `GetAsyncKeyState` or `GetDeviceState` in that phase.
+- Wheel -360, a middle drag, a right drag and Left held all left the land unmoved.
+
+**Static: the record loop in the poll `0x9b0880`.**
+- The loop processes records while the *next record's `dwTimeStamp` is non-zero*. The buffer is zeroed first and the returned count is not used.
+- The loop runs only if `[0x17792d4] != 0`.
+- `dwOfs` goes through a byte map plus a jump table:
+
+| dwOfs | handling |
+|---|---|
+| 0, 4 | X / Y, scaled by `[0x17792c0]` and added to `+0xcc` / `+0xd0` |
+| 8 | wheel: kept only when 40 < \|v\| < 10000, added to manager `+0x10c` (absolute `0x1d734f4`) |
+| 12 / 13 / 14 | left / right / middle |
+
+Button records go through `0x9afe60(bits)`:
+
+| button | press | double-click (gap < `[0x1d7a734]`) | release |
+|---|---|---|---|
+| left | 1 | 0x10 | 4 |
+| right | 2 | 0x20 | 8 |
+| middle | 0x40 | 0 | 0x80 |
+
+Our records, stamped with guest ticks, satisfy all of this.
+
+**Static: the consumer at `0x60ed90`.**
+- It turns pending bits in `[0x1d73544]` into bound actions: bit 1 → action 1, bit 2 → action 5, bit 0x40 → action 2.
+- It turns the wheel into action 3 (positive) or action 4 (negative).
+- Each goes through `0x611fa0(0, 0, action)`, the **action-binding dispatcher**, run with `ecx = [0x19504a8]`.
+- Only when it returns 1 is the wheel added to `[0x19a30e0]`, which looks like the zoom accumulator, and the pending bit cleared.
+
+**Static: `0x611fa0` with a == b == 0.**
+- It returns 0 at once when **`[0x18ed55c]` is non-zero**.
+- Otherwise it maps the action through `0x64c250` (the binding table) and runs it via `0x611830`.
+- A sibling flag, `[0x18ed558]`, gates the key path (a != 0) the same way.
+
+So a set `[0x18ed55c]` disables every mouse-bound action, which would explain a camera that ignores input while the cursor still tracks. It has not been read live yet.
+
+**Next boat:** read `[0x18ed55c]`, `[0x18ed558]` and `[0x19a30e0]` live (eval `guest_read32`):
+- during the intro;
+- in the Field tutorial at about 5400 s;
+- in free play;
+- around a `di-wheel`;
+- with `--count` on `0x60ee43` / `0x60ee6b` (zoom applied) and `0x60ee38` (dispatcher refused).
+
+If the flag clears in free play and the wheel then moves `[0x19a30e0]` and the view, the camera works and was only script-locked.
+
+### Answer (bx_yv8w7tcv, runs/20261011T1840Z-bw2-lock-flag-boat): the intro owns the camera
+
+We read the game live: a gate census every 60 s through `eval`, plus short bursts of `exports.set_count` hit counters.
+
+**[0x18ed55c] is not the lock.** It is set only in the front end (120-420 s) and is 0 from 483 s on, including in-world during the intro.
+
+**During the Land3 intro** (~2200-2500 s), every input stage works:
+- the poll's wheel case `0x9b0a28` fires;
+- `0x60ed90` runs every frame;
+- the dispatcher accepts (`0x60ee55`);
+- `[0x19a30e0]` follows `di-wheel` exactly (0 → -240 → 960).
+
+But nothing reads the value:
+- the camera-controller virtual method **`0x519390`** (vtable slot `0xc4630c`; its zoom read-and-clear is at `0x5195d9`) has **0 entries**;
+- so does the other reader at `0x511e66`.
+
+A script camera owns the view.
+
+**After the intro**, from the "Click on the Gold Scroll" objective at ~4200 s:
+- `0x519390` runs every frame. It passes both early gates: `0x663740() == 0`, and the vcall `[+0x3b8]` returns non-zero; the early exit `0x51a132` stays at 0.
+- It consumed the parked 960.
+- `di-wheel` visibly zooms (w00 → w02).
+- Middle and left drags also move the view (s02/s03, t01 → t02).
+
+So the camera works with our DirectInput mouse. The earlier "camera never moves" runs tested inside the intro, and some ran before 009c8ff11, when the wheel did not exist.
+
+Cursor note: the game cursor (`0x1d733e8+0xc4/+0xc8`) reads (311,345) while the hand is drawn at about (258,295) in the 640x480 capture, a scale of about 1.2 for the 800x600 back buffer.

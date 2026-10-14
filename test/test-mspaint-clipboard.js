@@ -105,9 +105,12 @@ function countDark(image, box) {
     [`Paste restored the selected line (${pastedDark} dark px)`, pastedDark === drawnDark],
     ['Paint published an OLE clipboard object',
       dibDumps.length === 2 && dibDumps.every(line => /oleObject=0x[1-9a-f][0-9a-f]*/.test(line))],
+    // count is CountClipboardFormats. Since 92929dbb7 (WordPad Paste) the OLE
+    // data object counts as clipboard content beside the rendered CF_DIB, as on
+    // Windows, where OleSetClipboard leaves several formats; it is not 1.
     ['CF_DIB remained available through Cut and Paste',
       dibDumps.length === 2 && dibDumps.every(line =>
-        /count=1/.test(line) && /availDib=1/.test(line) && /dibHandle=0x[1-9a-f][0-9a-f]*/.test(line))],
+        /count=[1-9]/.test(line) && /availDib=1/.test(line) && /dibHandle=0x[1-9a-f][0-9a-f]*/.test(line))],
     ['Paste retrieved CF_DIB through the native clipboard API',
       /GetClipboardData\(0x00000008\)/.test(output)],
     ['no clipboard error dialog, crash, or unimplemented API',

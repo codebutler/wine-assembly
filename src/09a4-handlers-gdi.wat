@@ -5,7 +5,7 @@
   ;; 856: GetCurrentObject(hdc, uObjectType) → HGDIOBJ
   ;; OBJ_PEN=1, OBJ_BRUSH=2, OBJ_PAL=5, OBJ_FONT=6, OBJ_BITMAP=7
   (func $handle_GetCurrentObject (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_get_current_object (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_get_current_object (local.get $arg0) (local.get $arg1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 145: SelectObject(hdc, hObject) — canonical selection is WAT-owned.
@@ -120,15 +120,19 @@
   ;; the WAT bitmap arena, then let JS create the derived Canvas presentation.
   (func $handle_CreateCompatibleBitmap (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $w i32) (local $h i32) (local $size64 i64) (local $bits_ga i32) (local $handle i32) (local $bits_wa i32)
+    (local $bpp i32) (local $stride i32) (local $palette i32)
     (local.set $w (local.get $arg1))
     (local.set $h (local.get $arg2))
     ;; Preserve the emulator's established zero/negative dimension behavior.
     (if (i32.le_s (local.get $w) (i32.const 0)) (then (local.set $w (i32.const 1))))
     (if (i32.le_s (local.get $h) (i32.const 0)) (then (local.set $h (i32.const 1))))
-    (local.set $size64
-      (i64.mul
-        (i64.mul (i64.extend_i32_u (local.get $w)) (i64.extend_i32_u (local.get $h)))
-        (i64.const 4)))
+    (local.set $bpp (call $gdi_window_bpp))
+    (local.set $stride (i32.and (i32.add (i32.mul (local.get $w)
+      (i32.shr_u (local.get $bpp) (i32.const 3))) (i32.const 3)) (i32.const -4)))
+    (if (i32.eq (local.get $bpp) (i32.const 8))
+      (then (local.set $palette (call $gdi_system_palette))))
+    (local.set $size64 (i64.mul (i64.extend_i32_u (local.get $stride))
+      (i64.extend_i32_u (local.get $h))))
     (if (i64.gt_u (local.get $size64) (i64.extend_i32_u (global.get $DIB_BACKING_BASE_SIZE)))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
@@ -141,9 +145,9 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $bits_wa (call $g2w (local.get $bits_ga))) (local.set $handle (call $gdi_bitmap_alloc
-      (local.get $w) (local.get $h) (i32.const 32) (i32.const 6)
-      (local.get $bits_wa) (i32.mul (local.get $w) (i32.const 4))
-      (i32.const 0) (i32.const 0)))
+      (local.get $w) (local.get $h) (local.get $bpp) (i32.const 6)
+      (local.get $bits_wa) (local.get $stride)
+      (local.get $palette) (select (i32.const 256) (i32.const 0) (i32.eq (local.get $bpp) (i32.const 8)))))
     (if (i32.eqz (local.get $handle))
       (then (call $dib_free_wasm (local.get $bits_wa))))
     (i32.store offset=0 (global.get $reg_base) (local.get $handle))
@@ -315,7 +319,7 @@
           (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))) (i32.const 0)))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
         (return)))
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_arc
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_arc
     (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
     (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
@@ -449,7 +453,7 @@
 
   ;; 161: TextOutA — hdc(arg0), x(arg1), y(arg2), lpString(arg3), nCount(arg4)
   (func $handle_TextOutA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_text_out
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_text_out
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (call $g2w (local.get $arg3)) (local.get $arg4) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (return)
@@ -471,10 +475,32 @@
 
   ;; 163: GetObjectA
   (func $handle_GetObjectA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $record i32) (local $type i32) (local $dest i32)
+    (local $record i32) (local $type i32) (local $dest i32) (local $len i32)
     (local.set $record (call $gdi_object_record (local.get $arg0)))
     (local.set $type (call $gdi_object_type (local.get $arg0)))
-    (if (local.get $arg2) (then (local.set $dest (call $g2w (local.get $arg2)))))
+    ;; The caller's buffer may straddle two sparsely-backed guest pages, so the
+    ;; writers below get a gathered copy that is put back afterwards. Nothing
+    ;; here writes past the largest object struct, so the span is clamped.
+    (if (local.get $arg2)
+      (then
+        (local.set $len (select (local.get $arg1) (i32.const 256)
+          (i32.lt_u (local.get $arg1) (i32.const 256))))
+        (local.set $dest (call $guest_span_in (local.get $arg2) (local.get $len)))))
+    ;; A palette's object is one WORD, its entry count: MFC's
+    ;; CPalette::GetEntryCount is GetObject(hpal, sizeof(WORD), &n).
+    (if (i32.or (i32.eq (local.get $arg0) (i32.const 0x3001F))
+                (i32.ne (call $gdi_palette_record (local.get $arg0)) (i32.const 0)))
+      (then
+        (if (i32.eqz (local.get $arg2))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 2)))
+          (else (if (i32.ge_u (local.get $arg1) (i32.const 2))
+            (then
+              (i32.store16 (local.get $dest) (call $gdi_palette_count (local.get $arg0)))
+              (i32.store offset=0 (global.get $reg_base) (i32.const 2)))
+            (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+        (call $guest_span_writeback (local.get $arg2) (local.get $dest) (local.get $len))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (if (i32.eq (local.get $type) (i32.const 4))
       (then (i32.store offset=0 (global.get $reg_base) (call $gdi_font_write_logfont (local.get $arg0)
         (local.get $dest)
@@ -485,16 +511,20 @@
           (local.get $arg0) (local.get $dest) (local.get $arg1))))
         (else (i32.store offset=0 (global.get $reg_base) (call $gdi_bitmap_write_object
           (local.get $record) (local.get $dest) (local.get $arg1)))))))
+    (call $guest_span_writeback (local.get $arg2) (local.get $dest) (local.get $len))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 164: GetTextMetricsA — queries host for font-aware metrics
   (func $handle_GetTextMetricsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $w i32) (local $packed i32) (local $h i32) (local $aveW i32)
-    (local.set $w (call $g2w (local.get $arg1)))
+    ;; Every field below is written through $w, so the buffer is gathered once
+    ;; and put back whole — a TEXTMETRICA astride two sparse pages included.
+    (local.set $w (call $guest_span_in (local.get $arg1) (i32.const 56)))
     (if (call $gdi_bitmap_text_metrics_write
           (local.get $arg0) (local.get $w) (i32.const 0))
       (then
+        (call $guest_span_writeback (local.get $arg1) (local.get $w) (i32.const 56))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
@@ -502,16 +532,14 @@
     (local.set $h (i32.and (local.get $packed) (i32.const 0xFFFF)))
     (local.set $aveW (i32.shr_u (local.get $packed) (i32.const 16)))
     (call $zero_memory (local.get $w) (i32.const 56))
-    (call $gs32 (local.get $arg1) (local.get $h))                                    ;; tmHeight
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 4))
-      (i32.sub (local.get $h) (i32.const 3)))                                        ;; tmAscent ~= h-3
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 8)) (i32.const 3))             ;; tmDescent = 3
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 20)) (local.get $aveW))        ;; tmAveCharWidth
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 24))
-      (i32.mul (local.get $aveW) (i32.const 2)))                                     ;; tmMaxCharWidth ~= 2*ave
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 28)) (i32.const 400))          ;; tmWeight = FW_NORMAL
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 36)) (i32.const 96))           ;; tmDigitizedAspectX
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 40)) (i32.const 96))           ;; tmDigitizedAspectY
+    (i32.store offset=0 (local.get $w) (local.get $h))                               ;; tmHeight
+    (i32.store offset=4 (local.get $w) (i32.sub (local.get $h) (i32.const 3)))       ;; tmAscent ~= h-3
+    (i32.store offset=8 (local.get $w) (i32.const 3))                                ;; tmDescent = 3
+    (i32.store offset=20 (local.get $w) (local.get $aveW))                           ;; tmAveCharWidth
+    (i32.store offset=24 (local.get $w) (i32.mul (local.get $aveW) (i32.const 2)))   ;; tmMaxCharWidth ~= 2*ave
+    (i32.store offset=28 (local.get $w) (i32.const 400))                             ;; tmWeight = FW_NORMAL
+    (i32.store offset=36 (local.get $w) (i32.const 96))                              ;; tmDigitizedAspectX
+    (i32.store offset=40 (local.get $w) (i32.const 96))                              ;; tmDigitizedAspectY
     ;; TEXTMETRICA byte fields start at +44 (after tmDigitizedAspectY at +40)
     (i32.store8 (i32.add (local.get $w) (i32.const 44)) (i32.const 32))              ;; tmFirstChar = 0x20
     (i32.store8 (i32.add (local.get $w) (i32.const 45)) (i32.const 255))             ;; tmLastChar = 0xFF
@@ -520,6 +548,7 @@
     (i32.store8 (i32.add (local.get $w) (i32.const 51)) (i32.const 0x26))            ;; tmPitchAndFamily
     (i32.store8 (i32.add (local.get $w) (i32.const 52))
       (call $gdi_dc_text_charset (local.get $arg0)))                                 ;; tmCharSet
+    (call $guest_span_writeback (local.get $arg1) (local.get $w) (i32.const 56))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
@@ -1065,7 +1094,7 @@
   (func $handle_SetBkColor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_set_field (local.get $arg0) (i32.const 24)
       (i32.and (local.get $arg1) (i32.const 0xFFFFFF)) (i32.const 0xFFFFFF)))
-    (drop (call $host_gdi_set_bk_color (local.get $arg0) (local.get $arg1)))
+    (drop (call $gdi_native_set_bk_color (local.get $arg0) (local.get $arg1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
@@ -1077,7 +1106,7 @@
       (then
         (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_set_field
           (local.get $arg0) (i32.const 28) (local.get $arg1) (i32.const 2)))
-        (drop (call $host_gdi_set_bk_mode (local.get $arg0) (local.get $arg1))))
+        (drop (call $gdi_native_set_bk_mode (local.get $arg0) (local.get $arg1))))
       (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
@@ -1086,13 +1115,13 @@
   (func $handle_SetTextColor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_set_field (local.get $arg0) (i32.const 20)
       (i32.and (local.get $arg1) (i32.const 0xFFFFFF)) (i32.const 0)))
-    (drop (call $host_gdi_set_text_color (local.get $arg0) (local.get $arg1)))
+    (drop (call $gdi_native_set_text_color (local.get $arg0) (local.get $arg1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 174: SetMenu
   (func $handle_SetMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $menu_key i32)
+    (local $menu_key i32) (local $menu_alias i32)
     ;; SetMenu changes the non-client layout. Install the menu in WAT before
     ;; later GetDC/GetClientRect/ShowWindow paths ask for client geometry;
     ;; several WEP games attach their menu after CreateWindowExA and paint
@@ -1101,6 +1130,11 @@
     ;; menu_set fallback is 0x00080001. Named-resource keys returned by
     ;; GetMenu are guest pointers and must remain intact.
     (local.set $menu_key (local.get $arg1))
+    ;; A LoadMenu handle the app already read or edited while unattached has a
+    ;; detached dynamic alias holding those edits (Unreal's localized ID_*
+    ;; labels); attach that tree instead of reloading the pristine resource.
+    (local.set $menu_alias (call $menu_detached_existing (local.get $arg1)))
+    (if (local.get $menu_alias) (then (local.set $menu_key (local.get $menu_alias))))
     ;; A bar assembled from CreateMenu/AppendMenu dynamic menus is serialized
     ;; here, in WAT; there is no resource for $menu_load to find.
     (if (call $menu_set_bar_from_dynamic (local.get $arg0) (local.get $menu_key))
@@ -1521,6 +1555,40 @@
         (local.get $arg0) (i32.const 8) (local.get $arg1) (i32.const 1)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
+  ;; ModifyWorldTransform(hdc, lpXform, iMode). Our DCs carry no world
+  ;; transform: their page space is the identity. So MWT_IDENTITY, and a left
+  ;; or right multiply by an identity XFORM, leave the real state exactly
+  ;; right and succeed; any other matrix is a transform this GDI cannot honour
+  ;; and fails loud. Tiberian Sun's DC-reset helper sets GM_ADVANCED and
+  ;; resets to identity before drawing text.
+  (func $handle_ModifyWorldTransform (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ok i32)
+    (if (i32.eqz (call $gdi_dc_state_entry (local.get $arg0) (i32.const 0)))
+      (then (global.set $last_error (i32.const 6)))  ;; ERROR_INVALID_HANDLE
+      (else
+        (if (i32.eq (local.get $arg2) (i32.const 1))      ;; MWT_IDENTITY
+          (then (local.set $ok (i32.const 1)))
+          (else
+            (if (i32.or (i32.eq (local.get $arg2) (i32.const 2))
+                        (i32.eq (local.get $arg2) (i32.const 3)))
+              (then
+                (if (i32.eqz (local.get $arg1))
+                  (then (global.set $last_error (i32.const 87)))  ;; ERROR_INVALID_PARAMETER
+                  (else
+                    (if (i32.eqz (i32.and
+                          (i32.and (f32.eq (f32.reinterpret_i32 (call $gl32 (local.get $arg1))) (f32.const 1))
+                                   (f32.eq (f32.reinterpret_i32 (call $gl32 (i32.add (local.get $arg1) (i32.const 4)))) (f32.const 0)))
+                          (i32.and
+                            (i32.and (f32.eq (f32.reinterpret_i32 (call $gl32 (i32.add (local.get $arg1) (i32.const 8)))) (f32.const 0))
+                                     (f32.eq (f32.reinterpret_i32 (call $gl32 (i32.add (local.get $arg1) (i32.const 12)))) (f32.const 1)))
+                            (i32.and (f32.eq (f32.reinterpret_i32 (call $gl32 (i32.add (local.get $arg1) (i32.const 16)))) (f32.const 0))
+                                     (f32.eq (f32.reinterpret_i32 (call $gl32 (i32.add (local.get $arg1) (i32.const 20)))) (f32.const 0))))))
+                      (then (call $crash_unimplemented (local.get $name_ptr))))
+                    (local.set $ok (i32.const 1)))))
+              (else (global.set $last_error (i32.const 87))))))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $ok))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+
   (func $handle_GetSystemPaletteUse (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (select
       (call $gdi_dc_meta_get (local.get $arg0) (i32.const 12) (i32.const 1))
@@ -1585,6 +1653,7 @@
         (i32.const 0)))
     (if (local.get $ok)
       (then
+        (call $present_frame_end)
         (i32.store offset=0 (global.get $reg_base) (local.get $ok))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
@@ -1598,7 +1667,8 @@
           (i32.const 0) (i32.const 0)
           (i32.load offset=4 (local.get $desc))
           (i32.load offset=8 (local.get $desc)))
-        (local.set $ok (i32.const 1))))
+        (local.set $ok (i32.const 1))
+        (call $present_frame_end)))
     (i32.store offset=0 (global.get $reg_base) (local.get $ok))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
@@ -1838,35 +1908,34 @@
   ;; call used to return 0 - and 0 is not a soft failure to a guest, it is
   ;; "no fonts were added". fontview.exe tests the result and destroys its own
   ;; window without painting, so the file it was launched on never appeared.
+  ;; One path resolution for installation and retirement. A known scalable
+  ;; resource names its source font; do not register the compatibility .FOT
+  ;; copy as a second independent TrueType file before consulting that mapping.
+  (func $font_resource_change (param $resource i32) (param $remove i32) (result i32)
+    (local $source i32) (local $result i32)
+    (if (i32.eqz (local.get $resource)) (then (return (i32.const 0))))
+    (local.set $source (call $scalable_font_source_for (local.get $resource)))
+    (if (i32.eqz (local.get $source))
+      (then (local.set $source (local.get $resource))))
+    (local.set $result
+      (if (result i32) (local.get $remove)
+        (then (call $gdi_bitmap_font_remove_resource (local.get $source)))
+        (else (call $gdi_bitmap_font_add_resource (local.get $source)))))
+    (if (i32.le_s (local.get $result) (i32.const 0))
+      (then (local.set $result
+        (if (result i32) (local.get $remove)
+          (then (call $tt_reg_remove (local.get $source)))
+          (else (call $tt_reg_add (local.get $source)))))))
+    (local.get $result))
+
   (func $handle_AddFontResourceA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $added i32) (local $source i32)
-    (if (local.get $arg0)
-      (then
-        (local.set $added (call $gdi_bitmap_font_add_resource (local.get $arg0)))
-        (if (i32.le_s (local.get $added) (i32.const 0))
-          (then (local.set $added (call $tt_reg_add (local.get $arg0)))))
-        (if (i32.le_s (local.get $added) (i32.const 0))
-          (then
-            (local.set $source (call $scalable_font_source_for (local.get $arg0)))
-            (if (local.get $source)
-              (then (local.set $added (call $tt_reg_add (local.get $source)))))))))
-    (i32.store offset=0 (global.get $reg_base) (local.get $added))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $font_resource_change (local.get $arg0) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_RemoveFontResourceA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $removed i32) (local $source i32)
-    (if (local.get $arg0)
-      (then
-        (local.set $removed
-          (call $gdi_bitmap_font_remove_resource (local.get $arg0)))
-        (if (i32.le_s (local.get $removed) (i32.const 0))
-          (then (local.set $removed (call $tt_reg_remove (local.get $arg0)))))
-        (if (i32.le_s (local.get $removed) (i32.const 0))
-          (then
-            (local.set $source (call $scalable_font_source_for (local.get $arg0)))
-            (if (local.get $source)
-              (then (local.set $removed (call $tt_reg_remove (local.get $source)))))))))
-    (i32.store offset=0 (global.get $reg_base) (local.get $removed))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $font_resource_change (local.get $arg0) (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_EnumFontsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1892,7 +1961,10 @@
     (if (local.get $arg1) (then (local.set $data (call $g2w (local.get $arg1)))))
     (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $gdi_metafile_valid_wmf (local.get $data) (local.get $arg0))
         (then (call $gdi_metafile_create
-          (i32.const 6) (local.get $data) (local.get $arg0)))
+          ;; The input allocation may have trailing padding. METAHEADER's
+          ;; bounded size is the actual metafile extent, in 16-bit words.
+          (i32.const 6) (local.get $data)
+          (i32.shl (i32.load offset=6 (local.get $data)) (i32.const 1))))
         (else (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
@@ -2137,15 +2209,15 @@
     (if (i32.eq (local.get $arg1) (i32.const 90))
     (then (i32.store offset=0 (global.get $reg_base) (i32.const 96))))   ;; LOGPIXELSY
     (if (i32.eq (local.get $arg1) (i32.const 12))
-    (then (i32.store offset=0 (global.get $reg_base) (i32.const 32))))  ;; BITSPIXEL
+    (then (i32.store offset=0 (global.get $reg_base) (call $gdi_display_bpp))))  ;; BITSPIXEL
     (if (i32.eq (local.get $arg1) (i32.const 14))
     (then (i32.store offset=0 (global.get $reg_base) (i32.const 1))))   ;; PLANES
     (if (i32.eq (local.get $arg1) (i32.const 24))
-    (then (i32.store offset=0 (global.get $reg_base) (i32.const -1))))  ;; NUMCOLORS — -1 = >256 colors
+    (then (i32.store offset=0 (global.get $reg_base) (select (i32.const 20) (i32.const -1) (i32.eq (call $gdi_display_bpp) (i32.const 8))))))  ;; NUMCOLORS — -1 = >256 colors
     (if (i32.eq (local.get $arg1) (i32.const 36))
     (then (i32.store offset=0 (global.get $reg_base) (i32.const 1))))   ;; CLIPCAPS: CP_RECTANGLE
     (if (i32.eq (local.get $arg1) (i32.const 38))
-    (then (i32.store offset=0 (global.get $reg_base) (i32.const 15033)))) ;; RASTERCAPS: common raster ops
+    (then (i32.store offset=0 (global.get $reg_base) (i32.or (i32.const 15033) (select (i32.const 256) (i32.const 0) (i32.eq (call $gdi_display_bpp) (i32.const 8))))))) ;; RASTERCAPS: common raster ops
     (if (i32.eq (local.get $arg1) (i32.const 40))
     (then (i32.store offset=0 (global.get $reg_base) (i32.const 36))))  ;; ASPECTX
     (if (i32.eq (local.get $arg1) (i32.const 42))
@@ -2153,7 +2225,7 @@
     (if (i32.eq (local.get $arg1) (i32.const 44))
     (then (i32.store offset=0 (global.get $reg_base) (i32.const 51))))  ;; ASPECTXY
     (if (i32.eq (local.get $arg1) (i32.const 104))
-    (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))   ;; SIZEPALETTE: no palette device
+    (then (i32.store offset=0 (global.get $reg_base) (select (i32.const 256) (i32.const 0) (i32.eq (call $gdi_display_bpp) (i32.const 8))))))   ;; SIZEPALETTE
     (if (i32.eq (local.get $arg1) (i32.const 108))
     (then (i32.store offset=0 (global.get $reg_base) (i32.const 24))))  ;; COLORRES — 24-bit color
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
@@ -2219,10 +2291,12 @@
   ;; 314: GetTextMetricsW — zero-fill, return 1
   (func $handle_GetTextMetricsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $packed i32) (local $h i32) (local $aveW i32) (local $wa i32)
-    (local.set $wa (call $g2w (local.get $arg1)))
+    ;; gathered whole: TEXTMETRICW may straddle two sparsely-backed guest pages
+    (local.set $wa (call $guest_span_in (local.get $arg1) (i32.const 60)))
     (if (call $gdi_bitmap_text_metrics_write
           (local.get $arg0) (local.get $wa) (i32.const 1))
       (then
+        (call $guest_span_writeback (local.get $arg1) (local.get $wa) (i32.const 60))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
@@ -2230,23 +2304,22 @@
     (local.set $h (i32.and (local.get $packed) (i32.const 0xFFFF)))
     (local.set $aveW (i32.shr_u (local.get $packed) (i32.const 16)))
     (call $zero_memory (local.get $wa) (i32.const 60))
-    (call $gs32 (local.get $arg1) (local.get $h))                                    ;; tmHeight
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 4))
-      (i32.sub (local.get $h) (i32.const 3)))                                        ;; tmAscent
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 8)) (i32.const 3))             ;; tmDescent
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 20)) (local.get $aveW))        ;; tmAveCharWidth
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 24))
-      (i32.mul (local.get $aveW) (i32.const 2)))                                     ;; tmMaxCharWidth
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 28)) (i32.const 400))          ;; tmWeight
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 36)) (i32.const 96))           ;; tmDigitizedAspectX
-    (call $gs32 (i32.add (local.get $arg1) (i32.const 40)) (i32.const 96))           ;; tmDigitizedAspectY
-    (call $gs16 (i32.add (local.get $arg1) (i32.const 44)) (i32.const 32))           ;; tmFirstChar
-    (call $gs16 (i32.add (local.get $arg1) (i32.const 46)) (i32.const 255))          ;; tmLastChar
-    (call $gs16 (i32.add (local.get $arg1) (i32.const 48)) (i32.const 31))           ;; tmDefaultChar
-    (call $gs16 (i32.add (local.get $arg1) (i32.const 50)) (i32.const 32))           ;; tmBreakChar
+    (i32.store offset=0 (local.get $wa) (local.get $h))                              ;; tmHeight
+    (i32.store offset=4 (local.get $wa) (i32.sub (local.get $h) (i32.const 3)))      ;; tmAscent
+    (i32.store offset=8 (local.get $wa) (i32.const 3))                               ;; tmDescent
+    (i32.store offset=20 (local.get $wa) (local.get $aveW))                          ;; tmAveCharWidth
+    (i32.store offset=24 (local.get $wa) (i32.mul (local.get $aveW) (i32.const 2)))  ;; tmMaxCharWidth
+    (i32.store offset=28 (local.get $wa) (i32.const 400))                            ;; tmWeight
+    (i32.store offset=36 (local.get $wa) (i32.const 96))                             ;; tmDigitizedAspectX
+    (i32.store offset=40 (local.get $wa) (i32.const 96))                             ;; tmDigitizedAspectY
+    (i32.store16 offset=44 (local.get $wa) (i32.const 32))                           ;; tmFirstChar
+    (i32.store16 offset=46 (local.get $wa) (i32.const 255))                          ;; tmLastChar
+    (i32.store16 offset=48 (local.get $wa) (i32.const 31))                           ;; tmDefaultChar
+    (i32.store16 offset=50 (local.get $wa) (i32.const 32))                           ;; tmBreakChar
     (i32.store8 offset=55 (local.get $wa) (i32.const 0x26)) ;; tmPitchAndFamily
     (i32.store8 offset=56 (local.get $wa)
       (call $gdi_dc_text_charset (local.get $arg0))) ;; tmCharSet
+    (call $guest_span_writeback (local.get $arg1) (local.get $wa) (i32.const 60))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
@@ -2333,11 +2406,22 @@
   )
 
   ;; 358: GetPaletteEntries(hPalette, iStart, nEntries, lppe) — 4 args stdcall
+  ;; Bytes a PALETTEENTRY[count] occupies, clamped to a whole 8bpp table so a
+  ;; nonsense count from the guest cannot ask the gather arena for the world.
+  (func $gdi_palette_span_bytes (param $count i32) (result i32)
+    (i32.shl (select (local.get $count) (i32.const 256)
+      (i32.lt_u (local.get $count) (i32.const 256))) (i32.const 2)))
+
   (func $handle_GetPaletteEntries (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $dest i32) (local $len i32)
+    (if (local.get $arg3)
+      (then
+        (local.set $len (call $gdi_palette_span_bytes (local.get $arg2)))
+        (local.set $dest (call $guest_span_in (local.get $arg3) (local.get $len)))))
     (i32.store offset=0 (global.get $reg_base) (call $gdi_palette_get_entries
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (if (result i32) (local.get $arg3)
-        (then (call $g2w (local.get $arg3))) (else (i32.const 0)))))
+      (local.get $dest)))
+    (call $guest_span_writeback (local.get $arg3) (local.get $dest) (local.get $len))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; 4 args stdcall
   )
 
@@ -2354,8 +2438,7 @@
   ;; 360: RealizePalette(hdc) — 1 arg stdcall
   ;; In true-color mode this is mostly a no-op; return number of entries mapped
   (func $handle_RealizePalette (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $gdi_palette_count
-      (call $gdi_dc_selected_palette (local.get $arg0))))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_realize_palette (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; 1 arg stdcall
   )
 
@@ -2395,12 +2478,19 @@
 
   ;; 362: GetObjectW — same object layout as GetObjectA for bitmaps
   (func $handle_GetObjectW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $dest i32) (local $len i32)
     (if (i32.eq (call $gdi_object_type (local.get $arg0)) (i32.const 4))
       (then
+        ;; gathered so a LOGFONTW split across two sparse pages still comes back whole
+        (if (local.get $arg2)
+          (then
+            (local.set $len (select (local.get $arg1) (i32.const 256)
+              (i32.lt_u (local.get $arg1) (i32.const 256))))
+            (local.set $dest (call $guest_span_in (local.get $arg2) (local.get $len)))))
         (i32.store offset=0 (global.get $reg_base) (call $gdi_font_write_logfont (local.get $arg0)
-          (if (result i32) (local.get $arg2)
-            (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
+          (local.get $dest)
           (local.get $arg1) (i32.const 1)))
+        (call $guest_span_writeback (local.get $arg2) (local.get $dest) (local.get $len))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
       (else (call $handle_GetObjectA
         (local.get $arg0) (local.get $arg1) (local.get $arg2)
@@ -2409,7 +2499,7 @@
 
   ;; SetTextAlign(hdc, fMode) — store alignment on the DC and return the previous value.
   (func $handle_SetTextAlign (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_set_text_align (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_set_text_align (local.get $arg0) (local.get $arg1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
@@ -2435,7 +2525,7 @@
       (then
         (local.set $count (local.get $packed_ansi_len))
         (local.set $wide (i32.const 0))))
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_ext_text_out
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_ext_text_out
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $rect_wa)
       (local.get $text_wa) (local.get $count) (local.get $dx_wa) (local.get $wide)))
@@ -2453,17 +2543,22 @@
   ;; 366: CreatePalette(lpLogPalette) — 1 arg stdcall
   ;; LOGPALETTE: palVersion(u16, +0), palNumEntries(u16, +2), palPalEntry[](+4, each 4 bytes RGBX)
   (func $handle_CreatePalette (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $src_wa i32) (local $num_entries i32)
+    (local $src_wa i32) (local $num_entries i32) (local $len i32)
     (if (i32.eqz (local.get $arg0))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
-    (local.set $src_wa (call $g2w (local.get $arg0)))
-    (local.set $num_entries (i32.load16_u (i32.add (local.get $src_wa) (i32.const 2))))
+    ;; The two-word header is read per field; only palPalEntry[] is handed to
+    ;; the allocator as one span, so a LOGPALETTE split across sparse pages is
+    ;; gathered rather than read off the end of the first page's backing.
+    (local.set $num_entries (call $gl16 (i32.add (local.get $arg0) (i32.const 2))))
+    (local.set $len (call $gdi_palette_span_bytes (local.get $num_entries)))
+    (local.set $src_wa (call $guest_span_in (i32.add (local.get $arg0) (i32.const 4)) (local.get $len)))
     (i32.store offset=0 (global.get $reg_base) (call $gdi_palette_alloc
-      (i32.add (local.get $src_wa) (i32.const 4)) (local.get $num_entries)
-      (i32.load16_u (local.get $src_wa))))
+      (local.get $src_wa) (local.get $num_entries)
+      (call $gl16 (local.get $arg0))))
+    (call $guest_span_release (local.get $src_wa) (local.get $len))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; 1 arg stdcall
   )
 
@@ -2479,7 +2574,7 @@
   ;; 368: StretchDIBits(hdc, xDst, yDst, wDst, hDst, xSrc, ySrc, wSrc, hSrc, lpBits, lpBmi, usage, rop)
   ;; 13 args stdcall
   (func $handle_StretchDIBits (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_stretch_dib_bits
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_stretch_dib_bits
       (local.get $arg0)                                              ;; hdc
       (local.get $arg1)                                              ;; xDst
       (local.get $arg2)                                              ;; yDst
@@ -2490,7 +2585,8 @@
       (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))       ;; wSrc
       (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))       ;; hSrc
       (call $g2w (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40))))  ;; lpBits → WASM addr
-      (call $g2w (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44))))  ;; lpBmi → WASM addr
+      (call $gdi_bitmap_info_wa
+        (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44))))  ;; lpBmi → WASM addr
       (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 48)))       ;; iUsage
       (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 52)))       ;; dwRop
     ))
@@ -2559,7 +2655,7 @@
 
   ;; 375: TextOutW(hdc, x, y, lpString, c) — 5 args stdcall, host reads UTF-16 LE.
   (func $handle_TextOutW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_text_out
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_text_out
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (call $g2w (local.get $arg3)) (local.get $arg4) (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
@@ -2670,21 +2766,21 @@
 
   ;; 438: FillRgn(hdc, hrgn, hbrush) → BOOL
   (func $handle_FillRgn (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_fill_rgn
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_fill_rgn
       (local.get $arg0) (call $gdi_rgn_host_handle (local.get $arg1)) (local.get $arg2)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; PaintRgn(hdc, hrgn) → BOOL — paint with DC's current brush
   (func $handle_PaintRgn (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_fill_rgn
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_fill_rgn
       (local.get $arg0) (call $gdi_rgn_host_handle (local.get $arg1)) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; FrameRgn(hdc, hrgn, hbrush, nWidth, nHeight) -> BOOL
   (func $handle_FrameRgn (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_frame_rgn
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_frame_rgn
       (local.get $arg0) (call $gdi_rgn_host_handle (local.get $arg1))
       (local.get $arg2) (local.get $arg3) (local.get $arg4)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
@@ -2692,16 +2788,21 @@
 
   ;; 439: GetDIBColorTable(hdc, startIndex, numEntries, pColors) → count
   (func $handle_GetDIBColorTable (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_get_dib_color_table
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_get_dib_color_table
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 440: SetDIBColorTable(hdc, startIndex, numEntries, pColors) → count
   (func $handle_SetDIBColorTable (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $src i32) (local $len i32)
+    (if (local.get $arg3)
+      (then
+        (local.set $len (call $gdi_palette_span_bytes (local.get $arg2)))
+        (local.set $src (call $guest_span_in (local.get $arg3) (local.get $len)))))
     (i32.store offset=0 (global.get $reg_base) (call $gdi_set_dib_color_table
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (if (result i32) (local.get $arg3)
-        (then (call $g2w (local.get $arg3))) (else (i32.const 0)))))
+      (local.get $src)))
+    (call $guest_span_release (local.get $src) (local.get $len))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 441: ResizePalette(hPalette, nEntries) — 2 args stdcall
@@ -2720,10 +2821,15 @@
 
   ;; 443: SetPaletteEntries(hPalette, iStart, nEntries, lppe) — 4 args stdcall
   (func $handle_SetPaletteEntries (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $src i32) (local $len i32)
+    (if (local.get $arg3)
+      (then
+        (local.set $len (call $gdi_palette_span_bytes (local.get $arg2)))
+        (local.set $src (call $guest_span_in (local.get $arg3) (local.get $len)))))
     (i32.store offset=0 (global.get $reg_base) (call $gdi_palette_set_entries
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (if (result i32) (local.get $arg3)
-        (then (call $g2w (local.get $arg3))) (else (i32.const 0)))))
+      (local.get $src)))
+    (call $guest_span_release (local.get $src) (local.get $len))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; 4 args stdcall
   )
 
@@ -2736,10 +2842,10 @@
     (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $lpBMI (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
     (local.set $fuColorUse (i32.load (i32.add (local.get $wa_esp) (i32.const 28))))
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_set_dib_bits
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_set_dib_bits
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (call $g2w (local.get $arg4))
-      (call $g2w (local.get $lpBMI))
+      (call $gdi_bitmap_info_wa (local.get $lpBMI))
       (local.get $fuColorUse)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))  ;; stdcall, 7 args
   )
@@ -2757,10 +2863,11 @@
     (local.set $lpBits (i32.load (i32.add (local.get $wa_esp) (i32.const 40))))
     (local.set $lpBMI (i32.load (i32.add (local.get $wa_esp) (i32.const 44))))
     (local.set $colorUse (i32.load (i32.add (local.get $wa_esp) (i32.const 48))))
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_set_dib_to_device
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_set_dib_to_device
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
       (local.get $xSrc) (local.get $ySrc) (local.get $startScan) (local.get $cLines)
-      (call $g2w (local.get $lpBits)) (call $g2w (local.get $lpBMI)) (local.get $colorUse)))
+      (call $g2w (local.get $lpBits)) (call $gdi_bitmap_info_wa (local.get $lpBMI))
+      (local.get $colorUse)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 52)))  ;; stdcall, 12 args
   )
 
@@ -2782,9 +2889,68 @@
   ;; 718: CreateICA(lpszDriver, lpszDevice, lpszOutput, lpdvmInit) → HDC
   (func $handle_CreateICA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Same as CreateICW — returns an information context handle
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_create_compat_dc (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_create_compat_dc (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
+
+  ;; WinG32 uses the canonical GDI DC/bitmap/palette/raster implementation.
+  (func $handle_WinGCreateDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_alloc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  ;; WinGCreateBitmap(hdc, bmi, bits): CreateDIBSection with RGB color entries.
+  (func $handle_WinGCreateBitmap (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (block $invalid
+      (br_if $invalid (call $ptr_range_access_bad (local.get $arg2) (i32.const 4) (i32.const 1)))
+      (call $gs32 (local.get $arg2) (i32.const 0))
+      (br_if $invalid (call $ptr_range_access_bad (local.get $arg1) (i32.const 40) (i32.const 0)))
+      (br_if $invalid (call $ptr_range_access_bad (local.get $arg1)
+        (call $gdi_bitmap_info_size (local.get $arg1)) (i32.const 0)))
+      (call $handle_CreateDIBSection (local.get $arg0) (local.get $arg1)
+        (i32.const 0) (local.get $arg2) (i32.const 0) (local.get $name_ptr)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 16))))
+
+  (func $handle_WinGSetDIBColorTable (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_SetDIBColorTable (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  ;; WinGBitBlt has eight args: the last three are on the guest stack;
+  ;; unlike BitBlt there is no ROP parameter (the operation is SRCCOPY).
+  (func $handle_WinGBitBlt (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_bitblt
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (call $gl32 (i32.add (local.get $sp) (i32.const 24)))
+      (call $gl32 (i32.add (local.get $sp) (i32.const 28)))
+      (call $gl32 (i32.add (local.get $sp) (i32.const 32))) (i32.const 0x00CC0020)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
+
+  ;; WinGRecommendDIBFormat(BITMAPINFO*): describe the indexed BI_RGB format
+  ;; supported by our DIB engine. The caller supplies dimensions and palette
+  ;; after this recommendation. Only the 40-byte header is an output here.
+  (func $handle_WinGRecommendDIBFormat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $offset i32) (local $valid i32)
+    (local.set $valid (i32.eqz (call $ptr_range_access_bad
+      (local.get $arg0) (i32.const 40) (i32.const 1))))
+    (if (local.get $valid)
+      (then
+        ;; Use guest writes: the header may straddle non-adjacent sparse pages.
+        (local.set $offset (i32.const 16))
+        (loop $zero_header
+          (call $gs32 (i32.add (local.get $arg0) (local.get $offset)) (i32.const 0))
+          (local.set $offset (i32.add (local.get $offset) (i32.const 4)))
+          (br_if $zero_header (i32.lt_u (local.get $offset) (i32.const 40))))
+        (call $gs32 (local.get $arg0) (i32.const 40))
+        (call $gs32 (i32.add (local.get $arg0) (i32.const 4)) (i32.const 320))
+        (call $gs32 (i32.add (local.get $arg0) (i32.const 8)) (i32.const 1))
+        ;; biPlanes=1, biBitCount=8 (adjacent WORDs).
+        (call $gs32 (i32.add (local.get $arg0) (i32.const 12)) (i32.const 0x00080001))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $valid))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; 447: CreateDIBSection(hdc, pbmi, usage, ppvBits, hSection, offset)
   ;; Own the pixels and RGBQUAD color table in one canonical WAT allocation.
@@ -2792,8 +2958,7 @@
     (local $handle i32) (local $record i32)
     (local.set $handle (call $gdi_bitmap_create_dib_section
       (local.get $arg0)
-      (if (result i32) (local.get $arg1)
-        (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
+      (call $gdi_bitmap_info_wa (local.get $arg1))
       (local.get $arg2)))
     (if (local.get $arg3)
       (then
@@ -2807,18 +2972,23 @@
 
   ;; 448: GetDIBits(hdc, hbmp, uStartScan, cScanLines, lpvBits, lpbmi, uUsage) — 7 args stdcall
   (func $handle_GetDIBits (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $wa_esp i32) (local $lpbmi i32) (local $uUsage i32)
+    (local $wa_esp i32) (local $lpbmi i32) (local $uUsage i32) (local $bmi_wa i32)
     (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $lpbmi (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
     (local.set $uUsage (i32.load (i32.add (local.get $wa_esp) (i32.const 28))))
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_get_di_bits
+    ;; This one is an output buffer as well: GetDIBits describes the bitmap in
+    ;; the caller's header. A straddling BITMAPINFO is read through a gathered
+    ;; copy, so what the call wrote there has to be put back afterwards.
+    (local.set $bmi_wa (call $gdi_bitmap_info_wa_out (local.get $lpbmi)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_get_di_bits
       (local.get $arg0)              ;; hdc
       (local.get $arg1)              ;; hbmp
       (local.get $arg2)              ;; uStartScan
       (local.get $arg3)              ;; cScanLines
       (local.get $arg4)              ;; lpvBits (guest address)
-      (if (result i32) (local.get $lpbmi) (then (call $g2w (local.get $lpbmi))) (else (i32.const 0)))  ;; lpbmi (WASM ptr)
+      (local.get $bmi_wa)            ;; lpbmi (WASM ptr)
       (local.get $uUsage)))
+    (call $gdi_bitmap_info_writeback (local.get $lpbmi) (local.get $bmi_wa))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))  ;; 7 args + ret
   )
 
@@ -2828,7 +2998,7 @@
     ;; true-color callers that omit the duplicate BITMAPINFO pointer.
     (i32.store offset=0 (global.get $reg_base) (call $gdi_bitmap_create_dibitmap
       (local.get $arg0)
-      (call $g2w (select (local.get $arg4) (local.get $arg1)
+      (call $gdi_bitmap_info_wa (select (local.get $arg4) (local.get $arg1)
         (i32.ne (local.get $arg4) (i32.const 0))))
       (if (result i32) (local.get $arg3)
         (then (call $g2w (local.get $arg3))) (else (i32.const 0)))
@@ -2919,7 +3089,7 @@
           (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
         (return)))
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_round_rect
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_round_rect
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
       (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))))
@@ -2940,7 +3110,7 @@
     (if (call $gdi_dc_path_is_open (local.get $arg0))
       (then (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_path_record_bezier
         (local.get $arg0) (local.get $points_wa) (local.get $arg2) (i32.const 0))))
-      (else (i32.store offset=0 (global.get $reg_base) (call $host_gdi_poly_bezier
+      (else (i32.store offset=0 (global.get $reg_base) (call $gdi_native_poly_bezier
         (local.get $arg0) (local.get $points_wa) (local.get $arg2) (i32.const 0)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
@@ -3221,7 +3391,7 @@
     (if (call $gdi_dc_path_is_open (local.get $arg0))
       (then (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_path_record_bezier
         (local.get $arg0) (local.get $points_wa) (local.get $arg2) (i32.const 1))))
-      (else (i32.store offset=0 (global.get $reg_base) (call $host_gdi_poly_bezier
+      (else (i32.store offset=0 (global.get $reg_base) (call $gdi_native_poly_bezier
         (local.get $arg0) (local.get $points_wa) (local.get $arg2) (i32.const 1)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
@@ -3547,7 +3717,7 @@
 
   ;; GetTextAlign(hdc) — return current alignment flags.
   (func $handle_GetTextAlign (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_get_text_align (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_get_text_align (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
@@ -3559,14 +3729,14 @@
 
   ;; 598: GetBkMode(hdc) — current OPAQUE/TRANSPARENT setting
   (func $handle_GetBkMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_get_bk_mode (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_get_bk_mode (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 599: GetTextColor — STUB: unimplemented
   ;; GetTextColor(hdc) → COLORREF — 1 arg stdcall
   (func $handle_GetTextColor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_get_text_color (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_get_text_color (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
@@ -3579,7 +3749,7 @@
   ;; 601: GetBkColor — STUB: unimplemented
   ;; GetBkColor(hdc) → COLORREF — 1 arg stdcall
   (func $handle_GetBkColor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_get_bk_color (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_get_bk_color (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
@@ -3663,7 +3833,7 @@
     (local.set $lpDx (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
     (if (local.get $lpDx)
       (then (local.set $dx_wa (call $g2w (local.get $lpDx)))))
-    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_ext_text_out
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_native_ext_text_out
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $rect_wa)
       (local.get $text_wa) (local.get $count) (local.get $dx_wa) (i32.const 0)))
@@ -3672,7 +3842,7 @@
 
   ;; 947: SetPixelV(hdc, x, y, color) — 4 args stdcall, like SetPixel but returns BOOL
   (func $handle_SetPixelV (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (drop (call $host_gdi_set_pixel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
+    (drop (call $gdi_native_set_pixel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
@@ -4058,6 +4228,60 @@
       (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
+  ;; The 20-byte DDIB record: +0 magic, +4 nonzero after a successful
+  ;; DrawDibBegin, +8 the palette DrawDibSetPalette attached (0 = none).
+  ;; DrawDibBegin(hdd, hdc, dxDst, dyDst, lpbi, dxSrc, dySrc, wFlags) -> BOOL.
+  ;; Every draw here goes straight through StretchDIBits, so Begin only
+  ;; validates the format it will be handed and records that it succeeded.
+  (func $handle_DrawDibBegin (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ok i32) (local $lpbi_wa i32)
+    (if (i32.and (call $drawdib_dc_valid (local.get $arg0))
+                 (i32.ne (local.get $arg4) (i32.const 0)))
+      (then
+        (local.set $lpbi_wa (call $g2w (local.get $arg4)))
+        (local.set $ok
+          (i32.and
+            (i32.ge_u (i32.load (local.get $lpbi_wa)) (i32.const 40))
+            (i32.and (i32.gt_s (i32.load offset=4 (local.get $lpbi_wa)) (i32.const 0))
+                     (i32.gt_s (i32.load offset=8 (local.get $lpbi_wa)) (i32.const 0)))))
+        (i32.store offset=4 (call $g2w (local.get $arg0)) (local.get $ok))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $ok))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
+
+  ;; DrawDibEnd(hdd) -> BOOL
+  (func $handle_DrawDibEnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ok i32)
+    (local.set $ok (call $drawdib_dc_valid (local.get $arg0)))
+    (if (local.get $ok)
+      (then (i32.store offset=4 (call $g2w (local.get $arg0)) (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $ok))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; DrawDibSetPalette(hdd, hpal) -> BOOL.  hpal = 0 detaches the palette.
+  (func $handle_DrawDibSetPalette (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ok i32)
+    (local.set $ok (call $drawdib_dc_valid (local.get $arg0)))
+    (if (local.get $ok)
+      (then (i32.store offset=8 (call $g2w (local.get $arg0)) (local.get $arg1))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $ok))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; DrawDibRealize(hdd, hdc, fBackground) -> UINT: colours mapped into hdc's
+  ;; palette.  With no attached palette there is nothing to realize.
+  (func $handle_DrawDibRealize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $hpal i32) (local $count i32)
+    (if (i32.and (call $drawdib_dc_valid (local.get $arg0))
+                 (i32.ne (local.get $arg1) (i32.const 0)))
+      (then
+        (local.set $hpal (i32.load offset=8 (call $g2w (local.get $arg0))))
+        (if (local.get $hpal)
+          (then
+            (drop (call $gdi_dc_select_palette (local.get $arg1) (local.get $hpal)))
+            (if (i32.eq (call $gdi_dc_selected_palette (local.get $arg1)) (local.get $hpal))
+              (then (local.set $count (call $gdi_palette_count (local.get $hpal)))))))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $count))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+
   ;; DrawDibDraw(hdd, hdc, xDst, yDst, dxDst, dyDst, lpbi, lpBits,
   ;;             xSrc, ySrc, dxSrc, dySrc, wFlags) -> BOOL
   (func $handle_DrawDibDraw (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4113,7 +4337,14 @@
       (then (local.set $arg4 (local.get $width))))
     (if (i32.eq (local.get $dy_dst) (i32.const -1))
       (then (local.set $dy_dst (local.get $height))))
-    (local.set $drawn (call $host_gdi_stretch_dib_bits
+    ;; DrawDib's (0,0) is the bitmap's upper-left corner; StretchDIBits counts
+    ;; ySrc up from the lower-left.  A full-image draw is the same either way,
+    ;; a strip is not: Moorhuhn 3's puzzles repaint a 648x424 DIB in 8-row
+    ;; strips (ySrc = 0, 8, 16 ...), and read literally each strip took the
+    ;; rows mirrored about the middle of the picture.
+    (local.set $y_src (i32.sub (i32.sub (local.get $height) (local.get $y_src))
+                               (local.get $dy_src)))
+    (local.set $drawn (call $gdi_native_stretch_dib_bits
       (local.get $arg1)                                             ;; hdc
       (local.get $arg2)                                             ;; xDst
       (local.get $arg3)                                             ;; yDst

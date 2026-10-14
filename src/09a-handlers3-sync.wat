@@ -40,11 +40,23 @@
     (call $handle_LoadLibraryEx_core
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
 
+  ;; Both startup-info encodings currently expose no strings or inherited
+  ;; handles. Keep their identical structure initialization guest-addressed.
+  ;; A program launched from Explorer or Start > Run gets
+  ;; dwFlags = STARTF_USESHOWWINDOW and wShowWindow = SW_SHOWNORMAL, and the
+  ;; CRT hands that to WinMain as nCmdShow. With the flag clear it falls back
+  ;; to SW_SHOWDEFAULT (10) instead, which apps that build a show command from
+  ;; it get wrong: SimCity 2000 shows its frame with nCmdShow|3, meant to be
+  ;; SW_SHOWMAXIMIZED, and 10|3 is 11.
+  (func $startup_info_init (param $out i32)
+    (call $guest_memset (local.get $out) (i32.const 0) (i32.const 68))
+    (call $gs32 (local.get $out) (i32.const 68))
+    (call $gs32 (i32.add (local.get $out) (i32.const 44)) (i32.const 1)) ;; dwFlags = STARTF_USESHOWWINDOW
+    (call $gs16 (i32.add (local.get $out) (i32.const 48)) (i32.const 1))) ;; wShowWindow = SW_SHOWNORMAL
+
   ;; 301: GetStartupInfoW — zero-fill the struct
   (func $handle_GetStartupInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $zero_memory (call $g2w (local.get $arg0)) (i32.const 68))
-    ;; Set cb = 68 (sizeof STARTUPINFOW)
-    (call $gs32 (local.get $arg0) (i32.const 68))
+    (call $startup_info_init (local.get $arg0))
     (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
@@ -72,6 +84,13 @@
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
+
+  ;; mouse_event(flags, dx, dy, data, extraInfo): system input, not PostMessage.
+  (func $handle_mouse_event (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (drop (call $host_queue_mouse_input (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ToAsciiEx(uVirtKey, uScanCode, lpKeyState, lpChar, uFlags, hkl) → int.
   ;; 6-arg stdcall. The US keyboard layout: the character the key produces
@@ -569,11 +588,11 @@
   ;; The DLL table is process-shared while dll_count is synchronized into each
   ;; worker instance, so resolving on the rare initialization call is safer
   ;; than caching a guest address in a per-instance mutable global.
-  (func $guest_comctl32_init_common_controls_ex (result i32)
+  (func $guest_comctl32_init_common_controls_ex_locked (result i32)
     (local $idx i32) (local $tbl i32) (local $base i32)
     (local $exp_rva i32) (local $name_rva i32)
     (block $missing (loop $scan
-      (br_if $missing (i32.ge_u (local.get $idx) (global.get $dll_count)))
+      (br_if $missing (i32.ge_u (local.get $idx) (i32.atomic.load (global.get $DLL_SHARED))))
       (local.set $tbl (i32.add (global.get $DLL_TABLE)
         (i32.mul (local.get $idx) (i32.const 32))))
       (local.set $base (i32.load (local.get $tbl)))
@@ -719,26 +738,125 @@ nW — STUB: unimplemented
     ;; cdecl: only pop return address
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
-  ;; 326: TlsAlloc — return next TLS index
+  ;; TLS state is process-shared; no host calls or allocation occur under this
+  ;; lock. Bitmap changes, vector publication and API reads/writes serialize.
+  (func $tls_lock
+    (loop $retry
+      (br_if $retry (i32.atomic.rmw.cmpxchg offset=4
+        (global.get $TLS_NEXT_INDEX_SHARED) (i32.const 0) (i32.const 1)))))
+  (func $tls_unlock
+    (i32.atomic.store offset=4 (global.get $TLS_NEXT_INDEX_SHARED) (i32.const 0)))
+  (func $tls_bitmap_word (param $index i32) (result i32)
+    (i32.add (global.get $TLS_NEXT_INDEX_SHARED)
+      (i32.add (i32.const 12) (i32.shl (i32.shr_u (local.get $index) (i32.const 5)) (i32.const 2)))))
+  ;; Caller holds TLS lock. Vectors are process-lifetime allocations, as before;
+  ;; clearing never frees the application-owned values stored in their slots.
+  (func $tls_clear_index (param $index i32)
+    (local $node i32) (local $vector i32)
+    (local.set $node (i32.load offset=8 (global.get $TLS_NEXT_INDEX_SHARED)))
+    (block $done (loop $next
+      (br_if $done (i32.eqz (local.get $node)))
+      (local.set $vector (call $gl32 (i32.add (local.get $node) (i32.const 4))))
+      (if (local.get $vector)
+        (then (call $gs32 (i32.add (local.get $vector) (i32.shl (local.get $index) (i32.const 2))) (i32.const 0))))
+      (local.set $node (call $gl32 (local.get $node)))
+      (br $next))))
+  (func $tls_attach_slots (param $vector i32) (result i32)
+    (local $node i32)
+    (if (i32.eqz (global.get $tls_registry_node))
+      (then
+        (local.set $node (call $heap_alloc (i32.const 8)))
+        (if (i32.eqz (local.get $node)) (then (return (i32.const 0))))))
+    (call $tls_lock)
+    (if (local.get $node)
+      (then
+        (call $gs32 (local.get $node) (i32.load offset=8 (global.get $TLS_NEXT_INDEX_SHARED)))
+        (i32.store offset=8 (global.get $TLS_NEXT_INDEX_SHARED) (local.get $node))
+        (global.set $tls_registry_node (local.get $node))))
+    (call $gs32 (i32.add (global.get $tls_registry_node) (i32.const 4)) (local.get $vector))
+    (global.set $tls_slots (local.get $vector))
+    (call $tls_unlock)
+    (i32.const 1))
+  (func $tls_ensure_slots (result i32)
+    (local $vector i32)
+    (if (global.get $tls_slots) (then (return (global.get $tls_slots))))
+    (local.set $vector (call $heap_alloc (i32.shl (global.get $TLS_SLOT_COUNT) (i32.const 2))))
+    (if (i32.eqz (local.get $vector)) (then (return (i32.const 0))))
+    (call $zero_memory (call $g2w (local.get $vector)) (i32.shl (global.get $TLS_SLOT_COUNT) (i32.const 2)))
+    (if (i32.eqz (call $tls_attach_slots (local.get $vector)))
+      (then (call $heap_free (local.get $vector)) (return (i32.const 0))))
+    (local.get $vector))
+  (func $tls_reserve (result i32)
+    (local $index i32) (local $word i32) (local $mask i32)
+    (call $tls_lock)
+    (block $full (loop $scan
+      (br_if $full (i32.ge_u (local.get $index) (global.get $TLS_SLOT_COUNT)))
+      (local.set $word (call $tls_bitmap_word (local.get $index)))
+      (local.set $mask (i32.shl (i32.const 1) (local.get $index)))
+      (if (i32.eqz (i32.and (i32.load (local.get $word)) (local.get $mask)))
+        (then
+          (call $tls_clear_index (local.get $index))
+          (i32.store (local.get $word) (i32.or (i32.load (local.get $word)) (local.get $mask)))
+          (if (i32.ge_u (local.get $index) (i32.atomic.load (global.get $TLS_NEXT_INDEX_SHARED)))
+            (then (i32.atomic.store (global.get $TLS_NEXT_INDEX_SHARED) (i32.add (local.get $index) (i32.const 1)))))
+          (call $tls_unlock)
+          (return (local.get $index))))
+      (local.set $index (i32.add (local.get $index) (i32.const 1)))
+      (br $scan)))
+    (call $tls_unlock)
+    (i32.const -1))
+  (func $tls_release_index (param $index i32) (result i32)
+    (local $word i32) (local $mask i32)
+    (if (i32.ge_u (local.get $index) (global.get $TLS_SLOT_COUNT)) (then (return (i32.const 0))))
+    (local.set $word (call $tls_bitmap_word (local.get $index)))
+    (local.set $mask (i32.shl (i32.const 1) (local.get $index)))
+    (call $tls_lock)
+    (if (i32.eqz (i32.and (i32.load (local.get $word)) (local.get $mask)))
+      (then (call $tls_unlock) (return (i32.const 0))))
+    (call $tls_clear_index (local.get $index))
+    (i32.store (local.get $word) (i32.and (i32.load (local.get $word)) (i32.xor (local.get $mask) (i32.const -1))))
+    (call $tls_unlock)
+    (i32.const 1))
+  ;; Compatibility spawn metadata is a high-water mark, not the current used
+  ;; set. Never reserve a freed hole merely because a stale snapshot arrives.
+  (func $tls_publish_minimum (param $minimum i32)
+    (local $index i32) (local $word i32)
+    (if (i32.gt_u (local.get $minimum) (global.get $TLS_SLOT_COUNT))
+      (then (local.set $minimum (global.get $TLS_SLOT_COUNT))))
+    (call $tls_lock)
+    (local.set $index (i32.atomic.load (global.get $TLS_NEXT_INDEX_SHARED)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $index) (local.get $minimum)))
+      (local.set $word (call $tls_bitmap_word (local.get $index)))
+      (i32.store (local.get $word) (i32.or (i32.load (local.get $word)) (i32.shl (i32.const 1) (local.get $index))))
+      (local.set $index (i32.add (local.get $index) (i32.const 1)))
+      (br $scan)))
+    (i32.atomic.store (global.get $TLS_NEXT_INDEX_SHARED) (local.get $index))
+    (call $tls_unlock))
+
+  ;; 326: TlsAlloc — reserve a reusable process index, with a per-thread vector.
   (func $handle_TlsAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $index i32)
+    (if (i32.eqz (call $tls_ensure_slots))
+      (then
+        (global.set $last_error (i32.const 8))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
     (local.set $index (call $tls_reserve))
     (if (i32.eq (local.get $index) (i32.const -1))
       (then
+        (global.set $last_error (i32.const 259))
         (i32.store offset=0 (global.get $reg_base) (i32.const -1)) ;; TLS_OUT_OF_INDEXES
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (return)))
-    (if (i32.eqz (global.get $tls_slots))
-      (then
-        (global.set $tls_slots (call $heap_alloc (i32.const 256)))
-        (call $zero_memory (call $g2w (global.get $tls_slots)) (i32.const 256))))
     (i32.store offset=0 (global.get $reg_base) (local.get $index))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 327: TlsGetValue(index)
   (func $handle_TlsGetValue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (i32.ge_u (local.get $arg0) (i32.const 64))
+    (if (i32.ge_u (local.get $arg0) (global.get $TLS_SLOT_COUNT))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
@@ -750,38 +868,42 @@ nW — STUB: unimplemented
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
+    (call $tls_lock)
     (i32.store offset=0 (global.get $reg_base) (call $gl32 (i32.add (global.get $tls_slots) (i32.shl (local.get $arg0) (i32.const 2)))))
+    (call $tls_unlock)
     (global.set $last_error (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 328: TlsSetValue(index, value)
   (func $handle_TlsSetValue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (i32.ge_u (local.get $arg0) (i32.const 64))
+    (if (i32.ge_u (local.get $arg0) (global.get $TLS_SLOT_COUNT))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    (if (i32.eqz (global.get $tls_slots))
+    (if (i32.eqz (call $tls_ensure_slots))
       (then
-        (global.set $tls_slots (call $heap_alloc (i32.const 256)))
-        (call $zero_memory (call $g2w (global.get $tls_slots)) (i32.const 256))))
+        (global.set $last_error (i32.const 8))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+        (return)))
+    (call $tls_lock)
     (call $gs32 (i32.add (global.get $tls_slots) (i32.shl (local.get $arg0) (i32.const 2))) (local.get $arg1))
-    (global.set $last_error (i32.const 0))
+    (call $tls_unlock)
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
-  ;; 329: TlsFree(index) — return TRUE
+  ;; 329: TlsFree(index) — clear all vectors and return the index to the bitmap.
   (func $handle_TlsFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (i32.ge_u (local.get $arg0) (i32.const 64))
+    (if (i32.eqz (call $tls_release_index (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
-    (global.set $last_error (i32.const 0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
@@ -877,6 +999,7 @@ nW — STUB: unimplemented
         (local.set $cs (i32.atomic.load (call $cs_slot (local.get $i))))
         (if (local.get $cs)
           (then
+            (call $cs_unaligned_lock (local.get $cs))
             (if (i32.eq (i32.load offset=12 (local.get $cs)) (local.get $owner))
               (then
                 ;; Counters first, owner last — the same publish-last order the
@@ -887,7 +1010,8 @@ nW — STUB: unimplemented
                 (if (call $cs_owner_aligned (local.get $cs))
                   (then (i32.atomic.store offset=12 (local.get $cs) (i32.const 0)))
                   (else (i32.store offset=12 (local.get $cs) (i32.const 0))))
-                (local.set $n (i32.add (local.get $n) (i32.const 1)))))))
+                (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+            (call $cs_unaligned_unlock (local.get $cs))))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $scan)))
     (local.get $n))
@@ -1006,13 +1130,14 @@ nW — STUB: unimplemented
             (local.set $spin (i32.add (local.get $spin) (i32.const 1)))
             (br_if $again (i32.lt_u (local.get $spin) (i32.const 2000))))))
       (else
-        ;; A misaligned CRITICAL_SECTION would TRAP the atomic — WASM requires
-        ;; natural alignment where `lock cmpxchg` does not. Compilers align the
-        ;; struct, so this is the rare path, and being no better than the old
-        ;; racy version there beats killing the app.
+        ;; Packed guest structs can put this word across an atomic boundary.
+        ;; Serialize the claim with the split-lock mutex, never across guest
+        ;; execution, imports, callbacks, or a park.
+        (call $cs_unaligned_lock (local.get $cs))
         (local.set $prev (i32.load offset=12 (local.get $cs)))
         (if (i32.eqz (local.get $prev))
-          (then (i32.store offset=12 (local.get $cs) (local.get $me))))))
+          (then (i32.store offset=12 (local.get $cs) (local.get $me))))
+        (call $cs_unaligned_unlock (local.get $cs))))
     ;; Held by somebody else: park and retry. Both operands are 0/1 predicates.
     (if (i32.and (i32.ne (local.get $prev) (i32.const 0))
                  (i32.ne (local.get $prev) (local.get $me)))
@@ -1061,9 +1186,11 @@ nW — STUB: unimplemented
         (local.set $prev (i32.atomic.rmw.cmpxchg offset=12
           (local.get $cs) (i32.const 0) (local.get $me))))
       (else
+        (call $cs_unaligned_lock (local.get $cs))
         (local.set $prev (i32.load offset=12 (local.get $cs)))
         (if (i32.eqz (local.get $prev))
-          (then (i32.store offset=12 (local.get $cs) (local.get $me))))))
+          (then (i32.store offset=12 (local.get $cs) (local.get $me))))
+        (call $cs_unaligned_unlock (local.get $cs))))
     (if (i32.or (i32.eqz (local.get $prev))
                 (i32.eq (local.get $prev) (local.get $me)))
       (then
@@ -1081,10 +1208,22 @@ nW — STUB: unimplemented
   (func $cs_owner_aligned (param $cs i32) (result i32)
     (i32.eqz (i32.and (i32.add (local.get $cs) (i32.const 12)) (i32.const 3))))
 
+  ;; This internal mutex protects only bounded plain-memory accesses. Aligned
+  ;; sections retain their existing CAS path and never take this mutex.
+  (func $cs_unaligned_lock (param $cs i32)
+    (if (i32.eqz (call $cs_owner_aligned (local.get $cs)))
+      (then (loop $retry
+        (br_if $retry (i32.atomic.rmw.cmpxchg
+          (global.get $LOCK_MUTEX) (i32.const 0) (i32.const 1)))))))
+  (func $cs_unaligned_unlock (param $cs i32)
+    (if (i32.eqz (call $cs_owner_aligned (local.get $cs)))
+      (then (i32.atomic.store (global.get $LOCK_MUTEX) (i32.const 0)))))
+
   ;; 332: LeaveCriticalSection(lpCriticalSection)
   (func $handle_LeaveCriticalSection (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $cs i32) (local $rec i32)
     (local.set $cs (call $g2w (local.get $arg0)))
+    (call $cs_unaligned_lock (local.get $cs))
     ;; A non-owner Leave is invalid and must not mutate the section. The former
     ;; compatibility path released somebody else's lock because callbacks could
     ;; execute on the wrong instance; owner-thread SendMessage removes that cause.
@@ -1093,6 +1232,7 @@ nW — STUB: unimplemented
         (global.set $cs_bad_leaves (i32.add (global.get $cs_bad_leaves) (i32.const 1)))
         (global.set $cs_bad_leave_addr (local.get $cs))
         (global.set $cs_bad_leave_owner (i32.load offset=12 (local.get $cs)))
+        (call $cs_unaligned_unlock (local.get $cs))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     ;; RecursionCount-- / LockCount--
@@ -1110,6 +1250,7 @@ nW — STUB: unimplemented
         (if (call $cs_owner_aligned (local.get $cs))
           (then (i32.atomic.store offset=12 (local.get $cs) (i32.const 0)))
           (else (i32.store offset=12 (local.get $cs) (i32.const 0))))))
+    (call $cs_unaligned_unlock (local.get $cs))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
@@ -1180,11 +1321,54 @@ nW — STUB: unimplemented
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
+  ;; One indivisible DWORD operation across guest WASM instances. Interlocked
+  ;; refcounts are often acquired BEFORE an object's critical section, so a
+  ;; load followed by a store can free an object while another thread uses it.
+  ;; op 0 = add, 1 = exchange, 2 = compare/exchange; return the OLD value.
+  (func $interlocked_rmw32
+      (param $ga i32) (param $value i32) (param $compare i32) (param $op i32)
+      (result i32)
+    (local $wa i32) (local $old i32)
+    ;; An aligned DWORD cannot straddle a guest page. Translation preserves
+    ;; alignment for all normal mappings; check the result too for the sink.
+    (if (i32.eqz (i32.and (local.get $ga) (i32.const 3)))
+      (then
+        (local.set $wa (call $g2w (local.get $ga)))
+        (if (i32.eqz (i32.and (local.get $wa) (i32.const 3)))
+          (then
+            ;; Keep gs32's executable-page invalidation before publishing the
+            ;; write. A failed compare/exchange conservatively invalidates too,
+            ;; but does not report a write to page watchers.
+            (if (call $code_page_test (local.get $ga))
+              (then (call $code_write_hit (local.get $ga) (i32.const 4))))
+            (if (i32.eqz (local.get $op))
+              (then (local.set $old (i32.atomic.rmw.add
+                (local.get $wa) (local.get $value))))
+              (else (if (i32.eq (local.get $op) (i32.const 1))
+                (then (local.set $old (i32.atomic.rmw.xchg
+                  (local.get $wa) (local.get $value))))
+                (else (local.set $old (i32.atomic.rmw.cmpxchg
+                  (local.get $wa) (local.get $compare) (local.get $value)))))))
+            (if (i32.or (i32.ne (local.get $op) (i32.const 2))
+                  (i32.eq (local.get $old) (local.get $compare)))
+              (then (call $page_watch_write_one (local.get $wa))))
+            (return (local.get $old))))))
+    ;; Win32's interlocked atomicity contract requires DWORD alignment. Keep
+    ;; legacy unaligned callers working without a WASM atomic-alignment trap;
+    ;; gl32/gs32 also gather/scatter noncontiguous sparse page boundaries.
+    (local.set $old (call $gl32 (local.get $ga)))
+    (if (i32.eqz (local.get $op))
+      (then (call $gs32 (local.get $ga) (i32.add (local.get $old) (local.get $value))))
+      (else (if (i32.or (i32.eq (local.get $op) (i32.const 1))
+                  (i32.eq (local.get $old) (local.get $compare)))
+        (then (call $gs32 (local.get $ga) (local.get $value))))))
+    (local.get $old))
+
   ;; 340: InterlockedIncrement(ptr)
   (func $handle_InterlockedIncrement (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32)
-    (local.set $tmp (i32.add (call $gl32 (local.get $arg0)) (i32.const 1)))
-    (call $gs32 (local.get $arg0) (local.get $tmp))
+    (local.set $tmp (i32.add (call $interlocked_rmw32
+      (local.get $arg0) (i32.const 1) (i32.const 0) (i32.const 0)) (i32.const 1)))
     (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
@@ -1192,27 +1376,40 @@ nW — STUB: unimplemented
   ;; 341: InterlockedDecrement(ptr)
   (func $handle_InterlockedDecrement (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32)
-    (local.set $tmp (i32.sub (call $gl32 (local.get $arg0)) (i32.const 1)))
-    (call $gs32 (local.get $arg0) (local.get $tmp))
+    (local.set $tmp (i32.sub (call $interlocked_rmw32
+      (local.get $arg0) (i32.const -1) (i32.const 0) (i32.const 0)) (i32.const 1)))
     (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 342: InterlockedExchange(ptr, value)
   (func $handle_InterlockedExchange (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $gl32 (local.get $arg0)))
-    (call $gs32 (local.get $arg0) (local.get $arg1))
+    (i32.store offset=0 (global.get $reg_base) (call $interlocked_rmw32
+      (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
+  ;; InterlockedExchangeAdd(ptr, delta) → original (unlike Increment/Decrement).
+  (func $handle_InterlockedExchangeAdd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $interlocked_rmw32
+      (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+  )
+
   ;; InterlockedCompareExchange(ptr, newVal, comparand) → original
-  ;; Atomic (single-threaded emu, so just sequential): if *ptr == comparand, *ptr = newVal.
+  ;; Atomically replace only when *ptr == comparand; return the prior value.
   (func $handle_InterlockedCompareExchange (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $orig i32)
-    (local.set $orig (call $gl32 (local.get $arg0)))
+    (local.set $orig (call $interlocked_rmw32
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 2)))
     (i32.store offset=0 (global.get $reg_base) (local.get $orig))
-    (if (i32.eq (local.get $orig) (local.get $arg2))
-      (then (call $gs32 (local.get $arg0) (local.get $arg1))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
+  ;; One coherent registry read, with no guest callback or host import held.
+  (func $guest_comctl32_init_common_controls_ex  (result i32)
+    (local $value i32)
+    (call $dll_load_lock_begin)
+    (local.set $value (call $guest_comctl32_init_common_controls_ex_locked ))
+    (call $lock_release (global.get $DLL_LOAD_LOCK))
+    (local.get $value))

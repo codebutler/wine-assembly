@@ -3,6 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    // A direct link (?app=ID) is a request for that program, not for the
+    // desktop. Marked here, before the first paint, so CSS can keep the
+    // desktop, its icons and the taskbar from ever being drawn; the desktop
+    // is built only when the visitor leaves the program. The launch window
+    // counts its 500ms from navigation start (startedAt 0 on the
+    // performance.now() clock): lib/launch-progress.js picks this up as soon
+    // as it loads. ?debug keeps the old page, toolbar and all.
+    (function () {
+      var q = new URLSearchParams(location.search);
+      var id = q.get('app');
+      if (!id || q.has('debug')) return;
+      document.documentElement.classList.add('direct-launch');
+      window.__wineDirectLaunch = { appId: id, startedAt: 0 };
+    })();
+  </script>
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#008080">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -601,6 +617,140 @@
       display: flex;
       align-items: center;
     }
+    /* A direct ?app= link (the head script sets html.direct-launch): no
+       icons, no taskbar, no debug chrome -- the desktop's teal with, if the
+       launch takes longer than 500ms, the launch window on it. The desktop
+       is built when the program exits (ensureDesktop). No background rule
+       here: a windowed program (Minesweeper) sits on the Win98 teal as it
+       would on the desktop, and a fullscreen one gets black from the
+       page-fullscreen / exclusive-fullscreen rules, which an !important
+       black here used to pre-empt for every app. */
+    html.direct-launch #shell { margin: 0; border: 0; background: transparent; }
+    html.direct-launch #titlebar,
+    html.direct-launch #toolbar,
+    html.direct-launch #log,
+    html.direct-launch #debug-peek,
+    html.direct-launch #taskbar,
+    html.direct-launch #start-menu,
+    html.direct-launch #desktop-icons,
+    html.direct-launch #readme-window,
+    html.direct-launch #build-stamp,
+    html.direct-launch #compile-status { display: none !important; }
+
+    /* The launch window (lib/launch-progress.js): the Win98 "File Download"
+       dialog. Above the screen canvas and the taskbar, below crash reports
+       and the LAN cards. Never modal on the desktop -- it takes only the
+       clicks that land on it. */
+    .wa-launch {
+      position: fixed; left: 50%; top: 45%; transform: translate(-50%, -50%);
+      z-index: 5000;
+      width: min(400px, calc(100vw - 20px));
+      /* Never a scrollbar: every line below is capped (ellipsis, clamped
+         heading, a fixed number of Details rows), so the window fits a
+         landscape phone; anything still taller is clipped, not scrolled. */
+      max-height: calc(100dvh - 16px); overflow: hidden;
+      background: #c0c0c0; color: #000;
+      border: 1px solid; border-color: #dfdfdf #000 #000 #dfdfdf;
+      box-shadow: inset 1px 1px #fff, inset -1px -1px #808080, 2px 2px 0 rgba(0,0,0,.35);
+      font: 11px "MS Sans Serif", Tahoma, Arial, sans-serif;
+      user-select: none; -webkit-user-select: none;
+    }
+    .wa-launch[hidden], .wa-launch.wa-launch-minimized { display: none; }
+    .wa-launch [hidden] { display: none !important; }
+    .wa-launch-titlebar {
+      display: flex; align-items: center; gap: 4px; margin: 2px; padding: 2px 3px; height: 18px;
+      background: linear-gradient(90deg, #000080, #1084d0); color: #fff; font-weight: bold;
+      white-space: nowrap; overflow: hidden; touch-action: none; cursor: default;
+    }
+    .wa-launch-ico { width: 16px; height: 16px; image-rendering: pixelated; flex: none; }
+    .wa-launch-titletext { overflow: hidden; text-overflow: ellipsis; }
+    .wa-launch-tbtns { margin-left: auto; display: flex; gap: 2px; flex: none; }
+    .wa-launch-tb {
+      width: 16px; height: 14px; padding: 0; background: #c0c0c0; color: #000;
+      border: 1px solid; border-color: #fff #000 #000 #fff; box-shadow: inset -1px -1px #808080;
+      font: bold 9px/12px Tahoma, Arial, sans-serif; text-align: center; cursor: default;
+    }
+    .wa-launch-body { padding: 8px 10px 10px; }
+    .wa-launch-art { height: 44px; margin-bottom: 8px; }
+    .wa-launch-art svg { display: block; }
+    .wa-launch-page { animation: wa-launch-fly 1.6s linear infinite; }
+    @keyframes wa-launch-fly {
+      0% { transform: translate(52px, 14px); }
+      50% { transform: translate(122px, 2px); }
+      100% { transform: translate(196px, 14px); }
+    }
+    .wa-launch-err { display: flex; gap: 10px; align-items: flex-start; margin: 2px 0 6px; }
+    .wa-launch-erricon {
+      width: 32px; height: 32px; border-radius: 50%; flex: none;
+      background: #e00000; color: #fff; border: 1px solid #800000;
+      font: bold 20px/32px Arial, sans-serif; text-align: center;
+    }
+    .wa-launch-err.wa-launch-noicon .wa-launch-erricon { display: none; }
+    .wa-launch-heading {
+      font-weight: bold; padding-top: 2px; overflow-wrap: anywhere;
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
+    }
+    .wa-launch-saving div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; }
+    .wa-launch-bar {
+      position: relative; height: 18px; margin: 6px 0 2px; padding: 2px; overflow: hidden;
+      border: 1px solid; border-color: #808080 #fff #fff #808080;
+    }
+    .wa-launch-fill {
+      height: 100%; width: 0;
+      background: repeating-linear-gradient(90deg, #000080 0 9px, transparent 9px 11px);
+    }
+    .wa-launch-indeterminate .wa-launch-fill {
+      position: absolute; top: 2px; bottom: 2px; width: 42px; height: auto;
+      animation: wa-launch-slide 1.4s linear infinite;
+    }
+    @keyframes wa-launch-slide { from { left: -42px; } to { left: 100%; } }
+    .wa-launch-status { margin-top: 6px; }
+    .wa-launch-status div { margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wa-launch-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; margin-top: 8px; }
+    .wa-launch-grid span:nth-child(even) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wa-launch-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+    .wa-launch-btn {
+      min-width: 75px; height: 23px; padding: 0 8px; background: #c0c0c0; color: #000;
+      font: 11px "MS Sans Serif", Tahoma, Arial, sans-serif;
+      border: 1px solid; border-color: #fff #000 #000 #fff; box-shadow: inset -1px -1px #808080;
+      cursor: default;
+    }
+    .wa-launch-btn:active { border-color: #000 #fff #fff #000; box-shadow: inset 1px 1px #808080; }
+    .wa-launch-default { box-shadow: inset -1px -1px #808080, 0 0 0 1px #000; }
+    .wa-launch-btn:focus-visible, .wa-launch-tb:focus-visible { outline: 1px dotted #000; outline-offset: -4px; }
+    /* A fixed number of rows (DETAILS_MAX_ROWS in lib/launch-progress.js,
+       with a summary row for the rest), so it never needs to scroll. */
+    .wa-launch-details { margin-top: 8px; overflow: hidden; background: #fff; border: 2px inset #dfdfdf; }
+    .wa-launch-details table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .wa-launch-details th:nth-child(2), .wa-launch-details td:nth-child(2) { width: 64px; }
+    .wa-launch-details th:nth-child(3), .wa-launch-details td:nth-child(3) { width: 72px; }
+    .wa-launch-details th {
+      position: sticky; top: 0; text-align: left; font-weight: normal; padding: 1px 4px;
+      background: #c0c0c0; border: 1px solid; border-color: #fff #808080 #808080 #fff;
+    }
+    .wa-launch-details td { padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wa-launch-live {
+      position: absolute; width: 1px; height: 1px; overflow: hidden;
+      clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+    }
+    @media (pointer: coarse) {
+      .wa-launch-btn { height: 44px; min-width: 88px; }
+      .wa-launch-tb { width: 28px; height: 22px; }
+      .wa-launch-titlebar { height: 26px; }
+    }
+    /* A landscape phone: the art goes, the body tightens, the window fits. */
+    @media (max-height: 420px) {
+      .wa-launch { top: 50%; width: min(460px, calc(100vw - 20px)); }
+      .wa-launch-art { display: none; }
+      .wa-launch-body { padding: 6px 10px 8px; }
+      .wa-launch-foot { margin-top: 6px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .wa-launch-page { animation: none; transform: translate(122px, 2px); }
+      .wa-launch-indeterminate .wa-launch-fill { animation: none; left: 30%; }
+    }
+    #launch-task-buttons { display: flex; gap: 2px; min-width: 0; }
+    #launch-task-buttons:empty { display: none; }
     #compile-status {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
       background: #c0c0c0; border: 2px outset #dfdfdf; padding: 16px 24px;
@@ -660,6 +810,14 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 22px;
     }
+    /* A faint 1px halo plus a hard 1px drop, like the label's text-shadow.
+       Win98 drew icons bare, but some art is drawn in the desktop's own teal:
+       Quake II's emblem is teal-bodied and vanished into the background
+       without an edge. A hard edge keeps pixel art crisp where a soft
+       XP-style shadow would smear it. */
+    .desktop-icon .icon-img img {
+      filter: drop-shadow(0 0 1px rgba(0,0,0,.7)) drop-shadow(1px 1px 0 rgba(0,0,0,.85));
+    }
     .desktop-icon .icon-label {
       color: white;
       font-size: 11px;
@@ -679,6 +837,29 @@
        every pixel. The way back to the desktop is the app's own close button —
        when the last guest exits, the icons return. */
     body.single-app #taskbar { display: none; }
+    /* ...except on the phone's desktop, where the Start menu is the way to
+       add a game and to log in. It floats over the bottom of the desktop
+       rather than taking layout height, so the guest screen is not resized
+       when an app starts and the taskbar goes away again. */
+    body.single-app:not(.app-running) #taskbar {
+      display: flex;
+      position: fixed; left: 0; right: 0; bottom: 0;
+      z-index: 20;
+      padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px));
+    }
+    body.single-app #start-menu {
+      position: fixed;
+      bottom: calc(30px + env(safe-area-inset-bottom, 0px));
+      z-index: 21;
+    }
+    body.single-app.app-running #start-menu { display: none; }
+    body.single-app:not(.app-running) #build-stamp {
+      bottom: calc(38px + env(safe-area-inset-bottom, 0px));
+    }
+    /* The last icon row must scroll clear of the floating taskbar. */
+    body.single-app:not(.app-running) #desktop-icons {
+      padding-bottom: calc(44px + env(safe-area-inset-bottom, 0px));
+    }
     /* The on-screen keyboard covers the page without resizing it. The guest
        screen keeps its size (a keyboard is not a display-mode change) and is
        translated up instead, by lib/mobile-keyboard.js. The transition is
@@ -1121,10 +1302,14 @@
       display: flex;
       position: fixed;
       top: env(safe-area-inset-top);
-      left: 0;
+      /* Clear of the touch overlay's top-corner buttons too (Esc/Enter/Opts):
+         the strip sits above the overlay, so a tap on a button under it never
+         reached the game. lib/touch-controls.js publishes how far each top
+         corner reaches; both are 0px when no overlay is up. */
+      left: var(--tc-top-left-reserve, 0px);
       /* Clear of the exit chip (30px at right:4px). A strip that covers the
          only way out of full screen is worse than no strip. */
-      right: calc(40px + env(safe-area-inset-right));
+      right: max(calc(40px + env(safe-area-inset-right)), var(--tc-top-right-reserve, 0px));
       /* 44px is Apple's minimum touch target, and this was 44. It has to be
          hit on the first try by someone who has not been told it is there,
          with a moving thumb, and 44 was reported as "quite thin" on the
@@ -1149,8 +1334,8 @@
       animation: gutter-nudge 1.6s ease-in-out infinite;
     }
     body.windowed-phone.scroll-collapse #scroll-collapse-gutter {
-      left: 0;
-      right: 0;
+      left: var(--tc-top-left-reserve, 0px);
+      right: var(--tc-top-right-reserve, 0px);
       box-sizing: border-box;
       padding-left: env(safe-area-inset-left);
       padding-right: env(safe-area-inset-right);
@@ -1413,6 +1598,26 @@
           <option value="mirc59">mIRC 5.9 Installer</option>
         </optgroup>
         <optgroup label="Local Candidates">
+          <option value="winboard">WinBoard 4.2.7 (experimental)</option>
+          <option value="dungeons_of_dredmor_release">Dungeons of Dredmor (Steam release, experimental)</option>
+          <option value="dungeons_of_dredmor">Dungeons of Dredmor (Steam beta, experimental)</option>
+          <option value="pirates_2004">Sid Meier's Pirates! (experimental)</option>
+          <option value="simcity2000_net">SimCity 2000 Network Edition</option>
+          <option value="simcity2000_net_server">SC2K Net Server</option>
+          <option value="windows_installer_20">Windows Installer 2.0 (experimental)</option>
+          <option value="ricochet_xtreme">Ricochet Xtreme</option>
+          <option value="alien_shooter">Alien Shooter</option>
+          <option value="collapse_crunch">Collapse! Crunch</option>
+          <option value="zuma_deluxe">Zuma Deluxe (experimental)</option>
+          <option value="crimsonland">Crimsonland (experimental)</option>
+          <option value="ultima4_gog">Ultima IV (GOG DOSBox)</option>
+          <option value="daggerfall_gog">Daggerfall (original GOG DOSBox)</option>
+          <option value="arena_gog">The Elder Scrolls: Arena (GOG DOSBox)</option>
+          <option value="daikatana_demo">Daikatana Demo</option>
+          <option value="asghan_demo">Asghan: The Dragon Slayer Demo</option>
+          <option value="avp_marine_demo">Aliens versus Predator: Marine Demo</option>
+          <option value="carmageddon2_demo">Carmageddon II: Carpocalypse Now Demo</option>
+          <option value="scummvm_fotaq">ScummVM: Flight of the Amazon Queen</option>
           <option value="far_manager_170">Far Manager 1.70</option>
           <option value="winrar_310">WinRAR 3.10</option>
           <option value="cave_story">Cave Story</option>
@@ -1432,29 +1637,110 @@
           <option value="nethack_win32">NetHack</option>
           <option value="qbob">QBob</option>
           <option value="tetrinet">TetriNET</option>
+          <option value="moorhuhn">Moorhuhn</option>
+          <option value="moorhuhn_2">Moorhuhn 2</option>
+          <option value="moorhuhn_winter">Moorhuhn Winter-Edition</option>
+          <option value="moorhuhn_3">Moorhuhn 3</option>
+          <option value="moorhuhn_tennis">Moorhuhn Tennis</option>
+          <option value="moorhuhn_3_puzzle">Moorhuhn 3 Puzzle</option>
+          <option value="moorhuhn_3_puzzle_fisch">Moorhuhn 3 Puzzle: Fisch</option>
+          <option value="moorhuhn_3_puzzle_leuchtturm">Moorhuhn 3 Puzzle: Leuchtturm</option>
+          <option value="moorhuhn_training_1">Moorhuhn Training-Area 1</option>
+          <option value="moorhuhn_training_2">Moorhuhn Training-Area 2</option>
+          <option value="moorhuhn_2_making_of">Making of Moorhuhn 2</option>
+          <option value="gallinelle">Gallinelle (Moorhuhn, Italian)</option>
           <option value="curse_monkey_island_demo">Curse of Monkey Island Demo</option>
-          <option value="atomic_bomberman_demo">Atomic Bomberman Demo</option>
+          <option value="arcanum_demo">Arcanum Demo</option>
+          <option value="atomic_bomberman_june_demo">Atomic Bomberman Demo</option>
           <option value="broken_sword_demo">Broken Sword Demo</option>
           <option value="dungeon_keeper_demo">Dungeon Keeper Demo</option>
           <option value="darkstone_demo">Darkstone Demo</option>
+          <option value="red_alert_95_demo">Command &amp; Conquer: Red Alert Demo</option>
+          <option value="die_by_the_sword_demo">Die by the Sword Demo</option>
+          <option value="dark_colony_demo">Dark Colony Demo</option>
+          <option value="atlantis_demo">Atlantis: The Lost Tales Demo</option>
+          <option value="dark_reign_demo">Dark Reign Demo</option>
+          <option value="populous_tb_demo">Populous: The Beginning Demo</option>
+          <option value="descent3_demo">Descent 3 Demo</option>
+          <option value="carmageddon_tdr2000_demo">Carmageddon TDR2000 Alpha Test Demo</option>
+          <option value="croc2_demo">Croc 2 Demo (experimental)</option>
+          <option value="diehard_nakatomi_demo">Die Hard: Nakatomi Plaza Demo</option>
+          <option value="drakan_demo">Drakan: Order of the Flame Demo</option>
+          <option value="braveheart_demo">Braveheart Demo</option>
+          <option value="anachronox_demo">Anachronox Demo</option>
+          <option value="anno1602_demo">Anno 1602 Demo</option>
+          <option value="driver_demo">Driver Demo</option>
+          <option value="cmr2_demo">Colin McRae Rally 2.0 Demo</option>
+          <option value="colin_mcrae_rally_demo">Colin McRae Rally Demo</option>
+          <option value="avp_alien_demo">Aliens versus Predator: Alien Demo</option>
+          <option value="alpha_centauri_demo">Sid Meier's Alpha Centauri Demo</option>
+          <option value="freespace_demo">Descent: FreeSpace Demo</option>
+          <option value="dark_earth_demo">Dark Earth Demo</option>
+          <option value="daytona_usa_deluxe_demo">Daytona USA Deluxe Demo</option>
+          <option value="blood2_demo">Blood II: The Chosen Demo</option>
+          <option value="disciples_demo">Disciples: Sacred Lands Demo</option>
+          <option value="commandos_demo">Commandos: Behind Enemy Lines Demo</option>
+          <option value="age_of_wonders_demo">Age of Wonders Beta Demo</option>
+          <option value="age_of_wonders2_demo">Age of Wonders II Beta Demo</option>
+          <option value="crusaders_mm_demo">Crusaders of Might and Magic Demo</option>
+          <option value="delta_force_demo">Delta Force Demo</option>
+          <option value="comanche_gold_demo">Comanche Gold Demo</option>
+          <option value="disciples2_demo">Disciples II: Dark Prophecy Demo</option>
+          <option value="return_fire_demo">Return Fire Demo</option>
+          <option value="baldurs_gate2_demo">Baldur's Gate II: Shadows of Amn Demo</option>
+          <option value="dungeon_siege_demo">Dungeon Siege Demo (experimental)</option>
           <option value="jazz2_demo">Jazz Jackrabbit 2 Demo</option>
+          <option value="re_volt_demo">Re-Volt Demo</option>
+          <option value="dethkarz_demo">Dethkarz Demo</option>
+          <option value="i76_arsenal_demo">Interstate '76 Arsenal Demo</option>
+          <option value="rollcage_demo">Rollcage Demo</option>
+          <option value="forsaken_demo">Forsaken Demo</option>
+          <option value="midtown_madness_trial">Midtown Madness Trial</option>
+          <option value="monster_truck_madness2_trial">Monster Truck Madness 2 Trial</option>
+          <option value="heretic2_demo">Heretic II Demo</option>
+          <option value="hellbender_trial">Hellbender Trial</option>
+          <option value="expendable_demo">Expendable Demo</option>
+          <option value="rayman2_demo">Rayman 2: The Great Escape Demo</option>
+          <option value="incoming_demo">Incoming Demo</option>
+          <option value="tachyon_demo">Tachyon: The Fringe Demo</option>
+          <option value="trespasser_demo">Trespasser Demo</option>
+          <option value="battlezone_demo">Battlezone Demo</option>
+          <option value="evolva_demo">Evolva Demo</option>
+          <option value="requiem_demo">Requiem: Avenging Angel Demo</option>
+          <option value="kingpin_demo">Kingpin Demo</option>
+          <option value="hexen2_demo">Hexen II Demo</option>
+          <option value="shogo_demo">Shogo: Mobile Armor Division Demo</option>
+          <option value="slave_zero_demo">Slave Zero Demo</option>
+          <option value="mdk2_demo">MDK2 Demo</option>
+          <option value="sin_demo">SiN Demo</option>
+          <option value="sof_demo">Soldier of Fortune Demo</option>
+          <option value="starlancer_demo">Starlancer Demo</option>
           <option value="simgolf_demo">Sid Meier's SimGolf Demo</option>
           <option value="simcity2000_demo">SimCity 2000 Demo</option>
           <option value="black_white_2_demo">Black &amp; White 2 Demo</option>
           <option value="quake2_demo">Quake II Demo</option>
+          <option value="quake3_demo">Quake III Arena Demo</option>
           <option value="quake2_demo_installer">Quake II Demo Installer</option>
           <option value="heroes3_demo">Heroes III Demo</option>
           <option value="heroes3_demo_installer">Heroes III Demo Installer</option>
           <option value="diablo2_demo">Diablo II Demo</option>
+          <option value="diablo2_glide_demo">Diablo II Demo (Glide 3)</option>
+          <option value="hitman_glide_demo">Hitman Demo 2 (Glide 3, experimental)</option>
+          <option value="hype_glide_demo">Hype Demo (Glide 3, experimental)</option>
           <option value="diablo2_demo_installer">Diablo II Demo Installer</option>
           <option value="warcraft3_demo">Warcraft III Demo</option>
           <option value="gta2_demo">Grand Theft Auto 2 Demo</option>
+          <option value="nfs2_demo">Need for Speed II Demo</option>
+          <option value="nfs2se_glide_demo">Need for Speed II SE Demo (Glide)</option>
+          <option value="nfs3_demo">Need for Speed III: Hot Pursuit Demo</option>
+          <option value="nfs3_glide_demo">Need for Speed III: Hot Pursuit Demo (Glide)</option>
           <option value="halflife_uplink">Half-Life: Uplink</option>
           <option value="halflife_uplink_installer">Half-Life: Uplink Installer</option>
           <option value="deus_ex_demo">Deus Ex Demo</option>
           <option value="unreal_special_demo">Unreal Special Edition</option>
           <option value="ut2003_demo">Unreal Tournament 2003 Demo</option>
           <option value="ut2004_demo">Unreal Tournament 2004 Demo</option>
+          <option value="ut348_demo">Unreal Tournament Demo (348)</option>
           <option value="icewind_dale_demo">Icewind Dale Demo</option>
           <option value="baldurs_gate_noninteractive_demo">Baldur's Gate Non-interactive Demo</option>
           <option value="baldurs_gate_interactive_demo">Baldur's Gate Interactive Demo</option>
@@ -1462,6 +1748,9 @@
           <option value="civ2_win16">Civilization II (Win16 retail)</option>
           <option value="civ2_mge">Civilization II: MGE (Win32 retail)</option>
           <option value="morrowind">Morrowind (retail, own ISO)</option>
+          <option value="myth_tfl">Myth: The Fallen Lords (retail, own ISO)</option>
+          <option value="tomb_raider_3_demo">Tomb Raider III Demo</option>
+          <option value="tomb_raider_2_demo">Tomb Raider II Demo</option>
           <option value="diablo_demo">Diablo (pre-release demo)</option>
           <option value="diablo_shareware">Diablo Shareware (1997)</option>
           <option value="worms2_demo">Worms 2 Demo</option>
@@ -1531,13 +1820,15 @@
         <label title="Write emulator runtime messages to the browser console and debug log pane"><input id="runtime-log-toggle" type="checkbox" onchange="setRuntimeLogging(this.checked)">Runtime log</label>
         <label><input id="perf-hud-toggle" type="checkbox" onchange="setPerfHud(this.checked)">FPS graph</label>
         <label title="Fold Caesar III's run-length sprite blit into one dispatch (handler 424). Decode-time, so it steers blocks decoded after the toggle — relaunch for a clean A/B."><input id="rle-run-toggle" type="checkbox" checked onchange="setRleRun(this.checked)">RLE fold</label>
-        <label title="Experimental: compile proven x87 expression regions and fold contiguous x87 islands. Decode-time, so relaunch for a clean A/B."><input id="x87-fold-toggle" type="checkbox" onchange="setX87Fusion(this.checked)">x87 fold</label>
-        <label title="Which renderer both Direct3D generations use. WebGL: D3D8/9 on the WebGL backend, DX2-7 (immediate mode) on the WAT software rasterizer. +DX7 puts immediate mode on WebGL too — post-transform, so the guest keeps its own T&amp;L and each fence reads the frame back into the guest surface. Software: D3D8/9 on the software backend on a render Worker, DX2-7 on the WAT rasterizer. Both are read at launch, so relaunch after changing this.">D3D: <select id="d3d-renderer-select" onchange="setD3DRenderer(this.value)"><option value="webgl">WebGL</option><option value="webgl-all">WebGL +DX7</option><option value="software">Software</option></select></label>
+        <label title="Compile proven x87 expression regions and fold contiguous x87 islands. On by default; ?no-x87-fold starts it off. Decode-time, so relaunch for a clean A/B."><input id="x87-fold-toggle" type="checkbox" checked onchange="setX87Fusion(this.checked)">x87 fold</label>
+        <label title="Micro-op tier, on by default (?no-uop starts it off): a hot loop head is compiled from x86 into a micro-op program and run in one br_table loop (src/07d, 07e). Applies to running apps immediately, every guest thread included; turning it off drops every program."><input id="uop-toggle" type="checkbox" checked onchange="setUop(this.checked)">uop tier</label>
+        <label title="WebGL accelerates Direct3D and Glide when available, with software fallback. Choose Software to use CPU rendering. Relaunch the app after changing this.">GPU: <select id="d3d-renderer-select" onchange="setD3DRenderer(this.value)"><option value="webgl">WebGL</option><option value="software">Software</option></select></label>
         <label><input id="perf-stream-toggle" type="checkbox" onchange="setPerfStream(this.checked)">Stream</label>
-        <label title="Experimental: opt into real guest threads. Needs cross-origin isolation; the worker backend is still phase 1."><input id="threads-toggle" type="checkbox" onchange="setThreads(this.checked)">Threads</label>
+        <label title="Real guest threads, on by default (?no-threads starts this page without them): the guest main thread and every CreateThread target run in Workers. Needs cross-origin isolation, which the page installs once (sw-coi.js) and reloads for. An app with `threads: false` in lib/apps.js always runs cooperatively."><input id="threads-toggle" type="checkbox" checked onchange="setThreads(this.checked)">Threads</label>
         <span id="threads-status" style="color:#606060"></span>
       </span>
       <span class="debug-profile">
+        <label title="Delay Direct3D surface readback until pixels are accessed. Applies to running apps using shared WebGL. Disable if a game shows stale graphics."><input id="lazy-sync-toggle" type="checkbox" checked onchange="setLazySync(this.checked)">Lazy sync</label>
         <label title="Freeze the emulator: no slices run, no frames are drawn and the guest clock stops until somebody steps it. The browser twin of the headless CLI — an agent screenshots, clicks, steps, screenshots again, and the picture cannot change in between. Uncheck to go back to live; the guest sees no time jump either way."><input id="frozen-toggle" type="checkbox" onchange="setFrozenMode(this.checked)">Frozen</label>
         <button id="frozen-step-btn" onclick="frozenStepOnce(event)" title="Run one step's worth of guest work and stop again. Shift-click for 100 steps.">Step</button>
         <span id="frozen-status"></span>
@@ -1618,22 +1909,29 @@ Resource-aware Win98 emulator
   <div id="taskbar">
     <button class="start-btn" id="start-btn" onclick="toggleStartMenu(event)"><span class="win-flag"><span style="background:#FF0000"></span><span style="background:#00FF00"></span><span style="background:#0000FF"></span><span style="background:#FFFF00"></span></span>Start</button>
     <div id="task-buttons"></div>
+    <!-- The launch window's button ("34% of Diablo"): kept apart from
+         #task-buttons, which the renderer rebuilds from guest windows. -->
+    <div id="launch-task-buttons"></div>
     <div id="clock-area"><div id="notify-icons" role="status" aria-label="Notification area"></div><span id="clock"></span></div>
   </div>
   <div id="start-menu">
     <div class="banner">Wine&nbsp;Assembly</div>
     <div class="items">
-      <a class="item" href="#" onclick="openReadmeFromStart(event)"><span class="ico">&#128196;</span>Read Me</a>
-      <a class="item" href="apps/"><span class="ico">&#127918;</span>Apps</a>
-      <a class="item" href="design/"><span class="ico">&#128208;</span>Design</a>
-      <a class="item" href="story.html"><span class="ico">&#128218;</span>The Story</a>
-      <a class="item" href="https://berrry.app/create?remix=wine-assembly" target="_blank" rel="noopener"><span class="ico">&#127827;</span>Remix on Berrry</a>
-      <a class="item" href="https://github.com/vgrichina/wine-assembly" target="_blank" rel="noopener"><span class="ico">&#128187;</span>Source on GitHub</a>
+      <a class="item" href="#" id="start-add-game-item" onclick="addGameFromStart(event)" title="Open a game, disc image or archive from this device"><span class="ico"><img data-src="icons/ui/add-game.png" width="16" height="16" alt="&#128190;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Add a Game...</a>
+      <div class="sep"></div>
+      <a class="item" href="#" onclick="openReadmeFromStart(event)"><span class="ico"><img data-src="icons/ui/readme.png" width="16" height="16" alt="&#128196;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Read Me</a>
+      <a class="item" href="apps/"><span class="ico"><img data-src="icons/ui/apps.png" width="16" height="16" alt="&#127918;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Apps</a>
+      <a class="item" href="design/"><span class="ico"><img data-src="icons/ui/design.png" width="16" height="16" alt="&#128208;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Design</a>
+      <a class="item" href="story.html"><span class="ico"><img data-src="icons/ui/story.png" width="16" height="16" alt="&#128218;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>The Story</a>
+      <a class="item" href="https://berrry.app/create?remix=wine-assembly" target="_blank" rel="noopener"><span class="ico"><img data-src="icons/ui/berrry.png" width="16" height="16" alt="&#127827;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Remix on Berrry</a>
+      <a class="item" href="https://github.com/vgrichina/wine-assembly" target="_blank" rel="noopener"><span class="ico"><img data-src="icons/ui/github.png" width="16" height="16" alt="&#128187;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Source on GitHub</a>
       <div class="sep"></div>
       <a class="item" href="#" id="start-record-item" onclick="toggleRecordingFromStart(event)" title="Record screen + audio to video"><span class="ico" id="start-record-ico">&#9679;</span><span id="start-record-label">Record Screen</span></a>
+      <a class="item" href="#" id="start-agent-item" onclick="connectAgentFromStart(event)" title="Let an AI agent see and play this session"><span class="ico"><img data-src="icons/ui/agent.png" width="16" height="16" alt="&#129302;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Connect Agent...</a>
       <div class="sep"></div>
-      <a class="item" href="?debug"><span class="ico">&#128295;</span>Debug Mode</a>
+      <a class="item" href="?debug"><span class="ico"><img data-src="icons/ui/debug.png" width="16" height="16" alt="&#128295;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span>Debug Mode</a>
       <div class="sep"></div>
+      <a class="item" href="#" id="start-account-item" onclick="accountFromStart(event)" title="Your berrry account: online play and saves"><span class="ico"><img data-src="icons/ui/account.png" width="16" height="16" alt="&#128100;" draggable="false" style="vertical-align:middle;image-rendering:pixelated" onerror="this.replaceWith(this.alt)"></span><span id="start-account-label">Log In...</span></a>
       <a class="item" href="#" id="start-shutdown-item" onclick="openShutdownFromStart(event)" title="Shut Down Windows"><span class="ico"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="0.5" y="1.5" width="13" height="9" fill="#c0c0c0" stroke="#000"/><rect x="2" y="3" width="10" height="6" fill="#1084d0"/><rect x="5" y="11" width="4" height="2" fill="#808080"/><rect x="3" y="13" width="8" height="1.5" fill="#000"/><circle cx="12.5" cy="12" r="3" fill="#ffd700" stroke="#000"/></svg></span>Shut Down...</a>
     </div>
   </div>
@@ -1656,6 +1954,36 @@ Resource-aware Win98 emulator
       const b = document.getElementById('start-btn');
       const open = m.classList.toggle('open');
       b.classList.toggle('open', open);
+      if (open) refreshStartAccount();
+    }
+    function addGameFromStart(e) {
+      if (e) e.preventDefault();
+      closeStartMenu();
+      // Still inside the click, so the file picker is allowed to open.
+      if (window.wineMedia) window.wineMedia.openPicker();
+    }
+    // Log In... / Log Out <name>. The label is refreshed on load, every time
+    // the menu opens, and whenever a sign-in may have finished elsewhere.
+    let startAccountUser = null;
+    async function refreshStartAccount() {
+      const shell = window.browserShell;
+      if (!shell || !shell.accountUser) return;
+      startAccountUser = await shell.accountUser();
+      const label = document.getElementById('start-account-label');
+      if (label) {
+        label.textContent = startAccountUser
+          ? `Log Out${startAccountUser.name ? ' ' + startAccountUser.name : ''}...`
+          : 'Log In...';
+      }
+    }
+    async function accountFromStart(e) {
+      if (e) e.preventDefault();
+      closeStartMenu();
+      const shell = window.browserShell;
+      if (!shell || !shell.accountSignIn) return;
+      if (startAccountUser) await shell.accountSignOut();
+      else shell.accountSignIn();
+      refreshStartAccount();
     }
     function toggleRecordingFromStart(e) {
       if (e) {
@@ -1664,6 +1992,16 @@ Resource-aware Win98 emulator
       }
       closeStartMenu();
       if (typeof toggleRecording === 'function') toggleRecording();
+    }
+    // docs/design-agent-connect.md. The dialog module loads on first use.
+    function connectAgentFromStart(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      closeStartMenu();
+      import('./lib/agent-connect-ui.js').then(m => m.open())
+        .catch(err => console.warn('[agent-connect]', err));
     }
     function openShutdownFromStart(e) {
       if (e) {
@@ -1710,6 +2048,11 @@ Resource-aware Win98 emulator
     // runtime dependency order, now named once without 59 hand-bumped keys.
     const WINE_RUNTIME_SCRIPTS = Object.freeze([
       "lib/region-map.generated.js",
+      // Second: a direct ?app= link's launch window counts its 500ms from
+      // navigation start, so it has to be live while the rest still loads.
+      "lib/launch-progress.js",
+      // The in-game wait window for game data still downloading.
+      "lib/game-wait.js",
       "lib/mem-utils.js",
       "lib/dib.js",
       "lib/gdi-surface.js",
@@ -1721,6 +2064,7 @@ Resource-aware Win98 emulator
       "lib/page-viewport.js",
       "lib/renderer.js",
       "lib/dll-registry.js",
+      "lib/app-file-sizes.generated.js",
       "lib/apps.js",
       "lib/debug-app-picker.js",
       "lib/browser-input.js",
@@ -1732,14 +2076,19 @@ Resource-aware Win98 emulator
       "lib/overlay-store.js",
       "lib/vfs-overlay.js",
       "lib/byte-provider.js",
+      "lib/main-io-wait.js",
+      "lib/app-files.js",
+      "lib/startup-clock.js",
       "lib/zip-mount.js",
       "lib/iso9660.js",
       "lib/cdrom.js",
       "lib/media-sniff.js",
       "lib/media-library.js",
       "lib/media-import.js",
+      "lib/installed-shortcuts.js",
       "lib/media-import-ui.js",
       "lib/shutdown.js",
+      "lib/shell-link.js",
       "lib/browser-shell.js",
       "lib/pe.js",
       "lib/process-boot.js",
@@ -1753,6 +2102,7 @@ Resource-aware Win98 emulator
       "lib/host-audio.js",
       "lib/host-window.js",
       "lib/gpu-backend.js",
+      "lib/glide-backend.js",
       "lib/d3d9-shader.js",
       "lib/d3d-shader-ir.js",
       "lib/d3d9-fixed.js",
@@ -1760,17 +2110,23 @@ Resource-aware Win98 emulator
       "lib/d3d9-backend.js",
       "lib/d3dim-gpu.js",
       "lib/d3d-command-stream.js",
+      "lib/render-worker.js",
       "lib/d3d-geometry-batches.js",
       "lib/d3d9-software-backend.js",
+      "lib/glide-software.js",
+      "lib/glide-host.js",
       "lib/d3d9-host.js",
       "lib/gl-command-stream.js",
       "lib/gl-compat.js",
+      "lib/gl-render-host.js",
       "lib/worker-imports.js",
       "lib/vfs-seed.js",
       "lib/debug-midi.js",
       "lib/debug-thread-state.js",
       "lib/host-imports.js",
       "lib/compile-wat.js",
+      // Before watx-launcher.js: a compat source compile applies it.
+      "lib/dispatch-trampoline.js",
       "lib/watx-launcher.js",
       "lib/thread-manager.js",
       "lib/vlan-wire.js",
@@ -1804,7 +2160,10 @@ Resource-aware Win98 emulator
     const DEBUG_ONLY_APPS = window.wineApps.DEBUG_ONLY_APPS;
     const appFileUrl = window.wineApps.appFileUrl;
 
-    const LOCAL_DESKTOP = /^(localhost|127\.|0\.0\.0\.0|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
+    // ?prod shows a local server exactly the desktop the deployed site shows,
+    // so a release can be tried on localhost without the local-only candidates.
+    const LOCAL_DESKTOP = !new URLSearchParams(location.search).has('prod') &&
+      /^(localhost|127\.|0\.0\.0\.0|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
     const DEBUG_MODE = new URLSearchParams(location.search).has('debug');
 
     // Single-app mode: a phone. One app at a time, no taskbar, no icons while
@@ -1959,17 +2318,37 @@ Resource-aware Win98 emulator
     // log pane, and what to tidy up once the last guest is gone.
     const shell = window.browserShell.createBrowserShell({
       apps,
+      unservedApps: LOCAL_DESKTOP ? [] : LOCAL_CANDIDATE_APPS.map(a => a[0]),
       resolveRunSlice: window.wineApps.resolveRunSlice,
       debugMode: DEBUG_MODE,
       screenCanvasSize: () => screenCanvasSize(),
       appendDebugLog: text => appendDebugLog(text),
       singleApp: () => SINGLE_APP_MODE,
+      // The launch window (lib/launch-progress.js) and what it needs from
+      // the page: a name and an icon for the app, whether this is a direct
+      // ?app= link, and the way back to the desktop from one.
+      launchUi: window.wineLaunchUi || null,
+      appLabel: id => appLabelFor(id),
+      appIcon: id => appIconFor(id),
+      directLaunch: () => document.documentElement.classList.contains('direct-launch'),
+      onShowDesktop: () => ensureDesktop(),
       onAppBootingChange: booting => {
         document.body.classList.toggle('app-booting', !!booting);
       },
       onAppRunningChange: running => {
         document.body.classList.toggle('app-running', !!running);
         if (!running) document.body.classList.remove('windowed-focus-close');
+        // The program a direct link was for has gone: now the desktop. Not
+        // while a launch window is asking something (a Cancel's "Start
+        // again", a download error) or a hand-off (WRITE.EXE -> WordPad) is
+        // about to start the next program -- hence the turn of the loop.
+        if (!running && document.documentElement.classList.contains('direct-launch')) {
+          setTimeout(() => {
+            if (runningApps.length || shell.launchInFlight) return;
+            if (window.wineLaunchUi && window.wineLaunchUi.onScreen) return;
+            ensureDesktop();
+          }, 0);
+        }
         // Windowed phone games need Safari's scroll affordance too. They
         // never take DirectDraw exclusive mode, so the renderer cannot arm
         // it for them. Desktop/debug and browsers with a real API stay as-is.
@@ -2065,6 +2444,8 @@ Resource-aware Win98 emulator
     // lib/media-import.js.
     const mediaUI = window.mediaImportUI.install({
       dropTarget: document.getElementById('screen-wrap'),
+      // Start > Add a Game... replaces the corner button.
+      showButton: false,
       desktopIcons: document.getElementById('desktop-icons'),
       apps,
       shell,
@@ -2072,9 +2453,24 @@ Resource-aware Win98 emulator
       appendLog: text => appendDebugLog(text),
     });
     window.wineMedia = mediaUI;
-    // Kept media becomes desktop icons again on every visit. Nothing is read
-    // from OPFS here beyond the catalog -- the disc itself is opened on launch.
-    mediaUI.restoreLibrary().catch(e => appendDebugLog(`[media] ${e && e.message || e}`));
+    // A shortcut an installer saved on the guest desktop becomes a session
+    // icon here, launching the installed program from its filesystem.
+    shell.onGuestShortcuts(items => { for (const item of items) mediaUI.addSessionIcon(item); });
+    window.browserShell.onAccountChange(refreshStartAccount);
+    // The account probe and the kept-media catalog are desktop work: they run
+    // in ensureDesktop(), which a direct ?app= link reaches only on leaving
+    // its program.
+    let mediaLibraryRestore = null;
+    function restoreMediaLibrary() {
+      if (!mediaLibraryRestore) {
+        // Kept media becomes desktop icons again on every visit. Nothing is
+        // read from OPFS here beyond the catalog -- the disc itself is opened
+        // on launch.
+        mediaLibraryRestore = mediaUI.restoreLibrary()
+          .catch(e => appendDebugLog(`[media] ${e && e.message || e}`));
+      }
+      return mediaLibraryRestore;
+    }
 
     const threadStateViewer = window.debugThreadState.createDebugThreadState({
       debugMode: DEBUG_MODE,
@@ -2186,23 +2582,68 @@ Resource-aware Win98 emulator
     // goes to the shell directly rather than through the <select>, because the
     // selector is filtered down to the desktop set outside ?debug and a valid
     // registry id that is simply not in the dropdown should still launch.
+    //
+    // It launches at DOMContentLoaded, not `load`: `load` also waits for every
+    // image on the page, and nothing about starting a program needs them.
+    // The launch adopts the window the head script began at navigation start
+    // (lib/launch-progress.js), so its 500ms counts from the click on the
+    // link, not from when the runtime finished loading.
     (() => {
+      // Back from a Berrry sign-in that returned to the site root rather
+      // than to the room link that sent it there: go on to that link.
+      if (window.browserShell.resumeAfterSignIn()) return;
       const wanted = new URLSearchParams(location.search).get('app');
       if (!wanted) return;
-      window.addEventListener('load', () => {
+      const direct = window.__wineDirectLaunch;
+      const intent = direct && direct.launch;
+      // Before the shell has adopted it, the window can only offer the way
+      // out (a Cancel during the first second of a cold load).
+      if (intent) {
+        intent.setInfo({ handlers: {
+          showDesktop: () => ensureDesktop(),
+          closed: () => ensureDesktop(),
+          again: () => shell.launchApp(wanted),
+        } });
+      }
+      const start = async () => {
+        // An imported program's id only exists once the kept-media catalog
+        // has been read; nothing else needs that catalog on a direct link.
+        if (!apps[wanted]) await restoreMediaLibrary();
+        if (intent && intent.status !== 'pending') return;  // cancelled already
+        if (!apps[wanted]) {
+          appendDebugLog(`?app=${wanted}: no such program`);
+          if (intent) {
+            intent.fail({
+              title: 'Wine-Assembly',
+              heading: `There is no program called “${wanted}”.`,
+              message: 'The link may be mistyped or out of date.',
+              retry: false,
+              retryKeeps: false,
+            });
+          } else {
+            ensureDesktop();
+          }
+          return;
+        }
         const select = document.getElementById('app-select');
         if (select && [...select.options].some(o => o.value === wanted)) select.value = wanted;
-        shell.launchApp(wanted);
-      });
+        shell.launchApp(wanted, { directIntent: intent || null, startedAt: 0 });
+      };
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => { void start(); }, { once: true });
+      } else {
+        void start();
+      }
     })();
     // Decode-time superop switches. The flag is read when an instance is
     // created (host.js), so the honest A/B is toggle-then-relaunch; toggling
     // mid-run only steers blocks decoded from here on, which is why the
     // checkbox says so. ?no-rle-run starts it off, for a scripted comparison;
-    // ?x87-fold opts into the still-experimental x87 catalog/island compiler.
+    // The x87 catalog/island fold is on by default; ?no-x87-fold starts it off
+    // (?x87-fold is still accepted and changes nothing).
     window.WineSuperops = window.WineSuperops || {};
     if (typeof window.WineSuperops.rleRun !== 'boolean') window.WineSuperops.rleRun = true;
-    if (typeof window.WineSuperops.x87Fusion !== 'boolean') window.WineSuperops.x87Fusion = false;
+    if (typeof window.WineSuperops.x87Fusion !== 'boolean') window.WineSuperops.x87Fusion = true;
     function setRleRun(on) {
       window.WineSuperops.rleRun = !!on;
       const box = document.getElementById('rle-run-toggle');
@@ -2222,11 +2663,44 @@ Resource-aware Win98 emulator
       if (box) box.checked = !!on;
       appendDebugLog(`[superop] x87 fold ${on ? 'on' : 'off'} — takes effect on the next launch`);
     }
-    if (new URLSearchParams(location.search).has('x87-fold')) {
-      window.WineSuperops.x87Fusion = true;
+    if (new URLSearchParams(location.search).has('no-x87-fold')) {
+      window.WineSuperops.x87Fusion = false;
       window.addEventListener('load', () => {
         const box = document.getElementById('x87-fold-toggle');
-        if (box) box.checked = true;
+        if (box) box.checked = false;
+      });
+    }
+    // The micro-op tier is a run-time switch, not a decode-time one, so this
+    // also flips every running app (host.js setUop). On by default; ?no-uop
+    // starts it off (?uop is still accepted and changes nothing).
+    if (typeof window.WineSuperops.uop !== 'boolean') window.WineSuperops.uop = true;
+    // Per running app: {installs, kills, enters, blocks}, or null (tier off, or
+    // a guest Worker owns the main thread). For probes and the log line below.
+    window.WineSuperops.uopStats = () => runningApps
+      .filter(app => app && app.wine && app.wine.uopStats).map(app => app.wine.uopStats());
+    function setUop(on) {
+      for (const s of window.WineSuperops.uopStats()) {
+        if (s) appendDebugLog(`[superop] uop so far: installs=${s.installs} kills=${s.kills} ` +
+          `enters=${s.enters} blocks=${s.blocks}`);
+      }
+      window.WineSuperops.uop = !!on;
+      const box = document.getElementById('uop-toggle');
+      if (box) box.checked = !!on;
+      const live = runningApps.filter(app => app && app.wine && app.wine.setUop && app.wine.setUop(!!on)).length;
+      appendDebugLog(`[superop] uop tier ${on ? 'on' : 'off'} — ${live} running app(s) switched, later launches follow`);
+    }
+    // ?aggressive-stack: the uop tier also elides push/pop pairs nothing can
+    // observe (opt-in, compile-time; read at launch, host.js).
+    if (new URLSearchParams(location.search).has('aggressive-stack')) window.WineSuperops.aggressiveStack = true;
+    // Trace heads: hot heads with no back edge become forward traces (on by
+    // default, compile-time; read at launch, host.js). ?no-uop-trace-heads
+    // turns them off; ?uop-trace-heads is still accepted and changes nothing.
+    if (new URLSearchParams(location.search).has('no-uop-trace-heads')) window.WineSuperops.uopTraceHeads = false;
+    if (new URLSearchParams(location.search).has('no-uop')) {
+      window.WineSuperops.uop = false;
+      window.addEventListener('load', () => {
+        const box = document.getElementById('uop-toggle');
+        if (box) box.checked = false;
       });
     }
     // ?x87-fuse-debug=MASK[,LO,HI] bisects a fold divergence WITHOUT giving up
@@ -2259,45 +2733,39 @@ Resource-aware Win98 emulator
     // renderer do I want" is one question to whoever is looking at the
     // toolbar, and a dropdown next to a checkbox made it look like two.
     //
-    // DX2-7 on WebGL keeps its own option instead of riding in on the D3D8/9
-    // default. docs/d3dim-gl-sweep-2026-09-19.md found the executor agreeing
-    // with software everywhere it actually ran — and more correct than it on
-    // GTA2 — but eleven of sixteen apps never drew a triangle in that sweep,
-    // which is missing coverage, not evidence.
-    //
     // Both flags are read once per launch (host.js passes
     // window.WineD3D.renderer as ctx.d3d9Backend), so this steers the NEXT
-    // launch. ?d3d9-renderer=software|webgl and ?d3dim-gpu still set each half
-    // independently; a combination this dropdown cannot express gets an extra
-    // option rather than being misreported as one it can.
+    // launch. WebGL is preferred for both generations; their executors retain
+    // software fallback when a context or operation is unavailable.
     window.WineD3D = window.WineD3D || {};
     const D3D_MODES = {
-      'webgl':     { renderer: 'webgl',    d3dim: false },
-      'webgl-all': { renderer: 'webgl',    d3dim: true },
+      'webgl':     { renderer: 'webgl',    d3dim: true },
       'software':  { renderer: 'software', d3dim: false },
     };
     function d3dModeName() {
-      const name = Object.keys(D3D_MODES).find(key =>
-        D3D_MODES[key].renderer === window.WineD3D.renderer &&
-        D3D_MODES[key].d3dim === (window.WINE_D3DIM_GPU === true));
-      return name || 'mixed';
+      return window.WineD3D.renderer === 'software' ? 'software' : 'webgl';
     }
     function syncD3DSelect() {
       const select = document.getElementById('d3d-renderer-select');
       if (!select) return;
       const name = d3dModeName();
-      if (name === 'mixed' && !select.querySelector('option[value="mixed"]')) {
-        const option = document.createElement('option');
-        option.value = 'mixed';
-        option.textContent = 'Mixed (from URL)';
-        select.appendChild(option);
-      }
       select.value = name;
     }
     (() => {
-      const wanted = new URLSearchParams(location.search).get('d3d9-renderer');
+      const q = new URLSearchParams(location.search);
+      // Keep old URLs usable, but every selector now controls both versions.
+      // The unified parameter takes precedence over the old D3D9 spelling.
+      const wanted = q.get('d3d-renderer') ?? q.get('d3d9-renderer') ??
+        (q.has('d3dim-gpu') && /^(0|false|off)$/i.test(q.get('d3dim-gpu')) ? 'software' : 'webgl');
       window.WineD3D.renderer = wanted === 'software' ? 'software' : 'webgl';
+      window.WINE_D3DIM_GPU = window.WineD3D.renderer === 'webgl';
       window.addEventListener('load', syncD3DSelect);
+      // Lazy surface sync is on unless ?no-lazy-sync; the toolbar box follows.
+      window.WINE_D3DIM_LAZY_SYNC = !q.has('no-lazy-sync');
+      window.addEventListener('load', () => {
+        const box = document.getElementById('lazy-sync-toggle');
+        if (box) box.checked = window.WINE_D3DIM_LAZY_SYNC;
+      });
     })();
     function setD3DRenderer(value) {
       const mode = D3D_MODES[value];
@@ -2305,9 +2773,21 @@ Resource-aware Win98 emulator
       window.WineD3D.renderer = mode.renderer;
       window.WINE_D3DIM_GPU = mode.d3dim;
       syncD3DSelect();
-      appendDebugLog(`[d3d] D3D8/9 on ${mode.renderer === 'software' ? 'the software backend' : 'WebGL'}, ` +
+      appendDebugLog(`[gpu] Glide and D3D8/9 on ${mode.renderer === 'software' ? 'the software backend' : 'WebGL'}, ` +
         `DX2-7 on ${mode.d3dim ? 'WebGL' : 'the WAT software rasterizer'}` +
         ' — takes effect on the next launch');
+    }
+    async function setLazySync(on) {
+      window.WINE_D3DIM_LAZY_SYNC = !!on;
+      document.getElementById('lazy-sync-toggle').checked = !!on;
+      try {
+        await Promise.all(runningApps.filter(app => app?.wine?.setLazySync)
+          .map(app => app.wine.setLazySync(!!on)));
+        appendDebugLog(`[gpu] lazy surface sync ${on ? 'on' : 'off'}; later launches follow`);
+      } catch (error) {
+        appendDebugLog(`[gpu] lazy surface sync change failed: ${error.message}`);
+        throw error;
+      }
     }
     // Streaming can be switched on mid-session from the toolbar. Requiring a
     // URL parameter meant deciding to measure before loading the page, which
@@ -2341,20 +2821,23 @@ Resource-aware Win98 emulator
     //
     // The label reports the true per-launch state rather than inferring it from
     // isolation: worker startup may still fail and fall back cooperatively.
+    //
+    // On by default since the 2026-09-28 release: localStorage '0' is an
+    // explicit opt-out, ?threads / ?no-threads override both for one page
+    // load, and an app entry with `threads: false` in lib/apps.js always runs
+    // cooperatively (host.js _maybeStartGuestWorker).
     const THREADS_KEY = 'wine-assembly.threads';
+    function threadsWanted() {
+      const q = new URLSearchParams(location.search);
+      if (q.has('no-threads')) return false;
+      if (q.has('threads')) return true;
+      try { return localStorage.getItem(THREADS_KEY) !== '0'; } catch (_) { return true; }
+    }
     window.WINE_THREADS = false;
-    // D3DIM (DX2-7) software raster Worker: every draw path queues to it and
-    // each surface read/write, clear and present fences first. It needs a guest
-    // instance that may Atomics.wait, so it only engages in Threads mode.
-    // Opt-in with ?d3d-worker until a fixed-work A/B shows it is a net win:
-    // overlap is measured, but per-draw copies and hand-offs are not free.
-    window.WINE_D3D_RENDER_WORKER = new URLSearchParams(location.search).has('d3d-worker');
-    // D3DIM (DX2-7) triangles on WebGL instead of the WAT software rasterizer.
-    // Read once per launch by whichever thread owns the guest instance, so it
-    // steers the NEXT launch like the other renderer switches. The toolbar
-    // drives this half through the D3D select ("WebGL +DX7"); this parameter
-    // is the independent override and is what the select reads at load.
-    window.WINE_D3DIM_GPU = new URLSearchParams(location.search).has('d3dim-gpu');
+    // Threads mode shares one process-owned renderer across D3D, GL and
+    // Glide, for software and WebGL. The former ?no-d3d-worker / ?d3d-worker=0
+    // A/B switches no longer bypass rendering isolation.
+    window.WINE_D3D_RENDER_WORKER = true;
     // Diagnostic: serialize Worker slices to distinguish shared-state races
     // from incorrect per-thread state.
     window.WINE_THREADS_SERIAL = /[?&]threads-serial\b/.test(location.search);
@@ -2367,7 +2850,7 @@ Resource-aware Win98 emulator
       const el = document.getElementById('threads-status');
       const box = document.getElementById('threads-toggle');
       if (!el || !box) return;
-      const wanted = localStorage.getItem(THREADS_KEY) === '1';
+      const wanted = threadsWanted();
       box.checked = wanted;
       if (!wanted) { el.textContent = ''; return; }
       if (!window.__threadsStatusTimer && runningApps.length) {
@@ -2439,10 +2922,19 @@ Resource-aware Win98 emulator
       }
     }
 
-    // Restore the opt-in across the reload the service worker needs.
-    if (localStorage.getItem(THREADS_KEY) === '1') {
+    // Default on. The first visit has no isolation yet, so it runs
+    // cooperatively and quietly installs sw-coi.js; the next load comes back
+    // cross-origin isolated and gets Worker threads. No reload is forced on the
+    // visitor. An automated browser (navigator.webdriver) does not install it,
+    // so a harness page stays exactly as isolated as its server makes it.
+    if (threadsWanted()) {
       window.WINE_THREADS = true;
       window.addEventListener('load', updateThreadsStatus);
+      if (!threadsIsolated() && navigator.serviceWorker && window.isSecureContext &&
+          !navigator.webdriver) {
+        navigator.serviceWorker.register('sw-coi.js', { scope: './' }).catch(err =>
+          appendDebugLog('[threads] isolation service worker failed: ' + (err && err.message || err)));
+      }
     }
 
     // An app in exclusive fullscreen hides the toolbar, so the checkbox is
@@ -2553,10 +3045,27 @@ Resource-aware Win98 emulator
       // A small first-class desktop link for provenance and complete original
       // package downloads. It is intentionally not an emulator app or toolbar
       // option: opening it must not allocate a second 512MB guest instance.
+      // Sources and Read Me have no exe to take an icon from, so they get
+      // RetroDiffusion pixel art, generated once and kept in icons/ui/ (a live
+      // API call per page load put the desktop at the mercy of berrry's load).
+      // The emoji stays until the image decodes, so a failed load still shows one.
+      const pixelIcon = (box, name) => {
+        const img = new Image(32, 32);
+        img.style.imageRendering = 'pixelated';
+        img.alt = '';
+        img.onload = () => {
+          box.textContent = '';
+          box.style.background = 'transparent';
+          box.style.border = '0';
+          box.appendChild(img);
+        };
+        img.src = 'icons/ui/' + name + '.png';
+      };
       const sources = document.createElement('div');
       sources.className = 'desktop-icon';
       sources.dataset.app = 'sources';
       sources.innerHTML = '<div class="icon-img">📦</div><div class="icon-label">Sources</div>';
+      pixelIcon(sources.querySelector('.icon-img'), 'sources');
       let sourcesLastClick = 0;
       sources.addEventListener('click', () => {
         for (const e of grid.querySelectorAll('.desktop-icon.selected')) e.classList.remove('selected');
@@ -2576,6 +3085,7 @@ Resource-aware Win98 emulator
       readme.className = 'desktop-icon';
       readme.dataset.app = 'readme';
       readme.innerHTML = '<div class="icon-img">📄</div><div class="icon-label">Read Me</div>';
+      pixelIcon(readme.querySelector('.icon-img'), 'readme');
       let readmeLastClick = 0;
       readme.addEventListener('click', () => {
         for (const e of grid.querySelectorAll('.desktop-icon.selected')) e.classList.remove('selected');
@@ -2656,12 +3166,62 @@ Resource-aware Win98 emulator
     }
     showBuildStamp();
 
-    if (!DEBUG_MODE) {
-      document.body.classList.add('no-debug');
+    // Everything that makes the desktop a desktop: the icon grid (and its
+    // ~90 icon images), the Start menu's pictures, the account probe and the
+    // kept-media catalog. A normal visit builds it at DOMContentLoaded; a
+    // direct ?app= link builds it only when the visitor leaves the program,
+    // so that link fetches the runtime and that program and nothing else.
+    let desktopBuilt = false;
+    function ensureDesktop() {
+      if (document.documentElement.classList.contains('direct-launch')) {
+        const url = new URL(location.href);
+        url.searchParams.delete('app');
+        url.searchParams.delete('room');
+        history.replaceState(null, '', url.pathname + url.search + url.hash);
+      }
+      if (desktopBuilt) return;
+      desktopBuilt = true;
+      const wasDirect = document.documentElement.classList.contains('direct-launch');
+      document.documentElement.classList.remove('direct-launch');
+      for (const img of document.querySelectorAll('#start-menu img[data-src]')) {
+        img.src = img.dataset.src;
+        img.removeAttribute('data-src');
+      }
+      refreshStartAccount();
+      restoreMediaLibrary();
+      if (!DEBUG_MODE) initDesktop();
+      // The page's chrome just changed shape under the canvas.
+      if (wasDirect) resizeCanvas();
+    }
+    function appLabelFor(id) {
+      for (const list of [DEFAULT_APPS, LOCAL_CANDIDATE_APPS, DEBUG_ONLY_APPS]) {
+        const row = (list || []).find(entry => entry && entry[0] === id);
+        if (row && row[1]) return row[1];
+      }
+      const app = apps[id] || {};
+      return app.title || app.label || app.name || id;
+    }
+    // The desktop icon when there is one (already decoded, maybe from the
+    // exe); otherwise the pre-extracted PNG, which a direct link loads alone.
+    function appIconFor(id) {
+      const img = document.querySelector(`.desktop-icon[data-app="${CSS.escape(id)}"] .icon-img img`);
+      if (img && img.src) return img.src;
+      return typeof preExtractedIconUrl === 'function' ? preExtractedIconUrl(id) : '';
+    }
+    // Closing the launch window hands the keyboard back to the guest.
+    window.wineLaunchUiRestoreFocus = () => {
+      const canvas = document.getElementById('screen');
+      if (canvas && runningApps.length) {
+        try { canvas.focus({ preventScroll: true }); } catch (_) {}
+      }
+    };
+
+    if (!DEBUG_MODE) document.body.classList.add('no-debug');
+    if (!document.documentElement.classList.contains('direct-launch')) {
       if (document.readyState === 'loading') {
-        window.addEventListener('DOMContentLoaded', initDesktop);
+        window.addEventListener('DOMContentLoaded', ensureDesktop);
       } else {
-        initDesktop();
+        ensureDesktop();
       }
     }
 

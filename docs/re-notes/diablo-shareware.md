@@ -2694,7 +2694,42 @@ Enter Name and OK are unchanged from the multiplayer recipe. Both the Choose
 Class and Enter Name screens render correctly on this path (no blue portrait
 panel — that was transient on the multiplayer route).
 
-## OPEN (2026-08-25): the multiplayer Select Connection screen is blank
+## SOLVED (2026-10-06): the multiplayer Select Connection screen was blank
+
+The dialog's WM_INITDIALOG enumerates `C:\*.snp` and calls `LoadLibraryA` on
+each (`battle.snp`, then `standard.snp`), and WM_INITDIALOG is a synchronous
+send. `LoadLibraryA` yields (reason 5) for the host to map the DLL, a nested
+`$wnd_send_message` cannot return to the host, so every later round stopped on
+the same yield: run.js printed `[sync] ABANDONED wndproc hwnd=… msg=0x110 …
+(yield_reason=5)`, `LoadLibraryA` "returned" a stack address, `standard.snp`
+was never even found, and nothing painted. The send now has the host finish
+the load in place (`service_load_library` import → `serviceLoadLibraryYieldSync`,
+the path a LoadLibrary inside a DllMain already used). The screen lists
+Battle.net, Local Area Network (IPX), Modem and Direct Cable Connection.
+Pinned by `test/test-sync-send-loadlibrary.js`.
+
+**IPX multiplayer works (2026-10-06).** `test/test-diablo-ipx-vlan-gameplay.js`
+(heavy, boat): seat 10.0.0.1 creates a Normal IPX game, seat 10.0.0.2 picks it
+("GAL", the host hero's name, the row *below* Create Game at (445,296)) and both
+land in Tristram with two warriors on screen. The route after the connection
+screen: Local Area Network (IPX) (445,295) → OK (348,446) → Join IPX Games;
+host Create Game is the first row → OK → Select Difficulty → OK. The host is in
+Tristram by about batch 4100 at `--batch-size=200000 --tick-ms-per-batch=50`.
+The last block was "Unable to create game": OK on Select Difficulty runs
+SNetCreateGame and the next SDlgDialogBox loop from WM_LBUTTONDOWN, Storm's
+class wndproc hands that to `DefDlgProcA`, and `DefDlgProcA` ran the DLGPROC
+through the bounded synchronous sender, which cut the nested modal loop after 64
+rounds (`[sync] ABANDONED … msg=0x201 … yield_reason=0`). Client mouse and plain
+key messages now tail-dispatch into the DLGPROC like WM_COMMAND already did
+(`test/test-dialog-custom-dispatch.js`). IPX itself needed nothing: standard.snp
+opens two AF_IPX datagram sockets, binds, sets SO_BROADCAST and broadcasts, and
+the virtual LAN carries it. Evidence `scratch/runs/20261006T1700Z-diablo_shareware-w4-ipx-vlan`.
+
+Reach the Select Connection screen with the multiplayer
+recipe above plus the name keys and OK, capture at batch ~2640. The original
+note follows.
+
+### Original note (2026-08-25)
 
 Clicking OK on Enter Name in *multiplayer* now advances — the name is accepted
 and no "Invalid name" box appears — to a new 640x482 top-level dialog `0x10028`
@@ -3063,3 +3098,77 @@ Hidden scans now retain erase requests until exposure. The same trace changes
 0x10004's first BeginPaint from flags=0 to flags=2; later polling still clears
 that bit. This fixes one observed loss, not the entire candidate. See the
 latest section of `docs/review-win16-windowpos.md` for commands and logs.
+
+## 2026-09-28: display mode is fixed at 640x480x8
+
+`diablo_s.exe` (FileVersion 1.0.1.0) has one `IDirectDraw::SetDisplayMode`
+call, at `0x004172f7`: `push 8 / push 0x1e0 / push 0x280`, i.e.
+640x480x8. The only other `call [reg+0x54]` (`0x417451`) is on a surface,
+not the DirectDraw object. The 0x320 immediates in `.text` are `sub edi,
+0x320` pitch arithmetic in the blitters, not a mode, and `diablo.ini` holds
+only the `[NetMsg]` hot-key texts. There is no resolution setting to honour:
+640x480 is the whole answer, and the emulator fit-scales that exclusive
+primary to whatever canvas the host has.
+
+## spawn.mpq streams by HTTP range with a measured preload (2026-10-04)
+
+Why it had to be eager (2026-09-18 section above), now pinned in source:
+in cooperative mode a wait reached from inside a synchronous message
+(`$wnd_send_message`'s nested `$run`, e.g. WM_INITDIALOG) goes to
+`ThreadManager.waitMultipleCooperative`, which pumps Storm's worker with the
+synchronous `runSlice`. A worker read that misses a lazy range parks on
+io_wait; its fill is a promise that cannot settle before the loop gives up
+(zero-step slice), so the wait returns WAIT_FAILED and Storm decodes an empty
+buffer. A miss by the main thread itself at depth > 0 is worse: `$io_block`
+yields inside the nested `$run`, which retries 64 rounds and abandons the
+wndproc. Worker mode (browser `?threads`) blocks the main guest Worker in
+`Atomics.wait` (lib/guest-rpc.js) while the page fills the worker's read, so
+worker reads are safe there; main-thread reads at depth > 0 are not, in
+either mode.
+
+Measured (`run.js --trace-fs`, which now tags each read with `tid`, batch and
+the main thread's `sync_msg_depth`; `tools/io-range-census.js`), route menu ->
+new Warrior -> Tristram, 3420 batches: 2302 spawn.mpq reads, 15.2 MB unique;
+77 reads in nested context (14 main, 63 Storm worker), 0.61 MB. Preload set =
+MPQ header + hash/block tables + every file diabloui.dll names
+(`--names-from`) + every block read in nested context (adds
+`music\sintro.wav`, block 937, the menu music streamed by T2): 8 ranges,
+4.6 MB (21 chunks / 5.4 MB). Registered in lib/apps.js as `preloadRanges`.
+
+CLI A/B with `--lazy-ranges=5`: without the preload `[io] needs-preload` fires
+at spawn.mpq@628142 and the title/menu art is broken (route derails); with it
+the menu/class/name frames are byte-identical to eager and Tristram is
+reached. Browser (test-diablo-shareware-browser-web.js, cold, `?threads` on an
+isolated server, injected 800/1500 ms latency, injected 503s with Retry): all
+six stages pass; 63 chunks / 16.5 MB of the 50.3 MB archive fetched by
+gameplay. Re-measure the ranges if spawn.mpq changes; a size mismatch loads
+the whole file. `run.js --threads` cannot run Diablo at all on origin/main
+(batch 666: run.js `wait_multiple` calls `waitMultipleCooperative` under the
+worker backend) -- pre-existing, unrelated.
+
+## Control response and a qualified frame counter (2026-10-10)
+
+On the pinned route of `test/test-diablo-shareware-gameplay.js` (200000-block
+batches, 50 ms tick), each input gets an ordinary response:
+- a ground click at (450,230) walks the warrior to the tree and scrolls
+  Tristram (70% of pixels change);
+- CHAR opens the Character panel (GAL, Warrior, level 1);
+- INV opens the Inventory panel beside it.
+
+Two runs are byte-identical in every capture.
+
+**Frame counter.** Diablo never Flips or Blts. Each frame is exactly one
+`Lock` of the primary (returns to `0x457f61`) and one `Unlock` (returns to
+`0x458153`). Over batches 2900-4100 (59.95 guest-s) there are 1200 pairs, and
+`--present-distinct` (slot 1), `dx_present` and the host-flush series all count
+1200. That is **20.0 frames per guest-second**, every interval exactly 50
+guest-ms.
+
+**It is the game's rate, not the batch clock's.** The same guest-time schedule
+at `--tick-ms-per-batch=25` (every batch number doubled) gives the same 1200
+frames, now one per 2 batches. It also gives the same 236 changed and 129
+unique frames. This agrees with the fixed 50 ms gameplay iteration in
+"Gameplay benchmark correction" above. In `--frame-stats-out`, the first
+in-window interval reaches back to the last frame before the window, during
+the load (660 batches); leave it out. Browser FPS is not measured here.
+Evidence: `scratch/runs/20261010T0400Z-diablo_shareware-control-frames`.

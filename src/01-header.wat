@@ -53,6 +53,13 @@
   ;; Returns the number of thread slices actually run (0 = nobody to run, or
   ;; we are already inside a worker and must not re-enter one).
   (import "host" "cs_pump" (func $host_cs_pump (result i32)))
+  ;; Fill the lazy-file read this thread parked on (io_wait, yield 12) and
+  ;; return 1 once the bytes are in the shared cache, for a nested run that
+  ;; cannot yield to the host (11-seh $seh_fault_sync). Only a guest Worker
+  ;; ($guest_can_block) calls it: there the brokered call parks just this
+  ;; thread while the page fetches. 0 = cannot fill synchronously here.
+  ;; Argument: the thread key VFS pending reads use ($current_thread_id).
+  (import "host" "io_fill_sync" (func $host_io_fill_sync (param i32) (result i32)))
   (import "host" "resolve_ordinal" (func $host_resolve_ordinal (param i32 i32) (result i32)))
   ;; resolve_ordinal(dll_name_ptr, ordinal) → api_id (-1 if unknown)
   ;; GUI host imports — call into JS canvas renderer
@@ -120,11 +127,14 @@
   ;; queue_keyboard_input(vk, scan, flags, extraInfo, hwnd) → accepted. The
   ;; result makes Worker brokerage synchronous so an immediate PeekMessage
   ;; cannot outrun the synthesized input event.
+  ;; Synchronous input injection: a following input poll must see the event.
+  (import "host" "queue_mouse_input" (func $host_queue_mouse_input (param i32 i32 i32 i32 i32) (result i32)))
   (import "host" "get_mouse_position" (func $host_get_mouse_position (result i32)))
   ;; get_mouse_position() → packed x | (y << 16), in renderer/source coords
   (import "host" "set_mouse_position" (func $host_set_mouse_position (param i32 i32)))
   ;; set_mouse_position(x, y) — update the renderer's virtual cursor
   (import "host" "get_mouse_buttons" (func $host_get_mouse_buttons (result i32)))
+  (import "host" "get_mouse_buttons_live" (func $host_get_mouse_buttons_live (result i32)))
   ;; get_mouse_buttons() → MK_* style button bitmask (1=left, 2=right)
   (import "host" "set_window_class" (func $host_set_window_class (param i32 i32)))
   ;; set_window_class(hwnd, class_name_ptr)
@@ -198,6 +208,9 @@
   ;; get_window_info(hwnd, 0=style, 1=visible, 2=enabled, 3=pid, 4=exists) → renderer property.
   (import "host" "post_window_message" (func $host_post_window_message (param i32 i32 i32 i32) (result i32)))
   ;; post_window_message(...) → 1 when routed to another app instance.
+  (import "host" "broadcast_registered_message" (func $host_broadcast_registered_message (param i32 i32 i32) (result i32)))
+  ;; broadcast_registered_message(nameHash, wParam, lParam) → windows posted to
+  ;; in every *other* app instance (each resolves the name to its own id).
   (import "host" "activate_window" (func $host_activate_window (param i32) (result i32)))
   (import "host" "foreground_window" (func $host_foreground_window (result i32)))
   ;; foreground_window() → renderer-wide foreground top-level HWND, or NULL.
@@ -212,224 +225,17 @@
   ;; opcode, stdcall stack WA, auxiliary target HWND -> integer/API result.
   (import "host" "gpu_gl_call"
     (func $host_gpu_gl_call (param i32 i32 i32) (result i32)))
+  ;; Glide normalized batch/barrier: opcode, packet WA, packet byte length.
+  (import "host" "glide_submit"
+    (func $host_glide_submit (param i32 i32 i32) (result i32)))
   (import "host" "note_richedit_charformat_size" (func $host_note_richedit_charformat_size (param i32 i32 i32)))
   ;; note_richedit_charformat_size(yHeightTwips, selectionLo, selectionHi)
   ;; GDI host imports
-  (func $host_gdi_create_pen (param i32 i32 i32) (result i32)
-    (call $gdi_object_alloc (i32.const 1) (local.get 0) (local.get 1) (local.get 2)
-      (i32.eq (local.get 0) (i32.const 5))))
-  (func $host_gdi_create_solid_brush (param i32) (result i32)
-    (call $gdi_object_alloc (i32.const 2) (i32.const 0) (i32.const 0)
-      (local.get 0) (i32.const 0)))
-  (func $host_gdi_create_compat_dc (param i32) (result i32) (call $gdi_dc_alloc))
-  (func $host_gdi_create_compat_bitmap (param i32 i32 i32 i32) (result i32)
-    (call $gdi_create_compat_bitmap_internal (local.get 1) (local.get 2) (local.get 3)))
-  ;; gdi_create_compat_bitmap(hdc, width, height, backingWa) registers a DDB
-  ;; whose private canonical pixels live at backingWa. The address is not
-  ;; exposed through BITMAP.bmBits.
-  (func $host_gdi_create_bitmap (param i32 i32 i32 i32) (result i32)
-    (call $gdi_bitmap_create_bitmap (local.get 0) (local.get 1) (i32.const 1)
-      (local.get 2) (local.get 3)))
-  ;; gdi_create_bitmap(width, height, bitsPerPixel, lpBitsWasmAddr) → handle
-  (func $host_gdi_create_dib_bitmap (param i32 i32 i32) (result i32)
-    (call $gdi_bitmap_create_dibitmap (i32.const 0) (local.get 0) (local.get 1)
-      (i32.ne (i32.and (local.get 2) (i32.const 4)) (i32.const 0)) (i32.const 0)))
-  (func $host_gdi_get_object_bits (param i32) (result i32)
-    (call $gdi_bitmap_public_bits (local.get 0)))
-  ;; gdi_get_object_bits(hBitmap) → lpBits WASM address for DIB sections, or 0.
-  (func $host_gdi_get_object_storage (param i32) (result i32)
-    (call $gdi_bitmap_storage (local.get 0)))
-  ;; gdi_get_object_storage(hBitmap) → private WAT backing address, or 0.
-  (func $host_gdi_get_object_bpp (param i32) (result i32)
-    (call $gdi_bitmap_bpp (local.get 0)))
-  ;; gdi_get_object_bpp(hBitmap) → bitmap bits-per-pixel, or 0 if unknown.
-  (func $host_gdi_select_object (param i32 i32) (result i32)
-    (local $old i32)
-    (local.set $old (call $gdi_dc_select_owned_object (local.get 0) (local.get 1)))
-    (select (local.get $old) (i32.const 0) (i32.ne (local.get $old) (i32.const -1))))
-  (func $host_gdi_delete_object (param i32) (result i32)
-    (call $gdi_object_delete_full (local.get 0)))
-  (func $host_gdi_delete_dc (param i32) (result i32)
-    (call $gdi_dc_delete (local.get 0)))
-  (func $host_gdi_rectangle (param $hdc i32) (param $left i32) (param $top i32)
-        (param $right i32) (param $bottom i32) (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_rectangle_desc (local.get $hdc) (local.get $desc)
-      (local.get $left) (local.get $top) (local.get $right) (local.get $bottom)
-      (call $gdi_dc_get_field (local.get $hdc) (i32.const 4) (i32.const 0x30017))
-      (call $gdi_dc_get_field (local.get $hdc) (i32.const 8) (i32.const 0x30010))
-      (call $gdi_dc_get_rop2 (local.get $hdc))))
-  ;; gdi_rectangle(hdc, left, top, right, bottom)
-  (func $host_gdi_round_rect (param i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get 0) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_round_rect_desc (local.get 0) (local.get $desc)
-      (local.get 1) (local.get 2) (local.get 3) (local.get 4) (local.get 5) (local.get 6)
-      (call $gdi_dc_get_field (local.get 0) (i32.const 4) (i32.const 0x30017))
-      (call $gdi_dc_get_field (local.get 0) (i32.const 8) (i32.const 0x30010))
-      (call $gdi_dc_get_rop2 (local.get 0))))
-  ;; gdi_round_rect(hdc, left, top, right, bottom, ellipseWidth, ellipseHeight)
-  (func $host_gdi_fill_rect (param $hdc i32) (param $left i32) (param $top i32)
-        (param $right i32) (param $bottom i32) (param $brush i32) (result i32)
-    (local $desc i32)
-    (if (i32.eqz (local.get $brush))
-      (then (local.set $brush
-        (call $gdi_dc_get_field (local.get $hdc) (i32.const 8) (i32.const 0x30010)))))
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_fill_rect_desc (local.get $hdc) (local.get $desc)
-      (local.get $left) (local.get $top) (local.get $right) (local.get $bottom)
-      (local.get $brush)))
-  (func $host_gdi_draw_edge (param $hdc i32) (param $left i32) (param $top i32)
-        (param $right i32) (param $bottom i32) (param $edge i32) (param $flags i32)
-        (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_draw_edge_desc (local.get $hdc) (local.get $desc)
-      (local.get $left) (local.get $top) (local.get $right) (local.get $bottom)
-      (local.get $edge) (local.get $flags) (i32.const 0)))
-  ;; gdi_draw_focus_rect(hdc, left, top, right, bottom) — 1px dotted black rect.
-  (func $host_gdi_draw_focus_rect (param $hdc i32) (param $left i32) (param $top i32)
-        (param $right i32) (param $bottom i32) (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_focus_rect_desc (local.get $hdc) (local.get $desc)
-      (local.get $left) (local.get $top) (local.get $right) (local.get $bottom)))
-  ;; gdi_gradient_fill_h(hdc, l, t, r, b, colorL, colorR) — horizontal linear gradient.
-  ;; Win32 equivalent: GdiGradientFill(GRADIENT_FILL_RECT_H). Used by defwndproc_ncpaint.
-  (func $host_gdi_gradient_fill_h
-        (param $hdc i32) (param $left i32) (param $top i32)
-        (param $right i32) (param $bottom i32)
-        (param $color_left i32) (param $color_right i32) (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_gradient_fill_h_desc
-      (local.get $hdc) (local.get $desc)
-      (local.get $left) (local.get $top) (local.get $right) (local.get $bottom)
-      (local.get $color_left) (local.get $color_right)))
-  ;; gdi_fill_rect(hdc, left, top, right, bottom, hbrush)
-  (func $host_gdi_ellipse (param $hdc i32) (param $left i32) (param $top i32)
-        (param $right i32) (param $bottom i32) (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_ellipse_desc (local.get $hdc) (local.get $desc)
-      (local.get $left) (local.get $top) (local.get $right) (local.get $bottom)
-      (call $gdi_dc_get_field (local.get $hdc) (i32.const 4) (i32.const 0x30017))
-      (call $gdi_dc_get_field (local.get $hdc) (i32.const 8) (i32.const 0x30010))
-      (call $gdi_dc_get_rop2 (local.get $hdc))))
-  ;; gdi_ellipse(hdc, left, top, right, bottom)
-  (func $host_gdi_create_rect_rgn (param i32 i32 i32 i32) (result i32)
-    (call $gdi_rgn_alloc_rect (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
-  ;; gdi_create_rect_rgn(l, t, r, b) -> hrgn
-  (func $host_gdi_set_rect_rgn (param i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_rgn_set_rect
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)))
-  ;; gdi_set_rect_rgn(hrgn, l, t, r, b) -> bool
   (import "host" "gdi_set_region_bands" (func $host_gdi_set_region_bands (param i32 i32 i32) (result i32)))
   ;; gdi_set_region_bands(hrgn, rects_wa, count) rebuilds derived Canvas data;
   ;; count=-1 discards that presentation cache.
-  (func $host_gdi_combine_rgn (param i32 i32 i32 i32) (result i32)
-    (call $gdi_rgn_combine (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
-  ;; gdi_combine_rgn(dst, src1, src2, mode) -> complexity
-  (func $host_gdi_offset_rgn (param i32 i32 i32) (result i32)
-    (call $gdi_rgn_offset (local.get 0) (local.get 1) (local.get 2)))
-  ;; gdi_offset_rgn(hrgn, dx, dy) -> region complexity
-  (func $host_gdi_fill_rgn (param i32 i32 i32) (result i32)
-    (call $gdi_hdc_fill_rgn (local.get 0) (local.get 1) (local.get 2)))
-  ;; gdi_fill_rgn(hdc, hrgn, hbrush) — hbrush=0 uses DC's current brush (for PaintRgn)
-  (func $host_gdi_frame_rgn (param i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_hdc_frame_rgn
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)))
-  ;; gdi_frame_rgn(hdc, hrgn, hbrush, width, height) -> bool
   (import "host" "gdi_set_window_rgn" (func $host_gdi_set_window_rgn (param i32 i32 i32) (result i32)))
   ;; gdi_set_window_rgn(hwnd, hrgn, redraw) -> bool
-  (func $host_gdi_select_clip_rgn (param i32 i32) (result i32)
-    (call $gdi_dc_clip_select (local.get 0) (local.get 1)))
-  ;; gdi_select_clip_rgn(hdc, hrgn) -> complexity
-  (func $host_gdi_ext_select_clip_rgn (param i32 i32 i32) (result i32)
-    (call $gdi_dc_clip_ext_select (local.get 0) (local.get 1) (local.get 2)))
-  ;; gdi_ext_select_clip_rgn(hdc, hrgn, fnMode) -> complexity
-  (func $host_gdi_exclude_clip_rect (param i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_dc_clip_exclude_rect
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)))
-  ;; gdi_exclude_clip_rect(hdc, l, t, r, b) -> complexity
-  (func $host_gdi_intersect_clip_rect (param i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_dc_clip_intersect_rect
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)))
-  ;; gdi_intersect_clip_rect(hdc, l, t, r, b) -> complexity
-  (func $host_gdi_get_rgn_box (param i32 i32) (result i32)
-    (call $gdi_rgn_get_box (local.get 0) (local.get 1)))
-  ;; gdi_get_rgn_box(hrgn, lprect_wa) -> complexity
-  (func $host_gdi_polygon (param $hdc i32) (param $points i32) (param $count i32) (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
-      (then (return (i32.const 0))))
-    (call $gdi_polygon_desc (local.get $hdc) (local.get $desc)
-      (local.get $points) (local.get $count)
-      (call $gdi_dc_get_field (local.get $hdc) (i32.const 4) (i32.const 0x30017))
-      (call $gdi_dc_get_field (local.get $hdc) (i32.const 8) (i32.const 0x30010))
-      (call $gdi_dc_get_rop2 (local.get $hdc))
-      (call $gdi_dc_get_field (local.get $hdc) (i32.const 76) (i32.const 1))))
-  ;; gdi_polygon(hdc, pointsWaPtr, nCount)
-  (func $host_gdi_poly_bezier (param i32 i32 i32 i32) (result i32)
-    (call $gdi_poly_bezier (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
-  ;; gdi_poly_bezier(hdc, pointsWaPtr, nCount, fromCurrent)
-  (func $host_gdi_polyline (param $hdc i32) (param $points i32) (param $count i32) (result i32)
-    (call $gdi_polyline_try
-      (local.get $hdc) (local.get $points) (local.get $count) (i32.const 0)))
-  ;; gdi_polyline(hdc, pointsWaPtr, nCount) preserves the current position.
-  (func $host_gdi_polyline_to (param $hdc i32) (param $points i32) (param $count i32) (result i32)
-    (local $ok i32) (local $last i32)
-    (local.set $ok (call $gdi_polyline_try
-      (local.get $hdc) (local.get $points) (local.get $count) (i32.const 1)))
-    (if (i32.and (local.get $ok) (i32.gt_u (local.get $count) (i32.const 0)))
-      (then
-        (local.set $last (i32.add (local.get $points)
-          (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 3))))
-        (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 12)
-          (i32.load (local.get $last)) (i32.const 0)))
-        (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 16)
-          (i32.load offset=4 (local.get $last)) (i32.const 0)))))
-    (local.get $ok))
-  ;; gdi_polyline_to(hdc, pointsWaPtr, nCount)
-  (func $host_gdi_move_to (param $hdc i32) (param $x i32) (param $y i32) (result i32)
-    (if (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
-      (then (return (i32.const 0))))
-    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 12) (local.get $x) (i32.const 0)))
-    (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 16) (local.get $y) (i32.const 0)))
-    (i32.const 1))
-  (func $host_gdi_line_to (param $hdc i32) (param $x i32) (param $y i32) (result i32)
-    (local $from_x i32) (local $from_y i32) (local $ok i32)
-    (local.set $from_x (call $gdi_dc_get_field (local.get $hdc) (i32.const 12) (i32.const 0)))
-    (local.set $from_y (call $gdi_dc_get_field (local.get $hdc) (i32.const 16) (i32.const 0)))
-    (global.set $gdi_line_style_phase (i32.const 0))
-    (local.set $ok (call $gdi_line_try
-      (local.get $hdc) (local.get $from_x) (local.get $from_y) (local.get $x) (local.get $y)))
-    (if (local.get $ok)
-      (then
-        (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 12) (local.get $x) (i32.const 0)))
-        (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 16) (local.get $y) (i32.const 0)))))
-    (local.get $ok))
-  ;; gdi_line_to(hdc, x, y)
-  (func $host_gdi_get_line_descriptor (param $hdc i32) (param $desc i32) (result i32)
-    (i32.and (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc))
-      (call $gdi_line_descriptor_supported (local.get $desc))))
-  ;; gdi_get_line_descriptor(hdc, desc_wa) -> 1 for a supported DIB/solid-pen target.
   (import "host" "gdi_surface_create" (func $host_gdi_surface_create
     (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
   (import "host" "gdi_surface_upload" (func $host_gdi_surface_upload
@@ -441,158 +247,9 @@
   ;; no Canvas pixels are read back.
   (import "host" "gdi_screen_readback" (func $host_gdi_screen_readback
     (param i32 i32 i32 i32) (result i32)))
-  (func $host_gdi_get_current_object (param $hdc i32) (param $type i32) (result i32)
-    (if (i32.eq (local.get $type) (i32.const 1))
-      (then (return (call $gdi_dc_get_field (local.get $hdc) (i32.const 4) (i32.const 0x30017)))))
-    (if (i32.eq (local.get $type) (i32.const 2))
-      (then (return (call $gdi_dc_get_field (local.get $hdc) (i32.const 8) (i32.const 0x30010)))))
-    (if (i32.eq (local.get $type) (i32.const 5))
-      (then (return (call $gdi_dc_selected_palette (local.get $hdc)))))
-    (if (i32.eq (local.get $type) (i32.const 6))
-      (then (return (call $gdi_dc_get_field (local.get $hdc) (i32.const 88) (i32.const 0x3001D)))))
-    (if (i32.eq (local.get $type) (i32.const 7))
-      (then (return (call $gdi_dc_get_field (local.get $hdc) (i32.const 84) (i32.const 0x30007)))))
-    (i32.const 0))
-  ;; gdi_get_current_object(hdc, objectType) → handle
-  (func $host_gdi_arc (param i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_arc
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
-      (local.get 5) (local.get 6) (local.get 7) (local.get 8) (i32.const 0)))
-  ;; gdi_arc(hdc, left, top, right, bottom, xStart, yStart, xEnd, yEnd)
-  (func $host_gdi_bitblt (param i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_hdc_bitblt
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
-      (local.get 5) (local.get 6) (local.get 7) (local.get 8)))
-  ;; gdi_bitblt(dstDC, dx, dy, w, h, srcDC, sx, sy, rop)
-  (func $host_gdi_transparent_blt (param i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_hdc_transparent_blt
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
-      (local.get 5) (local.get 6) (local.get 7) (local.get 8)))
-  ;; gdi_transparent_blt(dstDC, dx, dy, w, h, srcDC, sx, sy, colorKey)
-  (func $host_gdi_disabled_blt (param i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_hdc_disabled_blt
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
-      (local.get 5) (local.get 6) (local.get 7) (local.get 8)))
-  ;; gdi_disabled_blt(dstDC, dx, dy, w, h, srcDC, sx, sy, colorKey)
 
-  (func $host_gdi_stretch_blt (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_hdc_stretch_blt
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
-      (local.get 5) (local.get 6) (local.get 7) (local.get 8) (local.get 9)
-      (local.get 10)))
-  ;; gdi_stretch_blt(dstDC, dx, dy, dw, dh, srcDC, sx, sy, sw, sh, rop)
-  (func $host_gdi_scroll_window (param i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_scroll_window
-      (local.get 0) (local.get 1) (local.get 2)
-      (if (result i32) (local.get 3) (then (call $g2w (local.get 3))) (else (i32.const 0)))
-      (if (result i32) (local.get 4) (then (call $g2w (local.get 4))) (else (i32.const 0)))))
-  ;; gdi_scroll_window(hwnd, dx, dy, prcScroll, prcClip)
   (import "host" "show_find_dialog" (func $host_show_find_dialog (param i32 i32 i32) (result i32)))
   ;; show_find_dialog(dlgHwnd, ownerHwnd, findreplace_guest_addr) → hwnd
-
-
-
-  (func $host_gdi_get_clip_box (param i32) (result i32)
-    (call $gdi_dc_target_size (local.get 0)))
-  ;; gdi_get_clip_box(hdc) → packed w | (h << 16)
-  (func $host_gdi_load_bitmap (param i32 i32) (result i32)
-    (call $gdi_bitmap_load_resource (local.get 0) (local.get 1) (i32.const 0)))
-  (func $host_gdi_get_object_w (param i32) (result i32)
-    (local $record i32)
-    (local.set $record (call $gdi_object_record (local.get 0)))
-    (if (result i32)
-      (i32.and (i32.ne (local.get $record) (i32.const 0))
-        (i32.eq (load.field.memarg GdiObject type (local.get $record)) (i32.const 3)))
-      (then (load.field.memarg GdiBitmap width (local.get $record))) (else (i32.const 0))))
-  (func $host_gdi_get_object_h (param i32) (result i32)
-    (local $record i32)
-    (local.set $record (call $gdi_object_record (local.get 0)))
-    (if (result i32)
-      (i32.and (i32.ne (local.get $record) (i32.const 0))
-        (i32.eq (load.field.memarg GdiObject type (local.get $record)) (i32.const 3)))
-      (then (load.field.memarg GdiBitmap height (local.get $record))) (else (i32.const 0))))
-  (func $host_gdi_set_viewport_org (param i32 i32 i32) (result i32)
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 56) (local.get 1) (i32.const 0)))
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 60) (local.get 2) (i32.const 0)))
-    (i32.const 1))
-  (func $host_gdi_get_viewport_org_x (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 56) (i32.const 0)))
-  (func $host_gdi_get_viewport_org_y (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 60) (i32.const 0)))
-  (func $host_gdi_set_viewport_ext (param i32 i32 i32) (result i32)
-    (if (i32.or (i32.eqz (local.get 1)) (i32.eqz (local.get 2)))
-      (then (return (i32.const 0))))
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 64) (local.get 1) (i32.const 1)))
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 68) (local.get 2) (i32.const 1)))
-    (i32.const 1))
-  (func $host_gdi_get_viewport_ext_x (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 64) (i32.const 1)))
-  (func $host_gdi_get_viewport_ext_y (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 68) (i32.const 1)))
-  (func $host_gdi_set_window_org (param i32 i32 i32) (result i32)
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 40) (local.get 1) (i32.const 0)))
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 44) (local.get 2) (i32.const 0)))
-    (i32.const 1))
-  (func $host_gdi_get_window_org_x (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 40) (i32.const 0)))
-  (func $host_gdi_get_window_org_y (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 44) (i32.const 0)))
-  (func $host_gdi_set_window_ext (param i32 i32 i32) (result i32)
-    (if (i32.or (i32.eqz (local.get 1)) (i32.eqz (local.get 2)))
-      (then (return (i32.const 0))))
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 48) (local.get 1) (i32.const 1)))
-    (drop (call $gdi_dc_set_field (local.get 0) (i32.const 52) (local.get 2) (i32.const 1)))
-    (i32.const 1))
-  (func $host_gdi_get_window_ext_x (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 48) (i32.const 1)))
-  (func $host_gdi_get_window_ext_y (param i32) (result i32)
-    (call $gdi_dc_get_field (local.get 0) (i32.const 52) (i32.const 1)))
-  (func $host_gdi_set_pixel (param i32 i32 i32 i32) (result i32)
-    (call $gdi_hdc_set_pixel (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
-  ;; gdi_set_pixel(hdc, x, y, color) → prev color
-  (func $host_gdi_frame_rect (param i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (local $desc i32)
-    (local.set $desc (global.get $GDI_LINE_DESC))
-    (if (result i32) (call $gdi_surface_descriptor (local.get 0) (local.get $desc))
-      (then (call $gdi_frame_rect_desc (local.get 0) (local.get $desc)
-        (local.get 1) (local.get 2) (local.get 3) (local.get 4) (local.get 5)))
-      (else (i32.const 0))))
-  ;; gdi_frame_rect(hdc, left, top, right, bottom, hbrush, hwnd) → 1
-  (func $host_gdi_get_pixel (param i32 i32 i32) (result i32)
-    (call $gdi_hdc_get_pixel (local.get 0) (local.get 1) (local.get 2)))
-  ;; gdi_get_pixel(hdc, x, y) → COLORREF
-  (func $host_gdi_ext_flood_fill (param i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_hdc_ext_flood_fill
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)))
-  ;; gdi_ext_flood_fill(hdc, x, y, color, fillType) → BOOL
-  (func $host_gdi_get_di_bits (param i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_get_dibits
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (if (result i32) (local.get 4) (then (call $g2w (local.get 4))) (else (i32.const 0)))
-      (local.get 5) (local.get 6)))
-  ;; gdi_get_di_bits(hdc, hBitmap, startScan, numScans, bitsGA, bmiWA, colorUse) → numScans
-  (func $host_gdi_set_dib_bits (param i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_set_dibits
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (local.get 5) (local.get 6)))
-  ;; gdi_set_dib_bits(hdc, hBitmap, startScan, numScans, bitsWasmAddr, bmiWasmAddr, colorUse) → numScans
-  (func $host_gdi_get_dib_color_table (param i32 i32 i32 i32) (result i32)
-    (call $gdi_get_dib_color_table
-      (local.get 0) (local.get 1) (local.get 2) (call $g2w (local.get 3))))
-  ;; gdi_get_dib_color_table(hdc, startIdx, numEntries, colorsGA) → count
-  (func $host_gdi_set_dib_to_device
-        (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_set_dib_to_device
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (local.get 5) (local.get 6) (local.get 7)
-      (local.get 8) (local.get 9) (local.get 10) (local.get 11)))
-  ;; gdi_set_dib_to_device(hdc, xDest, yDest, w, h, xSrc, ySrc, startScan, cLines, bitsWA, bmiWA, colorUse) → cLines
-  (func $host_gdi_stretch_dib_bits (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
-    (call $gdi_stretch_dibits
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
-      (local.get 5) (local.get 6) (local.get 7) (local.get 8)
-      (local.get 9) (local.get 10) (local.get 11) (local.get 12)))
-  ;; gdi_stretch_dib_bits(hdc, xDst, yDst, wDst, hDst, xSrc, ySrc, wSrc, hSrc, bitsWA, bmiWA, usage, rop)
 
   ;; DirectX tracing hook — WAT calls this from Lock/Unlock/Blt/Flip/SetEntries/dx_present
   ;; JS formats and logs iff --trace-dx is set. kind: 1=Lock 2=Unlock 3=Blt 4=SetEntries 5=Present 6=Flip
@@ -744,25 +401,41 @@
 
   ;; Filesystem host imports — backed by virtual FS
   (import "host" "fs_create_file" (func $host_fs_create_file (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_create_file_result" (func $host_fs_create_file_result_owned (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
   ;; fs_create_file(pathWA, access, creation, flagsAttrs, isWide) → handle
   (import "host" "fs_create_legacy_file" (func $host_fs_create_legacy_file (param i32 i32 i32 i32 i32) (result i32)))
   ;; fs_create_legacy_file(...) → 16-bit HFILE for _lopen/_lcreat
-  (import "host" "fs_read_file" (func $host_fs_read_file (param i32 i32 i32 i32) (result i32)))
-  (import "host" "fs_read_file_at" (func $host_fs_read_file_at (param i32 i32 i32 i32 i32 i32) (result i32)))
-  ;; fs_read_file(handle, bufGA, nToRead, nReadGA) → BOOL
-  (import "host" "fs_read_pending" (func $host_fs_read_pending (result i32)))
-  ;; fs_read_pending() → 1 when the fs_read_file that just returned 0 is
+  (import "host" "fs_read_file" (func $host_fs_read_file_owned (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_read_file_at" (func $host_fs_read_file_at_owned (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
+  ;; Read/map imports end in a 1-based guest thread ID. Internal adapters in
+  ;; base-late attach it from this instance, including legacy BOOL callers.
+  ;; fs_read_file(handle, bufGA, nToRead, nReadGA, threadId) → BOOL
+  (import "host" "fs_read_pending" (func $host_fs_read_pending_owned (param i32) (result i32)))
+  (import "host" "fs_read_file_result" (func $host_fs_read_file_result_owned (param i32 i32 i32 i32 i32) (result i32)))
+  ;; Returns success (0), lazy-fill retry (997), or the operation's error.
+  ;; fs_read_pending(threadId) → 1 when that thread's fs_read_file returned 0
   ;; waiting on bytes from a lazy (provider-backed) mount rather than failing.
-  ;; ReadFile asks only on a zero return; every other i32 the read can return
-  ;; is already spoken for as a BOOL at its other call sites.
+  ;; Legacy BOOL callers use this channel; ReadFile consumes its operation
+  ;; result directly without a second state lookup.
   (import "host" "fs_write_file" (func $host_fs_write_file (param i32 i32 i32 i32) (result i32)))
   ;; fs_write_file(handle, bufGA, nToWrite, nWrittenGA) → BOOL
+  (import "host" "fs_write_file_result" (func $host_fs_write_file_result (param i32 i32 i32 i32) (result i32)))
+  ;; Same write, returning ERROR_SUCCESS or the operation's Win32 error.
   (import "host" "fs_flush_file_buffers" (func $host_fs_flush_file_buffers (param i32) (result i32)))
   (import "host" "fs_close_handle" (func $host_fs_close_handle (param i32) (result i32)))
+  (import "host" "fs_duplicate_handle" (func $host_fs_duplicate_handle (param i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_duplicate_mapping_result" (func $host_fs_duplicate_mapping_result (param i32 i32 i32 i32 i32) (result i32)))
   (import "host" "fs_set_file_pointer" (func $host_fs_set_file_pointer (param i32 i32 i32) (result i32)))
+  (import "host" "fs_seek_result" (func $host_fs_seek_result (param i32 i32 i32 i32 i32) (result i32)))
+  ;; handle, distanceLow, optional high-word GA, method, private result WA -> Win32 error
   (import "host" "fs_set_end_of_file" (func $host_fs_set_end_of_file (param i32) (result i32)))
+  (import "host" "fs_set_end_of_file_result" (func $host_fs_set_end_of_file_result (param i32) (result i32)))
   (import "host" "fs_get_file_size" (func $host_fs_get_file_size (param i32) (result i32)))
-  ;; fs_file_time(handle, set, creationWA, accessWA, writeWA) → Win32 error code
+  (import "host" "fs_file_size_result" (func $host_fs_file_size_result (param i32 i32 i32) (result i32)))
+  ;; handle, private low output WA, optional high output GA -> Win32 error
+  (import "host" "fs_file_information" (func $host_fs_file_information (param i32 i32) (result i32)))
+  ;; handle, BY_HANDLE_FILE_INFORMATION output guest address -> Win32 error
+  ;; fs_file_time(handle, set, creationGA, accessGA, writeGA) → Win32 error code
   (import "host" "fs_file_time" (func $host_fs_file_time (param i32 i32 i32 i32 i32) (result i32)))
   (import "host" "fs_get_file_attributes" (func $host_fs_get_file_attributes (param i32 i32) (result i32)))
   (import "host" "fs_set_file_attributes" (func $host_fs_set_file_attributes (param i32 i32 i32) (result i32)))
@@ -791,8 +464,9 @@
   ;; fs_drive_type(rootWA, isWide) → DRIVE_* value, or 0 when no mount claims
   ;; that letter and the caller should keep its built-in answer.
   (import "host" "fs_volume_label" (func $host_fs_volume_label (param i32 i32 i32 i32) (result i32)))
-  ;; fs_volume_label(rootWA, isWide, outWA, maxChars) → characters written,
-  ;; NUL-terminated; 0 when the drive has no label of its own.
+  ;; fs_volume_label(rootWA, isWide, outGA, maxChars) → characters written,
+  ;; NUL-terminated; empty labels write NUL. -1 = short buffer, no writes.
+  ;; Output is a guest pointer so the host translates each written byte.
   (import "host" "fs_set_volume_label" (func $host_fs_set_volume_label (param i32 i32 i32) (result i32)))
   ;; fs_set_volume_label(driveIndex, labelGA, chars) → Win32 error code;
   ;; driveIndex 0 selects the current drive and chars 0 removes the label.
@@ -807,22 +481,30 @@
   ;; fs_search_path(pathWA, fileNameWA, extWA, bufLen, bufGA, filePartPtrGA, isWide) → len or 0
   (import "host" "fs_get_short_path_name" (func $host_fs_get_short_path_name (param i32 i32 i32 i32) (result i32)))
   (import "host" "fs_create_file_mapping" (func $host_fs_create_file_mapping (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_create_file_mapping_result" (func $host_fs_create_file_mapping_result (param i32 i32 i32 i32 i32 i32) (result i32)))
   ;; fs_create_file_mapping(hFile, protect, sizeHi, sizeLo, nameWA) → mapping handle
   ;; nameWA is 0 for an unnamed section. A named one can be reopened by name,
   ;; which is how an app asks "is my other instance already running?".
   (import "host" "fs_open_file_mapping" (func $host_fs_open_file_mapping (param i32) (result i32)))
+  (import "host" "fs_open_file_mapping_result" (func $host_fs_open_file_mapping_result (param i32 i32 i32 i32 i32) (result i32)))
   ;; fs_open_file_mapping(nameWA) → mapping handle, or 0 when no such name exists
-  (import "host" "fs_map_view_of_file" (func $host_fs_map_view_of_file (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_map_view_of_file" (func $host_fs_map_view_of_file_owned (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_map_view_of_file_result" (func $host_fs_map_view_of_file_result (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
   ;; fs_map_view_of_file(hMapping, access, offsetHi, offsetLo, size) → guest addr
   (import "host" "fs_unmap_view" (func $host_fs_unmap_view (param i32) (result i32)))
   ;; fs_unmap_view(baseAddr) → BOOL
   (import "host" "fs_flush_view" (func $host_fs_flush_view (param i32 i32) (result i32)))
   ;; fs_flush_view(addrInsideView, bytes | 0 for the rest of the view) → BOOL
   (import "host" "fs_filetime_to_systemtime" (func $host_fs_filetime_to_systemtime (param i32 i32) (result i32)))
-  ;; fs_filetime_to_systemtime(ftWasmAddr, stWasmAddr) → BOOL
+  ;; fs_filetime_to_systemtime(ftGuestAddr, stGuestAddr) → BOOL
   ;; DLL file check (for dynamic LoadLibrary)
   (import "host" "has_dll_file" (func $host_has_dll_file (param i32) (result i32)))
   ;; has_dll_file(nameWA) → 1 if DLL file exists in VFS/host, 0 if not
+  (import "host" "service_load_library" (func $host_service_load_library (result i32)))
+  ;; service_load_library() → 1 when the host finished a pending LoadLibraryA
+  ;; yield (reason 5) in place: DLL mapped, DllMain run, EAX/ESP/EIP set and the
+  ;; yield cleared. 0 leaves it pending (bytes need I/O, or no such host). For
+  ;; a nested synchronous send, which cannot return to the host's event loop.
 
   ;; COM host imports
   (import "host" "com_create_instance" (func $host_com_create_instance (param i32 i32 i32 i32 i32) (result i32)))
@@ -832,7 +514,9 @@
   (import "host" "com_revoke_class_object" (func $host_com_revoke_class_object (param i32) (result i32)))
   ;; com_revoke_class_object(cookie) → HRESULT
   ;; Returns 0=S_OK, 0x800401F0=CO_E_DLLNOTFOUND (need async load), other=error
-  (import "host" "com_get_pending_dll" (func $host_com_get_pending_dll (result i32)))
+  ;; (dest_wa, capacity) -> dest_wa, or 0 when nothing is pending. The host
+  ;; writes the server's path into the calling instance's own buffer.
+  (import "host" "com_get_pending_dll" (func $host_com_get_pending_dll (param i32 i32) (result i32)))
   (import "host" "com_initialize_thread" (func $host_com_initialize_thread (param i32 i32 i32) (result i32)))
   (import "host" "com_uninitialize_thread" (func $host_com_uninitialize_thread (param i32) (result i32)))
   ;; Thread/event host imports
@@ -844,6 +528,25 @@
   (import "host" "duplicate_current_thread" (func $host_duplicate_current_thread (param i32) (result i32)))
   (import "host" "suspend_thread" (func $host_suspend_thread (param i32) (result i32)))
   (import "host" "resume_thread" (func $host_resume_thread (param i32) (result i32)))
+  ;; QueueUserAPC's two halves. thread_apc_target resolves a thread HANDLE to
+  ;; its Win32 thread id (main is 1), or 0 for an unknown or exited thread;
+  ;; thread_alert, called after the APC is published in $THREAD_APC_QUEUES,
+  ;; ends that thread's alertable SleepEx early so the APC runs now rather than
+  ;; at the sleep's timeout.
+  (import "host" "thread_apc_target" (func $host_thread_apc_target (param i32 i32) (result i32)))
+  (import "host" "thread_alert" (func $host_thread_alert (param i32)))
+  ;; CreateProcess with redirected standard handles (09d7-pipes.wat): start
+  ;; the command line as a real child process at room address child_ip, whose
+  ;; std handles are the pipe ends described by count 16-byte entries at spec
+  ;; {which (-10/-11/-12), end, child_port, parent_port}. Returns the child's
+  ;; pid, or 0 when this host cannot start one -- CreateProcessA then takes
+  ;; its old shell_execute path, so a host that never implements this keeps
+  ;; behaving exactly as before.
+  (import "host" "process_spawn" (func $host_process_spawn (param i32 i32 i32 i32 i32) (result i32)))
+  ;; A child that process_spawn started, by pid: op 0 = its exit code (259
+  ;; STILL_ACTIVE while it runs), op 1 = terminate it with exit code arg (1 on
+  ;; success). -1 = no such child.
+  (import "host" "process_ctl" (func $host_process_ctl (param i32 i32 i32) (result i32)))
   (import "host" "get_thread_priority" (func $host_get_thread_priority (param i32 i32) (result i32)))
   (import "host" "set_thread_priority" (func $host_set_thread_priority (param i32 i32 i32) (result i32)))
   (import "host" "get_thread_locale" (func $host_get_thread_locale (param i32) (result i32)))
@@ -854,6 +557,8 @@
   (import "host" "create_event" (func $host_create_event (param i32 i32 i32 i32) (result i32)))
   (import "host" "open_event" (func $host_open_event (param i32 i32) (result i32)))
   (import "host" "set_event" (func $host_set_event (param i32) (result i32)))
+  (import "host" "socket_event" (func $host_socket_event (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "close_event" (func $host_close_event (param i32) (result i32)))
   (import "host" "reset_event" (func $host_reset_event (param i32) (result i32)))
   (import "host" "wait_single" (func $host_wait_single (param i32 i32) (result i32)))
   (import "host" "wait_multiple" (func $host_wait_multiple (param i32 i32 i32 i32) (result i32)))
@@ -863,8 +568,8 @@
 
   ;; ---- Memory: imported from host, 8192 pages = 512MB initial ----
   ;; Audio output — waveOut bridge to Web Audio API
-  (import "host" "wave_out_open" (func $host_wave_out_open (param i32 i32 i32 i32) (result i32)))
-  ;; wave_out_open(sampleRate, channels, bitsPerSample, callbackType) → handle
+  (import "host" "wave_out_open" (func $host_wave_out_open (param i32 i32 i32 i32 i32 i32) (result i32)))
+  ;; wave_out_open(sampleRate, channels, bitsPerSample, callbackType, callback, instance) → handle
   (import "host" "wave_out_write" (func $host_wave_out_write (param i32 i32 i32) (result i32)))
   ;; wave_out_write(handle, pcmDataWA, byteLength) → 0=ok
   (import "host" "wave_out_schedule_done" (func $host_wave_out_schedule_done (param i32 i32 i32 i32) (result i32)))
@@ -925,7 +630,13 @@
   (import "host" "net_frame_peek" (func $host_net_frame_peek (param i32 i32) (result i32)))
   ;; net_frame_commit() — discard the frame most recently peeked.
   (import "host" "net_frame_commit" (func $host_net_frame_commit))
-  ;; net_link_open() → 1 this process may use the room now, 0 not yet.
+  ;; net_link_open(why) → 1 this process may use the room now, 0 not yet.
+  ;; `why` names the networked act asking: 1 socket(), 2 DirectPlay Open to
+  ;; host, 3 Open to join, 4 EnumSessions, 6 DDE DdeNameService (a dealer
+  ;; offering its service; asked without waiting, the answer is ignored),
+  ;; 7 DdeConnect. (5 is the shell's own: the list shown at launch.) A host that joins a room for the
+  ;; person may then carry on from there -- a searcher is already on the
+  ;; session list, a host is not (lib/apps.js lan.join.inGame).
   ;;
   ;; A wire can be attached long after boot, and a browser host that asks a
   ;; person who to play with cannot answer inside a host import — the lobby is
@@ -935,7 +646,7 @@
   ;; (the CLI, or an app launched with its wire already in place) answers 1 for
   ;; ever and no guest waits. Answering 1 with no wire at all is also correct:
   ;; that is a machine with no cable, and the search simply finds nobody.
-  (import "host" "net_link_open" (func $host_net_link_open (result i32)))
+  (import "host" "net_link_open" (func $host_net_link_open (param i32) (result i32)))
   ;; The optional uplink: a host-provided peer on the same frame wire that
   ;; answers for addresses outside the room (see $vsock_addr_routable).
   ;; net_uplink_routes(ipHostOrder) → 1 when the wire carries frames for that
@@ -985,7 +696,8 @@
   (global $STRING_CONSTANTS i32 (region.addr $STRING_CONSTANTS 0))
   (global $STRING_CONSTANTS_SIZE i32 (region.size $STRING_CONSTANTS))
   (data (region.addr $STRING_CONSTANTS 0x0) "win.ini\00Help\00[Contents]\00[Back]\00")
-  ;; EXE name buffer at 0x120 (max 128 bytes), default "app.exe"
+  ;; Default image name. Launch-specific names live in PROCESS_IMAGE_STATE;
+  ;; this static data is initialized again when a guest-thread instance starts.
   (data (region.addr $STRING_CONSTANTS 0x20) "app.exe\00")
   ;; WAT-built find/replace dialog labels (consumed by $create_findreplace_dialog).
   ;; All NUL-terminated, lengths recorded next to the offset constants below.
@@ -1120,10 +832,14 @@
   ;; image and no DLL-table entry, so GetModuleHandle has to recognize them by
   ;; name. Lower case and without the ".dll" suffix; the matcher accepts
   ;; either form. See $guest_name_is_static_system_dll in 09a-handlers.wat.
-  ;; ORDER MATTERS: everything from index $STATIC_SYS_DLL_FIRST_DX onwards is
-  ;; part of DirectX and answers the file-version query with the DirectX
-  ;; version below, so new non-DirectX names belong before "dplayx".
-  (data (region.addr $RESERVED_PAGE_STRINGS 0x228) "ole32\00user32\00comctl32\00dplayx\00ddraw\00dsound\00d3drm\00\00")
+  ;; ORDER MATTERS: the DirectX range starts at $STATIC_SYS_DLL_FIRST_DX and
+  ;; contains $STATIC_SYS_DLL_DX_COUNT entries. Append other module names so
+  ;; existing pseudo handles remain stable.
+  ;; GDI32 is here because Win9x maps it into every process: InstallShield 3's
+  ;; engine registers GDI32, KERNEL32 and USER32 by GetModuleHandle at startup,
+  ;; stops at the first NULL, and then silently drops every script call into
+  ;; USER32 — War Wind II's SdAskOptions never shows its dialog and spins.
+  (data (region.addr $RESERVED_PAGE_STRINGS 0x280) "ole32\00user32\00comctl32\00gdi32\00dplayx\00ddraw\00dsound\00d3drm\00glide2x\00glide3x\00\00")
   ;; Where those modules claim to live, and the suffix appended to the stem.
   (data (region.addr $RESERVED_PAGE_STRINGS 0x25C) "C:\\WINDOWS\\SYSTEM\\\00")
   (data (region.addr $RESERVED_PAGE_STRINGS 0x274) ".dll\00")
@@ -1163,8 +879,9 @@
   ;; MMSYSTEM entry points asked for by name rather than imported. A module
   ;; this emulator answers for has no export table to read, so GetProcAddress
   ;; needs the name-to-ordinal mapping written down — see
-  ;; $win16_mmsystem_ordinal. Chip's Challenge asks for exactly these five
-  ;; before it will start.
+  ;; $win16_mmsystem_ordinal. Chip's Challenge asks for the first five before
+  ;; it will start; Authorware (Civilization II's Civilopedia) looks up the
+  ;; waveOut set that follows.
   ;;
   ;; Each entry is a length byte, the name, and the ordinal as a word; a zero
   ;; length ends the list. Upper case, because $win16_cstr_to_pstr folds the
@@ -1176,6 +893,14 @@
     "\11MCIGETERRORSTRING\c2\02"
     "\11MIDIOUTGETNUMDEVS\c9\00"
     "\11WAVEOUTGETNUMDEVS\91\01"
+    "\11WAVEOUTGETDEVCAPS\92\01"
+    "\0bWAVEOUTOPEN\94\01"
+    "\0cWAVEOUTCLOSE\95\01"
+    "\14WAVEOUTPREPAREHEADER\96\01"
+    "\16WAVEOUTUNPREPAREHEADER\97\01"
+    "\0cWAVEOUTWRITE\98\01"
+    "\0cWAVEOUTRESET\9b\01"
+    "\16WAVEOUTSETPLAYBACKRATE\a2\01"
     "\00")
   ;; The same shape for the entry points apps look up in KERNEL, GDI and USER
   ;; by name rather than importing. A module this emulator answers for has no
@@ -1434,7 +1159,7 @@
   ;; 0x00005104  8B      SHARED_DLG_ENDED / SHARED_DLG_RESULT
   ;; 0x0000510C  4B      SHARED_DLG_PUMP_HWND (modal pump hwnd, all instances)
   ;; 0x00005110  240B    LAUNCH_ENV_OVERRIDES (host-supplied NAME=VALUE entries)
-  ;; 0x00005200  4KB     WINDOW_EXTRA_TABLE (256 entries x 16 bytes)
+  ;; 0x00005200  10KB    WINDOW_EXTRA_TABLE (256 entries x 40 bytes)
   ;; 0x00006200  1KB     ATOM_LOCAL_TABLE  (128 entries × 8 bytes — AddAtom namespace)
   ;; 0x00006600  1KB     ATOM_GLOBAL_TABLE (128 entries × 8 bytes — GlobalAddAtom namespace)
   ;; 0x00006A00  1KB     CLIPFORMAT_TABLE (128 entries × 8 bytes — RegisterClipboardFormat)
@@ -1455,7 +1180,7 @@
   ;;   bit 0: WM_NCPAINT pending; bit 1: WM_ERASEBKGND pending; bit 2: WM_NCCALCSIZE pending
   ;; 0x0000EE70  2KB     TITLE_TABLE    (256 entries × 8 bytes — WASM title ptr + len, ends 0xF670)
   ;; 0x0000F670  4KB     CLIENT_RECT    (256 entries × 16 bytes — l/t/r/b i32, ends 0x10670)
-  ;; 0x00010670  256B    SHOW_STATE_TABLE (256 × 1 byte — bit 0 maximized, bit 1 minimized, ends 0x10770)
+  ;; 0x00010670  256B    SHOW_STATE_TABLE (256 × 1 byte — bit 0 maximized, bit 1 minimized, bit 2 show-sized, ends 0x10770)
   ;; 0x00010770  32B     WINDOW_REGION_BITS (256 × 1 bit — SetWindowRgn state, ends 0x10790)
   ;; 0x00010790  32B     NATIVE_STATUS_BITS (one bit per WND_RECORDS slot)
   ;; 0x000107B0  32B     NATIVE_TAB_BITS (one bit per WND_RECORDS slot)
@@ -1537,7 +1262,12 @@
   ;; 0x07F0C840 512B     LOCK_TABLE (cross-instance mutexes, one 64B line each)
   ;; 0x07F0CA40 1KB      CS_TABLE (256 CRITICAL_SECTIONs, WASM addresses)
   ;; 0x07F0CE40 16B      SHARED_COUNTERS (process-wide state; +0 class atom,
-  ;;                                     +4 decoded-code cache generation)
+  ;;                                     +4 decoded-code cache generation,
+  ;;                                     +16 last QPC count, i64,
+  ;;                                     +24 gamma ramp generation,
+  ;;                                     +28 gamma ramp guest address,
+  ;;                                     +32 LOCK atomic mode, +36 its mutex,
+  ;;                                     +40 page-index layout mode)
   ;; 0x07F0CE60 16B      GDI_TABLE_MARKS (high-water slot counts, 3 used)
   ;; The three TV_* tables below were at 0x07F0C900/0x07F0C904/0x07F0CA00 on
   ;; main. They move here on the merge into the threads branch, which grew
@@ -1600,11 +1330,14 @@
   ;; 0x07FFDEFC  260B    DX_VTBL_REGISTRY (64 pointers + count, ends at VSOCK_TABLE)
   ;; 0x07FFE000  8KB     VSOCK_TABLE    (64 sockets × 128 bytes, ends 0x08000000)
   ;; 0x00012000  60MB    Guest address space (PE sections + DLLs + large data)
-  ;;   For an NE task image_base is 0, so guest 0x00100000 + 8MB is the Win16
-  ;;   selector arena (WIN16_ARENA): one 64KB slot per selector index.
-  ;;   Slot WIN16_SEG_MAX (guest 0x01FF0000) is past the last usable selector,
-  ;;   so no far pointer can name it; it holds the Win16 handle table.
-  ;; 0x03C12000  1MB     Former low main stack slot, now free for guest heap
+  ;;   For an NE task image_base is 0, so guest 0x00100000 up to GUEST_BASE's
+  ;;   end is the Win16 selector arena (WIN16_ARENA): one 64KB slot per
+  ;;   selector index. Slot WIN16_SEG_MAX (guest 0x03BF0000) is past the last
+  ;;   usable selector, so no far pointer can name it; it holds the Win16
+  ;;   handle table.
+  ;; 0x03C12000  1MB     Former low main stack slot; the region allocator
+  ;;                     places small tables here, so nothing guest-owned may
+  ;;                     be addressed into it
   ;; 0x03D12000  ...     Guest heap grows upward; VirtualAlloc reserves grow downward from thread cache
   ;; 0x03E12000  256KB   Former IAT thunk zone, now free for guest heap
   ;; 0x04A00000   6MB    WIN16_APP_DLL_STAGING (one reusable app-module image)
@@ -1632,17 +1365,31 @@
   (global $GUEST_STACK_SIZE i32 (region.size $GUEST_STACK))
   (global $GUEST_HEAP_BASE i32 (region.addr $GUEST_HEAP_BASE 0))
   (global $GUEST_HEAP_BASE_SIZE i32 (region.size $GUEST_HEAP_BASE))
+  ;; Fixed guest pools (00-regions.wat): real guest memory at the guest
+  ;; addresses a program reserves exactly; see $guest_fixed_pool_of.
+  (global $GUEST_FIXED_POOL_A i32 (region.addr $GUEST_FIXED_POOL_A 0))
+  (global $GUEST_FIXED_POOL_A_SIZE i32 (region.size $GUEST_FIXED_POOL_A))
+  (global $GUEST_FIXED_POOL_B i32 (region.addr $GUEST_FIXED_POOL_B 0))
+  (global $GUEST_FIXED_POOL_B_SIZE i32 (region.size $GUEST_FIXED_POOL_B))
+  (global $GUEST_FIXED_POOL_C i32 (region.addr $GUEST_FIXED_POOL_C 0))
+  (global $GUEST_FIXED_POOL_C_SIZE i32 (region.size $GUEST_FIXED_POOL_C))
+  (global $GUEST_FIXED_POOL_D i32 (region.addr $GUEST_FIXED_POOL_D 0))
+  (global $GUEST_FIXED_POOL_D_SIZE i32 (region.size $GUEST_FIXED_POOL_D))
   (global $THUNK_BASE   i32 (region.addr $THUNK_BASE 0))
   (global $THUNK_BASE_SIZE i32 (region.size $THUNK_BASE))
   (global $THUNK_END    i32 (i32.const 0x07152000))
   (global $THREAD_CACHE_BASE i32 (region.addr $THREAD_CACHE_BASE 0))
   (global $THREAD_CACHE_BASE_SIZE i32 (region.size $THREAD_CACHE_BASE))
+  ;; Per-thread spill slots for decoding while the arena is full and its flush
+  ;; is deferred by a nested run ($thread_spill_enter in 04-cache.wat).
+  (global $THREAD_SPILL i32 (region.addr $THREAD_SPILL 0))
+  (global $THREAD_SPILL_SIZE i32 (region.size $THREAD_SPILL))
   ;; The partition sizes, not a uniform stride: main gets
   ;; $THREAD_CACHE_MAIN_BYTES at offset 0 and worker N (1..15) gets
   ;; $THREAD_CACHE_STRIDE at MAIN_BYTES + (N-1)*STRIDE. See the declaration in
   ;; 00-regions.wat for why they differ, and $init_thread for the arithmetic.
-  (global $THREAD_CACHE_MAIN_BYTES i32 (i32.const 0x00F00000))
-  (global $THREAD_CACHE_STRIDE i32 (i32.const 0x00100000))
+  (global $THREAD_CACHE_MAIN_BYTES i32 (i32.const 0x00EFE000))
+  (global $THREAD_CACHE_STRIDE i32 (i32.const 0x000C0000))
   ;; 0x07152000..0x07192000 held the direct-mapped block-cache index; pages
   ;; replaced it outright (docs/page-compile-design.md §§4/4.1), leaving it free.
   ;; Page compilation (docs/page-compile-design.md). Both regions live in the
@@ -1664,14 +1411,20 @@
   ;; space because a chunk is capped at PAGE_CHUNK_BYTES (0x4000), so a real
   ;; offset never needs bit 14 and the marker is free.
   ;;
-  ;; 8KB each. The main thread keeps 128 slots (1MB); each of the fifteen
+  ;; 9KB each. The main thread keeps 512 slots (4.5MB; 128 until 2026-09-28); each of the fifteen
   ;; workers gets 16 (128KB), because a worker compiles the one routine it was
   ;; spawned for. $PAGE_INDEX_SLOTS is therefore per-instance, set alongside
   ;; $PAGE_INDEX in $init_thread, and the defaults here are the main thread's.
   (global $PAGE_INDEX_ARENA i32 (region.addr $PAGE_INDEX_ARENA 0))
   (global $PAGE_INDEX_ARENA_SIZE i32 (region.size $PAGE_INDEX_ARENA))
-  (global $PAGE_INDEX_MAIN_BYTES i32 (i32.const 0x00120000))
-  (global $PAGE_INDEX_STRIDE i32 (i32.const 0x00024000))
+  ;; Mutable for one reason: an app whose game loop runs on a WORKER can opt
+  ;; into the worker-heavy split instead (main 256 slots, each worker 32),
+  ;; same arena, via set_page_index_layout before anything is decoded. Hype
+  ;; runs its whole game on tid1 and with 16 slots recompiled 4.4M pages in
+  ;; 3000 gameplay batches (docs/re-notes/hype.md). The default stays what
+  ;; Warcraft III's ~450-page main thread needs. $page_index_layout_apply.
+  (global $PAGE_INDEX_MAIN_BYTES (mut i32) (i32.const 0x00480000))
+  (global $PAGE_INDEX_STRIDE (mut i32) (i32.const 0x00024000))
   (global $PAGE_INDEX_BYTES  i32 (i32.const 0x2400))
   ;; Block-executor round 13 (docs/block-executor-design.md section 22). The
   ;; threaded stream is not self-describing: an op is (handler, operand) plus
@@ -1694,13 +1447,13 @@
   (global $PAGE_OPBITS_START i32 (i32.const 0x2000))
   (global $PAGE_OPBITS_END   i32 (i32.const 0x2200))
   (global $PAGE_OPBITS_BYTES i32 (i32.const 0x200))
-  (global $PAGE_INDEX_SLOTS  (mut i32) (i32.const 128))
-  (global $PAGE_INDEX_WORKER_SLOTS i32 (i32.const 16))
+  (global $PAGE_INDEX_SLOTS  (mut i32) (i32.const 512))
+  (global $PAGE_INDEX_WORKER_SLOTS (mut i32) (i32.const 16))
   (global $PAGE_INDEX_NONE   i32 (i32.const 0xFFFF))
   ;; Bit 14 marks an interior byte. "Is this offset an entry point" is therefore
   ;; the single test `(entry & PAGE_INDEX_COVER) == 0`, which catches 0xFFFF too.
   (global $PAGE_INDEX_COVER  i32 (i32.const 0x4000))
-  (global $PAGE_INDEX_OFFMASK i32 (i32.const 0x3FFF))
+  (global $PAGE_INDEX_OFFMASK i32 (i32.const 0x3FFC))
   ;; Round 14 (docs/block-executor-design.md section 23). Bit 15 says WHICH of
   ;; the page's two chunks the offset names: clear = the threaded-code chunk,
   ;; set = the block-executor DESCRIPTOR chunk. So the u16 entry space is
@@ -1717,12 +1470,21 @@
   ;; reaches 0xFFFF. "Which chunk does this entry name" is one AND, and the
   ;; owner key a retirement walk compares is `e & PAGE_INDEX_OWNER`, which
   ;; keeps the chunk bit and drops the cover bit.
+  ;;
+  ;; Bit 0 of an ENTRY is the micro-op tier's "no bump" mark (07c
+  ;; $bx_hot_bump, $page_nobump_mark): the head has a settled verdict, so a
+  ;; transfer into it need not count toward hotness. Every chunk offset is a
+  ;; whole word, so bits 0-1 of a real offset are always clear and OFFMASK and
+  ;; OWNER drop them; $page_resolve alone keeps bit 0, in the low bit of the
+  ;; pointer it returns, for its three callers to read and mask. A retire or a
+  ;; re-publish rewrites the entry, which is what clears the mark.
   (global $PAGE_INDEX_DESC   i32 (i32.const 0x8000))
-  (global $PAGE_INDEX_OWNER  i32 (i32.const 0xBFFF))
+  (global $PAGE_INDEX_OWNER  i32 (i32.const 0xBFFC))
+  (global $PAGE_INDEX_NOBUMP i32 (i32.const 1))
   ;; PAGE_DIR: per-thread direct-mapped table keyed on the guest page number.
   ;; 32 bytes per entry: +0 page base (0 = empty), +4 index ptr, +8 threaded
   ;; chunk base, +12 threaded chunk used|class|flags, +16 descriptor chunk base
-  ;; (0 = none yet), +20 descriptor chunk used|class, +24/+28 reserved.
+  ;; (0 = none yet), +20 descriptor chunk used|class, +24 referenced bit (second-chance eviction), +28 reserved.
   ;; Split like the other two per-thread arenas: the main thread keeps 1024
   ;; entries (32KB) and each of the fifteen workers gets 256 (8KB). Entries and
   ;; mask are per-instance, set in $init_thread; the values here are the main
@@ -1731,10 +1493,10 @@
   (global $PAGE_DIR_BASE i32 (region.addr $PAGE_DIR_BASE 0))
   (global $PAGE_DIR_BASE_SIZE i32 (region.size $PAGE_DIR_BASE))
   (global $PAGE_DIR_SLOT_BYTES i32 (i32.const 32))
-  (global $PAGE_DIR_MAIN_BYTES i32 (i32.const 0x8000))
+  (global $PAGE_DIR_MAIN_BYTES i32 (i32.const 0x20000))
   (global $PAGE_DIR_STRIDE i32 (i32.const 0x2000))
-  (global $PAGE_DIR_ENTRIES (mut i32) (i32.const 1024))
-  (global $PAGE_DIR_MASK (mut i32) (i32.const 1023))
+  (global $PAGE_DIR_ENTRIES (mut i32) (i32.const 4096))
+  (global $PAGE_DIR_MASK (mut i32) (i32.const 4095))
   (global $PAGE_DIR_WORKER_ENTRIES i32 (i32.const 256))
   ;; One contiguous chunk per compiled page, carved from the existing per-thread
   ;; decoded-code arena so the established flush machinery already covers it.
@@ -1770,7 +1532,7 @@
   ;; THREAD_END = THREAD_BASE + THREAD_CACHE_STRIDE. Per-thread partition limit; overflow
   ;; checks use this so main (tid=0) doesn't trample T1's thread cache region.
   ;; Updated in $init_thread per tid.
-  (global $THREAD_END   (mut i32) (region.addr $THREAD_CACHE_BASE 0x00F00000))
+  (global $THREAD_END   (mut i32) (region.addr $THREAD_CACHE_BASE 0x00EFE000))
   ;; Per-thread page-compilation state. Worker threads are separate WASM
   ;; instances over the same memory, so every one of these is per-instance and
   ;; must be re-armed in $init_thread -- see the per-instance-globals rule that
@@ -2158,6 +1920,15 @@
   ;; plan and an ANSI conversion buffer for LoadBitmapW resource names.
   (global $GDI_BITMAP_PLAN i32 (region.addr $GDI_BITMAP_PLAN 0))
   (global $GDI_BITMAP_PLAN_SIZE i32 (region.size $GDI_BITMAP_PLAN))
+  (global $GDI_BITMAP_INFO_SCRATCH i32 (region.addr $GDI_BITMAP_INFO_SCRATCH 0))
+  (global $GDI_BITMAP_INFO_SCRATCH_SIZE i32 (region.size $GDI_BITMAP_INFO_SCRATCH))
+  (global $GUEST_SPAN_SCRATCH i32 (region.addr $GUEST_SPAN_SCRATCH 0))
+  (global $GUEST_SPAN_SCRATCH_SIZE i32 (region.size $GUEST_SPAN_SCRATCH))
+  ;; Bytes of the arena currently lent out, and how often a span did not fit.
+  ;; Nothing here is silent: a handler whose span overflows falls back to the
+  ;; plain translation and this counter says so.
+  (global $guest_span_cursor (mut i32) (i32.const 0))
+  (global $guest_span_overflow (mut i32) (i32.const 0))
   (global $GDI_RGB555_MASKS i32 (region.addr $DIB_DEFAULT_RGB555_MASKS 0x00000000))
   (global $GDI_BITMAP_NAME i32 (region.addr $GDI_BITMAP_NAME 0))
   (global $GDI_BITMAP_NAME_SIZE i32 (region.size $GDI_BITMAP_NAME))
@@ -2255,10 +2026,10 @@
   ;; Keep WAT-owned object/DC namespaces distinct and outside stock handles.
   (global $gdi_next_object_handle (mut i32) (i32.const 0x00410001))
   (global $gdi_next_dc_handle (mut i32) (i32.const 0x00310001))
-  ;; GDI batching is synchronous in this emulator, but the public limit and
-  ;; display gamma ramp remain observable process state.
+  ;; GDI batching is synchronous in this emulator, but the public limit remains
+  ;; observable process state. (The display gamma ramp is the shared
+  ;; process state in $SHARED_COUNTERS, see $gamma_ramp_store in 10f-gdi-dc.wat.)
   (global $gdi_batch_limit (mut i32) (i32.const 310))
-  (global $gdi_gamma_ramp_guest (mut i32) (i32.const 0))
   ;; Set while a window's backing surface is being replaced after a resize and
   ;; its chrome is being drawn back onto the new one. The repaint allocates a
   ;; window DC, which comes back through $gdi_window_surface_ensure; this stops
@@ -2291,17 +2062,29 @@
   ;; the counter. Pure scratch -- reused by every block, never read at runtime,
   ;; so it costs no per-block memory. Overflow sets $op_index_poison and the
   ;; block is simply not matched.
-  (global $OP_INDEX i32 (region.addr $OP_INDEX 0))
-  (global $OP_INDEX_SIZE i32 (region.size $OP_INDEX))
+  ;; Per instance: the region is tid-strided (see 00-regions.wat) and
+  ;; $init_thread moves this to the thread's own slice. $OP_INDEX_SLICE is ONE
+  ;; slice, which is all any reader may touch (07c uses its far half).
+  (global $OP_INDEX (mut i32) (region.addr $OP_INDEX_REGION 0))
+  (global $OP_INDEX_REGION i32 (region.addr $OP_INDEX_REGION 0))
+  (global $OP_INDEX_REGION_SIZE i32 (region.size $OP_INDEX_REGION))
+  (global $OP_INDEX_SLICE i32 (i32.const 0x2000))
   (global $OP_INDEX_MAX i32 (i32.const 2048))
   (global $op_index_n (mut i32) (i32.const 0))
   (global $op_index_poison (mut i32) (i32.const 0))
-  ;; One bit per 4KB guest page below $VIRTUAL_ALLOC_MIN, set when a block is
-  ;; decoded out of that page. A store into a marked page invalidates the
-  ;; cached blocks there. The two $generated_code_* / $generated_sparse_code_*
-  ;; ranges only cover code inside the PE image or in the sparse VirtualAlloc
-  ;; reserve; Storm generates its blitters into ordinary HeapAlloc memory,
-  ;; which falls in neither. 0x10000000 >> 12 = 65536 pages = 8KB of bitmap.
+  ;; 65536 bits (8KB), one per slot; a guest page's slot is
+  ;; ((ga >> 12) ^ (ga >> 28) ^ ((ga >> 30) << 15)) & 0xFFFF ($code_page_slot,
+  ;; 04-cache). That is the page number itself below 0x10000000 -- one bit
+  ;; per page, exact, as before -- and above it a fold of the top four
+  ;; address bits into the low ones (bit 30 also into bit 15, which keeps the
+  ;; DIB arena off the exe's .text: see 04-cache), so every page of the 4GB
+  ;; space has a bit and pages alias only across 256MB segments. A set bit means "a block may have been decoded
+  ;; from a page with this slot"; the per-thread page index then answers
+  ;; exactly, so aliasing costs a wasted slow path, never a missed write.
+  ;; This replaced "bitmap below 0x10000000, sparse min..max SPAN above": on
+  ;; StarCraft that span grew to 0x7c6d0000..0x7ef81000 and sent 7.55M data
+  ;; stores per 3500 batches down the retire walk for nothing. The obvious
+  ;; fix, a 128KB bitmap over all 1M pages, does not fit the direct window.
   (global $CODE_PAGE_BITMAP i32 (region.addr $CODE_PAGE_BITMAP 0))
   (global $CODE_PAGE_BITMAP_SIZE i32 (region.size $CODE_PAGE_BITMAP))
   (global $CODE_PAGE_BITMAP_PAGES i32 (i32.const 65536))
@@ -2318,6 +2101,14 @@
   (global $HOT_BLOCK_HIST_SIZE i32 (region.size $HOT_BLOCK_HIST))
   (global $HOT_BLOCK_HIST_COUNT i32 (i32.const 32768))
   (global $hot_block_hist_collisions (mut i32) (i32.const 0))
+  ;; --edge-hist: (previous block entry, this block entry) pairs, so a tool can
+  ;; say how many distinct targets an indirect call/jmp/ret site reached. The
+  ;; map is at capacity (every shake mode must still place), so the edges
+  ;; BORROW the 1MB handler-pair matrix: 65536 {from,to,count,pad} records,
+  ;; and $handler_hist_record stops filling pairs while edges are on.
+  (global $edge_hist_enabled (mut i32) (i32.const 0))
+  (global $edge_hist_prev (mut i32) (i32.const 0))
+  (global $edge_hist_collisions (mut i32) (i32.const 0))
   (global $SIB_CONSUMER_HIST i32 (region.addr $SIB_CONSUMER_HIST 0))
   (global $SIB_CONSUMER_HIST_SIZE i32 (region.size $SIB_CONSUMER_HIST))
   (global $SIB_CONSUMER_HIST_COUNT i32 (i32.const 8192))
@@ -2434,6 +2225,11 @@
   ;;   +12 DWL_USER (offset 8)
   (global $DIALOG_STATE_TABLE i32 (region.addr $DIALOG_STATE_TABLE 0))
   (global $DIALOG_STATE_TABLE_SIZE i32 (region.size $DIALOG_STATE_TABLE))
+  ;; Per-slot dialog font, parallel to DIALOG_STATE_TABLE (256 x 8 bytes):
+  ;;   +0  HFONT the dialog manager created for DS_SETFONT (0 = stock font)
+  ;;   +4  dialog base units, x | y<<16 (0 = the 6x13 / Win16 8x16 default)
+  (global $DIALOG_FONT_TABLE i32 (region.addr $DIALOG_FONT_TABLE 0))
+  (global $DIALOG_FONT_TABLE_SIZE i32 (region.size $DIALOG_FONT_TABLE))
   (global $WINDOW_UNICODE_TABLE i32 (region.addr $WINDOW_UNICODE_TABLE 0))
   (global $WINDOW_UNICODE_TABLE_SIZE i32 (region.size $WINDOW_UNICODE_TABLE))
   ;; Process identity lives in shared linear memory rather than a mutable
@@ -2443,8 +2239,15 @@
   ;; Per-window cbWndExtra-compatible storage. USER classes in WinHelp use
   ;; independent LONG slots at offsets 0, 4, 8, and 12; aliasing these to
   ;; GWL_USERDATA corrupts toolbar layout state.
+  ;;
+  ;; 40 bytes per window is the Win95/98 ceiling on cbWndExtra (RegisterClass
+  ;; fails above it), so every class a Win9x app can register fits. It was 16:
+  ;; InstallShield 3's progress gauge (ISBarCls) keeps its empty-part colour
+  ;; at offset 0x10, the store was refused, GetWindowLong read back 0, and the
+  ;; unfilled bar and its percentage were painted black.
   (global $WINDOW_EXTRA_TABLE i32 (region.addr $WINDOW_EXTRA_TABLE 0))
   (global $WINDOW_EXTRA_TABLE_SIZE i32 (region.size $WINDOW_EXTRA_TABLE))
+  (global $WND_EXTRA_STRIDE i32 (i32.const 40))
   ;; One-shot override for CreateDialogIndirectParam*: when non-zero,
   ;; $dlg_load reads the DLGTEMPLATE directly from this guest pointer
   ;; instead of resolving an RT_DIALOG resource.
@@ -2681,8 +2484,15 @@
   ;;      for the lock that worker holds, neither ever moves. So these wrap pure
   ;;      table arithmetic — slot allocation — and nothing else.
   ;;   2. Never take two at once, so there is no order to get wrong.
+  ;;      One ordered exception: $DLL_LOAD_LOCK is held while a rebased image
+  ;;      reserves sparse memory, which takes $LOCK_VIRTUAL_MAP inside it. Never
+  ;;      the other way round -- LOCK_VIRTUAL_MAP's sections never load a DLL.
   (global $LOCK_TABLE i32 (region.addr $LOCK_TABLE 0))
   (global $LOCK_TABLE_SIZE i32 (region.size $LOCK_TABLE))
+  ;; Staging, address choice, mapping and the DLL_TABLE row of one DLL load
+  ;; (08b-dll-loader.wat, "The loader lock"). Same layout as a LOCK_TABLE line.
+  (global $DLL_LOAD_LOCK i32 (region.addr $DLL_LOAD_LOCK 0))
+  (global $DLL_LOAD_LOCK_SIZE i32 (region.size $DLL_LOAD_LOCK))
   ;; Every CRITICAL_SECTION the guest has initialised, so that one owned by a
   ;; thread that has ended can be found and released. WASM addresses, not guest
   ;; ones: the release runs from whichever instance notices the exit, and in
@@ -2720,6 +2530,16 @@
   ;; it: the comments are documentation, that test is the authority.
   (global $SHARED_COUNTERS i32 (region.addr $SHARED_COUNTERS 0))
   (global $SHARED_COUNTERS_SIZE i32 (region.size $SHARED_COUNTERS))
+  ;; +16: the last QueryPerformanceCounter count handed to any guest thread
+  ;; (i64, see $qpc_next).
+  (global $QPC_SHARED i32 (region.addr $SHARED_COUNTERS 0x00000010))
+  ;; +24 / +28: the display gamma ramp's generation and guest address
+  ;; ($gamma_ramp_store in 10f-gdi-dc.wat).
+  ;; +32: nonzero once guest threads run concurrently on Workers; the decoder
+  ;; then emits LOCK-prefixed RMW (and memory XCHG) as handler 499, an atomic
+  ;; compare-and-swap ($th_lock_rmw). +36: that handler's split-lock mutex.
+  (global $LOCK_MODE i32 (region.addr $SHARED_COUNTERS 0x00000020))
+  (global $LOCK_MUTEX i32 (region.addr $SHARED_COUNTERS 0x00000024))
   (global $CLASS_ATOM_BASE i32 (i32.const 0xC000))
   ;; 256 bytes of scratch that belong to the TEST HARNESS, not to the emulator.
   ;; No WAT reads any of it. The layout is fixed by offset so tests in separate
@@ -2753,6 +2573,13 @@
   ;; the second bind, so the symptom is a connect that fails rather than a
   ;; crossed wire — still wrong, and invisible. 0 means "not seeded yet".
   (global $VSOCK_NEXT_PORT_SHARED i32 (region.addr $LOCK_TABLE 0x00000100))
+  ;; Guest address of the WSAAsyncSelect registration table (09d-winsock.wat
+  ;; $vsock_async_rec), published once with cmpxchg. Process-wide for the same
+  ;; reason: a registration made on one guest thread's instance has to be seen
+  ;; by whichever instance pumps the wire and posts the event. 0 = not made yet.
+  (global $VSOCK_ASYNC_SHARED i32 (region.addr $LOCK_TABLE 0x00000104))
+  ;; WSAStartup references are process-owned, including calls from workers.
+  (global $WSA_STARTED_SHARED i32 (region.addr $LOCK_TABLE 0x00000108))
   ;; The next free thunk index, process-wide. $num_thunks is BOTH the count and
   ;; the next free index, and it is a per-instance global — so two instances that
   ;; both call GetProcAddress hand out the same thunk address, and the guest then
@@ -2760,6 +2587,11 @@
   ;; to nowhere with no bad pointer anywhere in the guest's own code.
   ;; $thunk_reserve allocates from here; $update_thunk_end keeps the two in step.
   (global $THUNK_NEXT_SHARED i32 (region.addr $LOCK_TABLE 0x00000140))
+  ;; The cross-thread user-APC inboxes (09a7d, $apc_shared_slot): one dword per
+  ;; Win32 thread id 1..16, the guest address of the newest queued node, 0 when
+  ;; empty. Lock-free (cmpxchg push, xchg take-all), so no lock line is needed;
+  ;; this is the table's last free 64-byte line, which is exactly 16 dwords.
+  (global $THREAD_APC_QUEUES i32 (region.addr $LOCK_TABLE 0x000001C0))
   ;; Where the heap starts when no PE was ever loaded — unit-test harnesses call
   ;; the WAT exports directly and still expect HeapAlloc to work. This was the
   ;; old initial value of the $heap_ptr global.
@@ -2790,7 +2622,15 @@
   (global $DIB_PAGE_USED_SIZE i32 (region.size $DIB_PAGE_USED))
   (global $DIB_PAGE_RUNS i32 (region.addr $DIB_PAGE_RUNS 0))
   (global $DIB_PAGE_RUNS_SIZE i32 (region.size $DIB_PAGE_RUNS))
-  (global $DIB_PAGE_COUNT i32 (i32.const 16384))
+  ;; The arena hands out exactly the pages $g2w translates: $DIB_GUEST_CAPACITY
+  ;; / 4096. It stayed at 16384 (64MB) when the capacity above dropped to 63MB,
+  ;; so the arena's top megabyte was allocatable but untranslatable: $g2w
+  ;; answered the NULL sentinel, $d3d9_create_surface zeroed `size` bytes from
+  ;; wasm 0xF0 and the software GL texture store wrote its texels there --
+  ;; through the guest image. Deus Ex on OpenGlDrv filled the arena that far
+  ;; after Escape and overwrote deusex.exe's own vtables with magenta.
+  ;; test/test-dib-arena-translates.js holds the two together.
+  (global $DIB_PAGE_COUNT i32 (i32.const 16128))
 
   (global $WNDPROC_CTRL_NATIVE i32 (i32.const 0xFFFF0002))  ;; WAT-native control wndproc
   (global $WNDPROC_CONSOLE_NATIVE i32 (i32.const 0xFFFF0003))  ;; WAT-native console window
@@ -2802,6 +2642,7 @@
   ;; below that line gets called as guest code and jumps into the void.
   (global $WNDPROC_DIALOG     i32 (i32.const 0xFFFF0004))  ;; USER DefDlgProc wrapper
   (global $WNDPROC_DISPDIB    i32 (i32.const 0xFFFF0005))  ;; DISPDIB "DisplayDibWindow"
+  (global $WNDPROC_MCIWND     i32 (i32.const 0xFFFF0006))  ;; MSVFW32 "MCIWndClass"
   (global $DISPDIB_STATE i32 (region.addr $DISPDIB_STATE 0))
   (global $DISPDIB_STATE_SIZE i32 (region.size $DISPDIB_STATE))
   (global $DISPDIB_STRINGS i32 (region.addr $DISPDIB_STRINGS 0))
@@ -2971,7 +2812,8 @@
   (global $msvcrt_commode_ptr (mut i32) (i32.const 0))
   (global $msvcrt_acmdln_ptr  (mut i32) (i32.const 0))
   (global $msvcrt_environ_ptr (mut i32) (i32.const 0))
-  (global $msvcrt_iob_ptr     (mut i32) (i32.const 0))
+  ;; Guest address of the CRT's __argv variable (__p___argv returns it).
+  (global $msvcrt_argv_ptr (mut i32) (i32.const 0))
   (global $msvcrt_pctype_ptr  (mut i32) (i32.const 0))
   (global $msvcrt_strerror_ptr (mut i32) (i32.const 0))
   (global $msvcrt_tmpnam_ptr  (mut i32) (i32.const 0))
@@ -3001,6 +2843,12 @@
   ;; InSendMessage is TRUE only for SendMessage from another thread; an
   ;; ordinary same-thread recursive SendMessage must still report FALSE.
   (global $cross_thread_send_depth (mut i32) (i32.const 0))
+  ;; Set by the scheduler when another thread has a SendMessage parked for a
+  ;; window this thread owns. Win32 delivers such a message only while its
+  ;; receiver is inside a message call, never between two arbitrary
+  ;; instructions; the message calls test this and yield (reason 17) so the
+  ;; host can deliver it there. See $incoming_send_yield.
+  (global $incoming_send_pending (mut i32) (i32.const 0))
   ;; ReplyMessage inside a cross-thread send: the depth it answered (0 = none)
   ;; and the LRESULT it supplied, which thread_send_end hands the sender in
   ;; place of the WndProc's own return value.
@@ -3071,10 +2919,13 @@
   (global $wave_out_volume (mut i32) (i32.const 0xFFFFFFFF))  ;; packed L|R, default max
   ;; MMIO buffered-I/O slots. mmioGetInfo/mmioAdvance hand the app a real
   ;; read buffer it memcpy's out of, so each open HMMIO that asks for one
-  ;; needs a stable guest block. Lazily allocated table of $MMIO_BUF_SLOTS
-  ;; {hmmio, pchBuffer, cchBuffer, owned} records; owned blocks die on close.
-  (global $mmio_buf_table (mut i32) (i32.const 0))
+  ;; needs a stable guest block. $MMIO_BUF_SLOTS 32-byte records in the
+  ;; shared $MMIO_BUF_TABLE region (layout at $mmio_slot_addr); owned blocks
+  ;; die on close.
+  (global $MMIO_BUF_TABLE i32 (region.addr $MMIO_BUF_TABLE 0))
+  (global $MMIO_BUF_TABLE_SIZE i32 (region.size $MMIO_BUF_TABLE))
   (global $MMIO_BUF_SLOTS i32 (i32.const 8))
+  (global $MMIO_SLOT_BYTES i32 (i32.const 32))
   (global $MMIO_BUF_SIZE i32 (i32.const 8192))
   (global $rgn_counter (mut i32) (i32.const 0))
   ;; _initterm trampoline state
@@ -3111,9 +2962,14 @@
   (global $qsort_ret       (mut i32) (i32.const 0))
   (global $qsort_thunk     (mut i32) (i32.const 0))
   ;; DLL loader state
-  (global $dll_count (mut i32) (i32.const 0))
-  (global $DLL_TABLE_CAPACITY i32 (i32.const 32))
-  (global $DLL_TABLE i32 (region.addr $DLL_TABLE 0))  ;; 32 bytes x 32 DLLs = 1024 bytes
+  ;; DLL row count is process-owned in DLL_SHARED, never an instance global.
+  (global $DLL_SHARED i32 (region.addr $DLL_SHARED 0))
+  (global $DLL_SHARED_SIZE i32 (region.size $DLL_SHARED))
+  ;; 64: Daikatana loads ~30 Miles providers (*.flt, *.m3d, mp3dec.asi) before
+  ;; its own dlls\physics.dll, and at 32 that load failed and its levels never
+  ;; finished loading.
+  (global $DLL_TABLE_CAPACITY i32 (i32.const 64))
+  (global $DLL_TABLE i32 (region.addr $DLL_TABLE 0))  ;; 32 bytes x 64 DLLs = 2048 bytes
   ;; Parallel to DLL_TABLE: per-DLL resource dir (rsrc_rva, rsrc_size). 8 bytes x 32 = 256B.
   (global $DLL_RSRC_TABLE i32 (region.addr $DLL_RSRC_TABLE 0))
   ;; Full path used to load each module, as a guest string pointer. Keeping it
@@ -3122,26 +2978,38 @@
   ;; Parallel per-DLL loader flags: bit 0 = static TLS directory present,
   ;; bit 1 = DLL_THREAD_ATTACH/DETACH notifications disabled.
   (global $DLL_FLAGS_TABLE i32 (region.addr $DLL_FLAGS_TABLE 0))
+  (global $DLL_STATIC_TLS_TABLE i32 (region.addr $DLL_STATIC_TLS_TABLE 0))
+  (global $DLL_STATIC_TLS_TABLE_SIZE i32 (region.size $DLL_STATIC_TLS_TABLE))
+  (global $DLL_SYNTHETIC_REFS i32 (region.addr $DLL_SYNTHETIC_REFS 0))
+  (global $DLL_SYNTHETIC_REFS_SIZE i32 (region.size $DLL_SYNTHETIC_REFS))
+  (global $DLL_LIFECYCLE_TABLE i32 (region.addr $DLL_LIFECYCLE_TABLE 0))
+  (global $DLL_LIFECYCLE_TABLE_SIZE i32 (region.size $DLL_LIFECYCLE_TABLE))
   ;; Active resource-lookup context. base=0 means "use main EXE ($image_base / $rsrc_rva)".
   ;; When a Load*/FindResource* handler is called with a DLL hInstance, these are pushed
   ;; to that DLL's load_addr + rsrc_rva for the duration of the lookup, then cleared.
   (global $rsrc_ctx_base (mut i32) (i32.const 0))
   (global $rsrc_ctx_rva  (mut i32) (i32.const 0))
   (global $exe_size_of_image (mut i32) (i32.const 0))
+  ;; The EXE's SizeOfStackReserve. Windows gives CreateThread(dwStackSize=0)
+  ;; this much stack, not a fixed default, and code is compiled against it.
+  (global $exe_stack_reserve (mut i32) (i32.const 0))
   ;; The EXE's own export directory RVA (data directory 0), 0 when it exports
   ;; nothing. An EXE that exports is the provider for its companion DLLs'
   ;; imports — Warcraft III's Game.dll imports 460 ordinals from War3Demo.exe.
   (global $exe_export_rva (mut i32) (i32.const 0))
   ;; rand() state
   (global $rand_seed (mut i32) (i32.const 12345))
-  ;; TLS: simple fixed-size TLS (64 slots), allocated in heap on first use
-  (global $tls_slots (mut i32) (i32.const 0))  ;; guest ptr to 64 x i32 = 256 bytes
+  ;; Native Win98 reference exposes 80 slots. Each instance registers its vector
+  ;; so releasing an index clears existing threads, including direct FS reads.
+  (global $TLS_SLOT_COUNT i32 (i32.const 80))
+  (global $tls_slots (mut i32) (i32.const 0))
+  (global $tls_registry_node (mut i32) (i32.const 0))
   ;; TLS indexes belong to the process, not one guest-thread WASM instance.
-  ;; Give the atomic cursor its own cache line in shared memory.
+  ;; Existing 64-byte region: +0 high-water mark, +4 lock, +8 vector-list head,
+  ;; +12/+16/+20 allocation bitmap. High-water metadata never resurrects holes.
   (global $TLS_NEXT_INDEX_SHARED i32 (region.addr $TLS_NEXT_INDEX_SHARED 0))
   (global $TLS_NEXT_INDEX_SHARED_SIZE i32 (region.size $TLS_NEXT_INDEX_SHARED))
   ;; Performance counter (monotonic, incremented per query)
-  (global $perf_counter_lo (mut i32) (i32.const 0))
   ;; EFLAGS bits outside the six we model lazily (CF/PF/ZF/SF/DF/OF). popfd
   ;; stores them here and pushfd ORs them back, so a bit the interpreter has no
   ;; opinion about still round-trips. Starts at the usual user-mode value:
@@ -3155,6 +3023,10 @@
   (global $tsc_last (mut i64) (i64.const 0))
   ;; FS segment base — points to fake TIB (allocated from heap during PE load)
   (global $fs_base (mut i32) (i32.const 0))
+  ;; Value of TIB+0x30 in every thread: a Win98 process-database address in
+  ;; the shared arena. Nothing is mapped there, so reads through it land on
+  ;; the NULL sentinel exactly as the old zero did; only its sign is load-bearing.
+  (global $WIN9X_PROCESS_DB i32 (i32.const 0x8167b2a4))
   ;; GS in a 16-bit task. A Win32 program never touches GS and nothing sets
   ;; these on that path, but a 16-bit one has six selectors to spend and uses
   ;; the last two like any other: Bad Toys 3D keeps a data selector in GS and
@@ -3268,6 +3140,8 @@
   ;; scans this table for the first set bit. 256 slots = 256 bytes total.
   (global $PAINT_FLAGS i32 (region.addr $PAINT_FLAGS 0))
   (global $PAINT_FLAGS_SIZE i32 (region.size $PAINT_FLAGS))
+  (global $PAINT_WORK_COUNTS i32 (region.addr $PAINT_WORK_COUNTS 0))
+  (global $PAINT_WORK_COUNTS_SIZE i32 (region.size $PAINT_WORK_COUNTS))
   (global $WINDOW_UPDATE_LOCK i32 (region.addr $WINDOW_UPDATE_LOCK 0))
   (global $WINDOW_UPDATE_LOCK_SIZE i32 (region.size $WINDOW_UPDATE_LOCK))
   (global $pending_child_create (mut i32) (i32.const 0)) ;; Child hwnd needing WM_CREATE (0=none)
@@ -3306,6 +3180,11 @@
   (global $MM_TIMER_TABLE_SIZE i32 (region.size $MM_TIMER_TABLE))
   (global $MM_TIMER_NEXT_ID i32 (region.addr $MM_TIMER_NEXT_ID 0))
   (global $MM_TIMER_NEXT_ID_SIZE i32 (region.size $MM_TIMER_NEXT_ID))
+  ;; The winmm timer thread, in TIMER_SHARED's tail: +0 mode (1 = callbacks
+  ;; run on their own guest thread), +4 thread handle (0 = not started), +8
+  ;; loop thunk guest address, +12 that thread's loop ESP. Process-wide, so
+  ;; every instance agrees on whether the thread owns the callbacks.
+  (global $MM_TIMER_THREAD i32 (region.addr $TIMER_SHARED 0x50))
   (global $mm_timer_in_cb    (mut i32) (i32.const 0))  ;; re-entrancy guard
   ;; A system timer may interrupt a main thread parked in WaitForSingleObject.
   ;; The callback borrows this WASM context, then restores the parked wait.
@@ -3329,11 +3208,13 @@
   ;; Clipboard: heap-allocated text buffer (CF_TEXT semantics). Each copy
   ;; replaces the contents — no append/grow. On WM_COPY/Ctrl+C/WM_CUT the
   ;; current ptr is freed (if cap too small) and a fresh one is allocated
-  ;; to fit the selection. $clipboard_ptr is a guest address; 0 = empty.
-  ;; $clipboard_len is authoritative (no NUL terminator).
+  ;; to fit the selection. $clipboard_ptr is a guest address; 0 = no buffer.
+  ;; Length excludes NUL. Presence is independent: an empty string is data,
+  ;; while EmptyClipboard may retain allocated capacity for the next copy.
   (global $clipboard_ptr (mut i32) (i32.const 0))
   (global $clipboard_cap (mut i32) (i32.const 0))
   (global $clipboard_len (mut i32) (i32.const 0))
+  (global $clipboard_text_present (mut i32) (i32.const 0))
   ;; Registered non-OLE "Rich Text Format" clipboard payload. This is separate
   ;; from embedded-object/OLE transfer; it stores a NUL-terminated RTF byte
   ;; string and uses a stable registered format id for the process.
@@ -3341,6 +3222,7 @@
   (global $clipboard_rtf_ptr (mut i32) (i32.const 0))
   (global $clipboard_rtf_cap (mut i32) (i32.const 0))
   (global $clipboard_rtf_len (mut i32) (i32.const 0))
+  (global $clipboard_rtf_present (mut i32) (i32.const 0))
   ;; Current OLE clipboard IDataObject. The object owns copied STGMEDIUM data;
   ;; OleSetClipboard swaps this reference and OleGetClipboard AddRefs it.
   (global $clipboard_ole_data_object (mut i32) (i32.const 0))
@@ -3369,6 +3251,13 @@
   (global $last_msg_pos_x (mut i32) (i32.const 0))
   (global $last_msg_pos_y (mut i32) (i32.const 0))
   (global $last_msg_time  (mut i32) (i32.const 0))
+  ;; GetMessageExtraInfo/SetMessageExtraInfo: the calling thread's extra-info
+  ;; word for the last message it retrieved. Per-instance on purpose (one
+  ;; instance per guest thread), and deliberately NOT propagated at spawn: a
+  ;; new thread has retrieved nothing yet, so it starts at 0. Every message
+  ;; source here (host input, posted, timers, synthesized) attaches 0, so
+  ;; each GetMessage/PeekMessage that retrieves a message clears it.
+  (global $msg_extra_info (mut i32) (i32.const 0))
   ;; ClipCursor confinement rectangle, in screen coordinates. Real USER clips
   ;; hardware cursor movement; JS reads this and clamps generated mouse input.
   (global $clip_cursor_active (mut i32) (i32.const 0))
@@ -3381,6 +3270,12 @@
   ;; $handle_EnterCriticalSection). Per-instance on purpose: the count is about
   ;; this thread's own progress.
   (global $cs_wait_spins (mut i32) (i32.const 0))
+  ;; 1 on an instance running in a guest Worker (lib/guest-worker.js), which may
+  ;; block in a brokered host call without stalling anybody else's imports --
+  ;; the page or the CLI's main serves those. Never set on the page's or the
+  ;; CLI's own instance, which must not block. Per-instance and deliberately not
+  ;; propagated at spawn: every guest Worker sets it on its own instance.
+  (global $guest_can_block (mut i32) (i32.const 0))
   (global $cs_steals (mut i32) (i32.const 0))
   (global $cs_waits (mut i32) (i32.const 0))
   (global $cs_bad_leaves (mut i32) (i32.const 0))
@@ -3424,7 +3319,7 @@
   ;; different bugs: what is actually wrong in that Winamp run is that a section
   ;; is orphaned by a thread that exits while owning it.
   (global $cs_steal_after (mut i32) (i32.const 0x3FFFFFFF))
-  (global $yield_reason (mut i32) (i32.const 0))  ;; 0=none, 1=waiting, 2=exited, 3=com_load_dll, 4=help_load, 5=load_library, 6=modal_dialog, 7=message_wait, 8=net_wait, 9=cs_wait, 10=cross-thread SendMessage, 11=self-suspend, 12=io_wait (lazy VFS chunk), 13=vblank_wait, 14=clock_spin (parked on the millisecond clock), 15=peek_spin (parked on an empty message queue)
+  (global $yield_reason (mut i32) (i32.const 0))  ;; 0=none, 1=waiting, 2=exited, 3=com_load_dll, 4=help_load, 5=load_library, 6=modal_dialog, 7=message_wait, 8=net_wait, 9=cs_wait, 10=cross-thread SendMessage, 11=self-suspend, 12=io_wait (lazy VFS chunk), 13=vblank_wait, 14=clock_spin (parked on the millisecond clock), 15=peek_spin (parked on an empty message queue), 17=incoming cross-thread send (parked on a message call's thunk)
   ;; ---- 60 Hz vertical-blank model (src/09a8-handlers-directx.wat) ----
   ;;
   ;; DirectDraw-era games use the display itself as their clock:
@@ -3513,6 +3408,42 @@
   (global $clock_spin_count0 (mut i32) (i32.const 0))
   (global $clock_spin_count1 (mut i32) (i32.const 0))
   (global $clock_spin_count2 (mut i32) (i32.const 0))
+  ;; GUEST WORK between two reads, the fifth condition. The four above cannot
+  ;; see it: a function that reads the clock once per object and makes no other
+  ;; API call looks exactly like a spin to them. Diablo II's 0x4293c0 does
+  ;; that ~160 times a frame, and in Worker mode -- where the clock only moves
+  ;; when the page republishes it -- every other read parked: 4 fps, against 41
+  ;; with the detector off. A real spin runs a handful of blocks between reads,
+  ;; so a read only counts when at most $spin_work_max blocks (the $block_budget
+  ;; clock, see $blocks_now) ran since the same context's previous read. 0
+  ;; disables the check. Each MRU context carries its own mark, like its count.
+  (global $spin_work_max (mut i32) (i32.const 64))
+  (global $clock_spin_blk (mut i32) (i32.const 0))
+  (global $clock_spin_blk0 (mut i32) (i32.const 0))
+  (global $clock_spin_blk1 (mut i32) (i32.const 0))
+  (global $clock_spin_blk2 (mut i32) (i32.const 0))
+  ;; GUEST STATE between two reads, the sixth condition. Block counting cannot
+  ;; separate a short per-object function from a spin body: Darkstone's host
+  ;; runs 5-8 blocks between its per-object GetTickCount reads, inside any
+  ;; sane threshold. What does separate them is that a busy-wait recomputes
+  ;; the same state every iteration, while a per-object loop carries a
+  ;; different object: Diablo II's 0x4293c0 reads the clock with EDI = this.
+  ;; So a read only counts when the callee-saved registers (EBX, EBP, ESI,
+  ;; EDI -- caller-saved ones are the API's to clobber) fingerprint the same
+  ;; as at the context's previous read, ignoring any that hold the previous
+  ;; clock reading itself ($clock_spin_raw_*). $spin_regs_check is the mask of
+  ;; registers compared (bit0 EBX, bit1 EBP, bit2 ESI, bit3 EDI); 0 disables.
+  (global $spin_regs_check (mut i32) (i32.const 15))
+  (global $clock_spin_raw_lo (mut i32) (i32.const 0))
+  (global $clock_spin_raw_hi (mut i32) (i32.const 0))
+  (global $clock_spin_regs (mut i32) (i32.const 0))
+  (global $clock_spin_regs0 (mut i32) (i32.const 0))
+  (global $clock_spin_regs1 (mut i32) (i32.const 0))
+  (global $clock_spin_regs2 (mut i32) (i32.const 0))
+  ;; Monotonic block clock: blocks retired by finished run() calls, and the
+  ;; budget the running call started with. $blocks_now reads both.
+  (global $blocks_retired_base (mut i32) (i32.const 0))
+  (global $run_budget_start (mut i32) (i32.const 0))
   ;; The value a park was already taken for. One park per distinct millisecond,
   ;; ever: if the host hands the guest back with the clock still reading the
   ;; same thing, spinning is the honest answer until it moves. Without this the
@@ -3568,6 +3499,10 @@
   (global $com_unk_outer (mut i32) (i32.const 0))   ;; pUnkOuter
   (global $com_cls_ctx   (mut i32) (i32.const 0))   ;; dwClsContext
   (global $com_dll_name  (mut i32) (i32.const 0))   ;; WASM addr of DLL name string (from registry)
+  ;; This instance's own copy of that name (a guest heap block, 0 until first
+  ;; use). Not propagated at spawn: a thread that shared its parent's buffer
+  ;; would be back to reading whichever thread's server was written last.
+  (global $com_dll_name_buf (mut i32) (i32.const 0))
   ;; Current instance/thread COM state; CoSetState owns this IUnknown and
   ;; CoGetState returns an independently AddRefed pointer.
   (global $com_state_unknown (mut i32) (i32.const 0))
@@ -3648,6 +3583,10 @@
   ;; proc returns TRUE, USER applies focus after init returns, after the app
   ;; has populated controls.
   (global $dlg_init_focus_hwnd (mut i32) (i32.const 0))
+  ;; Modal dialog created but not yet shown: DialogBoxParamA -> first CACA0004.
+  (global $dlg_show_pending (mut i32) (i32.const 0))
+  ;; WNDPROC of the class a dialog template names; 0 when it names none ($dlg_load).
+  (global $dlg_tmpl_class_wndproc (mut i32) (i32.const 0))
   ;; Flag set by continuation-thunk handlers that explicitly (re)direct EIP.
   ;; Read by $run's thunk-zone auto-pop: when a handler leaves EIP equal to
   ;; its own thunk addr (e.g. CACA0004 re-enters the dialog pump), the outer
@@ -3716,13 +3655,8 @@
   (global $propsheet_finish_page (mut i32) (i32.const 0))
   (global $propsheet_finish_nmhdr (mut i32) (i32.const 0))
   (global $ddenum_ret_thunk (mut i32) (i32.const 0)) ;; CACA0007 DDEnumerate callback return
-  ;; D3D EnumDevices multi-device iteration state (CACA000B)
+  ;; D3D EnumDevices continuation (CACA000B); invocation state is stack-owned.
   (global $d3d_enum_dev_thunk (mut i32) (i32.const 0))
-  (global $d3d_enum_dev_idx   (mut i32) (i32.const 0))
-  (global $d3d_enum_dev_cb    (mut i32) (i32.const 0))
-  (global $d3d_enum_dev_ctx   (mut i32) (i32.const 0))
-  (global $d3d_enum_dev_ret   (mut i32) (i32.const 0))
-  (global $d3d_enum_dev_mode  (mut i32) (i32.const 0)) ;; 0=legacy D3D1/2/3, 7=D3D7
 
   ;; EnumChildWindows iteration state (CACA002B). The callback runs once per
   ;; child and may stop the walk by returning FALSE, so the scan position has
@@ -3737,9 +3671,9 @@
   (global $enum_child_ret    (mut i32) (i32.const 0))
   (global $enum_child_depth  (mut i32) (i32.const 0))
 
-  ;; EnumResourceNamesA iteration state (CACA0030). Resource names may be
+  ;; ANSI resource enumeration state (CACA0030). Resource types/names may be
   ;; integer IDs or UTF-16 strings in the PE directory; the latter are copied
-  ;; to a temporary ANSI guest buffer for each ENUMRESNAMEPROC callback.
+  ;; to a temporary ANSI guest buffer for each callback.
   (global $enum_rsrc_thunk   (mut i32) (i32.const 0))
   ;; ReadFileEx completion queue belongs to this guest-thread instance.
   (global $io_apc_head (mut i32) (i32.const 0))
@@ -3760,6 +3694,11 @@
   (global $enum_rsrc_count   (mut i32) (i32.const 0))
   (global $enum_rsrc_namebuf (mut i32) (i32.const 0))
   (global $enum_rsrc_depth   (mut i32) (i32.const 0))
+  ;; Linked saved invocation state; nested resource callbacks must not replace
+  ;; the suspended caller's directory cursor or temporary ANSI name buffer.
+  (global $enum_rsrc_frame   (mut i32) (i32.const 0))
+  (global $enum_rsrc_kind    (mut i32) (i32.const 0))
+  (global $enum_rsrc_name    (mut i32) (i32.const 0))
 
   ;; Open / Save dialog: current directory (guest ptr to NUL-terminated
   ;; string). Owns its own heap allocation; replaced via $opendlg_set_dir
@@ -3832,7 +3771,8 @@
   ;; letting $g2w absorb it into NULL_SENTINEL. 0=off (the shipping behaviour,
   ;; and the only one that costs nothing: the check lives in the miss path,
   ;; after every translation attempt has already failed), 1=log and continue,
-  ;; 2=log and trap. A real Windows program that dereferences NULL takes an
+  ;; 2=log and trap, 3=log and raise, 4=raise silently for the 4KB NULL guard
+  ;; page only (Win98's rule). A real Windows program that dereferences NULL takes an
   ;; access violation; the sentinel makes that read zero and write nowhere,
   ;; which keeps buggy guests alive at the cost of hiding where they went
   ;; wrong. Turn this on when a symptom appears far from its cause.
@@ -3907,6 +3847,16 @@
   (global $hit0_first_caller (mut i32) (i32.const 0))
   (global $hit0_last_caller  (mut i32) (i32.const 0))
   (global $hit0_last_ebp     (mut i32) (i32.const 0))
+  ;; EAX..EDI at slot 0's latest hit: what --trace-at prints, for the page,
+  ;; which has no trace-at. Read with get_hit0_reg(0..7).
+  (global $hit0_r0 (mut i32) (i32.const 0))
+  (global $hit0_r1 (mut i32) (i32.const 0))
+  (global $hit0_r2 (mut i32) (i32.const 0))
+  (global $hit0_r3 (mut i32) (i32.const 0))
+  (global $hit0_r4 (mut i32) (i32.const 0))
+  (global $hit0_r5 (mut i32) (i32.const 0))
+  (global $hit0_r6 (mut i32) (i32.const 0))
+  (global $hit0_r7 (mut i32) (i32.const 0))
   ;; Four return addresses walked off EBP at the moment slot 0 is hit. A vtable
   ;; call names no caller statically and one frame of $dbg_prev_eip names only
   ;; the thunk; the interesting call site is usually two or three frames up.
@@ -3930,20 +3880,82 @@
   ;; empty message box. Civilization II keeps more than 300 global blocks live
   ;; after loading roughly 180 executable/DLL segments, so the former 510-slot
   ;; arena likewise failed with linear memory left. Slot MAX remains the hidden
-  ;; handle/resource page; at guest 0x03CF0000 it ends immediately below
-  ;; GUEST_HEAP_BASE after g2w translation.
+  ;; handle/resource page; at guest 0x03BF0000 it ends exactly where
+  ;; GUEST_BASE does after g2w translation.
+  ;;
+  ;; It must not reach further. The 1MB between GUEST_BASE's end and
+  ;; GUEST_HEAP_BASE looks free, but the region allocator places the window
+  ;; tables there (CLIENT_RECT, OWNER_TABLE, ...). At 959 the top fifteen
+  ;; selectors aliased them: Civilization II's 600KB City View DIB section
+  ;; landed on selector 944 and painted over every window's owner and client
+  ;; rect, after which its popups sorted behind the main window and every
+  ;; click was delivered to the wrong one. test/test-win16-arena-bounds.js.
   (global $WIN16_SEG_TABLE i32 (region.addr $WIN16_SEG_TABLE 0))
   (global $WIN16_SEG_TABLE_SIZE i32 (region.size $WIN16_SEG_TABLE))
-  (global $WIN16_SEG_MAX   i32 (i32.const 959))
+  (global $WIN16_SEG_MAX   i32 (i32.const 943))
   ;; Selector indices at and above WIN16_SUB_FIRST own no arena slot of their
   ;; own: they name small global blocks packed into shared pool slots (see
   ;; $win16_global_alloc). The table holds 8192 entries — every index a 16-bit
   ;; selector can carry — and the last is left alone so no handle is 0xFFFF.
   (global $WIN16_SUB_FIRST i32 (i32.const 1024))
   (global $WIN16_SEL_MAX   i32 (i32.const 8191))
-  (global $win16_sub_next  (mut i32) (i32.const 1024))
-  (global $win16_pool_base (mut i32) (i32.const 0))
-  (global $win16_pool_used (mut i32) (i32.const 0))
+  ;; The Win16 allocator cursors live in shared memory, not in globals: a
+  ;; second Win16 task runs as its own guest-thread instance (see
+  ;; docs/win16-multitask-design.md), every instance has its own copy of each
+  ;; mutable global, and the tables these index -- selectors, sub-selectors,
+  ;; the thunk table, the handle map, MM timers -- are shared. Per-instance
+  ;; cursors would hand the same selector to both tasks.
+  ;; They sit at 0xF000 of the arena's hidden page (slot WIN16_SEG_MAX, beside
+  ;; the handle map, DLL records and MM timers) rather than in a region of
+  ;; their own: the region map is at its ceiling. Every cursor reads correctly
+  ;; from zeroed memory -- sub_next starts at WIN16_SUB_FIRST, so it is stored
+  ;; biased by it -- and $win16_handle_reset does not reach this far.
+  (func $win16_task_shared (param $off i32) (result i32)
+    (i32.add (call $g2w (i32.add (global.get $WIN16_ARENA)
+                                 (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))
+             (i32.add (i32.const 0xF000) (local.get $off))))
+  (func $win16_next_seg_get (result i32) (i32.load (call $win16_task_shared (i32.const 0))))
+  (func $win16_next_seg_set (param $v i32) (i32.store (call $win16_task_shared (i32.const 0)) (local.get $v)))
+  (func $win16_sub_next_get (result i32)
+    (i32.add (i32.load (call $win16_task_shared (i32.const 4))) (global.get $WIN16_SUB_FIRST)))
+  (func $win16_sub_next_set (param $v i32)
+    (i32.store (call $win16_task_shared (i32.const 4)) (i32.sub (local.get $v) (global.get $WIN16_SUB_FIRST))))
+  (func $win16_pool_base_get (result i32) (i32.load (call $win16_task_shared (i32.const 8))))
+  (func $win16_pool_base_set (param $v i32) (i32.store (call $win16_task_shared (i32.const 8)) (local.get $v)))
+  (func $win16_pool_used_get (result i32) (i32.load (call $win16_task_shared (i32.const 12))))
+  (func $win16_pool_used_set (param $v i32) (i32.store (call $win16_task_shared (i32.const 12)) (local.get $v)))
+  (func $win16_thunk_count_get (result i32) (i32.load (call $win16_task_shared (i32.const 16))))
+  (func $win16_thunk_count_set (param $v i32) (i32.store (call $win16_task_shared (i32.const 16)) (local.get $v)))
+  (func $win16_handle_next_get (result i32) (i32.load (call $win16_task_shared (i32.const 20))))
+  (func $win16_handle_next_set (param $v i32) (i32.store (call $win16_task_shared (i32.const 20)) (local.get $v)))
+  (func $win16_res_handle_next_get (result i32) (i32.load (call $win16_task_shared (i32.const 24))))
+  (func $win16_res_handle_next_set (param $v i32) (i32.store (call $win16_task_shared (i32.const 24)) (local.get $v)))
+  (func $win16_mm_timer_next_get (result i32) (i32.load (call $win16_task_shared (i32.const 28))))
+  (func $win16_mm_timer_next_set (param $v i32) (i32.store (call $win16_task_shared (i32.const 28)) (local.get $v)))
+
+  ;; A second Win16 task (WinExec of an NE, docs/win16-multitask-design.md)
+  ;; is a guest thread whose instance starts at this sentinel EIP; run() sees
+  ;; it and calls $win16_task_boot, which reads the start record the parent
+  ;; wrote. The thread parameter is the record's slot number.
+  ;;
+  ;; Start records live in the hidden page after the shared cursors, eight of
+  ;; 0x180 bytes from +0x100. A slot is held for the life of its task, since
+  ;; GetModuleFileName answers from the path in it.
+  ;;   +0x00 module id (0 = free)   +0x04 nCmdShow
+  ;;   +0x08 thunk selector         +0x0C thunk segment index
+  ;;   +0x10 parent's $win16_trace   +0x14 command-tail length
+  ;;   +0x18 command tail (128)     +0x98 full path, NUL-terminated (128)
+  (global $WIN16_TASK_ENTRY i32 (i32.const 0xFFFE1600))
+  (global $WIN16_TASK_SLOTS i32 (i32.const 8))
+  (func $win16_task_start_slot (param $slot i32) (result i32)
+    (call $win16_task_shared
+      (i32.add (i32.const 0x100) (i32.mul (local.get $slot) (i32.const 0x180)))))
+  ;; The dynamic module id of this instance's task image, or 0 for the task
+  ;; the process was started with (whose image is the PE staging buffer).
+  (global $win16_task_module (mut i32) (i32.const 0))
+  (global $win16_task_slot (mut i32) (i32.const 0))
+  ;; What InitTask hands WinMain as nCmdShow.
+  (global $win16_cmd_show (mut i32) (i32.const 1))
   ;; One entry per distinct (module, ordinal) the task and its DLLs import.
   ;; 256 was not enough once a DLL as large as VBRUN100 was in the picture, and
   ;; the table has room for 2048 — still only 8KB of thunk segment used out of
@@ -3962,7 +3974,6 @@
   (global $WIN16_ARENA     i32 (i32.const 0x00100000))
   (global $WIN16_THUNK_SEL (mut i32) (i32.const 0))
   (global $win16_thunk_index (mut i32) (i32.const 0))
-  (global $win16_thunk_count (mut i32) (i32.const 0))
   (global $win16_seg_count (mut i32) (i32.const 0))
   (global $win16_auto_data (mut i32) (i32.const 0))
   (global $win16_entry_cs  (mut i32) (i32.const 0))
@@ -3992,7 +4003,6 @@
   (global $win16_last_ordinal (mut i32) (i32.const 0))
   (global $win16_last_is_name (mut i32) (i32.const 0))
   ;; Next free selector index for $win16_alloc_segment, and the task's PSP.
-  (global $win16_next_seg (mut i32) (i32.const 0))
   (global $win16_psp_sel (mut i32) (i32.const 0))
   ;; Selector index holding the task's DOS environment block, filled in the
   ;; first time GetDOSEnvironment is called and zero until then. It has to be a
@@ -4001,6 +4011,8 @@
   (global $win16_env_seg (mut i32) (i32.const 0))
   ;; The DOS disk transfer area as a far pointer, zero until first asked for.
   (global $win16_dta (mut i32) (i32.const 0))
+  ;; Last DOS error code an INT 21h service returned with CF set (AH=59h).
+  (global $win16_dos_last_error (mut i32) (i32.const 0))
   ;; ESP as the dispatcher found it, so --trace-win16 can report how much each
   ;; API actually popped.
   (global $win16_entry_esp (mut i32) (i32.const 0))
@@ -4026,10 +4038,8 @@
   ;; src/09e-win16-api.wat). Indices are 1-based so that 0 stays NULL in both
   ;; handle spaces. The table itself is the one arena slot no selector can
   ;; name — index WIN16_SEG_MAX — which is why it needs no address here.
-  (global $win16_handle_next (mut i32) (i32.const 0))
   ;; Resource handles need the module as well as the NE type/id key. The
   ;; descriptor table is reset with the ordinary Win16 handle table.
-  (global $win16_res_handle_next (mut i32) (i32.const 0))
   (global $WIN16_RES_HANDLE_MAX i32 (i32.const 1024))
   (global $WIN16_HANDLE_MAX i32 (i32.const 4096))
   ;; Indices start here so a small integer an app writes where a handle goes --
@@ -4079,9 +4089,14 @@
   ;; synchronous WM_CREATE here so USER can deliver the paired initial
   ;; WM_SIZE before CreateWindow itself returns.
   (global $WIN16_CONT_CREATE_SIZE i32 (i32.const 0xFF80))
+  ;; CreateWindow's WM_NCCREATE to the window's own procedure returns here; the
+  ;; CREATESTRUCT it pointed at is still on the stack. See $win16_create_nccreate.
+  (global $WIN16_CONT_NCCREATE i32 (i32.const 0xFF8C))
   ;; The CWPSTRUCT and CREATESTRUCT the hook is shown, built below SP; a fixed
   ;; size so the continuation can drop them without being told how big they are.
   (global $WIN16_CWP_SCRATCH i32 (i32.const 44))
+  ;; The CREATESTRUCT alone, the part of that scratch WM_NCCREATE reuses.
+  (global $WIN16_CREATESTRUCT_SIZE i32 (i32.const 34))
   ;; A third slot, standing for the window procedure this emulator supplies
   ;; itself. A 16-bit app that subclasses a window is handed the old procedure
   ;; and expects to be able to call it; the built-in one has no address in the
@@ -4162,7 +4177,7 @@
   (global $win16_file_size (mut i32) (i32.const 0))
   (global $win16_res_len (mut i32) (i32.const 0))
   ;; NUL-separated, double-NUL terminated; see the data segment above.
-  (global $STATIC_SYS_DLL_NAMES i32 (region.addr $RESERVED_PAGE_STRINGS 0x00000228))
+  (global $STATIC_SYS_DLL_NAMES i32 (region.addr $RESERVED_PAGE_STRINGS 0x00000280))
   (global $STATIC_SYS_DIR i32 (region.addr $RESERVED_PAGE_STRINGS 0x0000025C))
   (global $STATIC_SYS_DLL_EXT i32 (region.addr $RESERVED_PAGE_STRINGS 0x00000274))
   ;; Pseudo module handles for those names. They are deliberately outside
@@ -4171,7 +4186,8 @@
   ;; through the API table and ignores the handle) and GetModuleFileName.
   (global $STATIC_SYS_DLL_HANDLE_BASE i32 (i32.const 0x5D110000))
   ;; First index in the name list that belongs to DirectX.
-  (global $STATIC_SYS_DLL_FIRST_DX i32 (i32.const 3))
+  (global $STATIC_SYS_DLL_FIRST_DX i32 (i32.const 4))
+  (global $STATIC_SYS_DLL_DX_COUNT i32 (i32.const 4))
   (global $DX_VERSION_INFO i32 (region.addr $DX_VERSION_INFO 0))
   (global $DX_VERSION_INFO_SIZE i32 (region.size $DX_VERSION_INFO))
   (global $MODAL_PUMP_MSG i32 (region.addr $MODAL_PUMP_MSG 0))
@@ -4266,28 +4282,27 @@
   ;; between, and an independent file costs nothing. i64 rather than v128: the
   ;; MMX code we run is overwhelmingly whole-register moves, boolean ops and
   ;; 64-bit shifts, which are one exact i64 instruction each. See src/06c-mmx.wat.
-  (global $mm0 (mut i64) (i64.const 0))
-  (global $mm1 (mut i64) (i64.const 0))
-  (global $mm2 (mut i64) (i64.const 0))
-  (global $mm3 (mut i64) (i64.const 0))
-  (global $mm4 (mut i64) (i64.const 0))
-  (global $mm5 (mut i64) (i64.const 0))
-  (global $mm6 (mut i64) (i64.const 0))
-  (global $mm7 (mut i64) (i64.const 0))
-  ;; Per-instance XMM state is naturally per guest thread: both cooperative
-  ;; and Worker-backed threads execute in distinct WASM instances. Only the
-  ;; SSE remains separately advertised per application: the default CPU stays
-  ;; conservative, while measured guests can opt into the implemented path.
-  ;; Store each v128 as two i64s: WebAssembly's constant-expression subset
-  ;; does not permit a SIMD initializer on every engine we support.
-  (global $xmm0l (mut i64) (i64.const 0)) (global $xmm0h (mut i64) (i64.const 0))
-  (global $xmm1l (mut i64) (i64.const 0)) (global $xmm1h (mut i64) (i64.const 0))
-  (global $xmm2l (mut i64) (i64.const 0)) (global $xmm2h (mut i64) (i64.const 0))
-  (global $xmm3l (mut i64) (i64.const 0)) (global $xmm3h (mut i64) (i64.const 0))
-  (global $xmm4l (mut i64) (i64.const 0)) (global $xmm4h (mut i64) (i64.const 0))
-  (global $xmm5l (mut i64) (i64.const 0)) (global $xmm5h (mut i64) (i64.const 0))
-  (global $xmm6l (mut i64) (i64.const 0)) (global $xmm6h (mut i64) (i64.const 0))
-  (global $xmm7l (mut i64) (i64.const 0)) (global $xmm7h (mut i64) (i64.const 0))
+  ;; They live in this thread's slice of $MMX_FILE (below): MMn is
+  ;; the i64 at $mmx_base + n*8, +64 is uop-tier scratch. They were eight
+  ;; globals behind an eight-way branch; a file makes a register one load and
+  ;; lets the uop tier (07d/07e) name it as a memory cell.
+  ;; The file is 16 x 0x80 bytes in the top half of $UOP_CSCRATCH's last page,
+  ;; which otherwise holds only $UC_LOCK and $UOP_WIN_EPOCH (07e). It is not a
+  ;; region of its own because the map is at its ceiling: a new 0x800-byte
+  ;; region fails region-alloc --shake-all.
+  (global $MMX_FILE i32 (region.addr $UOP_CSCRATCH 0x139800))
+  (global $MMX_FILE_STRIDE i32 (i32.const 128))
+  (global $mmx_base (mut i32) (region.addr $UOP_CSCRATCH 0x139800))
+  ;; This thread's XMM register file (see $XMM_FILE in 00-regions.wat): XMMn
+  ;; is the v128 at $xmm_base + n*16. It used to be sixteen i64 globals behind
+  ;; eight-way branches, which made every SSE register read two calls and up
+  ;; to fourteen compares -- measured on Black & White 2, where SSE handlers
+  ;; are ~19% of all threaded ops. Memory is shared between instances, so the
+  ;; file is tid-strided exactly like $REGFILE and $FPU_FILE.
+  (global $XMM_FILE i32 (region.addr $XMM_FILE 0))
+  (global $XMM_FILE_SIZE i32 (region.size $XMM_FILE))
+  (global $XMM_FILE_STRIDE i32 (i32.const 128))
+  (global $xmm_base (mut i32) (region.addr $XMM_FILE 0))
   ;; CPUID feature advertisement. Zero = the 486DX we have always reported, so
   ;; every guest takes its scalar fallback; 1 = set EDX bit 23 (MMX) and let the
   ;; MMX paths run. Exported so a benchmark can A/B the same build.
@@ -4398,3 +4413,17 @@
   ;; How many releases the diagnostic actually swallowed. Without it, "armed
   ;; and had no effect" and "never matched a call site" are the same reading.
   (global $virtual_leak_hits (mut i32) (i32.const 0))
+
+  ;; waveOut borrows the actual owning interpreter, preserving caller TLS.
+  (global $wave_callback_saved (mut i32) (i32.const 0))
+  (global $wave_callback_saved_wait_handle (mut i32) (i32.const 0))
+  (global $wave_callback_saved_wait_handles_ptr (mut i32) (i32.const 0))
+  (global $wave_callback_saved_wait_all (mut i32) (i32.const 0))
+  (global $wave_callback_saved_wait_timeout (mut i32) (i32.const 0))
+  (global $wave_callback_saved_wait_stack_bytes (mut i32) (i32.const 0))
+  (global $wave_callback_saved_yield_reason (mut i32) (i32.const 0))
+  (global $wave_callback_saved_yield_flag (mut i32) (i32.const 0))
+
+  (global $getmessage_owner_generation (mut i32) (i32.const 0))
+  (global $GETMESSAGE_HOOKS i32 (region.addr $GETMESSAGE_HOOKS 0))
+  (global $GETMESSAGE_HOOKS_SIZE i32 (region.size $GETMESSAGE_HOOKS))

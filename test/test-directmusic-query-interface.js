@@ -1,13 +1,22 @@
 #!/usr/bin/env node
 'use strict';
 
+const assert = require('assert');
 const { createHostImports } = require('../lib/host-imports');
 const { compileSrcWasm } = require('./compile-src');
+const apiTable = require('../src/api_table.json');
+const apiId = name => apiTable.find(api => api.name === name).id;
+for (const family of ['IDirectMusic', 'IAMMultiMediaStream', 'IDirectDrawGammaControl']) {
+  for (const [method, handler] of [['AddRef', 'dx_com_addref'], ['Release', 'dx_com_release_basic']]) {
+    assert.strictEqual(apiTable.find(api => api.name === `${family}_${method}`).handler,
+      handler, `${family}_${method} retains its canonical lifetime implementation`);
+  }
+}
 
 const extraWat = String.raw`
   (func (export "test_create_directmusic") (result i32)
     (call $dx_create_com_obj
-      (i32.const 35) (call $init_com_vtable (i32.const 3076) (i32.const 3))))
+      (i32.const 35) (call $directmusic_vtable)))
 
   (func (export "test_create_amstream") (result i32)
     (call $dx_create_com_obj
@@ -42,6 +51,24 @@ const extraWat = String.raw`
       (local.get $iid) (local.get $out) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
 
+  ;; Call vtable slot $slot of $obj with two arguments, as the guest would.
+  (func (export "test_slot_call") (param $obj i32) (param $slot i32) (param $a i32) (param $b i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $dispatch_api_table
+      (call $gl32 (i32.add (call $gl32 (i32.add (call $gl32 (local.get $obj))
+        (i32.shl (local.get $slot) (i32.const 2)))) (i32.const 4)))
+      (local.get $obj) (local.get $a) (local.get $b)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load (global.get $reg_base)))
+
+  (func (export "test_enum_port") (param $obj i32) (param $index i32) (param $caps i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $dispatch_api_table
+      (call $gl32 (i32.add (call $gl32 (i32.add (call $gl32 (local.get $obj)) (i32.const 12))) (i32.const 4)))
+      (local.get $obj) (local.get $index) (local.get $caps)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load (global.get $reg_base)))
+
   (func (export "test_call_IDirectMusic_QueryInterface")
         (param $obj i32) (param $iid i32) (param $out i32) (result i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
@@ -68,10 +95,15 @@ const extraWat = String.raw`
 
   (func (export "test_call_IDirectMusic_Release") (param $obj i32) (result i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
-    (call $handle_IDirectMusic_Release
+    (call $dispatch_api_table (i32.const ${apiId('IDirectMusic_Release')})
       (local.get $obj) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_ref_dispatch") (param $api i32) (param $obj i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $dispatch_api_table (local.get $api) (local.get $obj)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load (global.get $reg_base)))
 `;
 
 async function main() {
@@ -105,6 +137,24 @@ async function main() {
   };
 
   const iunknown = writeGuid([0, 0, 0x000000c0, 0x46000000]);
+  for (const [family, create] of [
+    ['IDirectMusic', e.test_create_directmusic],
+    ['IAMMultiMediaStream', e.test_create_amstream],
+    ['IDirectDrawGammaControl', e.test_create_gamma_control],
+  ]) {
+    const live = e.test_dx_live_count();
+    const object = create() >>> 0;
+    check(`${family} starts with one owned reference`, object !== 0 &&
+      e.test_directmusic_refcount(object) === 1 && e.test_dx_live_count() === live + 1);
+    for (const [method, expected] of [['AddRef', 2], ['AddRef', 3], ['Release', 2], ['Release', 1]]) {
+      check(`${family} dispatched ${method} returns ${expected} and pops once`,
+        e.test_ref_dispatch(apiId(`${family}_${method}`), object) === expected &&
+        e.test_directmusic_refcount(object) === expected && e.get_esp() === 0x00300008);
+    }
+    check(`${family} final dispatched release retires its object`,
+      e.test_ref_dispatch(apiId(`${family}_Release`), object) === 0 &&
+      e.test_dx_live_count() === live && e.get_esp() === 0x00300008);
+  }
   const clsidDirectMusic = writeGuid([0x636b9f10, 0x11d10c7d, 0x2000b295, 0x2174dcaf]);
   const clsidDirectMusicWrongSuffix = writeGuid([0x636b9f10, 0, 0, 0]);
   const clsidAMStream = writeGuid([0x49c47ce5, 0x11d09ba4, 0xc0001282, 0x452cc34f]);
@@ -117,6 +167,38 @@ async function main() {
   const obj = e.test_create_directmusic() >>> 0;
   check('creates the bounded IDirectMusic object with one caller reference',
     obj !== 0 && e.test_directmusic_refcount(obj) === 1);
+
+  const methods = ['QueryInterface','AddRef','Release','EnumPort','CreateMusicBuffer',
+    'CreatePort','EnumMasterClock','GetMasterClock','SetMasterClock','Activate','GetDefaultPort','SetDirectSound'];
+  const vtable=dv.getUint32(wa(obj),true);
+  for(let slot=0;slot<methods.length;++slot) {
+    const thunk=dv.getUint32(wa(vtable)+slot*4,true);
+    check(`DirectMusic slot ${slot} maps to ${methods[slot]}`,
+      dv.getUint32(wa(thunk),true)===0xcaca0010 &&
+      dv.getUint32(wa(thunk)+4,true)===apiId('IDirectMusic_'+methods[slot]));
+  }
+  const caps=alloc(308), capBytes=new Uint8Array(memory.buffer,wa(caps),308);
+  capBytes.fill(0xa7);dv.setUint32(wa(caps),308,true);
+  const unchanged=Buffer.from(capBytes);
+  for(const index of [0,1,0xffffffff]) check(`no fabricated DirectMusic port ${index}`,
+    e.test_enum_port(obj,index,caps)===1 && e.get_esp()===0x00300010 &&
+    Buffer.from(capBytes).equals(unchanged));
+  check('EnumPort null caps is E_POINTER', (e.test_enum_port(obj,0,0)>>>0)===0x80004003);
+  // Croc 2's ads.dll: SetDirectSound(pDS, hWnd) right after creation, and
+  // Activate(FALSE) in its teardown. With no ports both only succeed.
+  check('SetDirectSound records the DirectSound object and succeeds (stdcall, 3 args)',
+    (e.test_slot_call(obj, 11, 0x12345678, 0x10001) >>> 0) === 0 && e.get_esp() === 0x00300010);
+  check('Activate(FALSE) succeeds with no ports to switch (stdcall, 2 args)',
+    (e.test_slot_call(obj, 9, 0, 0) >>> 0) === 0 && e.get_esp() === 0x0030000c);
+  dv.setUint32(wa(caps),307,true);
+  check('empty enumeration never reads or changes descriptor content', e.test_enum_port(obj,0,caps)===1 && dv.getUint32(wa(caps),true)===307);
+  // The port-producing methods still trap; Activate (9) and SetDirectSound
+  // (11) are answered above.
+  for(let slot=4;slot<methods.length;++slot) {
+    if (slot === 9 || slot === 11) continue;
+    const thunk=dv.getUint32(wa(vtable)+slot*4,true), id=dv.getUint32(wa(thunk)+4,true);
+    assert.throws(()=>e.test_ref_dispatch(id,obj),WebAssembly.RuntimeError,methods[slot]+' fails explicitly');
+  }
 
   check('IDirectMusic QueryInterface returns E_POINTER for null output without AddRef',
     (e.test_call_IDirectMusic_QueryInterface(obj, idirectmusic, 0) >>> 0) === 0x80004003 &&

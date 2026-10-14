@@ -28,6 +28,7 @@ file; it must not be shipped based on this document.
 | mfc30.dll | 335,872 | `07eeb7e8d7b2fdba0a250e0f19a2d5336a0ff83ae70b7b0f8623fb86e066041a` | Windows 98 SE OEM path below; local-only |
 | mfc42.dll | 995,383 | `ec63a85030c60716acdcf060abfaa95a6a3528631622fa60e7d17fbea2f751f9` | VC++ 6.0 redistributable path below |
 | mfc42u.dll | 995,384 | `5b3b68bb88be968a0c7c24887b437fac6d9081671b8d8376482168383ca30b8b` | VC++ 6.0 redistributable path below |
+| msvcirt.dll | 77,878 | `647f7534aaaedffa93534e4cb9b24bfcf91524828ff0364d88973be58139e255` | VC++ 6.0 redistributable path below |
 | msvcp60.dll | 401,462 | `2b6b93c2d66969eb00258e2b5ad6172decebada096e3b1b077a3380c80e4a072` | VC++ 6.0 redistributable path below |
 | msvcrt20.dll | 274,432 | `9446a83656e24ebf303a2c8c046ef0cce252a789c1becfde3580e9ab614b4316` | Windows 98 SE OEM path below; local-only |
 | msvcrt.dll | 278,581 | `887eb5ce93edb7192ca3e9220f07f9ca0f94db02af5862ebcbdfcb852db99fd1` | VC++ 6.0 redistributable path below |
@@ -231,6 +232,7 @@ Members taken as fixtures, verified on 2026-08-19:
 | `mfc42.dll` | 995,383 | `ec63a85030c60716acdcf060abfaa95a6a3528631622fa60e7d17fbea2f751f9` | MFC 6.00.8665.0; replaced the unverified 4.21.7160 copy |
 | `mfc42u.dll` | 995,384 | `5b3b68bb88be968a0c7c24887b437fac6d9081671b8d8376482168383ca30b8b` | byte-identical to the copy already present |
 | `msvcp60.dll` | 401,462 | `2b6b93c2d66969eb00258e2b5ad6172decebada096e3b1b077a3380c80e4a072` | byte-identical |
+| `msvcirt.dll` | 77,878 | `647f7534aaaedffa93534e4cb9b24bfcf91524828ff0364d88973be58139e255` | added 2026-10-11 from the same `vcredist.exe` (wrapper and `vcredist.exe` hashes as above, `msvcrt.dll` byte-identical): the old iostream classes, imported by the Trespasser demo |
 | `msvcrt.dll` | 278,581 | `887eb5ce93edb7192ca3e9220f07f9ca0f94db02af5862ebcbdfcb852db99fd1` | byte-identical |
 | `oleaut32.dll` | 598,288 | `baeb2f7c1b8be56738d34e1d1ddf8e0eebd3a633215dc1575e14656be38b939d` | byte-identical; supersedes the IE6 `OAINST.CAB` provenance |
 | `asycfilt.dll`, `comcat.dll`, `olepro32.dll` | — | — | same bytes as the VB6 SP6 package below |

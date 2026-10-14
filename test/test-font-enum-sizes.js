@@ -81,7 +81,7 @@ const BITMAP_FACES = ['Courier', 'MS Sans Serif', 'System', 'Terminal', 'Fixedsy
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
   const bitsOut = allocZero(4);
-  const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert(bitmap && hdc, 'the harness must give us a drawable DC');
   wat.test_call_SelectObject(hdc, bitmap);
@@ -136,7 +136,7 @@ const BITMAP_FACES = ['Courier', 'MS Sans Serif', 'System', 'Terminal', 'Fixedsy
   // strike under the face's own name -- the state the regression needed.
   const text = writeAnsi('Sphinx of black quartz');
   for (const { face, px } of SCALABLE_USE) {
-    const font = wat.test_call_CreateFontW(-px, 400, 0, wa(writeWide(face))) >>> 0;
+    const font = wat.test_call_CreateFontW(-px, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, wa(writeWide(face))) >>> 0;
     assert(font, `CreateFontW must give a handle for ${face}`);
     wat.test_call_SelectObject(hdc, font);
     assert.strictEqual(wat.test_call_TextOutA(hdc, 2, 2, text, 22), 1,

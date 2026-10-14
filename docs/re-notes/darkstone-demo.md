@@ -63,3 +63,107 @@ Run explicitly with:
 ```bash
 node test/test-darkstone-gameplay.js
 ```
+
+### Retained gameplay recovery, October 7
+
+Before assigning a new-game run, a read-only audit recovered all ten existing
+captures from `/tmp/wine-assembly-darkstone-gameplay/`, with file mtimes on
+October 6 from 06:31:23 to 06:31:46 UTC. They are copied and SHA-256 indexed in
+`scratch/runs/20261007-darkstone-retained-gameplay-audit/`. The reviewer
+`codex:darkstone-refill-worker` personally inspected `08-town-before-input.png`
+and `09-town-after-input.png`: both show Town, the champion and full HUD;
+the road, trees and gate rotate substantially between them, consistent with
+the ordinary Right camera-input route documented above. This is historical
+controlled gameplay, so Darkstone is excluded from a never-qualified new-game
+refill. No game was rerun during recovery.
+
+The original invocation, execution start/end, source/module hashes and exact
+renderer were not recovered. The result records these as unknown, retains
+file mtimes separately and timestamps the recovery itself. It does not
+qualify the current module or establish gameplay FPS. The later October 6
+browser results only reached the main menu and do not replace this evidence.
+
+## `--stuck-after` kills the asset load, and it looks like an emulator bug
+
+Driving this app by hand with a plain `test/run.js` command line ends at
+**batch 1183** with no error line, no crash dump and no unimplemented API —
+the process simply stops. That is not the guest. It is `run.js`'s own
+`--stuck-after`, which defaults to **10** (`test/run.js:773`): after ten
+batches that retire no new EIP the harness decides the run is wedged and ends
+it.
+
+The loop it trips on is legitimate. `0x004e7b2b` is the demo's asset-load
+loop reading `ddata.mtf`, and a load that reads 33 MB out of one archive
+spends a long time in one tight block by design. Nothing is wrong, so there
+is no diagnostic to find; the run just disappears.
+
+The fix is one flag:
+
+```
+--stuck-after=1000000
+```
+
+With it the demo runs straight through the logo, New Game, One Player,
+warrior creation and the forest loading animation into **Town**, with the
+full HUD — portrait, health and mana orbs, potion belt and minimap — on a
+champion standing on the forest road. Verified on the remote bench box under
+`--d3d9-renderer=software --d3d9-programmable`.
+
+Reach for this reading whenever a bounded run of *any* asset-heavy app ends
+early and silently: the absence of an error is the tell, because every real
+failure path in the emulator prints something.
+
+## The host's per-object GetTickCount loop and the clock-spin detector (2026-10-10)
+
+After "Create a session", the host's main thread stamps every object with
+GetTickCount and makes no other API call in between, with only 5-8 blocks
+between reads (w4). The clock-spin detector took that for a busy-wait and
+parked once per object, leaving the host on the white Session menu for minutes.
+a7e5f4f75 makes a read count only when the callee-saved registers match the
+previous read in that context, so a per-object loop no longer qualifies.
+Host-only A/B, same build (run `20261010T1720Z-clock-spin-regs-check-boat`):
+`--spin-regs-check=15` gives 0 parks and Town as HOST; `=0` gives 1213 parks
+and the frozen Session menu. The two-seat test no longer needs
+`--no-spin-park` for this.
+
+## Multiplayer over the virtual LAN (2026-10-10, w4)
+
+`test/test-darkstone-vlan-gameplay.js` (heavy, boat) plays two seats to the
+Town together. Menu route (800x600 coordinates): New Game (400,260) ->
+Multiplayer (400,374) -> create a champion as in single player -> OK
+(425,570) -> Available Services: TCP/IP (400,374) -> Session: Create a
+session (400,324) / Join a session (400,424). Join asks "Enter IP address, or
+Name of Host": click the field (400,372), type with keydown + di-keydown +
+**keypress** per character ('.' is VK 190; the champion-name field works
+without keypress, this one does not), OK (400,420), then **double-click** the
+session in the list (400,330); a single click only highlights it.
+
+DirectPlay: `CoCreateInstance` of an `IDirectPlayLobby2` (only for
+`GetConnectionSettings`, i.e. "not lobbied") and of `IDirectPlay3`, used as
+`IDirectPlay4` when available (flag `[0x52aa64]`). The game's wrapper object
+lives at `0x8a9f00`: `+0x6704` is-host, `+0x6708` "session lost, stop
+sending", `+0x670c` own DPID, `+0x6710/+0x6714` the player event and a quit
+event, `+0x6718` the receive thread, `+0x6720` joined/in-world, `+0x6724`
+CreatePlayer succeeded, `+0x673c/+0x6744` received message count/bytes.
+Thread `0x40bb70` waits on the two events and runs the receive loop
+`0x40c010` (`Receive(DPRECEIVE_ALL)`; sender 0 -> system handler `0x40cee0`,
+else app handler `0x40d390`, a jump table on the first byte, types
+0x65-0x7f at `0x40d878`). Every send goes through `0x40cb60` (size per type
+from the table at `0x40ce68`), which calls `GetMessageQueue(SEND)` and then
+`SendEx` with **GUARANTEED|ASYNC|NOSENDCOMPLETEMSG (0x601)**; it treats only
+`DPERR_CONNECTIONLOST` (0x88770168, logs "SESSIONLOST", sets `+0x6708`) and
+`DPERR_BUSY` (retry x5) specially. Before 47aafe16e our SendEx refused ASYNC
+and nothing ever left either seat.
+
+Join protocol: the guest, inside its `EnumPlayers` callback, resets the event
+at `[0x647ee0]`, sends type 0x6c (8 bytes) and waits `WaitForSingleObject(10 s)`
+up to three times at `0x416e4b` (timing out tears the session down via
+`0x40bf10`). The host's 0x6c handler `0x40d980` either pings 0x7f every second
+(host not yet in the world, `+0x6720` clear) or, normally, announces a block
+transfer with 0x6d (16 B: block count, size; guest handler `0x411850`) and
+sends the world in 0x6f blocks (536 B, guest handler `0x411940`, "receiving
+%d/%d..."), each acked by the guest with 0x6e (12 B). After the last block the
+guest sends 0x7e and `0x40e1a0` sets `+0x6720` and signals `[0x647ee0]`. The
+demo's town took 5 blocks. Headless this is slow but correct: run.js pumps a
+seat that is not blocked on the wire only every 64 batches, one block round
+trip per pump, so the test waits 800 batches after joining.

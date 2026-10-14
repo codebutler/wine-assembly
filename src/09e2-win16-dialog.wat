@@ -32,6 +32,7 @@
   ;; boolean) keeps a nested modal dialog created by the init procedure from
   ;; consuming the outer modeless return.
   (global $win16_dlg_modeless_pending (mut i32) (i32.const 0))
+  (global $WIN16_DLG_INIT_RET i32 (i32.const 0xFF44))
 
   (func $win16_dlg_emit16 (param $v i32)
     (call $gs16 (global.get $win16_dlg_w) (local.get $v))
@@ -145,11 +146,12 @@
   ;; The state the pump needs sits on the task's stack under the parked EIP, so
   ;; that a dialog put up from inside another dialog's procedure keeps its own:
   ;;   [sp+0] dialog hwnd, 16-bit    [sp+2] return offset    [sp+4] return sel
+  ;;   [sp+6] owner to re-enable, 32-bit (zero if already disabled/modeless)
   ;; A 16-bit window procedure RETFs its own arguments off, so this record is
   ;; exactly what the stack holds again each time one returns here.
   (func $win16_dlg_run (param $template i32) (param $parent i32) (param $proc i32)
         (param $init_param i32) (param $ret i32)
-    (local $hwnd i32) (local $i i32) (local $ctrl i32)
+    (local $hwnd i32) (local $i i32) (local $ctrl i32) (local $restore_owner i32)
     (local.set $hwnd (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_DIALOG))
@@ -159,6 +161,16 @@
     (call $heap_free (local.get $template))
     (call $wnd_set_parent (local.get $hwnd) (i32.const 0))
     (call $wnd_set_owner (local.get $hwnd) (local.get $parent))
+    ;; A modal owner's exposed client area must not activate or accept input.
+    ;; Remember only a disable performed by this invocation: a nested dialog
+    ;; must not enable the outer dialog's owner when it returns.
+    (if (i32.and (i32.ne (local.get $hwnd) (global.get $win16_dlg_modeless_pending))
+          (i32.and (i32.ne (local.get $parent) (i32.const 0))
+            (i32.and (i32.ge_s (call $wnd_table_find (local.get $parent)) (i32.const 0))
+              (i32.eqz (call $ctrl_style_disabled (call $wnd_get_style (local.get $parent)))))))
+      (then
+        (local.set $restore_owner (local.get $parent))
+        (call $win16_dlg_enable_owner (local.get $parent) (i32.const 0))))
     (drop (call $wnd_set_style (local.get $hwnd)
       (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
     (call $host_dialog_loaded (local.get $hwnd) (local.get $parent))
@@ -190,7 +202,15 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $seed)))
     (drop (call $host_show_window (local.get $hwnd) (i32.const 1)))
+    ;; A modal dialog is the foreground window while it runs. Since the
+    ;; renderer stopped inferring foreground from z-order (aba07804c), showing
+    ;; it was not enough: the owner stayed foreground and kept an active
+    ;; caption behind the dialog (Tetris' About). The owner is reactivated by
+    ;; $win16_focus_start when the dialog ends.
+    (drop (call $host_activate_window (local.get $hwnd)))
     (global.set $win16_dlg_ended (i32.const 0))
+    (call $win16_push16 (i32.shr_u (local.get $restore_owner) (i32.const 16)))
+    (call $win16_push16 (local.get $restore_owner))
     (call $win16_push16 (i32.shr_u (local.get $ret) (i32.const 16)))
     (call $win16_push16 (local.get $ret))
     (call $win16_push16 (call $win16_h16 (local.get $hwnd)))
@@ -226,9 +246,44 @@
   ;; procedure returning TRUE means "leave it where USER put it". Reached both
   ;; directly and from the filter's continuation, so the two cannot drift.
   (func $win16_dlg_init (param $proc i32) (param $hwnd16 i32) (param $init_param i32)
+    ;; A null lpDialogFunc is legal: DefDlgProc then has no procedure to hand
+    ;; WM_INITDIALOG to and answers FALSE itself. InstallShield's 16-bit
+    ;; self-extractor opens its "extracting" box as CreateDialog(..., NULL).
+    ;; Land on the continuation exactly as a procedure's RETF would.
+    (if (i32.eqz (local.get $proc))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
+        (global.set $eip (i32.add (global.get $seg_base_cs) (global.get $WIN16_DLG_INIT_RET)))
+        (return)))
     (call $win16_enter_wndproc (local.get $proc) (local.get $hwnd16)
       (i32.const 0x0110) (i32.const 0) (local.get $init_param)
-      (global.get $WIN16_THUNK_SEL) (global.get $WIN16_DLG_PUMP)))
+      (global.get $WIN16_THUNK_SEL) (global.get $WIN16_DLG_INIT_RET)))
+
+  ;; Showing host chrome alone does not activate the guest dialog. Finish
+  ;; WM_INITDIALOG through USER's far activation/focus transaction before
+  ;; pumping timers; otherwise JezzBall keeps playing beneath score entry and
+  ;; recursively opens another score dialog on every game-over timer tick.
+  (func $win16_dlg_init_complete
+    (local $dlg i32) (local $target i32)
+    (local.set $dlg (call $win16_h32 (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
+    (if (i32.or (global.get $win16_dlg_ended)
+                (i32.eq (local.get $dlg) (global.get $win16_dlg_modeless_pending)))
+      (then (call $win16_dlg_pump) (return)))
+    (local.set $target (local.get $dlg))
+    (if (i32.and (i32.load (global.get $reg_base)) (i32.const 0xFFFF))
+      (then (local.set $target (call $dialog_first_init_tabstop (local.get $dlg))))
+      (else
+        (if (i32.eq (call $wnd_top_level (global.get $focus_hwnd)) (local.get $dlg))
+          (then (local.set $target (global.get $focus_hwnd))))))
+    (if (i32.eqz (local.get $target)) (then (local.set $target (local.get $dlg))))
+    (call $win16_cont_push
+      (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+              (global.get $WIN16_DLG_PUMP)) (i32.const 0))
+    (if (i32.eq (local.get $target) (global.get $focus_hwnd))
+      (then (call $win16_activate_start (local.get $dlg)))
+      (else (call $win16_focus_start (local.get $target) (i32.const 0)))))
 
   ;; The filter has returned. It took its own arguments off; the CWPSTRUCT and
   ;; CREATESTRUCT built underneath them are this side's to drop, and under those
@@ -430,10 +485,31 @@
               (i32.ne (i32.shr_u (local.get $target) (i32.const 16)) (i32.const 0))
               (i32.lt_u (local.get $target) (i32.const 0xFFFF0000)))
           (then (local.set $proc (local.get $target))))
+        ;; The title-bar close: if the DLGPROC declines it, DefDlgProc's
+        ;; default follows when the pump resumes ($win16_dlg_close_default).
+        (global.set $win16_dlg_close_pending
+          (select (local.get $msg) (i32.const 0)
+            (i32.or
+              (i32.and (i32.eq (local.get $msg) (i32.const 0x0112))
+                       (i32.eq (i32.and (local.get $wparam) (i32.const 0xFFF0)) (i32.const 0xF060)))
+              (i32.eq (local.get $msg) (i32.const 0x0010)))))
         (call $win16_dlg_send (local.get $proc) (local.get $hwnd) (local.get $msg)
           (local.get $wparam) (local.get $lparam))
         (return (i32.const 1))))
     (local.set $target (call $wnd_table_get (local.get $hwnd)))
+    ;; Nested modal loops still pump messages for the outer dialog. Its table
+    ;; entry is USER's marker, not its callable far DLGPROC. Sending the marker
+    ;; through native dispatch would requeue this already-narrowed WM_COMMAND
+    ;; forever (JezzBall score entry exhausts the handle map that way).
+    (if (i32.eq (local.get $target) (global.get $WNDPROC_DIALOG))
+      (then
+        (local.set $target (call $dialog_proc_get (local.get $hwnd)))
+        (if (i32.and (i32.ne (i32.shr_u (local.get $target) (i32.const 16)) (i32.const 0))
+                     (i32.lt_u (local.get $target) (i32.const 0xFFFE0000)))
+          (then
+            (return (call $win16_dlg_route (local.get $hwnd) (local.get $target)
+              (local.get $hwnd) (local.get $msg) (local.get $wparam) (local.get $lparam)))))
+        (local.set $target (global.get $WNDPROC_DIALOG))))
     ;; No window procedure, or one of ours: nothing for the task to run.
     (if (i32.eqz (i32.shr_u (local.get $target) (i32.const 16)))
       (then (return (i32.const 0))))
@@ -450,9 +526,41 @@
   ;; own loop is bridged to, so a modal dialog sees the delivery order USER
   ;; defines — pending creates, the post queue, non-client work, painting,
   ;; input, timers — rather than a second opinion about it maintained here.
+  ;; DefDlgProc's share of the title-bar close, which a DLGPROC usually leaves
+  ;; to it: WM_SYSCOMMAND(SC_CLOSE) becomes WM_CLOSE, and WM_CLOSE becomes the
+  ;; IDCANCEL click -- unless the dialog's Cancel button is disabled, when USER
+  ;; only beeps. The DLGPROC's FALSE is in AX when the pump resumes. Without
+  ;; this a Win16 dialog ignored its X: JezzBall's high-score dialog in the
+  ;; browser Threads route, where the page no longer force-closes a frame
+  ;; (USER-JEZZBALL-SYSCOMMAND-TRAP-20261011).
+  (global $win16_dlg_close_pending (mut i32) (i32.const 0))
+  (func $win16_dlg_close_default (param $dlg i32)
+    (local $msg i32) (local $cancel i32)
+    (local.set $msg (global.get $win16_dlg_close_pending))
+    (global.set $win16_dlg_close_pending (i32.const 0))
+    (if (i32.or (i32.eqz (local.get $msg)) (global.get $win16_dlg_ended)) (then (return)))
+    (if (i32.ne (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)) (i32.const 0))
+      (then (return)))
+    (if (i32.eq (local.get $msg) (i32.const 0x0112))
+      (then
+        (drop (call $post_queue_push (local.get $dlg) (i32.const 0x0010) (i32.const 0) (i32.const 0)))
+        (return)))
+    (local.set $cancel (call $ctrl_find_by_id (local.get $dlg) (i32.const 2)))
+    (if (i32.and (i32.ne (local.get $cancel) (i32.const 0))
+          (i32.ne (call $ctrl_style_disabled (call $wnd_get_style (local.get $cancel))) (i32.const 0)))
+      (then (return)))
+    ;; Exactly what clicking the Cancel button posts (BN_CLICKED).
+    (drop (call $post_queue_push (local.get $dlg) (i32.const 0x0111) (i32.const 2) (local.get $cancel))))
+
+  (func $win16_dlg_enable_owner (param $owner i32) (param $enable i32)
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_EnableWindow (local.get $owner) (local.get $enable)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end))
+
   (func $win16_dlg_pump
     (local $dlg i32) (local $proc i32) (local $scratch i32) (local $packed i32)
-    (local $hwnd i32) (local $msg i32) (local $owner i32)
+    (local $hwnd i32) (local $msg i32) (local $owner i32) (local $restore_owner i32)
     (local $dlg_x i32) (local $dlg_y i32) (local $dlg_w i32) (local $dlg_h i32)
     (local.set $dlg (call $win16_h32 (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
     (local.set $proc (call $dialog_proc_get (local.get $dlg)))
@@ -467,7 +575,7 @@
         (local.set $packed (i32.or (call $gl16 (i32.load offset=16 (global.get $reg_base)))
           (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
                    (i32.const 16))))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (local.get $dlg)))
         (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (global.set $yield_reason (i32.const 0))
@@ -478,14 +586,19 @@
         (global.set $steps (i32.const 0))
         (return)))
 
+    (call $win16_dlg_close_default (local.get $dlg))
     ;; EndDialog, and the procedure that called it has returned.
     (if (global.get $win16_dlg_ended)
       (then
         (global.set $win16_dlg_ended (i32.const 0))
-        ;; The pump frame is {dialog WORD, return offset WORD, selector WORD}.
-        ;; Turn it into the existing far continuation's {result, offset, selector}
-        ;; before teardown can reenter USER and overwrite the shared result.
-        (call $gs16 (i32.load offset=16 (global.get $reg_base)) (global.get $win16_dlg_result))
+        ;; Retire the invocation's owner DWORD, leaving the standard far
+        ;; continuation {result, offset, selector}. Snapshot before callbacks.
+        (local.set $scratch (i32.load offset=16 (global.get $reg_base)))
+        (local.set $restore_owner (call $gl32 (i32.add (local.get $scratch) (i32.const 6))))
+        (local.set $packed (call $gl32 (i32.add (local.get $scratch) (i32.const 2))))
+        (call $gs16 (i32.add (local.get $scratch) (i32.const 4)) (global.get $win16_dlg_result))
+        (call $gs32 (i32.add (local.get $scratch) (i32.const 6)) (local.get $packed))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $scratch) (i32.const 4)))
         (local.set $owner (call $wnd_get_owner (local.get $dlg)))
         ;; Preserve the popup's screen bounds while its host/window-table
         ;; records still exist. ABOUTTET draws directly through GetDC(NULL),
@@ -497,6 +610,11 @@
         (call $wnd_destroy_children (local.get $dlg))
         (call $wnd_table_remove (local.get $dlg))
         (call $host_destroy_window (local.get $dlg))
+        ;; A destroyed owner is never recreated by restoration. Keep its full
+        ;; HWND here rather than a narrow handle that can be recycled.
+        (if (i32.and (i32.ne (local.get $restore_owner) (i32.const 0))
+              (i32.ge_s (call $wnd_table_find (local.get $restore_owner)) (i32.const 0)))
+          (then (call $win16_dlg_enable_owner (local.get $restore_owner) (i32.const 1))))
         (call $gdi_screen_surface_clear_rect
           (local.get $dlg_x) (local.get $dlg_y)
           (local.get $dlg_w) (local.get $dlg_h))
@@ -508,7 +626,14 @@
         (if (local.get $owner)
           (then
             (call $invalidate_hwnd (local.get $owner))
-            (drop (call $paint_seed_child_paints (local.get $owner)))))
+            (drop (call $paint_seed_child_paints (local.get $owner)))
+            ;; $win16_dlg_run published the dialog as foreground; hand the
+            ;; foreground back to the owner it was modal over. USER's active
+            ;; window never left the owner, so the focus transaction below
+            ;; sees no transition and would not republish it.
+            (if (i32.and (call $wnd_is_effectively_visible (local.get $owner))
+                         (i32.eqz (call $wnd_get_parent (local.get $owner))))
+              (then (drop (call $host_activate_window (local.get $owner)))))))
         (global.set $yield_reason (i32.const 0))
         (global.set $steps (i32.const 0))
         ;; Removal clears focus only when its HWND dies. Preserve a surviving

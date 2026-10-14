@@ -42,8 +42,23 @@ const session = startControlSession([
     }), { point, buttons: 0, async: 0 },
     'DirectInput release moved the cursor or left button 1 held');
 
+    // The middle button (3) is MK_MBUTTON / VK_MBUTTON, and di-wheel queues
+    // wheel motion for DirectInput's lZ.
+    assert.strictEqual((await session.send('di-mousedown:3')).queued, true);
+    await session.step(1);
+    assert.deepStrictEqual(await session.send({
+      action: 'eval',
+      code: '({point:renderer.getMousePosition(),buttons:renderer.getMouseButtons(),async:renderer.getAsyncKeyState(4)})',
+    }), { point, buttons: 0x10, async: 0x8001 }, 'DirectInput middle press missed MK_MBUTTON / VK_MBUTTON');
+    assert.strictEqual((await session.send('di-mouseup:3')).queued, true);
+    assert.strictEqual((await session.send('di-wheel:-120')).queued, true);
+    await session.step(1);
+    assert.strictEqual(await session.send({ action: 'eval', code: 'renderer.getMouseButtons()' }), 0);
+
     const code = await session.quit();
     assert.strictEqual(code, 0, session.output().slice(-3000));
+    assert.match(session.output(), /\[input\] di-mousedown button=3/);
+    assert.match(session.output(), /\[input\] di-wheel -120/);
     assert.match(session.output(), /\[input\] di-mousedown button=1/);
     assert.match(session.output(), /\[input\] di-mouseup button=1/);
     console.log('PASS  frozen CLI controls DirectInput mouse buttons without cursor motion');

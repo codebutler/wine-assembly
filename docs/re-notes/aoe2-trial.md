@@ -84,6 +84,26 @@ also holds Left through gameplay and checks the central fog band: the broken
 frame contained 1,800 colored pixels in repeated islands; the fixed CLI and web
 captures contain none.
 
+## LAN multiplayer over the virtual LAN (works 2026-10-06, 904b5e50)
+
+`test/test-aoe2-vlan-gameplay.js` (heavy, run on a boat): seat 10.0.0.1 hosts
+as "Host", seat 10.0.0.2 finds "Host's Game" and joins as "Guest", and both
+lobbies list both names. Evidence `scratch/runs/20261006T1450Z-aoe2-w4-vlan`.
+
+- **Route.** EULA Accept (161,433), Multiplayer (248,185), name field
+  (335,240) + OK (259,284), Local (LAN) TCP/IP Connection (430,102); host
+  Create (480,365); guest selects the list row (480,195) then Join (480,318).
+- **IDirectPlay4W only.** `EnumSessions(DPENUMSESSIONS_ASYNC|AVAILABLE)` polled
+  from the UI loop, `Open`, `CreatePlayer`, `GetCaps`/`GetPlayerCaps` into a
+  **40-byte** stack local (a fill of 64 bytes smashed the return address),
+  `GetSessionDesc(NULL, &size)` as a size probe (an unwritten size became a
+  SmartHeap out-of-memory), `GetPlayerName` on the remote player, then its own
+  lobby protocol over `Send`/`GetMessageCount`/`Receive`.
+- **1252 bytes in W fields.** `lpszSessionName` and the player DPNAME point at
+  ANSI buffers passed as UTF-16. Real DirectPlay copies W strings opaquely, so
+  they round-trip; a provider that narrows to 1252 and widens back shows "?".
+  The dpl/1 session record and PLAYER_ADD now carry the W units verbatim.
+
 ## Manifest and acceptance route
 
 `lib/apps.js` now mounts 95 required files (68.8 MiB): the EULA DLL/document,
@@ -104,3 +124,93 @@ a 640x480 capture with a substantial green terrain region, detailed world
 pixels, and the dark lower command/minimap HUD; it also rejects clean early
 `ExitProcess` as a failure. It then pans from batch 1602 through 1640 and rejects
 stale cursor-background rectangles in the fog.
+
+## 2026-10-06: startup regressions and the invisible cursor
+
+Three things had broken the trial on main, all fixed:
+
+- **"requires DirectX 6.1a or higher".** `DirectPlayCreate` then QueryInterface
+  for the Unicode `IDirectPlay4` {0AB1C530-…} returned E_NOINTERFACE (since the
+  2026-09-09 QI validation). Codex's DPLAY4W-UNICODE implementation, never
+  committed, was landed in 91bbc717.
+- **"Could not initialize graphics system".** The game opens `data\*.drs`
+  relative to its directory. The manifest's bare URLs mount at
+  `C:\<basename>`, and the VFS basename fallback that used to bridge that had
+  been narrowed. Subdirectory files now mount at their relative paths too
+  (a87fced6).
+- **The EULA Accept button** moved to about (161,433) when dialogs started
+  being centred; the test clicks there now.
+
+The in-game cursor shares AoE I's mechanism and its fix (see
+`age-of-empires.md`: `GetClipper` must answer DDERR_NOCLIPPERATTACHED).
+
+Open: on the test route the frame stops changing after batch 1600 (byte-identical
+captures with full 50k-block batches and few API calls), so the camera-pan
+check fails. This is independent of the cursor fix (A/B).
+
+## 2026-10-10: frame counter, page measurement, the page-only camera jump
+
+**Route correction.** `test-aoe2-gameplay.js` clicks the EULA at (104,415) at
+batch 10; the Accept button is at (161,433) (a capture at batch 30 shows the
+centred dialog), so on a fresh worktree that run sits on the EULA (288 API
+calls) and only passes when an earlier capture is lying around. Clicking
+(161,433) at batch 30 reaches the live map by ~1800 batches and every later
+frame changes -- the "frozen after 1600" note above was the EULA, not the map.
+CLI mouse coordinates on the map are in the 640x480 exclusive-transform space
+(a villager at 1024-space (175,340) is clicked at (109,213)).
+
+**Frame counter.** One drawn frame is `0x005d27e1 call 0x00444100`; inside
+it `0x004441fb call 0x00444420` Blts the frame to the primary (the only Blt in
+steady gameplay, all from one stack: `0x44445a <- 0x444200 <- 0x5d27e6 <-
+0x5aec3e <- ... <- 0x4202cc`). `--count=0x444100,0x5d27e6,0x444420,0x44445a`
+keeps all four equal (16 / 16 / 16 / 16 by batch 1700). `lib/apps.js` now
+declares `aoe2.perf.logicalFrame` `{ label: 'FRAME', address: 0x00444100,
+verifier: 0x005d27e6 }`. `0x4202cc` (~54k by batch 1700) is the outer loop.
+
+**Page measurement** (headful Chrome, GPU-less 4-vCPU boat, wasm f873b89e):
+2.79 / 2.81 / 2.72 FRAME/s over three ~11 s samples on the untouched live map,
+verifier 1:1, ~3.6 presents/s, ~1.2-1.4M blocks/s with the guest ~90% of each
+step -- CPU-bound, against ~5M blocks/s for StarCraft on the same box type.
+Keyboard control works: H selects the Town Center, C queues a Villager (food
+200 -> 150). Evidence `scratch/runs/20261010T0345Z-aoe2-gameplay-fps`.
+
+**Open, page only: the camera jumps into the fog on mouse input.** Any left
+click in the world view (on a villager or on empty sand), or the cursor
+resting at the top-left corner, leaves the world area black while the HUD
+keeps drawing; H re-centres on the Town Center and the world is back, so the
+camera moved, rendering did not stop. At the click the renderer's own state
+is right (`sharedRenderer._mouseX/_mouseY` 601,478 in 1024x768, no
+`ClipCursor`, button mask 1 then 0). The CLI does not reproduce it: the same
+villager click selects the villager and the world stays drawn. Not yet
+checked: what `GetCursorPos` and the WM_LBUTTONDOWN lParam return to the guest
+in the page (no API trace there), and whether the edge-scroll case is the
+guest seeing (0,0) while the page has not sent a move.
+
+**Solved (e84e3bd23): an abandoned synchronous WM_PAINT.** Game start is
+`0x5ad7f0` (called from `0x5ad53b`). In order it switches the display mode
+through the virtual setter `0x5b04d0` -> `0x421d60`, which suspends the draw
+system (`0x489e60` from `0x421da7`: `[P+4]=0`, `P=0x086e2698`) and sets the
+resume-pending flag `[0x6582fc]=1` at `0x421dd5`; then `InvalidateRect(main,
+NULL, TRUE)` (`0x5ad83d`) and `UpdateWindow` (`0x5ad845` -> `0x41f640`); then
+`IsIconic` (`0x5ada03`) and the cursor centring `0x48ad90`, whose branch
+`0x48addf` is `SetCursorPos([obj+0x2c]/2, [obj+0x30]/2)` through
+`[P+4]`. `UpdateWindow`'s WM_PAINT reaches wndproc `0x41f860` -> vtbl[0xec] =
+`0x420690`, which **is AoE II's game frame** (the one with the
+`timeGetTime`-at-`0x42069f` profiling): at `0x4208f2` it sees the pending
+flag and resumes the draw system (`0x489ec0` from `0x420908`, clear at
+`0x420969`). So the centring only reads a live surface if that paint ran to
+its end. On the way, `0x4208d0` takes a once-a-second branch
+(`call [eax+0x140]` at `0x4208dc`, landing `0x4208e2`) when 1000 ms have
+passed since `[0x65831c]`; the CLI's batch clock rarely gets there, the page's
+real clock does, and inside it the game busy-waits on `timeGetTime`. The clock
+spin detector parked that wait (yield 14) inside `$wnd_send_message`'s nested
+`$run`, where nothing takes the yield: 64 rounds, the paint was abandoned,
+`UpdateWindow` returned, and the centring read `[P+4]=NULL` -> `SetCursorPos(0,0)`,
+the edge-scroll corner. Page counts (probe `arm-aoe2-paint2.js`): the
+per-second branch fires in that paint, `0x4208e2` is not reached, game start's
+`UpdateWindow` landing `0x5ad84a` is, then the centring. CLI: `--lazy-ranges`
+prints `[sync] ABANDONED wndproc ... msg=0xf ... yield_reason=14` right before
+the centring. Fix: neither spin detector parks while `$sync_msg_depth > 0`.
+Ruled out on the way: the lazily mounted `music1.mid` (eager mount, same
+(0,0)), GetWindowRect, ClipCursor, uop tier, x87 fold, a second thread.
+Evidence `scratch/runs/20261010T0450Z-aoe2-page-camera-jump`.

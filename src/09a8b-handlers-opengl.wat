@@ -63,10 +63,10 @@
 
     ;; wglGetProcAddress. An extension named in GL_EXTENSIONS has to be
     ;; obtainable, and an extension entry point is an ordinary API here, so
-    ;; hand back a dispatch thunk exactly as GetProcAddress does. A name with
-    ;; no handler resolves to 0xFFFF and returns NULL, which is precisely what
-    ;; "this driver does not have it" means -- so the set an app can reach
-    ;; stays exactly the set api_table.json implements.
+    ;; hand back a dispatch thunk exactly as GetProcAddress does. The global
+    ;; import table also contains fail-fast aliases and unrelated Win32 APIs;
+    ;; existence there is not driver support. The generated predicate uses
+    ;; the actual GL/WGL dispatcher implementation set (excluding GLU).
     (if (i32.eq (local.get $opcode) (i32.const 50))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
@@ -83,6 +83,7 @@
           (local.set $api_id
             (call $lookup_api_id (i32.add (local.get $string_wa) (i32.const 2))))
           (br_if $wgpa (i32.eq (local.get $api_id) (i32.const 0xFFFF)))
+          (br_if $wgpa (i32.eqz (call $wgl_api_available (local.get $api_id))))
           (global.set $num_thunks (call $thunk_reserve))
           (local.set $aux (i32.add (global.get $THUNK_BASE)
             (i32.mul (global.get $num_thunks) (i32.const 8))))
@@ -158,6 +159,8 @@
     ;; 32-bit stack words, so GLdouble arguments correctly consume two each.
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base))
       (i32.shl (i32.add (local.get $stack_dwords) (i32.const 1)) (i32.const 2))))
+    ;; 55 is wglSwapBuffers: the frame end.
+    (if (i32.eq (local.get $opcode) (i32.const 55)) (then (call $present_frame_end)))
   )
 
   ;; wglSwapLayerBuffers(hdc, fuPlanes) -> BOOL. Warcraft III presents through
@@ -178,4 +181,78 @@
     (i32.store offset=0 (global.get $reg_base) (call $gl_wat_encode_call
       (i32.const 55) (call $g2w (i32.load offset=16 (global.get $reg_base))) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+    (call $present_frame_end)
   )
+
+  ;; Layer planes. The one pixel format DescribePixelFormat reports has no
+  ;; overlay or underlay planes (bReserved 0, $gdi_pixel_format_write), so
+  ;; there is no layer plane to describe or to hold a palette, and opengl32
+  ;; answers as it does for such a format: FALSE, or 0 entries. MDK2's demo
+  ;; resolves all four through GetProcAddress and gives up on OpenGL when any
+  ;; of them is missing; it never calls them.
+  ;; Is iLayerPlane a layer plane of the DC's pixel format? Positive planes
+  ;; are overlays and negative ones underlays; the counts are the descriptor's
+  ;; bReserved nibbles (overlays low, underlays high), read from the same
+  ;; descriptor DescribePixelFormat reports. 0 is the main plane, never a
+  ;; layer. ERROR_INVALID_PARAMETER for anything that is not a layer.
+  (func $wgl_layer_plane_exists (param $hdc i32) (param $plane i32) (result i32)
+    (local $pfd i32) (local $reserved i32) (local $ok i32)
+    (if (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+      (then (global.set $last_error (i32.const 6)) (return (i32.const 0)))) ;; ERROR_INVALID_HANDLE
+    (local.set $pfd (call $heap_alloc (i32.const 40)))
+    (if (i32.eqz (local.get $pfd)) (then (global.set $last_error (i32.const 8)) (return (i32.const 0))))
+    (drop (call $gdi_pixel_format_write (call $g2w (local.get $pfd)) (i32.const 40)))
+    (local.set $reserved (call $gl8 (i32.add (local.get $pfd) (i32.const 36))))
+    (call $heap_free (local.get $pfd))
+    (local.set $ok (if (result i32) (i32.gt_s (local.get $plane) (i32.const 0))
+      (then (i32.le_s (local.get $plane) (i32.and (local.get $reserved) (i32.const 0x0f))))
+      (else (if (result i32) (i32.lt_s (local.get $plane) (i32.const 0))
+        (then (i32.le_s (i32.sub (i32.const 0) (local.get $plane))
+          (i32.shr_u (local.get $reserved) (i32.const 4))))
+        (else (i32.const 0))))))
+    (if (i32.eqz (local.get $ok)) (then (global.set $last_error (i32.const 87))))
+    (local.get $ok))
+
+  ;; A plane that does exist has no description or palette this frontend can
+  ;; supply yet, so these fail fast for it instead of answering.
+  ;; wglDescribeLayerPlane(hdc, iPixelFormat, iLayerPlane, nBytes, plpd) -> BOOL
+  (func $handle_wglDescribeLayerPlane (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $wgl_layer_plane_exists (local.get $arg0) (local.get $arg2))
+      (then (call $crash_unimplemented (local.get $name_ptr))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+  ;; wglGetLayerPaletteEntries / wglSetLayerPaletteEntries(hdc, iLayerPlane,
+  ;; iStart, cEntries, pcr) -> entries copied: one body (api_table aliases).
+  (func $handle_wgl_layer_palette_entries (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $wgl_layer_plane_exists (local.get $arg0) (local.get $arg1))
+      (then (call $crash_unimplemented (local.get $name_ptr))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+  ;; wglRealizeLayerPalette(hdc, iLayerPlane, bRealize) -> BOOL
+  (func $handle_wglRealizeLayerPalette (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $wgl_layer_plane_exists (local.get $arg0) (local.get $arg1))
+      (then (call $crash_unimplemented (local.get $name_ptr))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+
+  ;; The OpenGL 1.1 surface outside the measured set. Unreal-engine OpenGlDrv
+  ;; resolves its whole GL table through GetProcAddress and refuses to bind if
+  ;; a single name is missing, so every GL 1.1 entry point is an api_table
+  ;; name. Those not implemented yet land here: fail fast with the guest frame,
+  ;; so the first one an app really calls names itself.
+  (func $handle_gl_unimplemented (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $host_crash_unimplemented (local.get $name_ptr)
+      (i32.load offset=16 (global.get $reg_base)) (global.get $eip) (i32.load offset=20 (global.get $reg_base)))
+    (unreachable))
+
+  ;; wglGetCurrentContext() / wglGetCurrentDC(): this thread's current HGLRC
+  ;; and the HDC it was made current on (both NULL when none is current).
+  ;; Per guest thread, as in Windows, because each thread instance owns its
+  ;; own encoder globals.
+  (func $handle_wglGetCurrentContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (global.get $gl_current_context))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_wglGetCurrentDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (global.get $gl_current_dc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))

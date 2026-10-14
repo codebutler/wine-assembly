@@ -32,6 +32,15 @@ const extraWat = String.raw`
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
 
+  (func (export "test_ds_get_caps") (param $this i32) (param $caps i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_IDirectSound_GetCaps
+      (local.get $this) (local.get $caps) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+
   (func (export "test_ds_compact") (param $this i32) (result i32)
     (local $saved_esp i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
@@ -57,6 +66,25 @@ const extraWat = String.raw`
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_IDirectSound_CreateSoundBuffer
       (local.get $this) (local.get $desc) (local.get $output)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+
+  (func (export "test_ds_duplicate")
+        (param $this i32) (param $original i32) (param $output i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_IDirectSound_DuplicateSoundBuffer
+      (local.get $this) (local.get $original) (local.get $output)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+
+  (func (export "test_dsbuf_release") (param $this i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_IDirectSoundBuffer_Release
+      (local.get $this) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
@@ -152,6 +180,35 @@ async function main() {
   assert.strictEqual(e.test_ds_create(soundOutput) >>> 0, 0);
   const sound = dv.getUint32(soundOutputWa, true);
   assert(sound, 'DirectSound fixture allocates');
+  // Miles reads DSCAPS_EMULDRIVER (0x20) as "no real driver", drops
+  // DirectSound for waveOut, and reports ~1.5s of latency that overflows
+  // Bink's audio-buffer divide (Arcanum's first movie).
+  const devCaps = e.guest_alloc(96) >>> 0;
+  dv.setUint32(wa(devCaps), 96, true);
+  assert.strictEqual(e.test_ds_get_caps(sound, devCaps) >>> 0, 0);
+  const devFlags = dv.getUint32(wa(devCaps) + 4, true);
+  assert.strictEqual(devFlags & 0x20, 0, 'the device is not an emulated driver');
+  assert.strictEqual(devFlags & 0xa0a, 0xa0a,
+    'primary and secondary stereo 16-bit are supported');
+  // DSCAPS field offsets. The max rate used to land at +56
+  // (dwFreeHw3DAllBuffers), leaving the rate range 0..0, and every voice count
+  // read 0 -- Diablo II's d2sound needs dwMaxHw3DAllBuffers >= 16 to keep 3D
+  // sound and otherwise refuses every sound it flags as 3D.
+  const capsAt = off => dv.getUint32(wa(devCaps) + off, true);
+  assert.strictEqual(capsAt(8), 100, 'dwMinSecondarySampleRate');
+  assert.strictEqual(capsAt(12), 100000, 'dwMaxSecondarySampleRate');
+  assert.strictEqual(capsAt(16), 1, 'dwPrimaryBuffers');
+  assert(capsAt(20) >= 16 && capsAt(32) >= 16, 'hardware mixing voices are reported');
+  assert(capsAt(44) >= 16 && capsAt(56) >= 16, 'hardware 3D voices are reported');
+  assert.notStrictEqual(capsAt(56), 44100, 'no sample rate in dwFreeHw3DAllBuffers');
+  // A DX3-sized caller (dwSize 20) gets only the fields it declared.
+  const oldCaps = e.guest_alloc(96) >>> 0;
+  for (let i = 0; i < 96; i += 4) dv.setUint32(wa(oldCaps) + i, 0x5a5a5a5a, true);
+  dv.setUint32(wa(oldCaps), 20, true);
+  assert.strictEqual(e.test_ds_get_caps(sound, oldCaps) >>> 0, 0);
+  assert.strictEqual(dv.getUint32(wa(oldCaps) + 12, true), 100000);
+  assert.strictEqual(dv.getUint32(wa(oldCaps) + 20, true), 0x5a5a5a5a,
+    'GetCaps writes nothing past the caller\'s dwSize');
   const topLevel = e.test_ds_make_window(0x10000000, 0) >>> 0;
   const child = e.test_ds_make_window(0x50000000, topLevel) >>> 0;
 
@@ -309,7 +366,39 @@ async function main() {
   assert.strictEqual(e.test_ds_set_cooperative_level(sound, topLevel, 4) >>> 0, 0,
     'DSSCL_WRITEPRIMARY is accepted by the modeled hardware primary ring');
 
+  // The final Release of a buffer frees its sample data. Create and Duplicate
+  // each allocate a private guest-heap copy, which nothing freed: Forsaken's
+  // attract loop rebuilds DirectSound and ~225 buffers per cycle and ran the
+  // guest heap dry within a minute. 300 rounds of a 1 MB buffer plus its
+  // duplicate is far more than the heap holds unless Release returns it.
+  const pcm = e.guest_alloc(18) >>> 0;
+  dv.setUint16(wa(pcm), 1, true);            // WAVE_FORMAT_PCM
+  dv.setUint16(wa(pcm) + 2, 2, true);        // stereo
+  dv.setUint32(wa(pcm) + 4, 22050, true);
+  dv.setUint32(wa(pcm) + 8, 88200, true);
+  dv.setUint16(wa(pcm) + 12, 4, true);
+  dv.setUint16(wa(pcm) + 14, 16, true);
+  dv.setUint16(wa(pcm) + 16, 0, true);
+  dv.setUint32(descWa, 20, true);
+  dv.setUint32(descWa + 4, 0, true);         // secondary
+  dv.setUint32(descWa + 8, 1 << 20, true);
+  dv.setUint32(descWa + 12, 0, true);
+  dv.setUint32(descWa + 16, pcm, true);
+  for (let round = 0; round < 300; round++) {
+    dv.setUint32(bufferOutputWa, 0, true);
+    assert.strictEqual(e.test_ds_create_buffer(sound, desc, bufferOutput) >>> 0, 0,
+      `round ${round}: a released 1 MB buffer's memory is available again`);
+    const buffer = dv.getUint32(bufferOutputWa, true);
+    dv.setUint32(bufferOutputWa, 0, true);
+    assert.strictEqual(e.test_ds_duplicate(sound, buffer, bufferOutput) >>> 0, 0,
+      `round ${round}: duplicate allocates`);
+    const duplicate = dv.getUint32(bufferOutputWa, true);
+    assert.strictEqual(e.test_dsbuf_release(duplicate) >>> 0, 0);
+    assert.strictEqual(e.test_dsbuf_release(buffer) >>> 0, 0);
+  }
+
   console.log('PASS DirectSound cooperative level gates primary-buffer format and Compact');
+  console.log('PASS released DirectSound buffers return their sample memory (300 x 2 MB)');
 }
 
 main().catch(error => {

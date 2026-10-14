@@ -181,7 +181,15 @@ const stats = {
   function pointerSpec(opcode, view, stackWa) {
     let arg = -1, length = 0, borrow = false;
     switch (opcode | 0) {
+      case 112: { // glTexParameterfv: invalid enums must not read params
+        if (u32At(view, stackWa, 0) !== 0x0DE1) break;
+        const pname=u32At(view, stackWa, 1);
+        if (pname===0x1004) {arg=2;length=16;}
+        else if ([0x2800,0x2801,0x2802,0x2803,0x8066].includes(pname)) {arg=2;length=4;}
+        break;
+      }
       case 34: arg = 0; length = 64; break; // glLoadMatrixf
+      case 109: arg = 0; length = 64; break; // glMultMatrixf
       case 43: // glDeleteTextures(count, names)
         arg = 1; length = u32At(view, stackWa, 0) * 4; break;
       case 45: { // glTexImage2D
@@ -275,7 +283,9 @@ const stats = {
     _state() {
       let state = this.immediateStates.get(this.currentContext);
       if (!state) {
-        state = { color: [1, 1, 1, 1], texCoord: [0, 0], normal: [0, 0, 1],
+        // Texture coordinates are (s, t, r, q): q is 1 unless glTexCoord4f,
+        // glMultiTexCoord4fARB or a 4-component array set it.
+        state = { color: [1, 1, 1, 1], texCoord: [0, 0, 0, 1], normal: [0, 0, 1],
           shadeModel: GL.SMOOTH, attribStack: [], clientEnabled: new Set(),
           vertexPointer: null, normalPointer: null, colorPointer: null,
           // ARB_multitexture makes the current texture coordinate, the client
@@ -285,7 +295,7 @@ const stats = {
           // and on a single-unit implementation that clear takes unit 0's
           // coordinates with it and the text renders as its drop shadow alone.
           clientActiveTexture: 0,
-          texCoord1: [0, 0],
+          texCoord1: [0, 0, 0, 1],
           texCoordPointers: [null, null],
           texCoordEnabled: [false, false] };
         this.immediateStates.set(this.currentContext, state);
@@ -349,8 +359,10 @@ const stats = {
 
     _appendVertex(opcode, stackWa) {
       if (!this.immediate) return false;
-      let x, y, z;
-      if (opcode === 29) {
+      let x, y, z, w = 1;
+      if (opcode === 118) {
+        x = this._f32(stackWa, 0); y = this._f32(stackWa, 1); z = this._f32(stackWa, 2); w = this._f32(stackWa, 3);
+      } else if (opcode === 29) {
         x = this._f32(stackWa, 0); y = this._f32(stackWa, 1); z = 0;
       } else if (opcode === 30) {
         x = this._f32(stackWa, 0); y = this._f32(stackWa, 1); z = this._f32(stackWa, 2);
@@ -361,11 +373,12 @@ const stats = {
         x = view.getFloat32(wa, true);
         y = view.getFloat32(wa + 4, true);
         z = view.getFloat32(wa + 8, true);
+        if (opcode === 119) w = view.getFloat32(wa + 12, true);
       }
-      return this._appendResolvedVertex(x, y, z);
+      return this._appendResolvedVertex(x, y, z, w);
     }
 
-    _appendResolvedVertex(x, y, z) {
+    _appendResolvedVertex(x, y, z, w = 1) {
       if (!this.immediate) return false;
       const state = this._state();
       this._reserveImmediate(VERTEX_FLOATS);
@@ -381,6 +394,11 @@ const stats = {
       this.immediateVertices[offset++] = state.normal[2];
       this.immediateVertices[offset++] = state.texCoord1[0];
       this.immediateVertices[offset++] = state.texCoord1[1];
+      this.immediateVertices[offset++] = w;
+      this.immediateVertices[offset++] = state.texCoord[2];
+      this.immediateVertices[offset++] = state.texCoord[3];
+      this.immediateVertices[offset++] = state.texCoord1[2];
+      this.immediateVertices[offset++] = state.texCoord1[3];
       this.immediate.length = offset;
       return true;
     }
@@ -431,15 +449,41 @@ const stats = {
       for (let unit = 0; unit < TEXTURE_UNITS; unit++) {
         const pointer = state.texCoordPointers[unit];
         if (!state.texCoordEnabled[unit] || !pointer) continue;
-        const uv = this._readArray(pointer, index, Math.min(2, pointer.size), false);
+        const uv = this._readArray(pointer, index, Math.min(4, pointer.size), false);
         if (!uv) continue;
         const target = unit === 0 ? state.texCoord : state.texCoord1;
         target[0] = uv[0] || 0;
         target[1] = uv.length > 1 ? uv[1] || 0 : 0;
+        // Missing components take GL's defaults, r = 0 and q = 1.
+        target[2] = uv.length > 2 ? uv[2] || 0 : 0;
+        target[3] = uv.length > 3 ? uv[3] || 0 : 1;
       }
       if (!state.clientEnabled.has(GL.VERTEX_ARRAY) || !state.vertexPointer) return;
       const vertex = this._readArray(state.vertexPointer, index, state.vertexPointer.size, false);
-      if (vertex) this._appendResolvedVertex(vertex[0] || 0, vertex[1] || 0, vertex[2] || 0);
+      if (vertex) this._appendResolvedVertex(vertex[0] || 0, vertex[1] || 0, vertex[2] || 0,
+        state.vertexPointer.size > 3 ? (vertex[3] === undefined ? 1 : vertex[3]) : 1);
+    }
+
+    // glDrawArrays is glArrayElement over first .. first+count-1 (the Descent
+    // demo's OpenGL renderer), with the same save/restore of current state.
+    _drawArrays(mode, first, count) {
+      if (this.immediate) throw new RangeError('glDrawArrays inside glBegin/glEnd');
+      if ((count | 0) < 1 || (first | 0) < 0) return;
+      const state = this._state();
+      if (!state.clientEnabled.has(GL.VERTEX_ARRAY) || !state.vertexPointer) return;
+      const saved = { color: state.color.slice(), texCoord: state.texCoord.slice(),
+        texCoord1: state.texCoord1.slice(), normal: state.normal.slice() };
+      this.immediate = { mode, length: 0 };
+      try {
+        for (let i = 0; i < count; i++) this._arrayElement(first + i);
+        this._finishImmediate();
+      } finally {
+        this.immediate = null;
+        for (let i = 0; i < 4; i++) state.color[i] = saved.color[i];
+        for (let i = 0; i < 4; i++) state.texCoord[i] = saved.texCoord[i];
+        for (let i = 0; i < 4; i++) state.texCoord1[i] = saved.texCoord1[i];
+        for (let i = 0; i < 3; i++) state.normal[i] = saved.normal[i];
+      }
     }
 
     // glDrawElements is glArrayElement over an index array: Warcraft III draws
@@ -464,8 +508,8 @@ const stats = {
       } finally {
         this.immediate = null;
         for (let i = 0; i < 4; i++) state.color[i] = saved.color[i];
-        for (let i = 0; i < 2; i++) state.texCoord[i] = saved.texCoord[i];
-        for (let i = 0; i < 2; i++) state.texCoord1[i] = saved.texCoord1[i];
+        for (let i = 0; i < 4; i++) state.texCoord[i] = saved.texCoord[i];
+        for (let i = 0; i < 4; i++) state.texCoord1[i] = saved.texCoord1[i];
         for (let i = 0; i < 3; i++) state.normal[i] = saved.normal[i];
       }
     }
@@ -563,6 +607,14 @@ const stats = {
         }
         return 0;
       }
+      if (opcode === 111) { // glColor3ub(r, g, b)
+        const color = this._state().color;
+        for (let i = 0; i < 3; i++) {
+          color[i] = (u32At(memoryView, stackWa, i) & 0xFF) / 255;
+        }
+        color[3] = 1;
+        return 0;
+      }
       if (opcode === 58) {
         const pointer = u32At(memoryView, stackWa, 0);
         const wa = this.guestToWasm(pointer) >>> 0;
@@ -577,6 +629,26 @@ const stats = {
         const texCoord = this._state().texCoord;
         texCoord[0] = this._f32(stackWa, 0);
         texCoord[1] = this._f32(stackWa, 1);
+        texCoord[2] = 0; texCoord[3] = 1;
+        return 0;
+      }
+      if (opcode === 120) { // glTexCoord4f(s, t, r, q)
+        const texCoord = this._state().texCoord;
+        for (let i = 0; i < 4; i++) texCoord[i] = this._f32(stackWa, i);
+        return 0;
+      }
+      if (opcode === 121) { // glTexCoord4fv(v)
+        this._readPointerFloats(stackWa, 4, this._state().texCoord);
+        return 0;
+      }
+      if (opcode === 122 || opcode === 123) { // glMultiTexCoord4f[v]ARB
+        const unit = (u32At(memoryView, stackWa, 0) - 0x84C0) >>> 0;
+        if (unit < TEXTURE_UNITS) {
+          const state = this._state();
+          const target = unit === 0 ? state.texCoord : state.texCoord1;
+          if (opcode === 122) for (let i = 0; i < 4; i++) target[i] = this._f32(stackWa, i + 1);
+          else this._readPointerFloats(stackWa + 4, 4, target);
+        }
         return 0;
       }
       if (opcode === 63 || opcode === 64) {
@@ -637,6 +709,18 @@ const stats = {
           const target = unit === 0 ? state.texCoord : state.texCoord1;
           target[0] = this._f32(stackWa, 1);
           target[1] = this._f32(stackWa, 2);
+          target[2] = 0; target[3] = 1;
+        }
+        return 0;
+      }
+      if (opcode === 117) { // glMultiTexCoord2fvARB(target, v): 107 by pointer
+        const unit = (u32At(memoryView, stackWa, 0) - 0x84C0) >>> 0;
+        if (unit < TEXTURE_UNITS) {
+          const state = this._state();
+          // One word along, the pointer is argument 0 to the shared reader.
+          const target = unit === 0 ? state.texCoord : state.texCoord1;
+          this._readPointerFloats(stackWa + 4, 2, target);
+          target[2] = 0; target[3] = 1;
         }
         return 0;
       }
@@ -652,8 +736,15 @@ const stats = {
           u32At(memoryView, stackWa, 2), u32At(memoryView, stackWa, 3));
         return 0;
       }
+      if (opcode === 108) { // glDrawArrays(mode, first, count)
+        this._drawArrays(u32At(memoryView, stackWa, 0), u32At(memoryView, stackWa, 1) | 0,
+          u32At(memoryView, stackWa, 2) | 0);
+        return 0;
+      }
       if (opcode === 95) {
-        this._readPointerFloats(stackWa, 2, this._state().texCoord);
+        const texCoord = this._state().texCoord;
+        this._readPointerFloats(stackWa, 2, texCoord);
+        texCoord[2] = 0; texCoord[3] = 1;
         return 0;
       }
       if (opcode === 87) {
@@ -685,8 +776,8 @@ const stats = {
         const saved = state.attribStack.pop();
         if (saved) {
           for (let i = 0; i < 4; i++) state.color[i] = saved.color[i];
-          for (let i = 0; i < 2; i++) state.texCoord[i] = saved.texCoord[i];
-          for (let i = 0; i < 2; i++) state.texCoord1[i] = saved.texCoord1[i];
+          for (let i = 0; i < 4; i++) state.texCoord[i] = saved.texCoord[i];
+          for (let i = 0; i < 4; i++) state.texCoord1[i] = saved.texCoord1[i];
           for (let i = 0; i < 3; i++) state.normal[i] = saved.normal[i];
           state.shadeModel = saved.shadeModel;
         }
@@ -701,7 +792,7 @@ const stats = {
         this.immediate = { mode: u32At(memoryView, stackWa, 0), length: 0 };
         return 0;
       }
-      if (opcode >= 29 && opcode <= 31) {
+      if ((opcode >= 29 && opcode <= 31) || opcode === 118 || opcode === 119) {
         this._appendVertex(opcode, stackWa);
         return 0;
       }

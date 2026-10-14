@@ -909,3 +909,554 @@ silent-success `DrawIndexedPrimitiveVB` stub, whose black floor scores
 `> 20000`: 10x over that failure, 1.7x under the tightest frame that is
 genuinely gameplay. The life orb, mana orb and colour assertions are unchanged
 (measured 2,974 / 2,902 / 961 against 2,500 / 2,000 / 100).
+
+## 2026-09-28: resolutions, and the 1024x768 "blow-up" that wasn't
+
+### What the binaries support: 640x480 and 800x600, nothing else
+
+`diablo ii.exe` is FileVersion 1.0.4.0 (the menu's "Shareware v 1.04"); the
+renderer DLLs carry no version resource. Every layer has exactly two
+resolutions, selected by an index of 0 or 1:
+
+| module | site | what it does |
+|---|---|---|
+| `d2gfx.dll` | `0x10004455` / `0x10004a07` | index 0 -> 640x480, 1 -> 800x600, anything else -> `"Unknown resolution %d"` (`0x1000d5c4`, `Window.cpp`); then AdjustWindowRectEx + SetWindowPos |
+| `d2direct3d.dll` | `0x1000207b` | same 0/1 choice, logs `"Opening Direct3D window at 800x600..."` / `640x480`, then `SetCooperativeLevel(hwnd, 0x411)` (FULLSCREEN\|EXCLUSIVE\|MULTITHREADED) and `SetDisplayMode(w, h, 16)` |
+| `d2ddraw.dll`, `d2gdi.dll`, `d2glide.dll` | `{640,800}` / `{480,600}` width/height tables (`d2ddraw` `0x1000d310`, `d2gdi` `0x10008290`, `d2direct3d` `0x100134e0`) | same pair |
+
+There is no 1024x768 constant in any of them, no `Resolution` value under
+`VideoConfig` (the exe's only VideoConfig value names are `Render`, plus the
+`Gamma`/`Perspective` preferences), and no resolution command-line switch:
+the switch table at `0x005a60e0` is 3DFX, OPENGL, D3D, RAVE, PERSPECTIVE,
+QUALITY, GAMMA, VSYNC, FRAMERATE, the network and character switches, and
+`-w`. The pre-LoD game does not let the player choose: **menus are 800x600,
+gameplay and cutscenes are 640x480**, fixed. LoD's in-game 800x600 option
+does not exist here.
+
+Measured per backend (probe3 on box 3, `--trace-api` on the mode calls, full
+route to the Rogue Encampment; all three reach it):
+
+| backend | selected by | cutscenes | menus | gameplay |
+|---|---|---|---|---|
+| Direct3D (`Render=1` or `-d3d`) | runtime `LoadLibrary d2direct3d.dll` | exclusive `SetDisplayMode(640,480,16)` | exclusive `800,600,16` | exclusive `640,480,16` |
+| DirectDraw (default, `Render` 0/2, `-opengl`) | static `d2ddraw.dll` | `640,480,8` then `640,480,16` for Bink | exclusive `800,600,8` | exclusive `640,480,8` |
+| GDI (`Render=4`, `-w`) | `d2gdi.dll` | window 648x508 (640x480 client) | `SetWindowPos` 808x628 (800x600 client) | back to 648x508 |
+| Glide (`Render=3`, `-3dfx`) | `d2glide.dll` | -- crashes on `_grGet@12` (no glide3x) -- | | |
+
+The emulator honours all of these: `SetDisplayMode` records the mode and
+resizes the cooperative window to it, and an exclusive primary is fit-scaled
+onto whatever canvas the host has. The GDI path is windowed, so its 808x628
+menu window needs a canvas at least that big — that, and not anything in the
+DX paths, is why GDI runs are made with `--screen=1024x768`.
+
+### The 1024x768 Direct3D "blow-up" is a harness coordinate bug, not the emulator
+
+Reported: `Render=1` + `-d3d` + `--screen=1024x768` through the benchmark
+driver (`~/d2-backends-out/d2-arm.js`) took 374s of user CPU over 3024
+batches, made 14,445 presents and "never reached a recognisable menu".
+
+The guest does not know the canvas size exists. Same command line at both
+sizes (`--branch-clock --batch-size=50000 --max-batches=3024`, run.js
+directly, no driver):
+
+| canvas | API calls | `Flip` | `EndScene` | user CPU |
+|---|---:|---:|---:|---:|
+| 640x480 | 102,014,423 | 14,445 | 14,440 | 346.8s |
+| 1024x768 | 102,014,423 | 14,445 | 14,440 | 348.0s |
+
+and the 600-batch version without `--branch-clock` also matches exactly
+(12,402,964 calls, identical block counts, 47.0s vs 46.5s). D2 asks for the
+same modes (above) either way.
+
+The driver's own last capture of the failed run (`01-main-menu.png`) **is**
+the main menu — 800x600 fit-scaled to 1024x768. Its stage signatures are
+written in 640x480-canvas coordinates (SINGLE PLAYER at `(200,145)-(440,185)`),
+and with `SCALE=1` they sample the sky above the scaled button, so the menu
+check never passed and the driver spent its whole `300 x 10`-batch attempt
+budget sitting in the menu. With `SCALE=1.6` (1024/640) the identical run
+reaches the menu at **batch 264 in 10.4s**, the same as the 640x480 canvas
+(9.4s).
+
+The two numbers that looked like a blow-up are just 2,760 batches of menu:
+
+- **Presents**: the menu flips ~5.2 times per batch — 25 fps at the headless
+  clock's 200 ms/batch — so 14,445 flips over 3,024 batches is its normal
+  rate, identical at both canvas sizes.
+- **CPU**: ~115-125 ms of user CPU per menu batch. 220s of the 347s is the
+  guest slice, and 99% of the guest's API calls are the frame limiter's
+  `PeekMessageA`/`QueryPerformanceCounter` spin (33.1M of each), as in *the
+  route's cost is a frame-limiter spin* above. The remaining ~127s is host
+  present work, ~8.8 ms per flip.
+
+So: nothing to fix in the D3D/DDraw emulation for this. A driver that runs
+with a non-default `--screen` must scale its sample points by
+`canvas width / 640` for the exclusive (fullscreen) backends, and use the
+window origin plus 1.25 (800/640) for the windowed GDI menus.
+
+## 2026-09-28: the menu's frame limiter is a QPC clock spin, and now parks
+
+### The loop
+
+`d2win.dll` loads at `0xc97000` (origBase `0x10000000`, so runtime = orig
+`- 0x0f369000`). The limiter is the function at orig **`0x1000b670`**, and
+every menu and loading screen runs it on the **main thread** (ESP
+`0x074ff1c0`, the main guest stack):
+
+```
+0x1000b690: PeekMessageA(&msg, 0, 0, 0, PM_NOREMOVE)   ; ret 0x1000b6a3
+            if TRUE: GetMessageA / TranslateMessage / DispatchMessageA -> 0x1000b74e
+0x1000b6e4: QueryPerformanceCounter(&now)                 ; ret 0x1000b6ef
+            QueryPerformanceFrequency(&freq)              ; ret 0x1000b6fa
+            _allmul(now - last, 25)  (0x10010fe0)
+            if (result > freq) { last = now; frame callback; 0x1000bda0 }
+0x1000b742: [0x1005bd08] = [0x1005bd04]
+            loop while [0x1001cb68] != 0
+```
+
+A 25 fps cap: a frame when `(now - last) * 25 > freq`, i.e. every 40ms of QPC
+time. `--trace-api=QueryPerformanceCounter,PeekMessageA` shows the API numbers
+stepping by three (Peek, QPC, QPF) with nothing else in between, the peek
+returning FALSE every time.
+
+### Why neither detector saw it
+
+* `QueryPerformanceCounter` was not a clock read: only GetTickCount and
+  timeGetTime called `$clock_spin_step`.
+* QPC and QPF both bumped `$spin_nonpoll_seq`, so to the clock detector every
+  pair of reads had "Win32 work" between them.
+* The empty-PeekMessage detector requires two peeks with **no** dispatch at all
+  in between (`$spin_dispatch_seq` adjacency), and QPC + QPF are two.
+
+`[spin-park]` over the 1,001-batch menu dwell below: no line at all on the old
+build (zero trips on any thread).
+
+Where the time went in the headless run, and why the saving is not bigger:
+the batch clock steps 1ms per `get_ticks` call and stops at the next batch
+boundary minus one (`lib/batch-clock.js`). So each batch the limiter renders a
+frame every ~40 loop passes until the clock reaches `base+199`, and then spins
+on a frozen millisecond for whatever budget is left. Only that tail is spin --
+about 12,000 passes, ~15ms of CPU a batch. The rest of a menu batch is five
+real frames of rendering plus the host present.
+
+### The fix
+
+QPC is now a clock read, keyed on the millisecond its count is built from
+(`$handle_QueryPerformanceCounter`, `src/09a7-handlers-dispatch.wat`): the
+count itself never repeats because `$perf_counter_lo` moves on every call, but
+the clock under it does, and that is what the guest is waiting on. The park is
+taken before the counter bump and the store, so a woken call is the whole call
+again. QPC and QPF are also clock reads for the activity sequence
+(`$spin_is_clock_read`, `src/09b-dispatch.wat`). Every existing guard applies
+unchanged: same return address and ESP per context, no non-clock Win32 call in
+between (an empty peek is neutral; a peek that finds a message is work), at
+most `$spin_work_max` blocks of guest work between reads, K=8 to qualify a site,
+one park per millisecond, deadline = next millisecond. `--no-spin-park` is the
+old arm, which is exact for D2: the old build took zero parks here.
+`test/test-qpc-spin-park.js` pins the shape and each of those resets.
+
+The peek detector was deliberately not widened. The loop is waiting on time,
+not on the queue, and the clock park is the one that carries the deadline the
+schedulers sleep to (`get_spin_deadline_ms` / `get_tick_count`, which QPC now
+updates).
+
+### Measured (box 3, `--batch-size=50000 --branch-clock`, user CPU)
+
+Menu dwell: Esc through the intros, then sit in the main menu to batch 1,001
+(menu up at batch 264 in both):
+
+| arm | API calls | QPC calls | clock parks | Flips | user CPU |
+|---|---:|---:|---:|---:|---:|
+| old build | 28,571,479 | 9,258,416 | 0 | 4,035 | 89.9s |
+| QPC park | 908,475 | 50,483 | 766 | 3,809 | **79.1s** |
+| old build, `--batch-size=60000` | 37,990,087 | 12,385,277 | 0 | 4,256 | 100.2s |
+| QPC park, `--batch-size=60000` | 935,956 | 52,232 | -- | 3,938 | **85.2s** |
+
+-12% and -15%. The earlier "220s of 347s was the loop" was the whole guest
+slice; the spin tail is ~15ms of a ~110ms menu batch.
+
+Full route through `~/d2-backends-out/d2-arm.js` (three runs each):
+
+| phase | old build | QPC park |
+|---|---|---|
+| main menu reached | batch 264 (x3) | batch 264 (x3) |
+| start -> menu | 8.79 / 8.75 / 8.77s | 8.08 / 8.07 / 8.10s |
+| menu -> Act I portal (355 batches) | 6.59 / 6.53 / 6.57s | 6.55 / 6.53 / 6.55s |
+| world -> end (630 gameplay batches) | 8.77 / 8.00 / 9.03s, 122 / 113 / 124 flips | 9.10 / 9.10 / 8.95s, 124 / 121 / 126 flips |
+| main-thread clock parks, world -> end (run 3) | 249 (all GetTickCount) | 251 |
+| main-thread clock parks, start -> menu (run 3) | 0 | 39 |
+
+The menu, hero-class, name, named and Act I loading captures are byte-identical
+between the arms. The encampment and final captures differ, but they also differ
+between two runs of the old build: the Act I load is nondeterministic (world
+reached at batch 3099-3259 across the six runs). The QPC park does not fire in
+gameplay (251 against 249 parks), and gameplay CPU per flip is the same (71-75ms
+in both arms).
+
+**The fewer Flips are the one guest-visible change, and they are the old
+build's artifact.** In the old build the frozen-millisecond tail was not
+entirely dead: QPC adds 1us per call, so ~11,000 spin passes could move the
+count the 11ms still missing from a 40ms frame and render one more before the
+batch ended. That extra frame is bought with surplus budget: the old build
+renders 4,035 menu flips at 50,000 blocks and 4,256 at 60,000. The QPC park
+ends the tail instead, leaving the menu at 25 fps of guest time as the
+limiter intends. In the menu-dwell captures, six of the eight sampled frames
+(batches 300-1000) are byte-identical between the arms. The other two differ
+only in the phase of the burning DIABLO II logo, since the extra frames shift
+the flame animation.
+
+Browser (not measured here, BROWSER-LOCK was held): there the clock is real
+and the limiter spins the whole 40ms between frames, so this is where the
+saving is large. A qualified site parks after two reads of one millisecond and
+sleeps to the next (`CLOCK_SPIN_PARK_MS`, `_spinParkDelay`).
+
+One tooling note: `--slice-split`, `--decode-stats` and `--batch-stats` time
+and count only the **first** main-thread `run()` of each batch. D2 has guest
+threads, so `test/run.js` also runs main between worker slices within the batch
+(the cooperative branch after the spin-park handler), and those runs are
+invisible to all three. With the QPC park, the park is taken in one of those
+interleaved runs. The next batch's first `run()` then returns immediately on
+the pending yield ("blocking wait", 1 block), and the menu's real work happens
+in the interleaved runs after the handler clears it. The old build spent the
+whole budget in its first run. So on this route those flags read 77ms/batch
+against 0.00ms for identical menu frames, which says nothing about cost. Use
+user CPU at fixed batches for spin A/Bs.
+
+## 2026-10-04: Glide menu freeze and repeating audio investigation
+
+The user reports frozen menu animation and repeating sound in
+`diablo2_glide_demo`. The corrected local observation did **not reproduce
+the menu freeze**. Audio continuity and quality remain unverified; this is
+not a repair or a resolution of the user report.
+
+The registered route inherits the installed demo and sets VideoConfig
+`Render=3` in both registry hives. It dynamically loads D2Glide. All 25
+registered files were present (135,378,002 bytes). The observed module was
+`f40d4ca3382279ff9b826188573f8acd9272eaa2dc5024dcbb69aecc35b49063`
+(1,664,777 bytes); current JavaScript was pinned separately, without claiming
+that later WAT source changes were included in this module.
+
+Attempt 1 ended with normal ExitProcess(0) after an Escape key sent without
+a fresh visual gate. It is preserved as a harness route failure, not a game
+crash or a freeze reproduction. Attempt 2 prohibited Escape, captured state
+before input, and reached the Shareware 1.04 menu through an ordinary click
+on the visible title screen.
+
+During the 10.3793-second quiet menu interval, Glide host presentation events
+increased from 1,539 to 1,812. The logo flames visibly changed between the
+first and last images; the coordinator independently confirmed this in
+`scratch/diablo2-glide-menu-20261004/root-visual-review.json`. These transport
+counts are diagnostic evidence of progress, not qualified game or display FPS.
+
+The AudioContext was running and advanced from 37.883 to 48.263 seconds.
+Three later read-only observations of DirectSound worklet voice 720898 showed
+an advancing cursor, descriptor sequence 758/770/780, and three different
+262,144-byte ring hashes over 4.01 seconds. These concurrent memory snapshots
+show producer activity, not an atomic audio recording or proof of seamless
+output. Shared waveOut callback registration was zero and its completion
+queues were empty; this observation does not support the separate Tile World
+or FOTAQ pending-function-callback diagnosis.
+
+Evidence is in `scratch/runs/20261004-diablo2-glide-menu-observation`
+(182 hashed artifacts), with raw `analysis.json`, `rings.json`, timed images,
+owner samples and the actual served files. All 147 unique served file copies
+passed their recorded hashes. The browser was headful Chrome 151 with explicit
+`--disable-gpu` and SwiftShader, so this is not proof of parity with the user's
+device. Browser session 35990 and its read-only attachment both exited 0;
+browser and server closed at 16:29:06.090 UTC.
+
+Next, compare the affected URL, build, browser/device and onset route with
+this local identity, then capture output audio if the complaint persists.
+No guest state, engine code or pacing was changed, and no gameplay, FPS or
+release-readiness claim follows from this menu observation.
+
+## Menu audio (2026-10-06, claude:65967384)
+
+The menu theme is `data\global\music\common\options.wav` (d2music.mpq), first in
+d2sound's music table at `0x1000f668`. The playlist (`#10033`, `0x10004640`,
+driven by d2sound's thread T3 at `0x100027f0`) opens it via Fog and hands it to
+**Storm's DDA streaming**: `SFileDdaBeginEx` (Storm `#255`, called through
+`0x1000511a`). Storm creates the 256 KB 22 kHz stereo buffer itself (flags 0xe0)
+on the IDirectSound d2sound gave `SFileDdaInitialize` (`#260`), and its own
+thread T2 (start `storm+0x6ffc59d0`) Locks/fills it (Lock site `0x6ffc6dc1`) and
+Plays it once (`0x6ffc6e89`). So the music never shows as a d2sound
+Lock/Play, and a worker's COM calls are not named in `--trace-api`: count the
+Storm sites with `--count=storm+0x6ffc6dc4,storm+0x6ffc6e8c` instead.
+
+- d2sound keeps 3D sound only when `DSCAPS.dwMaxHw3DAllBuffers >= 16` (check at
+  `0x1000189b`) and otherwise refuses every sound flagged 3D (`#10007`,
+  `0x100032a0`). We used to report 0 (and wrote the max rate into +56); fixed in
+  1b4d12a1.
+- On the CLI's 200 ms/batch clock Storm's decoder is starved: the theme starts
+  ~760 guest-s after batch 2500. Record CLI audio with `--video-fps=5` (one video
+  second = one guest second) or the mux's `-shortest` cuts the audio away.
+- Browser (record-probe, 180 s): continuous music over the live menu, no stuck
+  loop (`scratch/runs/20261006T1300Z-diablo2_glide_demo-w4-browser-audio`).
+
+## 2026-10-10: per-object GetTickCount vs the d2win QPC limiter
+
+Two clock loops, which the clock-spin detector must tell apart:
+
+- `0x4293c0` (exe) reads GetTickCount once per object, with `EDI = this`.
+  It is not a wait. In town the old detector parked it (in the browser Worker
+  build, 4 fps against 41).
+- `d2win.dll` `0x1000b6e4` (loaded at 0xc97000 in the CLI) is the real frame
+  limiter: QueryPerformanceCounter, QueryPerformanceFrequency and PeekMessage
+  in a loop. It copies each count into `ESI:EDI` (`mov esi,[esp+0x14]; mov
+  edi,[esp+0x18]`), so ESI changes on every pass of a genuine spin.
+
+a7e5f4f75 counts a read only when EBX/EBP/ESI/EDI match the context's previous
+read, discounting any register equal to the previous clock reading. Full
+route, same build: the limiter parks 38 by the menu and 40 by the Act I load
+in both arms; in town, parks go 0 (check on) vs 106 over 240 batches (off).
+Run `20261010T1720Z-clock-spin-regs-check-boat`.
+
+## 2026-10-13: explicit WebGL full-route control qualification
+
+Run `20261013T1930Z-diablo2-webgl-control` qualifies the registered
+`diablo2_demo` Direct3D route with explicit `--headless-gl --d3dim-gpu`,
+rather than the default portal-only test. Tested source was
+`a6bff043a76ae3fb580137afcaaff9dc788b3136` plus the retained driver-only patch;
+the full build completed all gates and produced Wasm SHA-256
+`99678a24d2160a69c346e475a947c2f5af7501474901015210ec00d240715005`.
+Node v24.18.1 ran on Linux x64 with Xorg display :0, native
+`@node-3d/webgl` 6.0.1 and `@node-3d/glfw` 7.3.1. Underlying GL vendor and
+physical hardware acceleration were not captured.
+
+The original 138,309,685-byte installer was downloaded from the Internet Archive
+storage mirror and matched its existing package hash. It is an embedded MPQ,
+not a ZIP/7z archive. Existing `tools/mpq.js` extracted 26 original blocks,
+matched by payload size and then exact SHA-256 against the existing installed
+fixture; `fixture-receipt.json` records every block and hash. No guest files
+were patched, and this extraction is not a fresh installer UI acceptance run.
+
+The driver retained the full child log after process shutdown, including
+runtime `d2direct3d.dll` loading and the final renderer census:
+21,985 WebGL draws, 122,496 triangles, 687 clears, eight fallbacks, zero errors.
+The eight fallback sites were not localized: this is qualification of the
+existing WebGL renderer with its ordinary fallback behavior, not proof that
+every command used the GPU. No FPS or software/WebGL speed ratio was measured.
+
+The full route created the Barbarian and reached the Rogue Encampment. Reviewed
+640x480 captures show textured grass, stone walls, wagon, NPCs, Barbarian, rain,
+and life/mana HUD. Ordinary ground input at (470,200) moved the scene: 250,700
+pixels changed versus 5,690 during idle. Both windows cover exactly 44 batches
+at the default 200 ms guest tick and 50,000-block budget. The cursor was placed
+at the destination before idle, so relocation alone cannot explain the result.
+The before/after views visibly shift the wagon, wall and NPCs while retaining
+the HUD. Driver exited zero at batch 3629; no guest crash was recorded.
+
+The driver now saves `run.log` and `control-evidence.json` on both success and
+failure, and equalizes the idle window with the click helper's four input
+steps plus forty settling steps. These changes were exercised by the full
+route; default portal-only behavior remains unchanged. Software's historical
+town evidence is separate and was not rerun for this WebGL qualification.
+
+## 2026-10-13: prepared wall-clock presentation sampler; not yet executed
+
+The full-route census in run `20261013T1930Z-diablo2-webgl-control`
+reports `lib/d3dim-gpu.js` lifetime `stats.fallbacks=8`. This increments
+at six rejection sites: unsupported primitive/vertex type or insufficient
+vertices; missing draw description; rejected draw target; failed draw texture
+decode; rejected clear target; incomplete clear texture descriptor. Each is
+a draw/clear operation returning zero to the caller's software route, not a
+failed frame. The target rejection can mean unavailable WebGL, absent DIB,
+zero/oversize dimensions, or unsupported target bit depth. No one of these
+reasons is established for this run.
+
+This is not an exhaustive software-operation count: untouched-target clears
+increment `declinedClears` instead, exceptions increment `errors`, and
+other zero-return paths do not increment `fallbacks`. The final log alone
+does not identify the eight sites, guest callers, or whether they occurred
+before gameplay. GPU draw and triangle totals likewise are not frame counts.
+
+`tools/measure-gameplay-presentations.js` is prepared source, **not runtime
+validated**. On an allocated browser slot, use the normal registered
+`diablo2_demo` route with `?debug&perf&perf-stream`, normal browser clock,
+and CDP enabled. Reach Single Player -> Barbarian -> name -> Act I -> Rogue
+Encampment through ordinary input; review town and a ground-click response
+before attaching. No guest flags, game state, pacing or counters are patched.
+Do not pass this helper a CLI frozen/batch-clock session.
+
+Example, substituting the page's exact URL:
+```sh
+node tools/measure-gameplay-presentations.js \
+  --cdp=http://localhost:9222 \
+  '--url=http://localhost:8080/index.html?debug&perf&perf-stream' \
+  '--scene=Diablo II Rogue Encampment after ordinary ground-click control' \
+  --seconds=10 --windows=3 --out=/tmp/diablo2-presentation-sample
+```
+
+The helper disconnects from CDP without closing the existing browser. It
+requires the identity recorded from actual compiled Wasm by host.js and
+hashes actual loaded same-origin script sources through CDP. Local checkout
+commit, diff and relevant file hashes are recorded separately; they do not
+assert the page used the current checkout. Its before/after screenshots
+must be reviewed. Source/debugger capture happens before timed sampling.
+
+Raw WinePerf presentation timestamps, endpoint cumulative presentation and
+upload counts, actual `performance.now()` intervals, and accessible WebGL
+counter deltas are saved. Null renderer counters mean unavailable, not zero.
+Three default ten-second windows report **guest presentation events per
+real wall second**. Draw rate, canvas uploads, rAF cadence, and logical frame
+rate are separate; `logicalFps` and `displayFps` stay null. A registration
+`perf.logicalFrame` is currently absent for Diablo II, and old menu 25/s
+guest-clock observations do not qualify a town counter.
+
+Next validation: syntax check; attach to an ordinary town run; confirm
+nonzero counter progress and review before/after. Then qualify one town
+logical submission boundary against Flip/EndScene/presentation census in a
+separate bounded diagnostic. Prove the relationship across idle and movement
+before converting presentation rate to logical FPS. Keep any instrumentation
+overhead separate from the normal-clock sample. No runtime, FPS, fallback
+site localization, hardware GPU or physical-device claim has been added.
+
+Sampler hardening: finite nonnegative counters and increasing wall intervals are required; every sampled counter must be monotonic. Navigation and changed Wine/instance/worker/Wasm/telemetry identity invalidate the report. A visibilitychange listener retains hidden mid-window transitions, and an identity monitor latches changes between endpoints. Failed captures retain an explicit failed report. Pure validation/browser-state mocks are in tools/measure-gameplay-presentations.test.js; run them before browser smoke. Node syntax check passed; browser runtime remains queued.
+
+
+## 2026-10-13: ordinary browser town/control and real-wall presentations
+
+Run `20261013T1950Z-diablo2-browser-presentations` follows the original
+registered `diablo2_demo` route in headful Chrome 151.0.7922.108 on Linux x64:
+title click -> Single Player -> Barbarian -> name `Ratecheck` -> OK -> Rogue
+Encampment. The normal default Worker backend remained enabled. An ordinary
+ground click visibly moved the camera, stone wall, wagon and NPC positions;
+no guest state or pacing was patched. Screenshots before and after the control
+and sampling were reviewed. `07-act-i-loading.png` was taken after loading had
+already finished and actually shows town, despite its planned filename.
+
+The page's compiled-module identity was SHA-256
+`79a828167326142433105270a3cd53fe33a3ce934f71116451e8948315b44c93`, 1,792,359
+bytes. It is the exact validated build of main `95457854dc818389f67c58373aef4c81133be3b5`,
+reused without rebuilding from `/home/user/gl-client-work`; the isolated
+runtime sources match that commit. Sampler commits were cherry-picked into
+`96cc1384cc33566c194f7691ba9b6d8f2e1c6a3c` and the retained sampler-only
+patch adds Worker census support and preserves the existing browser viewport.
+The original previously verified 26-file fixture was reused unchanged.
+Actual parsed page scripts (91) have separate CDP hashes in the reports.
+Worker source provenance uses the pinned static checkout; its scripts were
+not independently hashed through the page-only Debugger session.
+
+The first sampler attachment exposed Puppeteer's default connection behavior:
+it resized the existing page from 900x740 to 800x600. That exploratory report
+is retained as `town-sample/`; it is not the final sampler validation. The fix
+passes `defaultViewport: null`. A repeat `town-sample-preserve-viewport/`
+kept the existing 800x600 viewport and reviewed town scene throughout:
+
+| real wall seconds | presentation events | presentations/second | backend fallback operations | backend errors |
+| --- | --- | --- | --- | --- |
+| 10.002350 | 199 | 19.8953 | 10,359 | 0 |
+| 10.002365 | 213 | 21.2950 | 10,689 | 0 |
+| 10.001210 | 197 | 19.6976 | 10,029 | 0 |
+
+The total is **609 presentation events / 30.005925 real seconds = 20.296/s**;
+609 raw presentation timestamps corroborate the endpoint total. This is
+presentation-event throughput in one town scene, not qualified logical game
+FPS or physical display FPS. Both remain null. The three windows are one run,
+not independent benchmark repetitions or a renderer speed comparison. The
+static loopback server did not implement the optional `/api/perf` sink;
+`perf-stream` therefore generated periodic HTTP 404 requests (about one per
+second). Console evidence retains them. No page exception or guest trap was
+observed; the rate includes this instrumentation/network overhead and is not
+a clean production benchmark.
+
+The sampler now selects `wine.guestWorker.d3dStats` on this backend. This is
+the existing asynchronously relayed census: `lib/guest-worker.js` merges the
+command encoder snapshot followed by backend stats, so backend `fallbacks`
+overwrites the producer's similarly named transport counter. This does not
+count all software rendering or identify fallback rejection sites. Endpoint
+census values can lag the sample wall timestamp; the small clears/presents
+mismatch (212 vs 213, then 198 vs 197) illustrates that limit. The 31,077
+fallback operations in these town windows are not dropped frames and are not
+comparable to the previous eight lifetime CLI fallbacks as if they represented
+the same route, clock, rendering owner or interval. The sample also records
+248,458 accepted draws and 3,207,250 triangles. Renderer reports
+`ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6 (Core Profile) Mesa 23.2.1)`;
+that string alone is not an independent physical-device attestation.
+
+Pure validation tests pass, including a new counter-source-change rejection.
+`tools/measure-gameplay-presentations.browser.test.js` passed in actual headful
+Chromium with a separate explicitly synthetic telemetry fixture: positive
+capture, unchanged viewport, hidden-then-visible transition, runtime identity
+replacement, module identity replacement, decreasing counters, navigation and
+no presentation progress. Failure cases saved failed reports and cleaned up
+their owned capture. Synthetic test counts are not emulator measurements.
+The game/browser supervisor exited zero at 19:58:40 UTC and the test browser
+exited zero at 19:58:55 UTC; servers bound only to loopback. No public deploy.
+
+Next work, if required, is a separately bounded logical-frame boundary
+qualification and fallback-site attribution across idle/movement. This run
+does not establish those, audio quality, other devices, or long-session stability.
+
+## Browser fallback-site census, 2026-10-13
+
+Run `20261013T2020Z-diablo2-fallback-reasons` uses source `45498b943` and Wasm `79a828167326142433105270a3cd53fe33a3ce934f71116451e8948315b44c93`. Original default-Worker browser town and ordinary ground-click movement were reviewed. Across the two sampled scenes, all 33,692 backend fallbacks are `fallbackDrawShape` (idle 19,024; post-click 14,668); all five other reason deltas and backend-error deltas are zero. Raw endpoint arithmetic and exact reason sums were independently checked by the coordinator. The samples also record 24,390 readbacks.
+
+This locates the rejecting gate, not its precise input or performance cost. That gate combines vertex type, primitive kind and minimum vertex count. Worker census endpoints are asynchronous, timings overlap, and the static server retains optional telemetry-sink HTTP404 overhead. These are diagnostic scenes, not repeated optimization benchmarks; logical/display FPS remains unqualified.
+
+Main `0c90327e` adds bounded disjoint predicate masks, count buckets and eight immutable exact input tuple slots plus explicit overflow. Focused positive/negative tests pass. Next sample must validate tuple identities separately from monotonic counts and identify the actual rejected input before changing rendering behavior.
+
+
+## POINTLIST implementation and ordinary browser check, 2026-10-13
+
+Exact-shape run `20261013T2035Z-diablo2-exact-shapes` found all 40,605
+rejections were transformed-lit vertex type 3, primitive POINTLIST 1, count 1.
+Generic GPU point support is integrated as `782bc73d43c248766c2e24a27b8231cb000a6a44`.
+It preserves the software 2x2 point footprint and clipping. RGB565 batches;
+555/1555/opaque32 use per-point fences to preserve untouched packed bits.
+Unsupported formats remain explicit fallbacks. Forty native-WAT/WebGL1/WebGL2
+pixel cases and depth/blend transition tests passed; a pixel-offset mutation
+failed. This is a renderer change, not an interpreter optimization.
+
+Paired runs `20261013T2055Z-diablo2-pointlist-control` and
+`20261013T2055Z-diablo2-pointlist-candidate` use source d31cf3b784 and
+375c3aa819 respectively, the same original fixtures, and canonical Wasm
+`ba6f25ea2d467b3fba00110d83575d48ac1aeb8794a474052190998067723259`.
+Both reached town through ordinary input and responded to a ground click.
+Read-only target inspection confirms 640x480 RGB565, pitch 1280. Served-source
+and fixture hashes were checked, and final captures reviewed independently.
+Each arm sampled two 10-second idle and two 10-second post-click windows.
+
+| Counter summed across four windows | Control | Candidate |
+| --- | ---: | ---: |
+| Backend fallbacks | 38,701 | 0 |
+| GPU points | unavailable | 51,066 |
+| Readbacks | 27,556 | 1,001 |
+| Readback bytes | 7,260,959,680 | 1,230,028,800 |
+| Backend errors | 0 | 0 |
+
+Presentation events were 16.0–20.6/s for control and 25.0–25.1/s for candidate.
+Fresh characters produced different randomized town layouts, so these rates
+are not an isolated speedup estimate. Logical/display FPS, audio, other devices
+and long-session stability remain unqualified. Worker counters are asynchronous;
+read-only heap inspection occurred outside timed samples. The evidence supports
+removal of the measured fallback/readback mechanism with intact ordinary town
+rendering and movement. Result manifests retain the exact tested source, rather
+than relabeling the run with the later integration commit.
+
+
+## Explicit software browser gameplay, 2026-10-13
+
+Run `20261013T2115Z-diablo2-software-town` (prepared at21:15, executed
+21:26:31–21:29:01 UTC) uses source `2cf59bcff` and the same canonical
+`ba6f25ea2d467b3fba00110d83575d48ac1aeb8794a474052190998067723259`
+module as the earlier WebGL run. Ordinary title, Single Player, Barbarian and
+name input reached Rogue Encampment. Ground click(405,384) on reviewed open
+ground moved the hero east and scrolled the camera; before/after town captures
+were reviewed with terrain, rain and HUD intact. No captured page errors.
+
+This backend is positively attested rather than inferred from the selector:
+read-only CDP observes an initialized legacy render endpoint with
+backend=software and no GPU adapter; initialized guest workers report
+GPU disabled. Completed renderer commands rise595302->826832 across the
+ordinary input observation (231530 additional commands), endpoint errors0.
+The corresponding source dispatches those batches to the WASM rasterizer.
+All119 served JS/Wasm request hashes were checked against exact source blobs
+or the canonical module hash. Original26fixture hashes were verified during
+preparation;52remote artifacts were transferred with SHA256 checks.
+
+Evidence `result.json` was published after root visual/backend review.
+Supervisor115095, driver115103 and Chrome115116 exited/absent by21:29:10.
+Together with `20261013T2055Z-diablo2-pointlist-candidate`, this supplies
+ordinary browser town/control evidence for both software and WebGL on the
+recorded versions. It is not a matched performance comparison: RNG/time differ.
+No audio, combat, mobile, logical/display FPS or long-session claim is made.

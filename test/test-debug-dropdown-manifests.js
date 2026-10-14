@@ -66,14 +66,14 @@ assert.strictEqual(ut2003.x87Fusion, true,
   'UT2003 opts into the measured startup x87 fusion policy');
 assert.strictEqual(ut2003.cpuSSE, true,
   'UT2003 opts into its exercised SSE CPU path');
-assert(browserShell.includes('wine.x87Fusion = app.x87Fusion === true;'),
-  'the browser launcher passes per-app x87 policy to WineAssembly');
+assert(browserShell.includes('wine.x87Fusion = app.x87Fusion !== false;'),
+  'the browser launcher passes per-app x87 policy (default on, opt-out) to WineAssembly');
 assert(browserShell.includes('wine.cpuSSE = app.cpuSSE === true;'),
   'the browser launcher passes per-app SSE policy to WineAssembly');
 const hostSource = fs.readFileSync(path.join(ROOT, 'host.js'), 'utf8');
-assert(hostSource.includes('this.x87Fusion === true ||'),
-  'the host combines per-app and explicit debug x87 opt-ins');
-assert(browserShell.includes('x87Fusion: !!(callerWine && callerWine.x87Fusion),'),
+assert(hostSource.includes('this.x87Fusion !== false &&'),
+  'the host combines per-app and explicit debug x87 opt-outs');
+assert(browserShell.includes('x87Fusion: callerWine ? callerWine.x87Fusion !== false : true,'),
   'a child process inherits its workload x87 policy');
 assert(browserShell.includes('cpuSSE: !!(callerWine && callerWine.cpuSSE),'),
   'a child process inherits its workload SSE policy');
@@ -271,10 +271,13 @@ for (const [id, prefix, count, theme] of [
   assert.strictEqual(APPS[id].requiredFiles, true, `${id} frames must be launch-critical`);
 }
 
+// Object entries without a vfsPath (MW3's {url, size} fonts) mount at
+// c:\<basename>; only the database entries carry explicit paths.
 const mw3 = APPS.mw3.files.filter(item => item && typeof item === 'object');
-assert(mw3.some(item => item.vfsPath.toLowerCase() === 'c:\\zbd\\reader.zbd'),
+const mw3Path = item => String(item.vfsPath || '').toLowerCase();
+assert(mw3.some(item => mw3Path(item) === 'c:\\zbd\\reader.zbd'),
   'MechWarrior 3 must mount its bootstrap database at c:\\zbd\\reader.zbd');
-assert(mw3.some(item => item.vfsPath.toLowerCase() === 'c:\\zbd\\c4\\gamez.zbd'),
+assert(mw3.some(item => mw3Path(item) === 'c:\\zbd\\c4\\gamez.zbd'),
   'MechWarrior 3 must preserve nested database paths');
 assert((APPS.mw3.dlls || []).some(url =>
   path.basename(url).toLowerCase() === 'msvcp50.dll'),

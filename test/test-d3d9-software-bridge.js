@@ -26,7 +26,7 @@ const {Device:SoftwareDevice} = require('../lib/d3d9-software-backend');
     extraHostOverrides:{gpu_gl_call:(op,p,a)=>bridge.call(op,p,a)},extraWat:`
     ${['Apply','Release'].map(n=>`(func (export "block_${n}") (param $b i32) (result i32)
       (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
-      (call $handle_IDirect3DStateBlock9_${n} (local.get $b) (i32.const 0) (i32.const 0)
+      (call $handle_${require('../src/api_table.json').find(a=>a.name===`IDirect3DStateBlock9_${n}`).handler||`IDirect3DStateBlock9_${n}`} (local.get $b) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
     (func (export "create_depth") (param $d i32) (param $format i32) (param $out i32) (result i32)
       (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
@@ -481,6 +481,19 @@ const {Device:SoftwareDevice} = require('../lib/d3d9-software-backend');
     const code=alloc(tokens.length*4);new Uint32Array(memory.buffer,wa(code),tokens.length).set(tokens);
     assert.strictEqual(e.CreatePixelShader(device,code,out,0,0)>>>0,0x8876086c,'native COM rejects DP4 alias/destination and overlapping CMP pair masks');
   }
+  // D3D9-CREATE-DRAW-SHADER-AGREEMENT: with the software executor (0x800),
+  // CreatePixelShader also compiles the VM program the draw will use, so a
+  // shader the VM refuses fails here instead of latching the draw queue.
+  // Both ps_1_4 pairs below used to pass create and fail at draw.
+  assert.strictEqual(bridge.call(0x30017,0,0)&0x800,0x800,'create-time VM check is armed');
+  for(const tokens of [
+    [0xffff0104,1,0x800f0000,0xa0e40000,1,0x80010000,0xa0e40001,0x40000001,0x80080000,0xa0e40002,0xffff], // .r + .a pair
+    [0xffff0104,1,0x800f0001,0xa0e40000,1,0x800f0002,0xa0e40001,1,0x800f0003,0xa0e40002,1,0x800f0004,0xa0e40003,
+      5,0x80070000,0x80e40001,0x80e40002,0x40000002,0x80080000,0x80e40003,0x80e40004,0xffff] // grass.sdv: four temps across a pair
+  ]) {
+    const code=alloc(tokens.length*4);new Uint32Array(memory.buffer,wa(code),tokens.length).set(tokens);
+    ok(e.CreatePixelShader(device,code,out,0,0),'ps_1_4 pair the VM compiles');
+  }
   new Float32Array(memory.buffer,wa(ps12Constants),8).set([.25,.5,.75,1,.1,.1,.1,.1]);
   ok(e.SetPixelShaderConstantF(device,0,ps12Constants,2,0),'DP4 constants');
   shader([0xffff0102,9,0x800f0000,0xa0e40000,0xa0e40001,0xffff],true);
@@ -577,6 +590,29 @@ const {Device:SoftwareDevice} = require('../lib/d3d9-software-backend');
   ok(e.SetRenderState(device,157,0,0,0),'restore unscaled points');
   ok(e.SetRenderState(device,154,0x3f800000,0,0),'restore point size1');
   ok(e.SetRenderState(device,8,3,0,0),'restore solid after POINT');
+  ok(e.clear_target(device,0,0,1,0xff000000,1),'point-list background');
+  ok(e.SetRenderState(device,22,3,0,0),'polygon cull state does not cull point lists');
+  ok(e.DrawPrimitiveUP(device,1,1,input,16),'one POINTLIST vertex through guest API');
+  ok(e.Present(device,0,0,0,0),'point-list Present');
+  assert.strictEqual(pixels[0],0xffff0000,'one point reaches canonical presented pixels');
+  assert.strictEqual([...pixels].filter(v=>v===0xffff0000).length,1,'one point produces one pixel');
+  const screenPoint=alloc(20);
+  new Float32Array(memory.buffer,wa(screenPoint),4).set([4,4,.5,1]);
+  e.guest_write32(screenPoint+16,0xff00ff00);
+  ok(e.SetVertexShader(device,0),'point-list fixed vertex stage');
+  ok(e.SetPixelShader(device,0),'point-list fixed pixel stage');
+  ok(e.SetRenderState(device,137,0),'point-list unlit diffuse');
+  ok(e.SetTexture(device,0,0),'point-list no texture');
+  ok(e.SetFVF(device,0x44),'point-list XYZRHW diffuse, stride20');
+  ok(e.clear_target(device,0,0,1,0xff000000,1),'screen point background');
+  ok(e.DrawPrimitiveUP(device,1,1,screenPoint,20),'fixed screen point through guest API');
+  ok(e.Present(device,0,0,0,0),'screen point Present');
+  assert.strictEqual(pixels[36],0xff00ff00,'fixed screen point preserves position and diffuse');
+  assert.strictEqual([...pixels].filter(v=>v===0xff00ff00).length,1,'fixed point emits once');
+  ok(e.SetFVF(device,0x42),'restore XYZ diffuse');
+  ok(e.SetVertexShader(device,survivingVS),'restore surviving vertex shader');
+  ok(e.SetPixelShader(device,survivingPS),'restore surviving pixel shader');
+  ok(e.SetRenderState(device,22,1,0,0),'restore cull after point list');
   const resetPP=alloc(64);new Uint8Array(memory.buffer,wa(resetPP),64).fill(0);
   const setResetPP=()=>[16,10,21,1,0,0,1,1,1,1,80,0,0,0x80000000].forEach((v,i)=>e.guest_write32(resetPP+i*4,v));
   setResetPP();ok(e.create_depth(device,80,out),'external default-pool Reset blocker');const blocker=e.guest_read32(out)>>>0;

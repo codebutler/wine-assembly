@@ -15,11 +15,10 @@
     (global.set $steps (i32.const 0)) (return)
   )
 
-  ;; _cexit() — cdecl, run CRT cleanup without terminating the process. The
-  ;; current atexit runner is exit-oriented, so keep this as a startup-safe
-  ;; cleanup acknowledgement until a returning terminator chain exists.
+  ;; _cexit() — cdecl, drain callbacks and return without host termination.
+  ;; Its return address remains on the stack until the returning chain finishes.
   (func $handle__cexit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $crt_cexit_run_next)
   )
 
   ;; 207: __getmainargs
@@ -283,27 +282,15 @@
       (then (call $guest_wcsncpy (local.get $dst) (local.get $src) (local.get $max)))
       (else (call $guest_strncpy (local.get $dst) (local.get $src) (local.get $max)))))
 
-  ;; Negative / zero / positive, optionally ASCII case-insensitive. A NULL
-  ;; string sorts before a non-NULL one, and two NULLs are equal.
+  ;; lstrcmp[i]: CompareString(LOCALE_USER_DEFAULT) order as -1/0/1, not a
+  ;; byte compare — "a" < "B" and "a" < "A". A NULL string sorts before a
+  ;; non-NULL one, and two NULLs are equal.
   (func $lstr_cmp (param $a i32) (param $b i32) (param $wide i32) (param $fold i32) (result i32)
-    (local $i i32) (local $step i32) (local $c1 i32) (local $c2 i32)
     (if (i32.or (i32.eqz (local.get $a)) (i32.eqz (local.get $b)))
       (then (return (i32.sub (i32.ne (local.get $a) (i32.const 0))
                              (i32.ne (local.get $b) (i32.const 0))))))
-    (local.set $step (select (i32.const 2) (i32.const 1) (local.get $wide)))
-    (block $done (loop $cmp
-      (local.set $c1 (call $gl_char (i32.add (local.get $a) (local.get $i)) (local.get $wide)))
-      (local.set $c2 (call $gl_char (i32.add (local.get $b) (local.get $i)) (local.get $wide)))
-      (if (local.get $fold)
-        (then
-          (local.set $c1 (call $tolower (local.get $c1)))
-          (local.set $c2 (call $tolower (local.get $c2)))))
-      (if (i32.ne (local.get $c1) (local.get $c2))
-        (then (return (i32.sub (local.get $c1) (local.get $c2)))))
-      (br_if $done (i32.eqz (local.get $c1)))
-      (local.set $i (i32.add (local.get $i) (local.get $step)))
-      (br $cmp)))
-    (i32.const 0))
+    (call $nls_compare (local.get $a) (i32.const -1) (local.get $b) (i32.const -1)
+      (local.get $wide) (i32.ne (local.get $fold) (i32.const 0))))
 
   ;; PathRemoveFileSpecA/W(pszPath) removes the final component in place and
   ;; returns TRUE only when the string actually changed.
@@ -415,6 +402,24 @@
       (i32.const 1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
+
+  ;; SHDeleteKey removes descendants too. A NULL/empty subkey clears the
+  ;; open key's contents; the host mode's bit 1 retains that key itself.
+  (func $handle_SHDeleteKeyA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_delete_key
+      (local.get $arg0)
+      (if (result i32) (local.get $arg1)
+        (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
+      (i32.const 2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  (func $handle_SHDeleteKeyW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_delete_key
+      (local.get $arg0)
+      (if (result i32) (local.get $arg1)
+        (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
+      (i32.const 3)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; RegDeleteValueA(hKey, lpValueName) — 2 args stdcall
   (func $handle_RegDeleteValueA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -544,6 +549,20 @@
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (i32.store offset=0 (global.get $reg_base) (call $heap_payload_size_unchecked (local.get $arg0)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+  )
+
+  ;; LocalHandle(pMem): LocalAlloc hands out fixed blocks whose handle is the
+  ;; pointer itself (LocalLock is the identity), so the handle of a live heap
+  ;; block is its own address. Anything the allocator does not recognise as a
+  ;; block boundary is ERROR_INVALID_HANDLE. Intel's ir41_32.dll calls it when
+  ;; a decompression stream ends.
+  (func $handle_LocalHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $heap_block_size_checked (local.get $arg0))
+      (then (i32.store offset=0 (global.get $reg_base) (local.get $arg0)))
+      (else
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
@@ -801,7 +820,7 @@
           (i32.or (global.get $code16) (local.get $win16_bridge))
           (local.get $partial))
       (then
-        (drop (call $host_gdi_intersect_clip_rect
+        (drop (call $gdi_native_intersect_clip_rect
           (local.get $hdc)
           (i32.load (local.get $wa))
           (i32.load offset=4 (local.get $wa))
@@ -1109,6 +1128,30 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
+  ;; __p___argv() / __p___argc() — cdecl, return &__argv and &__argc, the
+  ;; same arrays __getmainargs hands out (LithTech's lithtech.exe reads its
+  ;; -rez arguments this way). __argc already lives in the command-line block;
+  ;; __argv is a variable of its own, so a program that reassigns it does not
+  ;; rewrite the block.
+  (func $handle___p___argv (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eqz (global.get $fake_cmdline_addr))
+      (then (call $store_fake_cmdline)))
+    (if (i32.eqz (global.get $msvcrt_argv_ptr))
+      (then
+        (global.set $msvcrt_argv_ptr (call $heap_alloc (i32.const 4)))
+        (call $gs32 (global.get $msvcrt_argv_ptr)
+          (i32.add (global.get $fake_cmdline_addr) (i32.const 1024)))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_argv_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
+  )
+
+  (func $handle___p___argc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eqz (global.get $fake_cmdline_addr))
+      (then (call $store_fake_cmdline)))
+    (i32.store offset=0 (global.get $reg_base) (i32.add (global.get $fake_cmdline_addr) (i32.const 508)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
+  )
+
   ;; __p___initenv() — cdecl, returns &__initenv for the narrow CRT startup path.
   (func $handle___p___initenv (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle___p__environ
@@ -1200,23 +1243,60 @@
   )
 
   ;; 268: _purecall
+  ;; msvcrt's _purecall is _amsg_exit(_RT_PURECALL): R6025 and the process
+  ;; ends. It must not return into the caller -- that caller has just called
+  ;; through a NULL-ish vtable slot and would run on in a broken object.
   (func $handle__purecall (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $host_exit (i32.const 3))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
+    (global.set $eip (i32.const 0))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $steps (i32.const 0)) (return)
   )
 
-  ;; 269: _onexit(func) — cdecl; accept the shutdown registration.
-  ;; The emulator tears down the whole guest process at exit, so there is no
-  ;; process-global CRT state left for these callbacks to release. Returning
-  ;; the supplied function matches successful CRT registration.
+  ;; 269: _onexit(func) — cdecl; shares the CRT's LIFO atexit registry.
+  ;; Unlike atexit, return the function pointer on success and NULL on failure.
+  ;; Callback return values are ignored by the termination dispatcher.
   (func $handle__onexit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=0 (global.get $reg_base)
+      (select (local.get $arg0) (i32.const 0)
+        (i32.eqz (call $crt_atexit_register (local.get $arg0)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  ;; DLL CRTs own these malloc-family tables and walk them backwards at detach.
+  ;; end is one past the last callback, not the allocation's capacity. Publish
+  ;; relocated pointers only after realloc succeeds; leave the process queue alone.
+  (func $crt_dllonexit_register (param $fn i32) (param $pbegin i32) (param $pend i32) (result i32)
+    (local $begin_w i32) (local $end_w i32) (local $begin i32) (local $end i32)
+    (local $bytes i32) (local $table i32)
+    (if (i32.eqz (local.get $fn)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $pbegin)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $pend)) (then (return (i32.const 0))))
+    (local.set $begin_w (call $g2w (local.get $pbegin)))
+    (local.set $end_w (call $g2w (local.get $pend)))
+    (local.set $begin (i32.load (local.get $begin_w)))
+    (local.set $end (i32.load (local.get $end_w)))
+    ;; Defensive span checks, including allocator rounding/size overflow.
+    (if (i32.lt_u (local.get $end) (local.get $begin)) (then (return (i32.const 0))))
+    (local.set $bytes (i32.sub (local.get $end) (local.get $begin)))
+    (if (i32.and (local.get $bytes) (i32.const 3)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $bytes) (i32.const 0x7ffffff0)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $begin))
+      (then (if (local.get $end) (then (return (i32.const 0))))))
+    (local.set $table (call $heap_realloc (local.get $begin)
+      (i32.add (local.get $bytes) (i32.const 4)) (i32.const 0)))
+    (if (i32.eqz (local.get $table)) (then (return (i32.const 0))))
+    (call $gs32 (i32.add (local.get $table) (local.get $bytes)) (local.get $fn))
+    (i32.store (local.get $begin_w) (local.get $table))
+    (i32.store (local.get $end_w) (i32.add (local.get $table)
+      (i32.add (local.get $bytes) (i32.const 4))))
+    (local.get $fn))
+
   ;; 270: __dllonexit(func, begin, end) — cdecl; DLL-local counterpart.
   (func $handle___dllonexit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=0 (global.get $reg_base)
+      (call $crt_dllonexit_register (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
@@ -1286,11 +1366,7 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
-  ;; 272: _wcsicmp — cdecl, case-insensitive UTF-16 comparison
-  (func $handle__wcsicmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $guest_wcsicmp (local.get $arg0) (local.get $arg1)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-  )
+  ;; _wcsicmp lives with the other CRT overrides in 09a6-handlers-crt.wat.
 
   ;; 273: _wtoi — cdecl; wide string to int
   (func $handle__wtoi (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1346,11 +1422,7 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
-  ;; 277: wcslen — cdecl, length in UTF-16 code units
-  (func $handle_wcslen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $guest_wcslen (local.get $arg0)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-  )
+  ;; wcslen lives with the other CRT overrides in 09a6-handlers-crt.wat.
 
   ;; 278: memset(dest, ch, count) — cdecl
   (func $handle_memset (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

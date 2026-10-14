@@ -5,9 +5,7 @@
     (local $pe_off i32) (local $num_sections i32) (local $opt_hdr_size i32)
     (local $section_off i32) (local $i i32) (local $vaddr i32) (local $vsize i32)
     (local $raw_off i32) (local $raw_size i32) (local $import_rva i32)
-    (local $tls_rva i32) (local $tls_dir i32) (local $tls_start i32) (local $tls_end i32)
-    (local $tls_index_addr i32) (local $tls_index i32) (local $tls_data i32) (local $tls_data_wa i32)
-    (local $tls_raw_size i32) (local $tls_zero_size i32)
+    (local $tls_rva i32)
     (local $src i32) (local $dst i32) (local $characteristics i32)
     (local $mapped_size i32) (local $copy_size i32) (local $initialized_size i32)
 
@@ -24,6 +22,8 @@
     (local.set $opt_hdr_size (i32.load16_u (i32.add (local.get $pe_off) (i32.const 20))))
     (global.set $image_base (i32.load (i32.add (local.get $pe_off) (i32.const 52))))
     (global.set $entry_point (i32.add (global.get $image_base) (i32.load (i32.add (local.get $pe_off) (i32.const 40)))))
+    ;; A new process reuses thunk slots; old hook descriptors cannot survive.
+    (call $zero_memory (global.get $THUNK_PATCH_STATE) (global.get $THUNK_PATCH_STATE_SIZE))
     ;; Compute guest-space thunk zone bounds
     (global.set $thunk_guest_base (i32.add (i32.sub (global.get $THUNK_BASE) (global.get $GUEST_BASE)) (global.get $image_base)))
     (global.set $thunk_guest_end  (i32.add (i32.sub (global.get $THUNK_END)  (global.get $GUEST_BASE)) (global.get $image_base)))
@@ -32,9 +32,16 @@
     (local.set $tls_rva (i32.load (i32.add (local.get $pe_off) (i32.const 192))))
     ;; Resource directory RVA = data directory entry 2 (offset 136 in optional header)
     (global.set $rsrc_rva (i32.load (i32.add (local.get $pe_off) (i32.const 136))))
+    ;; Export directory = data directory entry 0 (offset 120). Usually zero; a
+    ;; game whose engine lives in the EXE and whose DLLs import back out of it
+    ;; needs this to resolve those imports.
+    (global.set $exe_export_rva (i32.load (i32.add (local.get $pe_off) (i32.const 120))))
 
     ;; Store SizeOfImage for DLL loader
     (global.set $exe_size_of_image (i32.load (i32.add (local.get $pe_off) (i32.const 80))))
+    ;; SizeOfStackReserve (optional header +72) sizes every thread stack the
+    ;; guest does not size itself; lib/thread-manager.js reads it.
+    (global.set $exe_stack_reserve (i32.load (i32.add (local.get $pe_off) (i32.const 96))))
     ;; Set heap to be above the image. Publishes to HEAP_SHARED so guest threads,
     ;; which are separate instances and get their own copy of every global, start
     ;; from the same process heap instead of a private replica of this cursor.
@@ -137,46 +144,54 @@
     ;; TIB+0x2c: ThreadLocalStoragePointer — point at our TLS slot array so that
     ;; apps doing direct FS:[0x2c][index*4] reads (bypassing TlsGetValue) see the
     ;; same values our TlsSetValue writes. Eagerly allocate the slot array.
-    (if (i32.eqz (global.get $tls_slots))
-      (then
-        (global.set $tls_slots (call $heap_alloc (i32.const 256)))
-        (call $zero_memory (call $g2w (global.get $tls_slots)) (i32.const 256))))
+    (if (i32.eqz (call $tls_ensure_slots))
+      (then (global.set $last_error (i32.const 8)) (return (i32.const 0))))
     (call $gs32 (i32.add (global.get $fs_base) (i32.const 0x2c)) (global.get $tls_slots))
+    ;; TIB+0x30: on Win9x this is the process database, a pointer into the
+    ;; shared arena above 0x80000000; NT keeps its PEB (below 2 GB) here. Code
+    ;; tells the two apart by the sign bit alone (Moorhuhn 3's packer takes
+    ;; its Win9x path on `test eax,eax / js`), so the high bit is the ABI.
+    (call $gs32 (i32.add (global.get $fs_base) (i32.const 0x30)) (global.get $WIN9X_PROCESS_DB))
     ;; Static PE TLS: assign one slot, copy the template, and expose it through
     ;; FS:[0x2c][slot]. Delphi/VCL reads this vector directly instead of always
     ;; calling TlsGetValue.
     (if (i32.ne (local.get $tls_rva) (i32.const 0))
-      (then
-        (local.set $tls_dir (i32.add (global.get $image_base) (local.get $tls_rva)))
-        (local.set $tls_start (call $gl32 (local.get $tls_dir)))
-        (local.set $tls_end (call $gl32 (i32.add (local.get $tls_dir) (i32.const 4))))
-        (local.set $tls_index_addr (call $gl32 (i32.add (local.get $tls_dir) (i32.const 8))))
-        (local.set $tls_raw_size (i32.sub (local.get $tls_end) (local.get $tls_start)))
-        (local.set $tls_zero_size (call $gl32 (i32.add (local.get $tls_dir) (i32.const 16))))
-        (if (i32.ne
-              (i32.or (local.get $tls_raw_size) (local.get $tls_zero_size))
-              (i32.const 0))
-          (then
-            (local.set $tls_index (call $tls_reserve))
-            (if (i32.ne (local.get $tls_index) (i32.const -1))
-              (then
-                (if (local.get $tls_index_addr)
-                  (then (call $gs32 (local.get $tls_index_addr) (local.get $tls_index))))
-                (local.set $tls_data
-                  (call $heap_alloc (i32.add (local.get $tls_raw_size) (local.get $tls_zero_size))))
-                (if (local.get $tls_data)
-                  (then
-                    (local.set $tls_data_wa (call $g2w (local.get $tls_data))) (call $memcpy
-                      (local.get $tls_data_wa)
-                      (call $g2w (local.get $tls_start))
-                      (local.get $tls_raw_size))
-                    (call $zero_memory
-                      (i32.add (local.get $tls_data_wa) (local.get $tls_raw_size))
-                      (local.get $tls_zero_size))
-                    (call $gs32
-                      (i32.add (global.get $tls_slots) (i32.shl (local.get $tls_index) (i32.const 2)))
-                      (local.get $tls_data))))))))))
+      (then (call $static_tls_attach (i32.add (global.get $image_base) (local.get $tls_rva)))))
     (global.get $entry_point))
+
+  ;; One module's static TLS (IMAGE_TLS_DIRECTORY at the guest VA $tls_dir,
+  ;; already relocated): reserve a slot, write it to AddressOfIndex, and point
+  ;; this thread's FS:[0x2c][slot] at a copy of the template plus zero fill.
+  ;; Shared by the EXE and every DLL: a DLL with a .tls section that never got
+  ;; its index read slot 0 -- MSVCRT's own TlsAlloc data -- as its block
+  ;; (Serious Sam's Engine.dll stream list).
+  (func $static_tls_attach (param $tls_dir i32)
+    (drop (call $static_tls_attach_owned (local.get $tls_dir))))
+  (func $static_tls_attach_owned (param $tls_dir i32) (result i32)
+    (local $tls_start i32) (local $tls_end i32) (local $tls_index_addr i32) (local $tls_index i32)
+    (local $tls_data i32) (local $tls_data_wa i32) (local $tls_raw_size i32) (local $tls_zero_size i32)
+    (local.set $tls_start (call $gl32 (local.get $tls_dir)))
+    (local.set $tls_end (call $gl32 (i32.add (local.get $tls_dir) (i32.const 4))))
+    (local.set $tls_index_addr (call $gl32 (i32.add (local.get $tls_dir) (i32.const 8))))
+    (local.set $tls_raw_size (i32.sub (local.get $tls_end) (local.get $tls_start)))
+    (local.set $tls_zero_size (call $gl32 (i32.add (local.get $tls_dir) (i32.const 16))))
+    (if (i32.eqz (i32.or (local.get $tls_raw_size) (local.get $tls_zero_size))) (then (return (i32.const 0))))
+    (local.set $tls_index (call $tls_reserve))
+    (if (i32.eq (local.get $tls_index) (i32.const -1)) (then (return (i32.const 0))))
+    (if (local.get $tls_index_addr)
+      (then (call $gs32 (local.get $tls_index_addr) (local.get $tls_index))))
+    (local.set $tls_data
+      (call $heap_alloc (i32.add (local.get $tls_raw_size) (local.get $tls_zero_size))))
+    (if (i32.eqz (local.get $tls_data)) (then
+      (drop (call $tls_release_index (local.get $tls_index)))
+      (return (i32.const 0))))
+    (local.set $tls_data_wa (call $g2w (local.get $tls_data)))
+    (call $memcpy (local.get $tls_data_wa) (call $g2w (local.get $tls_start)) (local.get $tls_raw_size))
+    (call $zero_memory (i32.add (local.get $tls_data_wa) (local.get $tls_raw_size)) (local.get $tls_zero_size))
+    (call $gs32
+      (i32.add (global.get $tls_slots) (i32.shl (local.get $tls_index) (i32.const 2)))
+      (local.get $tls_data))
+    (i32.add (local.get $tls_index) (i32.const 1)))
 
   ;; ============================================================
   ;; IMPORT TABLE
@@ -451,6 +466,11 @@
     (i32.store (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
       (i32.const 0xCACA002E))
     (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+
+    ;; Reinitialize the DLGPROC epilog for this PE's thunk arena. Worker
+    ;; instances restore the same address through sync_thunk_state.
+    (global.set $dialog_proc_ret_thunk
+      (call $com_cont_thunk (i32.const 0xCACA003C)))
 
     ;; SetFocus WM_SETFOCUS return continuation (marker 0xCACA002A).
     (global.set $setfocus_ret_thunk (i32.add

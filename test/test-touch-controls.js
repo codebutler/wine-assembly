@@ -66,6 +66,10 @@ function makeEl(tag) {
       for (const fn of (el._handlers.get(type) || []).slice()) fn(event);
     },
     get firstChild() { return el.children[0] || null; },
+    contains(node) {
+      for (let n = node; n; n = n.parentNode) if (n === el) return true;
+      return false;
+    },
   };
   return el;
 }
@@ -82,7 +86,10 @@ global.document = {
   addEventListener: (...args) => body.addEventListener(...args),
   removeEventListener: (...args) => body.removeEventListener(...args),
 };
-global.window = Object.assign(makeEl('window'), { innerHeight: 844 });
+// The minimum key hold defers releases on a timer. The cases below assert
+// message order synchronously, so they run with it off; the last case turns
+// it back on and checks the hold itself.
+global.window = Object.assign(makeEl('window'), { innerHeight: 844, __waMinKeyHoldMs: 0 });
 global.location = { search: '' };
 
 const touchEvent = (changed, active = changed) => ({
@@ -198,6 +205,28 @@ assert.deepStrictEqual(keys.slice(6), [['down', VK_DOWN], ['up', VK_DOWN]],
 keys.length = 0;
 dpad.dispatch('touchend', touchEvent([touch(999, 0, 0)]));
 assert.deepStrictEqual(keys, [], 'an unknown touch identifier changes nothing');
+
+// A touch whose end never reached its widget -- the canvas's window-capture
+// handler stopped it, or iOS never sent it -- is let go of by the next touch
+// event anywhere, once the browser stops listing it in e.touches. A touch
+// that is ending in that same event belongs to its widget and is untouched.
+keys.length = 0;
+dpad.dispatch('touchstart', touchEvent([touch(60, 166 + 60, 366)]));
+btnZ.dispatch('touchstart', touchEvent([touch(61, 0, 0)]));
+assert.deepStrictEqual(keys, [['down', VK_RIGHT], ['down', 0x5A]],
+  'pad and button held by two fingers');
+// The button hears its end at window capture (its own listener, not the
+// reconciler); the pad, still listed in e.touches, keeps its key.
+window.dispatch('touchend', touchEvent([touch(61, 0, 0)], [touch(60, 166 + 60, 366)]));
+btnZ.dispatch('touchend', touchEvent([touch(61, 0, 0)], [touch(60, 166 + 60, 366)]));
+assert.deepStrictEqual(keys.slice(2), [['up', 0x5A]],
+  'the ending touch is released once by its widget and the listed one is kept');
+// The pad's touchend was swallowed; the next event no longer lists it.
+window.dispatch('touchstart', touchEvent([touch(62, 0, 0)]));
+assert.deepStrictEqual(keys.slice(3), [['up', VK_RIGHT]],
+  'a touch the browser no longer lists releases the key it held');
+dpad.dispatch('touchend', touchEvent([touch(60, 166 + 60, 366)], []));
+assert.deepStrictEqual(keys.slice(4), [], 'a late end for a reconciled touch is a no-op');
 
 // 5. Teardown: every held key goes up and every listener comes off.
 keys.length = 0;
@@ -830,14 +859,21 @@ TouchControls.destroy();
   const { APPS } = require('../lib/apps');
   const actionApps = [
     'blobby_volley', 'cave_story', 'generally', 'little_fighter_2',
-    'icy_tower', 'elasto_mania', 'atomic_bomberman_demo', 'jazz2_demo',
+    'icy_tower', 'elasto_mania', 'atomic_bomberman_june_demo', 'jazz2_demo',
     'quake2_demo', 'gta2_demo', 'halflife_uplink', 'deus_ex_demo', 'abedemo',
+    // USER-MOBILE-CONTROLS-ALL-WORKING-20261011: keyboard, twin-stick and
+    // pinball games with reviewed gameplay, checked in phone emulation.
+    'wep16_ski', 'tworld', 'liquid_war', 'tetrinet', 'rodent2000',
+    'tomb_raider_2_demo', 'tomb_raider_3_demo', 'crimsonland', 'pinball_plus95',
+    'wep16_tetris', 'wep16_chips', 'wep16_rattler',
   ];
+  // A mouseButton is a DOM button number: 2 is the right button.
+  assert.strictEqual(APPS.crimsonland.touchControls.buttons[1].mouseButton, 2, 'Reload is the right button');
   for (const id of actionApps) {
     assert(APPS[id] && APPS[id].touchControls,
       `${id} should expose phone gameplay controls`);
   }
-  for (const id of ['dxball']) {
+  for (const id of ['dxball', 'jardinains']) {
     assert.strictEqual(APPS[id].mobileTouch, 'direct', 'canvas remains an absolute mouse alongside the joystick');
     assert.strictEqual(APPS[id].touchControls.mouseJoystick.maxSpeed, 900);
     assert.strictEqual(APPS[id].touchControls.mouseJoystick.responseExponent, 3);
@@ -879,10 +915,14 @@ TouchControls.destroy();
         `player ${i + 1}'s pad must send player ${i + 1}'s left/right and nothing else`);
       assert(layouts[i].buttons[0].vk.includes(keys[2]),
         `player ${i + 1}'s Jump button must send player ${i + 1}'s jump key`);
-      assert.strictEqual(dat.control[i], CONTROL.keyboard,
-        `player ${i + 1} must be on the keyboard: the mouse never reaches a `
-        + 'network client, and COMPUTER leaves the AI driving its blob');
     }
+    // Player one is the person; player two is the AI, so a solo launch is a
+    // game against ADAM. A network match overwrites both CONTROL dwords for
+    // its duration (the local player gets the network screen's CONTROL, the
+    // remote one 0x32) -- docs/re-notes/blobby-volley.md. Never the mouse:
+    // it cannot reach a network client.
+    assert.deepStrictEqual(dat.control, [CONTROL.keyboard, CONTROL.computer],
+      'shipped settings.dat: player one keyboard, player two computer');
     // The menu keys ride along in both layouts, so none may be a player key.
     const playerKeys = [...dat.keys1, ...dat.keys2];
     for (const vk of [0x26, 0x28, 0x0d]) {
@@ -897,6 +937,16 @@ TouchControls.destroy();
     'Half-Life should combine its WASD pad with deterministic trackpad look');
   assert.strictEqual(APPS.deus_ex_demo.mobileTouch, 'trackpad',
     'Deus Ex should combine its WASD pad with deterministic trackpad look');
+  for (const id of ['moorhuhn', 'moorhuhn_2', 'moorhuhn_winter', 'moorhuhn_3'])
+    assert.strictEqual(APPS[id].mobileTouch, 'trackpad',
+      `${id} aims a crosshair; a finger must move it without shooting`);
+  // Moorhuhn 2 integrates DirectInput deltas into its own crosshair: the
+  // host pointer can only disagree with it, and reload is the right button.
+  assert.strictEqual(APPS.moorhuhn_2.hideHostCursor, true);
+  // Reload is a zone over the magazine the game draws bottom-right.
+  assert.deepStrictEqual(APPS.moorhuhn_2.touchControls.zones.map(z => z.mouseButton), [2]);
+  assert.ok(APPS.moorhuhn_2.touchControls.zones[0].rect.x > 0.5 &&
+    APPS.moorhuhn_2.touchControls.zones[0].rect.y > 0.5, 'reload zone sits over the shells');
 }
 
 // Pinball zones follow the table, not the score panel, in Normal view.
@@ -1463,9 +1513,38 @@ console.log('PASS  touch controls hold, pair and release guest keys');
   area = TouchControls.getBoardArea();
   assert.strictEqual(area.x * 844, 204, 'landscape rails already clear the notch');
   assert.strictEqual(area.h, 1);
+
+  // The right column stacks bottom-up: 18px padding, the keyboard pill's row
+  // (40), then each button row, 12px apart. quake2_demo's Jump/Crouch + Fire
+  // is 18+40+12+58+12+76 = 216px, and a shooter's third row (Use/Weapon) makes
+  // it 286px. The fixed 204px portrait band left the top row on the bottom of
+  // the picture -- Daikatana's and Kingpin's HUD at 390x844.
+  TouchControls.el._rect = { left: 0, top: 0, width: 390, height: 844 };
+  global.window.innerWidth = 390;
+  global.window.visualViewport.height = 844;
+  global.window.getComputedStyle = () => ({ getPropertyValue: () => '0px' });
+  const pad = { pos: 'bl', style: 'cross', hold: true, vks: { up: 0x26, down: 0x28, left: 0x41, right: 0x44 } };
+  const twoRows = [
+    { vk: 0x43, label: 'Crouch', pos: 'br' }, { vk: 0x20, label: 'Jump', pos: 'br' },
+    { mouseButton: 0, label: 'Fire', pos: 'br', row: 1, width: 152, height: 76 },
+  ];
+  TouchControls.setLayout({ screenAnchored: true, dpad: pad, buttons: twoRows });
+  area = TouchControls.getBoardArea();
+  assert.strictEqual(Math.round((area.y + area.h) * 844), 844 - 216,
+    'the band covers the whole two-row column, pill row included (quake2_demo)');
+  TouchControls.setLayout({ screenAnchored: true, dpad: pad, buttons: [...twoRows,
+    { vk: 0x0D, label: 'Use', pos: 'br', row: 2 }, { vk: 0x51, label: 'Weapon', pos: 'br', row: 2 }] });
+  area = TouchControls.getBoardArea();
+  assert.strictEqual(Math.round((area.y + area.h) * 844), 844 - 286,
+    'a third button row reserves its full height, so the picture ends above it');
+  // A pad alone (186px with padding) still gets the 204px minimum.
+  TouchControls.setLayout({ screenAnchored: true, dpad: pad, buttons: [] });
+  area = TouchControls.getBoardArea();
+  assert.strictEqual(Math.round((area.y + area.h) * 844), 844 - 204,
+    'a short stack keeps the 204px minimum band');
   TouchControls.destroy();
   global.window = previous;
-  console.log('PASS board area: status/notch insets, no double inset, keyboard freeze, landscape rails');
+  console.log('PASS board area: status/notch insets, no double inset, keyboard freeze, landscape rails, tall clusters');
 }
 
 // Landscape gutter centring. A portrait-shaped game letterboxed on a landscape
@@ -1628,3 +1707,95 @@ console.log('PASS  touch controls hold, pair and release guest keys');
     'a dialog or menu restores the complete native window');
   console.log('PASS Rodent phone Fit preserves the HUD and full portrait window');
 }
+
+// The page's scroll-collapse gutter sits above the overlay across the top of
+// the screen; the overlay tells it how far its top corners reach so a tap on
+// Esc/Enter lands on the button, not the gutter.
+{
+  const props = {};
+  global.document.documentElement = { style: { setProperty: (k, v) => { props[k] = v; } } };
+  const previousWidth = global.window.innerWidth;
+  global.window.innerWidth = 844;
+  TouchControls.destroy();
+  TouchControls.install({ document: global.document, renderer: { handleKeyDown() {}, handleKeyUp() {} } });
+  TouchControls.setLayout({ buttons: [
+    { vk: 0x1B, label: 'Esc', pos: 'tl', hold: false },
+    { vk: 0x0D, label: 'Enter', pos: 'tl', hold: false },
+    { vk: 0x71, label: 'F2', pos: 'tr' },
+    { vk: 0x5A, label: 'Z', pos: 'bl' },
+  ] });
+  const all = [];
+  (function walk(node) { for (const child of node.children) { all.push(child); walk(child); } })(TouchControls.el);
+  const btn = label => all.find(el => el.className === 'tc-btn' && el.textContent === label);
+  btn('Esc')._rect = { left: 8, top: 8, right: 72, bottom: 64, width: 64, height: 56 };
+  btn('Enter')._rect = { left: 80, top: 8, right: 153, bottom: 64, width: 73, height: 56 };
+  btn('F2')._rect = { left: 700, top: 8, right: 760, bottom: 64, width: 60, height: 56 };
+  btn('Z')._rect = { left: 8, top: 300, right: 80, bottom: 372, width: 72, height: 72 };
+  TouchControls.layoutZones();
+  assert.strictEqual(props['--tc-top-left-reserve'], '157px',
+    'the gutter starts right of the last top-left button (Enter ends at 153, +4)');
+  assert.strictEqual(props['--tc-top-right-reserve'], '148px',
+    'and ends left of the top-right button (844 - 700, +4); bottom corners reserve nothing');
+  TouchControls.destroy();
+  assert.strictEqual(props['--tc-top-left-reserve'], '0px', 'a torn-down overlay releases the top band');
+  assert.strictEqual(props['--tc-top-right-reserve'], '0px', 'on both sides');
+  delete global.document.documentElement;
+  global.window.innerWidth = previousWidth;
+  console.log('PASS the scroll-collapse gutter is told to clear the top-corner buttons');
+}
+
+// A tap is held long enough for a polling game to see it. Dethkarz reads
+// Enter through GetDeviceState and ignored overlay taps whose keydown and
+// keyup came in one JS turn; it advanced on 300 ms holds (WebKit, Threads).
+(async () => {
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const seen = [];
+  TouchControls.destroy();
+  TouchControls.install({ document: global.document, renderer: {
+    handleKeyDown: vk => seen.push(['down', vk]),
+    handleKeyUp: vk => seen.push(['up', vk]),
+  } });
+  TouchControls.setLayout(LAYOUT);
+  const all = [];
+  (function walk(node) { for (const child of node.children) { all.push(child); walk(child); } })(TouchControls.el);
+  const tap = all.find(el => el.className === 'tc-btn' && el.textContent === 'F2');
+  const hold = all.find(el => el.className === 'tc-btn' && el.textContent === 'Z');
+  global.window.__waMinKeyHoldMs = 60;
+  try {
+    tap.dispatch('touchstart', touchEvent([touch(900, 0, 0)]));
+    tap.dispatch('touchend', touchEvent([touch(900, 0, 0)]));
+    assert.deepStrictEqual(seen, [['down', 0x71]], 'a tap-mode key is still down after its touch ends');
+    await sleep(25);
+    assert.deepStrictEqual(seen, [['down', 0x71]], 'and still down inside the minimum hold');
+    await sleep(70);
+    assert.deepStrictEqual(seen, [['down', 0x71], ['up', 0x71]], 'it comes up once the minimum hold has passed');
+
+    seen.length = 0;
+    tap.dispatch('touchstart', touchEvent([touch(901, 0, 0)]));
+    tap.dispatch('touchstart', touchEvent([touch(902, 0, 0)]));
+    assert.deepStrictEqual(seen, [['down', 0x71], ['up', 0x71], ['down', 0x71]],
+      'a second press delivers the pending release first, keeping down/up/down');
+    await sleep(90);
+    assert.deepStrictEqual(seen.length, 4, 'the second press is released after its own hold');
+
+    seen.length = 0;
+    hold.dispatch('touchstart', touchEvent([touch(903, 0, 0)]));
+    await sleep(80);
+    hold.dispatch('touchend', touchEvent([touch(903, 0, 0)]));
+    assert.deepStrictEqual(seen, [['down', 0x5A], ['up', 0x5A]],
+      'a press already longer than the hold is released at once');
+
+    seen.length = 0;
+    hold.dispatch('touchstart', touchEvent([touch(904, 0, 0)]));
+    hold.dispatch('touchend', touchEvent([touch(904, 0, 0)]));
+    TouchControls.releaseAll();
+    assert.deepStrictEqual(seen, [['down', 0x5A], ['up', 0x5A]],
+      'releaseAll delivers a deferred release now, so no key outlives the layout');
+    await sleep(90);
+    assert.strictEqual(seen.length, 2, 'and its timer does not release the key a second time');
+  } finally {
+    global.window.__waMinKeyHoldMs = 0;
+    TouchControls.destroy();
+  }
+  console.log('PASS a touch key stays down for the minimum hold');
+})().catch(e => { console.error(e); process.exit(1); });

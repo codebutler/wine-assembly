@@ -52,6 +52,7 @@
   {
     "id": 7,
     "name": "Arc",
+    "test_call": true,
     "nargs": 9,
     "convention": "stdcall",
     "hash": 2633717115
@@ -59,6 +60,7 @@
   {
     "id": 8,
     "name": "ArcTo",
+    "test_call": true,
     "nargs": 9,
     "convention": "stdcall",
     "hash": 1661709782
@@ -87,6 +89,7 @@
   {
     "id": 12,
     "name": "BitBlt",
+    "test_call": true,
     "nargs": 9,
     "convention": "stdcall",
     "hash": 712574158,
@@ -279,6 +282,7 @@
     "id": 32,
     "name": "CloseHandle",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4206493797
   },
@@ -466,6 +470,7 @@
   {
     "id": 55,
     "name": "CreateDCA",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 913473419
@@ -473,6 +478,7 @@
   {
     "id": 56,
     "name": "CreateDCW",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 1282581037
@@ -488,6 +494,7 @@
   {
     "id": 58,
     "name": "CreateDIBSection",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 1775273563,
@@ -523,6 +530,7 @@
   {
     "id": 59,
     "name": "CreateDIBitmap",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 1889378205,
@@ -704,6 +712,7 @@
   {
     "id": 73,
     "name": "CreateFontW",
+    "test_call": true,
     "nargs": 14,
     "convention": "stdcall",
     "hash": 4048576717
@@ -840,6 +849,7 @@
     "id": 84,
     "name": "CreatePipe",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1980612961
   },
@@ -1429,6 +1439,7 @@
   {
     "id": 149,
     "name": "ExtTextOutW",
+    "test_call": true,
     "nargs": 8,
     "convention": "stdcall",
     "hash": 2195762886
@@ -1756,6 +1767,7 @@
   {
     "id": 188,
     "name": "GetClassInfoW",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 1625874786
@@ -3192,6 +3204,7 @@
   {
     "id": 350,
     "name": "GetVolumeInformationA",
+    "test_call": true,
     "nargs": 8,
     "convention": "stdcall",
     "hash": 3336373344
@@ -3199,6 +3212,7 @@
   {
     "id": 351,
     "name": "GetVolumeInformationW",
+    "test_call": true,
     "nargs": 8,
     "convention": "stdcall",
     "hash": 3705480962
@@ -3921,6 +3935,7 @@
   {
     "id": 439,
     "name": "LoadImageA",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 2831074045
@@ -4201,6 +4216,7 @@
   {
     "id": 468,
     "name": "MoveToEx",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 3465295632
@@ -4379,6 +4395,7 @@
   {
     "id": 486,
     "name": "PatBlt",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 221597160,
@@ -4473,6 +4490,7 @@
     "id": 492,
     "name": "PeekNamedPipe",
     "nargs": 6,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 826275607
   },
@@ -4685,6 +4703,7 @@
     "id": 516,
     "name": "ReadFile",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1425852739
   },
@@ -5062,6 +5081,7 @@
   {
     "id": 561,
     "name": "RoundRect",
+    "test_call": true,
     "nargs": 7,
     "convention": "stdcall",
     "hash": 2710615405
@@ -5118,7 +5138,7 @@
   {
     "id": 569,
     "name": "SHRegGetUSValueA",
-    "nargs": 6,
+    "nargs": 8,
     "convention": "stdcall",
     "hash": 958162268
   },
@@ -5264,6 +5284,7 @@
   {
     "id": 581,
     "name": "SelectPalette",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3979802408
@@ -5528,6 +5549,7 @@
   {
     "id": 609,
     "name": "SetDIBitsToDevice",
+    "test_call": true,
     "nargs": 12,
     "convention": "stdcall",
     "hash": 2575315803
@@ -5666,6 +5688,7 @@
   {
     "id": 625,
     "name": "SetLastError",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 568184203
@@ -6164,6 +6187,7 @@
   {
     "id": 679,
     "name": "StartDocA",
+    "test_call": true,
     "nargs": 2,
     "convention": "stdcall",
     "hash": 1324418878
@@ -6200,6 +6224,7 @@
   {
     "id": 684,
     "name": "StretchBlt",
+    "test_call": true,
     "nargs": 11,
     "convention": "stdcall",
     "hash": 3201689656
@@ -6256,6 +6281,7 @@
   {
     "id": 692,
     "name": "TabbedTextOutA",
+    "test_call": true,
     "nargs": 8,
     "convention": "stdcall",
     "hash": 3430445091
@@ -6263,6 +6289,7 @@
   {
     "id": 693,
     "name": "TabbedTextOutW",
+    "test_call": true,
     "nargs": 8,
     "convention": "stdcall",
     "hash": 3262668901
@@ -6347,6 +6374,7 @@
   {
     "id": 698,
     "name": "TlsAlloc",
+    "test_call": true,
     "nargs": 0,
     "convention": "stdcall",
     "hash": 1400863067
@@ -6354,6 +6382,7 @@
   {
     "id": 699,
     "name": "TlsFree",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 405434144
@@ -6361,6 +6390,7 @@
   {
     "id": 700,
     "name": "TlsGetValue",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3436724359
@@ -6368,6 +6398,7 @@
   {
     "id": 701,
     "name": "TlsSetValue",
+    "test_call": true,
     "nargs": 2,
     "convention": "stdcall",
     "hash": 2114826995
@@ -6550,6 +6581,7 @@
   {
     "id": 726,
     "name": "WinHelpA",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 2210761837
@@ -6557,6 +6589,7 @@
   {
     "id": 727,
     "name": "WinHelpW",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 1841654219
@@ -6628,6 +6661,7 @@
     "id": 737,
     "name": "WriteFile",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2131215434
   },
@@ -7702,6 +7736,7 @@
   {
     "id": 867,
     "name": "SHGetFileInfoW",
+    "test_call": true,
     "nargs": 5,
     "convention": "stdcall",
     "hash": 998752965
@@ -8123,6 +8158,7 @@
   {
     "id": 925,
     "name": "WSAGetLastError",
+    "test_call": true,
     "nargs": 0,
     "convention": "stdcall",
     "hash": 3753760860,
@@ -8131,6 +8167,7 @@
   {
     "id": 926,
     "name": "socket",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2417129068,
@@ -8153,6 +8190,7 @@
   {
     "id": 927,
     "name": "closesocket",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 109265666,
@@ -8167,6 +8205,7 @@
   {
     "id": 928,
     "name": "connect",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2866859257,
@@ -8189,6 +8228,7 @@
   {
     "id": 929,
     "name": "send",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 1919010991,
@@ -8215,6 +8255,7 @@
   {
     "id": 930,
     "name": "recv",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 3974385709,
@@ -8241,6 +8282,7 @@
   {
     "id": 931,
     "name": "gethostbyname",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 695126147,
@@ -8255,6 +8297,7 @@
   {
     "id": 932,
     "name": "htons",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2986200853,
@@ -8269,6 +8312,7 @@
   {
     "id": 933,
     "name": "inet_addr",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3427581171,
@@ -8283,6 +8327,7 @@
   {
     "id": 934,
     "name": "select",
+    "test_call": true,
     "nargs": 5,
     "convention": "stdcall",
     "hash": 297952813,
@@ -8313,6 +8358,7 @@
   {
     "id": 935,
     "name": "setsockopt",
+    "test_call": true,
     "nargs": 5,
     "convention": "stdcall",
     "hash": 910428104,
@@ -8343,6 +8389,7 @@
   {
     "id": 936,
     "name": "ioctlsocket",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2151917855,
@@ -8447,6 +8494,7 @@
   {
     "id": 949,
     "name": "ExtTextOutA",
+    "test_call": true,
     "nargs": 8,
     "convention": "stdcall",
     "hash": 2497760028,
@@ -9245,7 +9293,27 @@
     "name": "IDirectSound_CreateSoundBuffer",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 383371466
+    "hash": 383371466,
+    "args": [
+      {
+        "name": "this",
+        "type": "HANDLE"
+      },
+      {
+        "name": "desc",
+        "type": "LPDSBUFFERDESC"
+      },
+      {
+        "name": "ppBuffer",
+        "type": "LPVOIDPTR",
+        "out": true
+      },
+      {
+        "name": "outer",
+        "type": "HANDLE"
+      }
+    ],
+    "ret": "HRESULT"
   },
   {
     "id": 1048,
@@ -9530,7 +9598,7 @@
   {
     "id": 1083,
     "name": "IDirectInput_Initialize",
-    "nargs": 4,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 3944384218
   },
@@ -9808,14 +9876,16 @@
     "name": "IDirect3D_AddRef",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 4273929347
+    "hash": 4273929347,
+    "handler": "dx_com_addref"
   },
   {
     "id": 1118,
     "name": "IDirect3D_Release",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 1501242244
+    "hash": 1501242244,
+    "handler": "dx_com_release_basic"
   },
   {
     "id": 1119,
@@ -9865,6 +9935,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 3075881755,
+    "handler": "IDirect3D_QueryInterface",
     "args": [
       {
         "name": "this",
@@ -9887,14 +9958,16 @@
     "name": "IDirect3D3_AddRef",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 3084695000
+    "hash": 3084695000,
+    "handler": "dx_com_addref"
   },
   {
     "id": 1127,
     "name": "IDirect3D3_Release",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 1347481985
+    "hash": 1347481985,
+    "handler": "dx_com_release_basic"
   },
   {
     "id": 1128,
@@ -10247,7 +10320,8 @@
     "name": "IDirect3DDevice3_SetTransform",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 4265567830
+    "hash": 4265567830,
+    "handler": "IDirect3DDevice2_SetTransform"
   },
   {
     "id": 1172,
@@ -10367,6 +10441,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 3101062033,
+    "handler": "IDirect3DViewport_QueryInterface",
     "args": [
       {
         "name": "this",
@@ -10590,6 +10665,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 635542,
+    "handler": "IDirect3DMaterial_QueryInterface",
     "args": [
       {
         "name": "this",
@@ -10621,7 +10697,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 1932170706,
-    "handler": "dx_com_release_basic"
+    "handler": "IDirect3DMaterial_Release"
   },
   {
     "id": 1218,
@@ -10802,6 +10878,7 @@
   {
     "id": 1240,
     "name": "OpenMutexA",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 4094163651
@@ -10809,6 +10886,7 @@
   {
     "id": 1241,
     "name": "CreateMutexA",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 997118615
@@ -10867,7 +10945,10 @@
     "name": "SetMessageQueue",
     "nargs": 1,
     "test_call": true,
-    "stub": { "pop": 8, "ret": 1 },
+    "stub": {
+      "pop": 8,
+      "ret": 1
+    },
     "convention": "stdcall",
     "hash": 156967389
   },
@@ -11084,6 +11165,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 2418560322,
+    "handler": "IDirect3D_QueryInterface",
     "args": [
       {
         "name": "this",
@@ -11165,6 +11247,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 3231089519,
+    "handler": "IDirect3D_QueryInterface",
     "args": [
       {
         "name": "this",
@@ -11224,7 +11307,8 @@
     "name": "IDirect3D7_EnumZBufferFormats",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 577012621
+    "hash": 577012621,
+    "handler": "IDirect3D3_EnumZBufferFormats"
   },
   {
     "id": 1291,
@@ -11353,7 +11437,8 @@
     "name": "IDirect3DDevice_EnumTextureFormats",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 2545828129
+    "hash": 2545828129,
+    "handler": "IDirect3DDevice2_EnumTextureFormats"
   },
   {
     "id": 1307,
@@ -11702,7 +11787,8 @@
     "name": "IDirect3DDevice7_EnumTextureFormats",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 2131998094
+    "hash": 2131998094,
+    "handler": "IDirect3DDevice3_EnumTextureFormats"
   },
   {
     "id": 1352,
@@ -12151,6 +12237,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 3250248736,
+    "handler": "IDirect3DViewport_QueryInterface",
     "args": [
       {
         "name": "this",
@@ -12181,7 +12268,8 @@
     "name": "IDirect3DViewport2_Release",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 900370660
+    "hash": 900370660,
+    "handler": "IDirect3DViewport_Release"
   },
   {
     "id": 1415,
@@ -12324,8 +12412,7 @@
     "name": "IDirect3DMaterial_Release",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 1420259853,
-    "handler": "dx_com_release_basic"
+    "hash": 1420259853
   },
   {
     "id": 1433,
@@ -12375,6 +12462,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 2408145839,
+    "handler": "IDirect3DMaterial_QueryInterface",
     "args": [
       {
         "name": "this",
@@ -12406,7 +12494,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 892185061,
-    "handler": "dx_com_release_basic"
+    "handler": "IDirect3DMaterial_Release"
   },
   {
     "id": 1442,
@@ -12625,14 +12713,16 @@
     "name": "IDirect3DVertexBuffer7_Release",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 1541311869
+    "hash": 1541311869,
+    "handler": "IDirect3DVertexBuffer_Release"
   },
   {
     "id": 1466,
     "name": "IDirect3DVertexBuffer7_Lock",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 3458090823
+    "hash": 3458090823,
+    "handler": "IDirect3DVertexBuffer_Lock"
   },
   {
     "id": 1467,
@@ -12646,14 +12736,16 @@
     "name": "IDirect3DVertexBuffer7_ProcessVertices",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 2177878198
+    "hash": 2177878198,
+    "handler": "IDirect3DVertexBuffer_ProcessVertices"
   },
   {
     "id": 1469,
     "name": "IDirect3DVertexBuffer7_GetVertexBufferDesc",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 3930517573
+    "hash": 3930517573,
+    "handler": "IDirect3DVertexBuffer_GetVertexBufferDesc"
   },
   {
     "id": 1470,
@@ -13078,8 +13170,7 @@
     "name": "mmioSeek",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 3500785251,
-    "handler": "_llseek"
+    "hash": 3500785251
   },
   {
     "id": 1523,
@@ -13177,6 +13268,7 @@
   {
     "id": 1534,
     "name": "IDirectPlay3_AddRef",
+    "handler": "dx_com_addref",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1511343625
@@ -13522,6 +13614,7 @@
   {
     "id": 1581,
     "name": "IDirectPlayLobby2_AddRef",
+    "handler": "dx_com_addref",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2853561022
@@ -13529,6 +13622,7 @@
   {
     "id": 1582,
     "name": "IDirectPlayLobby2_Release",
+    "handler": "dx_com_release_basic",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1201154899
@@ -16986,7 +17080,10 @@
     "id": 2052,
     "name": "StgIsStorageFile",
     "nargs": 1,
-    "stub": { "pop": 8, "ret": 2147680507 },
+    "stub": {
+      "pop": 8,
+      "ret": 2147680507
+    },
     "convention": "stdcall",
     "hash": 2828024486
   },
@@ -17359,7 +17456,10 @@
     "id": 2097,
     "name": "ILockBytes_Flush",
     "nargs": 1,
-    "stub": { "pop": 8, "ret": 0 },
+    "stub": {
+      "pop": 8,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 1871531943
   },
@@ -17374,7 +17474,10 @@
     "id": 2099,
     "name": "ILockBytes_LockRegion",
     "nargs": 6,
-    "stub": { "pop": 28, "ret": 0 },
+    "stub": {
+      "pop": 28,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 3251546320
   },
@@ -17382,7 +17485,10 @@
     "id": 2100,
     "name": "ILockBytes_UnlockRegion",
     "nargs": 6,
-    "stub": { "pop": 28, "ret": 0 },
+    "stub": {
+      "pop": 28,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 3278977363
   },
@@ -17629,7 +17735,10 @@
     "id": 2130,
     "name": "IStorage_SetElementTimes",
     "nargs": 5,
-    "stub": { "pop": 24, "ret": 0 },
+    "stub": {
+      "pop": 24,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 1490303668
   },
@@ -17657,6 +17766,7 @@
   {
     "id": 2134,
     "name": "OleSetClipboard",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2614966087,
@@ -17671,6 +17781,7 @@
   {
     "id": 2135,
     "name": "OleGetClipboard",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2528419507,
@@ -17829,7 +17940,10 @@
     "id": 2148,
     "name": "IDataObject_DUnadvise",
     "nargs": 2,
-    "stub": { "pop": 12, "ret": 2147745796 },
+    "stub": {
+      "pop": 12,
+      "ret": 2147745796
+    },
     "convention": "stdcall",
     "hash": 3856140751
   },
@@ -18013,7 +18127,10 @@
     "id": 2169,
     "name": "IOleObject_SetMoniker",
     "nargs": 3,
-    "stub": { "pop": 16, "ret": 2147500033 },
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
     "convention": "stdcall",
     "hash": 2367689803
   },
@@ -18042,7 +18159,10 @@
     "id": 2173,
     "name": "IOleObject_DoVerb",
     "nargs": 7,
-    "stub": { "pop": 32, "ret": 2147746048 },
+    "stub": {
+      "pop": 32,
+      "ret": 2147746048
+    },
     "convention": "stdcall",
     "hash": 241602258
   },
@@ -18057,7 +18177,10 @@
     "id": 2175,
     "name": "IOleObject_Update",
     "nargs": 1,
-    "stub": { "pop": 8, "ret": 0 },
+    "stub": {
+      "pop": 8,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 691549207
   },
@@ -18065,7 +18188,10 @@
     "id": 2176,
     "name": "IOleObject_IsUpToDate",
     "nargs": 1,
-    "stub": { "pop": 8, "ret": 0 },
+    "stub": {
+      "pop": 8,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 2757278334
   },
@@ -18129,7 +18255,10 @@
     "id": 2185,
     "name": "IOleObject_SetColorScheme",
     "nargs": 2,
-    "stub": { "pop": 12, "ret": 0 },
+    "stub": {
+      "pop": 12,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 83796750
   },
@@ -18161,14 +18290,16 @@
     "name": "IPersistStorage_AddRef",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 311358282
+    "hash": 311358282,
+    "handler": "ole_static_interface_addref"
   },
   {
     "id": 2188,
     "name": "IPersistStorage_Release",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 2845451047
+    "hash": 2845451047,
+    "handler": "ole_static_interface_release"
   },
   {
     "id": 2189,
@@ -18272,14 +18403,16 @@
     "name": "IOleCache_AddRef",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 1488284197
+    "hash": 1488284197,
+    "handler": "ole_static_interface_addref"
   },
   {
     "id": 2200,
     "name": "IOleCache_Release",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 220876194
+    "hash": 220876194,
+    "handler": "ole_static_interface_release"
   },
   {
     "id": 2201,
@@ -18306,7 +18439,10 @@
     "id": 2204,
     "name": "IOleCache_InitCache",
     "nargs": 2,
-    "stub": { "pop": 12, "ret": 0 },
+    "stub": {
+      "pop": 12,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 3920739603
   },
@@ -18345,14 +18481,16 @@
     "name": "IViewObject_AddRef",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 2383695659
+    "hash": 2383695659,
+    "handler": "ole_static_interface_addref"
   },
   {
     "id": 2208,
     "name": "IViewObject_Release",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 4285216876
+    "hash": 4285216876,
+    "handler": "ole_static_interface_release"
   },
   {
     "id": 2209,
@@ -18379,7 +18517,10 @@
     "id": 2212,
     "name": "IViewObject_Unfreeze",
     "nargs": 2,
-    "stub": { "pop": 12, "ret": 0 },
+    "stub": {
+      "pop": 12,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 756718563
   },
@@ -18387,7 +18528,10 @@
     "id": 2213,
     "name": "IViewObject_SetAdvise",
     "nargs": 4,
-    "stub": { "pop": 20, "ret": 0 },
+    "stub": {
+      "pop": 20,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 3367103449
   },
@@ -18409,7 +18553,10 @@
     "id": 2216,
     "name": "OleUIUpdateLinksA",
     "nargs": 4,
-    "stub": { "pop": 20, "ret": 1 },
+    "stub": {
+      "pop": 20,
+      "ret": 1
+    },
     "convention": "stdcall",
     "hash": 754592658
   },
@@ -18543,6 +18690,7 @@
   {
     "id": 2232,
     "name": "CreateRoundRectRgn",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 641841592
@@ -18582,6 +18730,7 @@
   {
     "id": 2237,
     "name": "MaskBlt",
+    "test_call": true,
     "nargs": 12,
     "convention": "stdcall",
     "hash": 1501640265
@@ -18724,6 +18873,7 @@
   {
     "id": 2255,
     "name": "GetGlyphOutlineA",
+    "test_call": true,
     "nargs": 7,
     "convention": "stdcall",
     "hash": 3100394838
@@ -18731,6 +18881,7 @@
   {
     "id": 2256,
     "name": "GetTextExtentExPointA",
+    "test_call": true,
     "nargs": 7,
     "convention": "stdcall",
     "hash": 2331778848
@@ -18738,6 +18889,7 @@
   {
     "id": 2257,
     "name": "GetTextExtentExPointW",
+    "test_call": true,
     "nargs": 7,
     "convention": "stdcall",
     "hash": 2700886466
@@ -18939,7 +19091,10 @@
     "id": 2281,
     "name": "IMoniker_IsDirty",
     "nargs": 1,
-    "stub": { "pop": 8, "ret": 1 },
+    "stub": {
+      "pop": 8,
+      "ret": 1
+    },
     "convention": "stdcall",
     "hash": 602413002
   },
@@ -19642,6 +19797,7 @@
   {
     "id": 2371,
     "name": "accept",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 136609321,
@@ -19665,6 +19821,7 @@
   {
     "id": 2372,
     "name": "bind",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3344129838,
@@ -19687,6 +19844,7 @@
   {
     "id": 2373,
     "name": "listen",
+    "test_call": true,
     "nargs": 2,
     "convention": "stdcall",
     "hash": 993752742,
@@ -19705,6 +19863,7 @@
   {
     "id": 2374,
     "name": "shutdown",
+    "test_call": true,
     "nargs": 2,
     "convention": "stdcall",
     "hash": 4162873931,
@@ -19723,6 +19882,7 @@
   {
     "id": 2375,
     "name": "ntohs",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2991326401,
@@ -19737,6 +19897,7 @@
   {
     "id": 2376,
     "name": "inet_ntoa",
+    "test_call": true,
     "nargs": 1,
     "convention": "stdcall",
     "hash": 4004911546,
@@ -19751,6 +19912,7 @@
   {
     "id": 2377,
     "name": "__WSAFDIsSet",
+    "test_call": true,
     "nargs": 2,
     "convention": "stdcall",
     "hash": 3919210010,
@@ -19782,6 +19944,7 @@
   {
     "id": 2379,
     "name": "AngleArc",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 3484032984,
@@ -19816,6 +19979,7 @@
   {
     "id": 2380,
     "name": "Chord",
+    "test_call": true,
     "nargs": 9,
     "convention": "stdcall",
     "hash": 272082677,
@@ -19862,6 +20026,7 @@
   {
     "id": 2381,
     "name": "Pie",
+    "test_call": true,
     "nargs": 9,
     "convention": "stdcall",
     "hash": 3477574229,
@@ -20083,6 +20248,7 @@
   {
     "id": 2405,
     "name": "WSAAsyncSelect",
+    "test_call": true,
     "nargs": 4,
     "convention": "stdcall",
     "hash": 445374758
@@ -20469,7 +20635,10 @@
     "id": 2444,
     "name": "IFont_SetRatio",
     "nargs": 3,
-    "stub": { "pop": 16, "ret": 0 },
+    "stub": {
+      "pop": 16,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 2216503609
   },
@@ -20484,7 +20653,10 @@
     "id": 2446,
     "name": "IFont_AddRefHfont",
     "nargs": 2,
-    "stub": { "pop": 12, "ret": 0 },
+    "stub": {
+      "pop": 12,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 2169197931
   },
@@ -20492,7 +20664,10 @@
     "id": 2447,
     "name": "IFont_ReleaseHfont",
     "nargs": 2,
-    "stub": { "pop": 12, "ret": 0 },
+    "stub": {
+      "pop": 12,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 2639763140
   },
@@ -20500,7 +20675,10 @@
     "id": 2448,
     "name": "IFont_SetHdc",
     "nargs": 2,
-    "stub": { "pop": 12, "ret": 0 },
+    "stub": {
+      "pop": 12,
+      "ret": 0
+    },
     "convention": "stdcall",
     "hash": 1026454271
   },
@@ -20521,7 +20699,8 @@
         "type": "DWORD"
       }
     ],
-    "ret": "DWORD"
+    "ret": "DWORD",
+    "test_call": true
   },
   {
     "id": 2450,
@@ -20882,6 +21061,7 @@
   {
     "id": 2474,
     "name": "GetCharacterPlacementA",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 788745880
@@ -21455,14 +21635,14 @@
   {
     "id": 2537,
     "name": "IVBDirectDraw7_DirectSlot003",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 426316677
   },
   {
     "id": 2538,
     "name": "IVBDirectDraw7_DirectSlot004",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 308873344
   },
@@ -21476,7 +21656,7 @@
   {
     "id": 2540,
     "name": "IVBDirectDraw7_DirectSlot006",
-    "nargs": 1,
+    "nargs": 4,
     "convention": "stdcall",
     "hash": 342428582
   },
@@ -21490,21 +21670,22 @@
   {
     "id": 2542,
     "name": "IVBDirectDraw7_DirectSlot008",
-    "nargs": 1,
+    "nargs": 4,
     "convention": "stdcall",
-    "hash": 510204772
+    "hash": 510204772,
+    "handler": "VBDD_CreateSurfaceFromFile"
   },
   {
     "id": 2543,
     "name": "IVBDirectDraw7_DirectSlot009",
-    "nargs": 1,
+    "nargs": 5,
     "convention": "stdcall",
     "hash": 526982391
   },
   {
     "id": 2544,
     "name": "IVBDirectDraw7_DirectSlot010",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 2624331861
   },
@@ -21518,105 +21699,105 @@
   {
     "id": 2546,
     "name": "IVBDirectDraw7_DirectSlot012",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 2590776623
   },
   {
     "id": 2547,
     "name": "IVBDirectDraw7_DirectSlot013",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 2573999004
   },
   {
     "id": 2548,
     "name": "IVBDirectDraw7_DirectSlot014",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 2557221385
   },
   {
     "id": 2549,
     "name": "IVBDirectDraw7_DirectSlot015",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 2540443766
   },
   {
     "id": 2550,
     "name": "IVBDirectDraw7_DirectSlot016",
-    "nargs": 1,
+    "nargs": 4,
     "convention": "stdcall",
     "hash": 2523666147
   },
   {
     "id": 2551,
     "name": "IVBDirectDraw7_DirectSlot017",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 2506888528
   },
   {
     "id": 2552,
     "name": "IVBDirectDraw7_DirectSlot018",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 2758552813
   },
   {
     "id": 2553,
     "name": "IVBDirectDraw7_DirectSlot019",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 2741775194
   },
   {
     "id": 2554,
     "name": "IVBDirectDraw7_DirectSlot020",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 2725144670
   },
   {
     "id": 2555,
     "name": "IVBDirectDraw7_DirectSlot021",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 2741922289
   },
   {
     "id": 2556,
     "name": "IVBDirectDraw7_DirectSlot022",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 2691589432
   },
   {
     "id": 2557,
     "name": "IVBDirectDraw7_DirectSlot023",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 2708367051
   },
   {
     "id": 2558,
     "name": "IVBDirectDraw7_DirectSlot024",
-    "nargs": 1,
+    "nargs": 4,
     "convention": "stdcall",
     "hash": 2792255146
   },
   {
     "id": 2559,
     "name": "IVBDirectDraw7_DirectSlot025",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 2809032765
   },
   {
     "id": 2560,
     "name": "IVBDirectDraw7_DirectSlot026",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 2758699908
   },
@@ -21666,42 +21847,42 @@
   {
     "id": 2567,
     "name": "IVBDirectDrawClipper_DirectSlot003",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 1147537389
   },
   {
     "id": 2568,
     "name": "IVBDirectDrawClipper_DirectSlot004",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 1030094056
   },
   {
     "id": 2569,
     "name": "IVBDirectDrawClipper_DirectSlot005",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 1046871675
   },
   {
     "id": 2570,
     "name": "IVBDirectDrawClipper_DirectSlot006",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 1063649294
   },
   {
     "id": 2571,
     "name": "IVBDirectDrawClipper_DirectSlot007",
-    "nargs": 1,
+    "nargs": 3,
     "convention": "stdcall",
     "hash": 1080426913
   },
   {
     "id": 2572,
     "name": "IVBDirectDrawClipper_DirectSlot008",
-    "nargs": 1,
+    "nargs": 2,
     "convention": "stdcall",
     "hash": 962983580
   },
@@ -24034,6 +24215,7 @@
   {
     "id": 2866,
     "name": "mmioGetInfo",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3516870985
@@ -26040,6 +26222,7 @@
   {
     "id": 3077,
     "name": "IDirectMusic_AddRef",
+    "handler": "dx_com_addref",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1460223485
@@ -26047,6 +26230,7 @@
   {
     "id": 3078,
     "name": "IDirectMusic_Release",
+    "handler": "dx_com_release_basic",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 968630362
@@ -26061,6 +26245,7 @@
   {
     "id": 3080,
     "name": "IDirectDrawGammaControl_AddRef",
+    "handler": "dx_com_addref",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1697827258
@@ -26068,6 +26253,7 @@
   {
     "id": 3081,
     "name": "IDirectDrawGammaControl_Release",
+    "handler": "dx_com_release_basic",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 4203858967
@@ -27026,6 +27212,7 @@
   {
     "id": 3210,
     "name": "DrawDibDraw",
+    "test_call": true,
     "nargs": 13,
     "convention": "stdcall",
     "hash": 939389100,
@@ -27151,6 +27338,7 @@
   {
     "id": 3220,
     "name": "IAMMultiMediaStream_AddRef",
+    "handler": "dx_com_addref",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 985466014
@@ -27158,6 +27346,7 @@
   {
     "id": 3221,
     "name": "IAMMultiMediaStream_Release",
+    "handler": "dx_com_release_basic",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1538703347
@@ -28204,21 +28393,24 @@
     "name": "IDirect3DBuffer9_AddRef",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 1401859284
+    "hash": 1401859284,
+    "handler": "IDirect3DShader9_AddRef"
   },
   {
     "id": 3331,
     "name": "IDirect3DBuffer9_Release",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 3237482869
+    "hash": 3237482869,
+    "handler": "IDirect3DShader9_Release"
   },
   {
     "id": 3332,
     "name": "IDirect3DBuffer9_GetDevice",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 808555630
+    "hash": 808555630,
+    "handler": "IDirect3DShader9_GetDevice"
   },
   {
     "id": 3333,
@@ -28302,21 +28494,24 @@
     "name": "IDirect3DVertexDeclaration9_AddRef",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 3248373916
+    "hash": 3248373916,
+    "handler": "IDirect3DShader9_AddRef"
   },
   {
     "id": 3345,
     "name": "IDirect3DVertexDeclaration9_Release",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 2568355453
+    "hash": 2568355453,
+    "handler": "IDirect3DShader9_Release"
   },
   {
     "id": 3346,
     "name": "IDirect3DVertexDeclaration9_GetDevice",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 1189194134
+    "hash": 1189194134,
+    "handler": "IDirect3DShader9_GetDevice"
   },
   {
     "id": 3347,
@@ -28337,21 +28532,24 @@
     "name": "IDirect3DStateBlock9_AddRef",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 1938304424
+    "hash": 1938304424,
+    "handler": "IDirect3DShader9_AddRef"
   },
   {
     "id": 3350,
     "name": "IDirect3DStateBlock9_Release",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 319741457
+    "hash": 319741457,
+    "handler": "IDirect3DShader9_Release"
   },
   {
     "id": 3351,
     "name": "IDirect3DStateBlock9_GetDevice",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 145936098
+    "hash": 145936098,
+    "handler": "IDirect3DShader9_GetDevice"
   },
   {
     "id": 3352,
@@ -28400,7 +28598,8 @@
     "name": "IDirect3DQuery9_AddRef",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 1986462002
+    "hash": 1986462002,
+    "handler": "IDirect3DShader9_AddRef"
   },
   {
     "id": 3359,
@@ -28414,7 +28613,8 @@
     "name": "IDirect3DQuery9_GetDevice",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 2445305476
+    "hash": 2445305476,
+    "handler": "IDirect3DShader9_GetDevice"
   },
   {
     "id": 3361,
@@ -28701,8 +28901,7 @@
     "name": "IDirectPlayLobby3_RegisterApplication",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 1698421876,
-    "handler": "dplobby3_application_unsupported"
+    "hash": 1698421876
   },
   {
     "id": 3402,
@@ -29091,7 +29290,8 @@
     "name": "IDirect3D8_CreateDevice",
     "nargs": 7,
     "convention": "stdcall",
-    "hash": 1561565041
+    "hash": 1561565041,
+    "ret": "HRESULT"
   },
   {
     "id": 3457,
@@ -29136,6 +29336,7 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2204512498,
+    "ret": "HRESULT",
     "handler": "IDirect3DDevice9_TestCooperativeLevel"
   },
   {
@@ -29221,7 +29422,7 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 3788986756,
-    "handler": "d3d8_unimplemented"
+    "ret": "HRESULT"
   },
   {
     "id": 3474,
@@ -29229,6 +29430,7 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 3714648088,
+    "ret": "HRESULT",
     "handler": "IDirect3DDevice9_Present"
   },
   {
@@ -29280,8 +29482,7 @@
     "name": "IDirect3DDevice8_CreateCubeTexture",
     "nargs": 7,
     "convention": "stdcall",
-    "hash": 2700944367,
-    "handler": "d3d8_unimplemented"
+    "hash": 2700944367
   },
   {
     "id": 3482,
@@ -29323,8 +29524,7 @@
     "name": "IDirect3DDevice8_CopyRects",
     "nargs": 6,
     "convention": "stdcall",
-    "hash": 1283737735,
-    "handler": "d3d8_unimplemented"
+    "hash": 1283737735
   },
   {
     "id": 3488,
@@ -29521,7 +29721,7 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 4274330284,
-    "handler": "d3d8_unimplemented"
+    "handler": "IDirect3DDevice9_EndStateBlock"
   },
   {
     "id": 3513,
@@ -29529,7 +29729,7 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 2828484225,
-    "handler": "d3d8_unimplemented"
+    "handler": "d3d8_ApplyStateBlock"
   },
   {
     "id": 3514,
@@ -29537,7 +29737,7 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 1988280067,
-    "handler": "d3d8_unimplemented"
+    "handler": "d3d8_CaptureStateBlock"
   },
   {
     "id": 3515,
@@ -29545,7 +29745,7 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 318331532,
-    "handler": "d3d8_unimplemented"
+    "handler": "d3d8_DeleteStateBlock"
   },
   {
     "id": 3516,
@@ -29553,7 +29753,7 @@
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2605493951,
-    "handler": "d3d8_unimplemented"
+    "handler": "IDirect3DDevice9_CreateStateBlock"
   },
   {
     "id": 3517,
@@ -29721,32 +29921,28 @@
     "name": "IDirect3DDevice8_SetVertexShaderConstant",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 2014196192,
-    "handler": "d3d8_unimplemented"
+    "hash": 2014196192
   },
   {
     "id": 3539,
     "name": "IDirect3DDevice8_GetVertexShaderConstant",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 735411796,
-    "handler": "d3d8_unimplemented"
+    "hash": 735411796
   },
   {
     "id": 3540,
     "name": "IDirect3DDevice8_GetVertexShaderDeclaration",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 3660895412,
-    "handler": "d3d8_unimplemented"
+    "hash": 3660895412
   },
   {
     "id": 3541,
     "name": "IDirect3DDevice8_GetVertexShaderFunction",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 2861618696,
-    "handler": "d3d8_unimplemented"
+    "hash": 2861618696
   },
   {
     "id": 3542,
@@ -29783,8 +29979,7 @@
     "name": "IDirect3DDevice8_CreatePixelShader",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 3536493694,
-    "handler": "d3d8_unimplemented"
+    "hash": 3536493694
   },
   {
     "id": 3547,
@@ -29805,8 +30000,7 @@
     "name": "IDirect3DDevice8_DeletePixelShader",
     "nargs": 2,
     "convention": "stdcall",
-    "hash": 1816459635,
-    "handler": "d3d8_unimplemented"
+    "hash": 1816459635
   },
   {
     "id": 3550,
@@ -29814,7 +30008,7 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 15167756,
-    "handler": "d3d8_unimplemented"
+    "handler": "IDirect3DDevice9_SetPixelShaderConstantF"
   },
   {
     "id": 3551,
@@ -29822,15 +30016,14 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 2587698088,
-    "handler": "d3d8_unimplemented"
+    "handler": "IDirect3DDevice9_GetPixelShaderConstantF"
   },
   {
     "id": 3552,
     "name": "IDirect3DDevice8_GetPixelShaderFunction",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 2366535732,
-    "handler": "d3d8_unimplemented"
+    "hash": 2366535732
   },
   {
     "id": 3553,
@@ -30044,6 +30237,7 @@
   {
     "id": 3580,
     "name": "sendto",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 2223612394
@@ -30051,6 +30245,7 @@
   {
     "id": 3581,
     "name": "recvfrom",
+    "test_call": true,
     "nargs": 6,
     "convention": "stdcall",
     "hash": 2287937341
@@ -30058,6 +30253,7 @@
   {
     "id": 3582,
     "name": "getsockopt",
+    "test_call": true,
     "nargs": 5,
     "convention": "stdcall",
     "hash": 3713548348
@@ -30065,6 +30261,7 @@
   {
     "id": 3583,
     "name": "getsockname",
+    "test_call": true,
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2609806812
@@ -30869,153 +31066,7927 @@
   },
   {
     "id": 3689,
+    "name": "ReadProcessMemory",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 158663941,
+    "args": [
+      {
+        "name": "hProcess",
+        "type": "HANDLE"
+      },
+      {
+        "name": "lpBaseAddress",
+        "type": "LPVOID"
+      },
+      {
+        "name": "lpBuffer",
+        "type": "LPVOID"
+      },
+      {
+        "name": "nSize",
+        "type": "int"
+      },
+      {
+        "name": "lpNumberOfBytesRead",
+        "type": "LPVOID"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3690,
+    "name": "SetThreadToken",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3621185672,
+    "args": [
+      {
+        "name": "Thread",
+        "type": "LPVOID"
+      },
+      {
+        "name": "Token",
+        "type": "HANDLE"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3691,
+    "name": "GetDiskFreeSpaceExA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1174598858,
+    "args": [
+      {
+        "name": "lpDirectoryName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpFreeBytesAvailableToCaller",
+        "type": "LPVOID"
+      },
+      {
+        "name": "lpTotalNumberOfBytes",
+        "type": "LPVOID"
+      },
+      {
+        "name": "lpTotalNumberOfFreeBytes",
+        "type": "LPVOID"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3692,
+    "name": "acmFormatSuggest",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3154390367,
+    "args": [
+      {
+        "name": "had",
+        "type": "HANDLE"
+      },
+      {
+        "name": "pwfxSrc",
+        "type": "LPVOID"
+      },
+      {
+        "name": "pwfxDst",
+        "type": "LPVOID"
+      },
+      {
+        "name": "cbwfxDst",
+        "type": "DWORD"
+      },
+      {
+        "name": "fdwSuggest",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3693,
+    "name": "acmStreamOpen",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 2824203672,
+    "args": [
+      {
+        "name": "phas",
+        "type": "LPVOID"
+      },
+      {
+        "name": "had",
+        "type": "HANDLE"
+      },
+      {
+        "name": "pwfxSrc",
+        "type": "LPVOID"
+      },
+      {
+        "name": "pwfxDst",
+        "type": "LPVOID"
+      },
+      {
+        "name": "pwfltr",
+        "type": "LPVOID"
+      },
+      {
+        "name": "dwCallback",
+        "type": "DWORD"
+      },
+      {
+        "name": "dwInstance",
+        "type": "DWORD"
+      },
+      {
+        "name": "fdwOpen",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3694,
+    "name": "acmStreamClose",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2799884308,
+    "args": [
+      {
+        "name": "has",
+        "type": "HANDLE"
+      },
+      {
+        "name": "fdwClose",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3695,
+    "name": "acmStreamSize",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 239129825,
+    "args": [
+      {
+        "name": "has",
+        "type": "HANDLE"
+      },
+      {
+        "name": "cbInput",
+        "type": "DWORD"
+      },
+      {
+        "name": "pdwOutputBytes",
+        "type": "LPVOID"
+      },
+      {
+        "name": "fdwSize",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3696,
+    "name": "acmStreamPrepareHeader",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3664537810,
+    "args": [
+      {
+        "name": "has",
+        "type": "HANDLE"
+      },
+      {
+        "name": "pash",
+        "type": "LPVOID"
+      },
+      {
+        "name": "fdwPrepare",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3697,
+    "name": "acmStreamUnprepareHeader",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 967539367,
+    "args": [
+      {
+        "name": "has",
+        "type": "HANDLE"
+      },
+      {
+        "name": "pash",
+        "type": "LPVOID"
+      },
+      {
+        "name": "fdwUnprepare",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3698,
+    "name": "acmStreamConvert",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 204842239,
+    "args": [
+      {
+        "name": "has",
+        "type": "HANDLE"
+      },
+      {
+        "name": "pash",
+        "type": "LPVOID"
+      },
+      {
+        "name": "fdwConvert",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3699,
+    "name": "mciGetErrorStringA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3623365022,
+    "args": [
+      {
+        "name": "fdwError",
+        "type": "DWORD"
+      },
+      {
+        "name": "lpszErrorText",
+        "type": "LPSTR"
+      },
+      {
+        "name": "cchErrorText",
+        "type": "UINT"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3700,
+    "name": "InternetOpenA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3795556071,
+    "args": [
+      {
+        "name": "lpszAgent",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "dwAccessType",
+        "type": "DWORD"
+      },
+      {
+        "name": "lpszProxy",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpszProxyBypass",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "dwFlags",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "HANDLE"
+  },
+  {
+    "id": 3701,
+    "name": "InternetConnectA",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 3156141353,
+    "args": [
+      {
+        "name": "hInternet",
+        "type": "HANDLE"
+      },
+      {
+        "name": "lpszServerName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "nServerPort",
+        "type": "DWORD"
+      },
+      {
+        "name": "lpszUserName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpszPassword",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "dwService",
+        "type": "DWORD"
+      },
+      {
+        "name": "dwFlags",
+        "type": "DWORD"
+      },
+      {
+        "name": "dwContext",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "HANDLE"
+  },
+  {
+    "id": 3702,
+    "name": "HttpOpenRequestA",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 1845509757,
+    "args": [
+      {
+        "name": "hConnect",
+        "type": "HANDLE"
+      },
+      {
+        "name": "lpszVerb",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpszObjectName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpszVersion",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpszReferrer",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lplpszAcceptTypes",
+        "type": "LPVOID"
+      },
+      {
+        "name": "dwFlags",
+        "type": "DWORD"
+      },
+      {
+        "name": "dwContext",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "HANDLE"
+  },
+  {
+    "id": 3703,
+    "name": "InternetCloseHandle",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1306388838,
+    "args": [
+      {
+        "name": "hInternet",
+        "type": "HANDLE"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3704,
+    "name": "InternetReadFile",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2517415110,
+    "args": [
+      {
+        "name": "hFile",
+        "type": "HANDLE"
+      },
+      {
+        "name": "lpBuffer",
+        "type": "LPVOID"
+      },
+      {
+        "name": "dwNumberOfBytesToRead",
+        "type": "DWORD"
+      },
+      {
+        "name": "lpdwNumberOfBytesRead",
+        "type": "LPVOID"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3705,
+    "name": "HttpSendRequestA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3134761763,
+    "args": [
+      {
+        "name": "hRequest",
+        "type": "HANDLE"
+      },
+      {
+        "name": "lpszHeaders",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "dwHeadersLength",
+        "type": "DWORD"
+      },
+      {
+        "name": "lpOptional",
+        "type": "LPVOID"
+      },
+      {
+        "name": "dwOptionalLength",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3706,
+    "name": "waveOutSetPlaybackRate",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 8
+    },
+    "convention": "stdcall",
+    "hash": 4174287963,
+    "args": [
+      {
+        "name": "hwo",
+        "type": "HANDLE"
+      },
+      {
+        "name": "dwRate",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 3707,
+    "name": "DrawDibBegin",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 766324423,
+    "args": [
+      {
+        "name": "hdd",
+        "type": "HDRAWDIB"
+      },
+      {
+        "name": "hdc",
+        "type": "HDC"
+      },
+      {
+        "name": "dxDst",
+        "type": "INT"
+      },
+      {
+        "name": "dyDst",
+        "type": "INT"
+      },
+      {
+        "name": "lpbi",
+        "type": "BITMAPINFOHEADER*"
+      },
+      {
+        "name": "dxSrc",
+        "type": "INT"
+      },
+      {
+        "name": "dySrc",
+        "type": "INT"
+      },
+      {
+        "name": "wFlags",
+        "type": "UINT"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3708,
+    "name": "DrawDibEnd",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 822240431,
+    "args": [
+      {
+        "name": "hdd",
+        "type": "HDRAWDIB"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3709,
+    "name": "DrawDibSetPalette",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 537706397,
+    "args": [
+      {
+        "name": "hdd",
+        "type": "HDRAWDIB"
+      },
+      {
+        "name": "hpal",
+        "type": "HPALETTE"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3710,
+    "name": "DrawDibRealize",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1485543468,
+    "args": [
+      {
+        "name": "hdd",
+        "type": "HDRAWDIB"
+      },
+      {
+        "name": "hdc",
+        "type": "HDC"
+      },
+      {
+        "name": "fBackground",
+        "type": "BOOL"
+      }
+    ],
+    "ret": "UINT"
+  },
+  {
+    "id": 3711,
+    "name": "WSAIsBlocking",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3164277069,
+    "ret": "BOOL"
+  },
+  {
+    "id": 3712,
+    "name": "ImageList_Read",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1974049503,
+    "ret": "HANDLE"
+  },
+  {
+    "id": 3713,
+    "name": "ImageList_Add",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1430645694,
+    "ret": "int"
+  },
+  {
+    "id": 3714,
+    "name": "ImageList_GetIconSize",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2210696609,
+    "ret": "BOOL"
+  },
+  {
+    "id": 3715,
+    "name": "ImageList_SetIconSize",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 864757549,
+    "ret": "BOOL"
+  },
+  {
+    "id": 3716,
+    "name": "ImageList_Draw",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2443252953,
+    "ret": "BOOL"
+  },
+  {
+    "id": 3717,
+    "name": "ImageList_DrawEx",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 672945796,
+    "ret": "BOOL"
+  },
+  {
+    "id": 3718,
+    "name": "CreateMDIWindowA",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 3130410986,
+    "ret": "HWND"
+  },
+  {
+    "id": 3719,
+    "name": "CreateItemMoniker",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3979334899,
+    "ret": "HRESULT"
+  },
+  {
+    "id": 3720,
+    "name": "IsTextUnicode",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4094454969,
+    "ret": "BOOL"
+  },
+  {
+    "id": 3721,
+    "name": "IIDFromString",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2345636636,
+    "ret": "HRESULT"
+  },
+  {
+    "id": 3722,
+    "name": "OleSetMenuDescriptor",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1563692465,
+    "ret": "HRESULT"
+  },
+  {
+    "id": 3723,
+    "name": "ICSendMessage",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1305944430,
+    "args": [
+      {
+        "name": "hic",
+        "type": "HANDLE"
+      },
+      {
+        "name": "msg",
+        "type": "DWORD"
+      },
+      {
+        "name": "dw1",
+        "type": "DWORD"
+      },
+      {
+        "name": "dw2",
+        "type": "DWORD"
+      }
+    ]
+  },
+  {
+    "id": 3724,
+    "name": "ICLocate",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2844074431
+  },
+  {
+    "id": 3725,
+    "name": "ICDecompress",
+    "nargs": 6,
+    "convention": "cdecl",
+    "hash": 715061218
+  },
+  {
+    "id": 3726,
+    "name": "ICGetInfo",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 75557971
+  },
+  {
+    "id": 3727,
+    "name": "AVIFileOpenA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2523938666
+  },
+  {
+    "id": 3728,
+    "name": "AVIFileGetStream",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2013954429
+  },
+  {
+    "id": 3729,
+    "name": "AVIFileRelease",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3706851568
+  },
+  {
+    "id": 3730,
+    "name": "AVIStreamOpenFromFileA",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3991198386
+  },
+  {
+    "id": 3731,
+    "name": "AVIStreamRelease",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 575964030
+  },
+  {
+    "id": 3732,
+    "name": "AVIStreamInfoA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 21626124
+  },
+  {
+    "id": 3733,
+    "name": "AVIStreamStart",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1779274207
+  },
+  {
+    "id": 3734,
+    "name": "AVIStreamLength",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 880028949
+  },
+  {
+    "id": 3735,
+    "name": "AVIStreamReadFormat",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1406680178
+  },
+  {
+    "id": 3736,
+    "name": "AVIStreamRead",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3716088517
+  },
+  {
+    "id": 3737,
+    "name": "AVIStreamFindSample",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3326681424
+  },
+  {
+    "id": 3738,
+    "name": "AVIStreamSampleToTime",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3231607027
+  },
+  {
+    "id": 3739,
+    "name": "AVIStreamTimeToSample",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2022757007
+  },
+  {
+    "id": 3740,
+    "name": "WaitForMultipleObjectsEx",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2129291060
+  },
+  {
+    "id": 3741,
+    "name": "MCIWndCreateA",
+    "nargs": 4,
+    "convention": "cdecl",
+    "hash": 4268366522,
+    "args": [
+      {
+        "name": "hwndParent",
+        "type": "HWND"
+      },
+      {
+        "name": "hInstance",
+        "type": "HANDLE"
+      },
+      {
+        "name": "dwStyle",
+        "type": "DWORD"
+      },
+      {
+        "name": "szFile",
+        "type": "LPCSTR"
+      }
+    ],
+    "ret": "HWND"
+  },
+  {
+    "id": 3742,
+    "name": "strtok",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 1020058646
+  },
+  {
+    "id": 3743,
+    "name": "DefDriverProc",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1129332926,
+    "args": [
+      {
+        "name": "dwDriverId",
+        "type": "DWORD"
+      },
+      {
+        "name": "hDriver",
+        "type": "HANDLE"
+      },
+      {
+        "name": "uMsg",
+        "type": "DWORD"
+      },
+      {
+        "name": "lParam1",
+        "type": "DWORD"
+      },
+      {
+        "name": "lParam2",
+        "type": "DWORD"
+      }
+    ]
+  },
+  {
+    "id": 3744,
+    "name": "LocalHandle",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4103303870,
+    "args": [
+      {
+        "name": "pMem",
+        "type": "LPVOID"
+      }
+    ],
+    "ret": "HANDLE"
+  },
+  {
+    "id": 3745,
+    "name": "wcscpy",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 761796242
+  },
+  {
+    "id": 3746,
+    "name": "wcscat",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 747431384
+  },
+  {
+    "id": 3747,
+    "name": "wcsstr",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 1323298499
+  },
+  {
+    "id": 3748,
+    "name": "_wcsnicmp",
+    "nargs": 3,
+    "convention": "cdecl",
+    "hash": 2611291440
+  },
+  {
+    "id": 3749,
+    "name": "setlocale",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 3602379541
+  },
+  {
+    "id": 3750,
+    "name": "_wsetlocale",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 846584795
+  },
+  {
+    "id": 3751,
+    "name": "GetMessageExtraInfo",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 766010320,
+    "ret": "LPARAM"
+  },
+  {
+    "id": 3752,
+    "name": "SetMessageExtraInfo",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1584462164,
+    "args": [
+      {
+        "name": "lParam",
+        "type": "LPARAM"
+      }
+    ],
+    "ret": "LPARAM"
+  },
+  {
+    "id": 3753,
+    "name": "clearerr",
+    "nargs": 1,
+    "convention": "cdecl",
+    "hash": 3870215973
+  },
+  {
+    "id": 3754,
+    "name": "strncat",
+    "nargs": 3,
+    "convention": "cdecl",
+    "hash": 2985193262
+  },
+  {
+    "id": 3755,
+    "name": "fputc",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 600194539
+  },
+  {
+    "id": 3756,
+    "name": "grGlideInit",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 461211915
+  },
+  {
+    "id": 3757,
+    "name": "_grGlideInit@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3664627698,
+    "handler": "grGlideInit"
+  },
+  {
+    "id": 3758,
+    "name": "grGlideShutdown",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2689351459
+  },
+  {
+    "id": 3759,
+    "name": "_grGlideShutdown@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2275395962,
+    "handler": "grGlideShutdown"
+  },
+  {
+    "id": 3760,
+    "name": "grSstWinClose",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2939979584
+  },
+  {
+    "id": 3761,
+    "name": "_grSstWinClose@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2826153029,
+    "handler": "grSstWinClose"
+  },
+  {
+    "id": 3762,
+    "name": "grSstQueryHardware",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 4083667090
+  },
+  {
+    "id": 3763,
+    "name": "_grSstQueryHardware@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3224358621,
+    "handler": "grSstQueryHardware"
+  },
+  {
+    "id": 3764,
+    "name": "grSstQueryBoards",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1270525527,
+    "handler": "grSstQueryHardware"
+  },
+  {
+    "id": 3765,
+    "name": "_grSstQueryBoards@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3683668420,
+    "handler": "grSstQueryHardware"
+  },
+  {
+    "id": 3766,
+    "name": "grGlideGetVersion",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2505792305
+  },
+  {
+    "id": 3767,
+    "name": "_grGlideGetVersion@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1557137020,
+    "handler": "grGlideGetVersion"
+  },
+  {
+    "id": 3768,
+    "name": "grSstSelect",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1465475618
+  },
+  {
+    "id": 3769,
+    "name": "_grSstSelect@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2561928011,
+    "handler": "grSstSelect"
+  },
+  {
+    "id": 3770,
+    "name": "grSstScreenWidth",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 411244018
+  },
+  {
+    "id": 3771,
+    "name": "_grSstScreenWidth@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2530201789,
+    "handler": "grSstScreenWidth"
+  },
+  {
+    "id": 3772,
+    "name": "grSstScreenHeight",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1399653709
+  },
+  {
+    "id": 3773,
+    "name": "_grSstScreenHeight@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2171560428,
+    "handler": "grSstScreenHeight"
+  },
+  {
+    "id": 3774,
+    "name": "grSstIdle",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3813265036
+  },
+  {
+    "id": 3775,
+    "name": "_grSstIdle@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2958944133,
+    "handler": "grSstIdle"
+  },
+  {
+    "id": 3776,
+    "name": "grSstIsBusy",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 4157250059,
+    "handler": "grSstIdle"
+  },
+  {
+    "id": 3777,
+    "name": "_grSstIsBusy@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 127767966,
+    "handler": "grSstIdle"
+  },
+  {
+    "id": 3778,
+    "name": "grBufferNumPending",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3369905793,
+    "handler": "grSstIdle"
+  },
+  {
+    "id": 3779,
+    "name": "_grBufferNumPending@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1670300510,
+    "handler": "grSstIdle"
+  },
+  {
+    "id": 3780,
+    "name": "grSstStatus",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2322017860
+  },
+  {
+    "id": 3781,
+    "name": "_grSstStatus@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3816133409,
+    "handler": "grSstStatus"
+  },
+  {
+    "id": 3782,
+    "name": "grSstVRetraceOn",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1727684903
+  },
+  {
+    "id": 3783,
+    "name": "_grSstVRetraceOn@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 399310562,
+    "handler": "grSstVRetraceOn"
+  },
+  {
+    "id": 3784,
+    "name": "grErrorSetCallback",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 290734669
+  },
+  {
+    "id": 3785,
+    "name": "_grErrorSetCallback@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 701863158,
+    "handler": "grErrorSetCallback"
+  },
+  {
+    "id": 3786,
+    "name": "grSstControl",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 33290623
+  },
+  {
+    "id": 3787,
+    "name": "_grSstControl@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1447511468,
+    "handler": "grSstControl"
+  },
+  {
+    "id": 3788,
+    "name": "grSstWinOpen",
+    "nargs": 7,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3785260828
+  },
+  {
+    "id": 3789,
+    "name": "_grSstWinOpen@28",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3970997635,
+    "handler": "grSstWinOpen"
+  },
+  {
+    "id": 3790,
+    "name": "grColorCombine",
+    "nargs": 5,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 921923860
+  },
+  {
+    "id": 3791,
+    "name": "_grColorCombine@20",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3256091815,
+    "handler": "grColorCombine"
+  },
+  {
+    "id": 3792,
+    "name": "grAlphaCombine",
+    "nargs": 5,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1646072441
+  },
+  {
+    "id": 3793,
+    "name": "_grAlphaCombine@20",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 142550180,
+    "handler": "grAlphaCombine"
+  },
+  {
+    "id": 3794,
+    "name": "grConstantColorValue",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 4017435396
+  },
+  {
+    "id": 3795,
+    "name": "_grConstantColorValue@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 672309851,
+    "handler": "grConstantColorValue"
+  },
+  {
+    "id": 3796,
+    "name": "grDepthBufferMode",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1601858080
+  },
+  {
+    "id": 3797,
+    "name": "_grDepthBufferMode@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1558744369,
+    "handler": "grDepthBufferMode"
+  },
+  {
+    "id": 3798,
+    "name": "grDepthBufferFunction",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1598835015
+  },
+  {
+    "id": 3799,
+    "name": "_grDepthBufferFunction@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1304096646,
+    "handler": "grDepthBufferFunction"
+  },
+  {
+    "id": 3800,
+    "name": "grDepthMask",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2673872013
+  },
+  {
+    "id": 3801,
+    "name": "_grDepthMask@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4102571160,
+    "handler": "grDepthMask"
+  },
+  {
+    "id": 3802,
+    "name": "grAlphaBlendFunction",
+    "nargs": 4,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3265932411
+  },
+  {
+    "id": 3803,
+    "name": "_grAlphaBlendFunction@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1324827799,
+    "handler": "grAlphaBlendFunction"
+  },
+  {
+    "id": 3804,
+    "name": "grAlphaTestFunction",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 753377836
+  },
+  {
+    "id": 3805,
+    "name": "_grAlphaTestFunction@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3089962997,
+    "handler": "grAlphaTestFunction"
+  },
+  {
+    "id": 3806,
+    "name": "grAlphaTestReferenceValue",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 32855046
+  },
+  {
+    "id": 3807,
+    "name": "_grAlphaTestReferenceValue@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1364532895,
+    "handler": "grAlphaTestReferenceValue"
+  },
+  {
+    "id": 3808,
+    "name": "grChromakeyMode",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 861750190
+  },
+  {
+    "id": 3809,
+    "name": "_grChromakeyMode@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3490515895,
+    "handler": "grChromakeyMode"
+  },
+  {
+    "id": 3810,
+    "name": "grChromakeyValue",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2028295326
+  },
+  {
+    "id": 3811,
+    "name": "_grChromakeyValue@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3294105029,
+    "handler": "grChromakeyValue"
+  },
+  {
+    "id": 3812,
+    "name": "grFogMode",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1569448159
+  },
+  {
+    "id": 3813,
+    "name": "_grFogMode@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2619303374,
+    "handler": "grFogMode"
+  },
+  {
+    "id": 3814,
+    "name": "grFogColorValue",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3943382816
+  },
+  {
+    "id": 3815,
+    "name": "_grFogColorValue@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 232799445,
+    "handler": "grFogColorValue"
+  },
+  {
+    "id": 3816,
+    "name": "grCullMode",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3949800915
+  },
+  {
+    "id": 3817,
+    "name": "_grCullMode@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1981028220,
+    "handler": "grCullMode"
+  },
+  {
+    "id": 3818,
+    "name": "grSstOrigin",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2318435292
+  },
+  {
+    "id": 3819,
+    "name": "_grSstOrigin@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1011050069,
+    "handler": "grSstOrigin"
+  },
+  {
+    "id": 3820,
+    "name": "grClipWindow",
+    "nargs": 4,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1000557302
+  },
+  {
+    "id": 3821,
+    "name": "_grClipWindow@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 717074228,
+    "handler": "grClipWindow"
+  },
+  {
+    "id": 3822,
+    "name": "grColorMask",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 951585335
+  },
+  {
+    "id": 3823,
+    "name": "_grColorMask@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3249988666,
+    "handler": "grColorMask"
+  },
+  {
+    "id": 3824,
+    "name": "grRenderBuffer",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 752093862
+  },
+  {
+    "id": 3825,
+    "name": "_grRenderBuffer@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3981521457,
+    "handler": "grRenderBuffer"
+  },
+  {
+    "id": 3826,
+    "name": "grDepthBiasLevel",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2060886982
+  },
+  {
+    "id": 3827,
+    "name": "_grDepthBiasLevel@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3589546181,
+    "handler": "grDepthBiasLevel"
+  },
+  {
+    "id": 3828,
+    "name": "grDitherMode",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1861732559
+  },
+  {
+    "id": 3829,
+    "name": "_grDitherMode@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3208032012,
+    "handler": "grDitherMode"
+  },
+  {
+    "id": 3830,
+    "name": "grGammaCorrectionValue",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3008968950
+  },
+  {
+    "id": 3831,
+    "name": "_grGammaCorrectionValue@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2948339893,
+    "handler": "grGammaCorrectionValue"
+  },
+  {
+    "id": 3832,
+    "name": "grHints",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 4007265346
+  },
+  {
+    "id": 3833,
+    "name": "_grHints@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1739529515,
+    "handler": "grHints"
+  },
+  {
+    "id": 3834,
+    "name": "grTexClampMode",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 4161209879
+  },
+  {
+    "id": 3835,
+    "name": "_grTexClampMode@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 24442315,
+    "handler": "grTexClampMode"
+  },
+  {
+    "id": 3836,
+    "name": "grTexFilterMode",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1143458648
+  },
+  {
+    "id": 3837,
+    "name": "_grTexFilterMode@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2655122676,
+    "handler": "grTexFilterMode"
+  },
+  {
+    "id": 3838,
+    "name": "grTexLodBiasValue",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1324355962
+  },
+  {
+    "id": 3839,
+    "name": "_grTexLodBiasValue@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2399972807,
+    "handler": "grTexLodBiasValue"
+  },
+  {
+    "id": 3840,
+    "name": "grTexCombine",
+    "nargs": 7,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 239985058
+  },
+  {
+    "id": 3841,
+    "name": "_grTexCombine@28",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1225593337,
+    "handler": "grTexCombine"
+  },
+  {
+    "id": 3842,
+    "name": "grTexMipMapMode",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1167799370
+  },
+  {
+    "id": 3843,
+    "name": "_grTexMipMapMode@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2024523814,
+    "handler": "grTexMipMapMode"
+  },
+  {
+    "id": 3844,
+    "name": "grTexMinAddress",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3308305405
+  },
+  {
+    "id": 3845,
+    "name": "_grTexMinAddress@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1195046112,
+    "handler": "grTexMinAddress"
+  },
+  {
+    "id": 3846,
+    "name": "grTexMaxAddress",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2023443503
+  },
+  {
+    "id": 3847,
+    "name": "_grTexMaxAddress@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2472542402,
+    "handler": "grTexMaxAddress"
+  },
+  {
+    "id": 3848,
+    "name": "grTexCalcMemRequired",
+    "nargs": 4,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1136332520
+  },
+  {
+    "id": 3849,
+    "name": "_grTexCalcMemRequired@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 507112038,
+    "handler": "grTexCalcMemRequired"
+  },
+  {
+    "id": 3850,
+    "name": "grTexTextureMemRequired",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3804776216
+  },
+  {
+    "id": 3851,
+    "name": "_grTexTextureMemRequired@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 242874289,
+    "handler": "grTexTextureMemRequired"
+  },
+  {
+    "id": 3852,
+    "name": "grTexSource",
+    "nargs": 4,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 650108752
+  },
+  {
+    "id": 3853,
+    "name": "_grTexSource@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2965550116,
+    "handler": "grTexSource"
+  },
+  {
+    "id": 3854,
+    "name": "grTexDownloadMipMap",
+    "nargs": 4,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3552077521
+  },
+  {
+    "id": 3855,
+    "name": "_grTexDownloadMipMap@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2622909559,
+    "handler": "grTexDownloadMipMap"
+  },
+  {
+    "id": 3856,
+    "name": "grTexDownloadTable",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 405297915
+  },
+  {
+    "id": 3857,
+    "name": "_grTexDownloadTable@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3006295407,
+    "handler": "grTexDownloadTable"
+  },
+  {
+    "id": 3858,
+    "name": "grFogTable",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2226682064
+  },
+  {
+    "id": 3859,
+    "name": "_grFogTable@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 660100323,
+    "handler": "grFogTable"
+  },
+  {
+    "id": 3860,
+    "name": "grDrawTriangle",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2648990206
+  },
+  {
+    "id": 3861,
+    "name": "_grDrawTriangle@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1414243260,
+    "handler": "grDrawTriangle"
+  },
+  {
+    "id": 3862,
+    "name": "grBufferClear",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3843631815
+  },
+  {
+    "id": 3863,
+    "name": "_grBufferClear@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3730700913,
+    "handler": "grBufferClear"
+  },
+  {
+    "id": 3864,
+    "name": "grBufferSwap",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3795006001
+  },
+  {
+    "id": 3865,
+    "name": "_grBufferSwap@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 736912854,
+    "handler": "grBufferSwap"
+  },
+  {
+    "id": 3866,
+    "name": "grAADrawLine",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2542708606
+  },
+  {
+    "id": 3867,
+    "name": "_grAADrawLine@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2154334833,
+    "handler": "grAADrawLine"
+  },
+  {
+    "id": 3868,
+    "name": "grAADrawTriangle",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 700279752,
+    "handler": "grAADrawTriangle"
+  },
+  {
+    "id": 3869,
+    "name": "_grAADrawTriangle@24",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2210710371,
+    "handler": "grAADrawTriangle"
+  },
+  {
+    "id": 3870,
+    "name": "grDrawLine",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3297492340
+  },
+  {
+    "id": 3871,
+    "name": "_grDrawLine@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1967438915,
+    "handler": "grDrawLine"
+  },
+  {
+    "id": 3872,
+    "name": "grDrawPoint",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2343528528
+  },
+  {
+    "id": 3873,
+    "name": "_grDrawPoint@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 51801521,
+    "handler": "grDrawPoint"
+  },
+  {
+    "id": 3874,
+    "name": "grLfbLock",
+    "nargs": 6,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 4093928807
+  },
+  {
+    "id": 3875,
+    "name": "_grLfbLock@24",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2529347556,
+    "handler": "grLfbLock"
+  },
+  {
+    "id": 3876,
+    "name": "grLfbUnlock",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1288331068
+  },
+  {
+    "id": 3877,
+    "name": "_grLfbUnlock@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4115944385,
+    "handler": "grLfbUnlock"
+  },
+  {
+    "id": 3878,
+    "name": "grLfbReadRegion",
+    "nargs": 7,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3535445784
+  },
+  {
+    "id": 3879,
+    "name": "_grLfbReadRegion@28",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3585577241,
+    "handler": "grLfbReadRegion"
+  },
+  {
+    "id": 3880,
+    "name": "grLfbWriteRegion",
+    "nargs": 8,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3142490887
+  },
+  {
+    "id": 3881,
+    "name": "_grLfbWriteRegion@32",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 2652078501,
+    "handler": "grLfbWriteRegion"
+  },
+  {
+    "id": 3882,
+    "name": "grTexCombineFunction",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3161202934
+  },
+  {
+    "id": 3883,
+    "name": "_grTexCombineFunction@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2019337885,
+    "handler": "grTexCombineFunction"
+  },
+  {
+    "id": 3884,
+    "name": "guFogGenerateExp",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2603656571
+  },
+  {
+    "id": 3885,
+    "name": "_guFogGenerateExp@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2725758928,
+    "handler": "guFogGenerateExp"
+  },
+  {
+    "id": 3886,
+    "name": "DirectSoundCreate8",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2590216625
+  },
+  {
+    "id": 3887,
+    "name": "IDirectSound8_VerifyCertification",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4126570558
+  },
+  {
+    "id": 3888,
+    "name": "grVertexLayout",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2339079236
+  },
+  {
+    "id": 3889,
+    "name": "_grVertexLayout@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1431888170,
+    "handler": "grVertexLayout"
+  },
+  {
+    "id": 3890,
+    "name": "grCoordinateSpace",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2356562300
+  },
+  {
+    "id": 3891,
+    "name": "_grCoordinateSpace@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 113067737,
+    "handler": "grCoordinateSpace"
+  },
+  {
+    "id": 3892,
+    "name": "grDrawVertexArray",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 841807601
+  },
+  {
+    "id": 3893,
+    "name": "_grDrawVertexArray@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 644930675,
+    "handler": "grDrawVertexArray"
+  },
+  {
+    "id": 3894,
+    "name": "grDrawVertexArrayContiguous",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3949840089
+  },
+  {
+    "id": 3895,
+    "name": "_grDrawVertexArrayContiguous@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2022015007,
+    "handler": "grDrawVertexArrayContiguous"
+  },
+  {
+    "id": 3896,
+    "name": "grGet",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 884187272
+  },
+  {
+    "id": 3897,
+    "name": "_grGet@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 28572120,
+    "handler": "grGet"
+  },
+  {
+    "id": 3898,
+    "name": "grGetString",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2707785489
+  },
+  {
+    "id": 3899,
+    "name": "_grGetString@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2546946084,
+    "handler": "grGetString"
+  },
+  {
+    "id": 3900,
+    "name": "grSelectContext",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3448218823
+  },
+  {
+    "id": 3901,
+    "name": "_grSelectContext@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 426274006,
+    "handler": "grSelectContext"
+  },
+  {
+    "id": 3902,
+    "name": "grFinish",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 53188843
+  },
+  {
+    "id": 3903,
+    "name": "_grFinish@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3978859188,
+    "handler": "grFinish"
+  },
+  {
+    "id": 3904,
+    "name": "grFlush",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1675040242
+  },
+  {
+    "id": 3905,
+    "name": "_grFlush@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1920882727,
+    "handler": "grFlush"
+  },
+  {
+    "id": 3906,
+    "name": "grLoadGammaTable",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4031368507
+  },
+  {
+    "id": 3907,
+    "name": "_grLoadGammaTable@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1619802419,
+    "handler": "grLoadGammaTable"
+  },
+  {
+    "id": 3908,
+    "name": "guGammaCorrectionRGB",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2200338157
+  },
+  {
+    "id": 3909,
+    "name": "_guGammaCorrectionRGB@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3897841765,
+    "handler": "guGammaCorrectionRGB"
+  },
+  {
+    "id": 3910,
+    "name": "grViewport",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 119916518
+  },
+  {
+    "id": 3911,
+    "name": "_grViewport@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 631513192,
+    "handler": "grViewport"
+  },
+  {
+    "id": 3912,
+    "name": "grDepthRange",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1490623582
+  },
+  {
+    "id": 3913,
+    "name": "_grDepthRange@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 626133417,
+    "handler": "grDepthRange"
+  },
+  {
+    "id": 3914,
+    "name": "grQueryResolutions",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1003354203
+  },
+  {
+    "id": 3915,
+    "name": "_grQueryResolutions@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1442107504,
+    "handler": "grQueryResolutions"
+  },
+  {
+    "id": 3916,
+    "name": "grTexDownloadTablePartial",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 180287768
+  },
+  {
+    "id": 3917,
+    "name": "_grTexDownloadTablePartial@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 180646564,
+    "handler": "grTexDownloadTablePartial"
+  },
+  {
+    "id": 3918,
+    "name": "grGetProcAddress",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2950775536
+  },
+  {
+    "id": 3919,
+    "name": "_grGetProcAddress@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 756910763,
+    "handler": "grGetProcAddress"
+  },
+  {
+    "id": 3920,
+    "name": "grEnable",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1783241435
+  },
+  {
+    "id": 3921,
+    "name": "_grEnable@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2053563304,
+    "handler": "grEnable"
+  },
+  {
+    "id": 3922,
+    "name": "grDisable",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3377410376
+  },
+  {
+    "id": 3923,
+    "name": "_grDisable@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1580856281,
+    "handler": "grDisable"
+  },
+  {
+    "id": 3924,
+    "name": "grLfbConstantDepth",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1353385
+  },
+  {
+    "id": 3925,
+    "name": "_grLfbConstantDepth@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4008935098,
+    "handler": "grLfbConstantDepth"
+  },
+  {
+    "id": 3926,
+    "name": "grGlideGetState",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2753602624
+  },
+  {
+    "id": 3927,
+    "name": "_grGlideGetState@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3609194645,
+    "handler": "grGlideGetState"
+  },
+  {
+    "id": 3928,
+    "name": "grGlideSetState",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3626438172
+  },
+  {
+    "id": 3929,
+    "name": "_grGlideSetState@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 522755041,
+    "handler": "grGlideSetState"
+  },
+  {
+    "id": 3930,
+    "name": "grGlideGetVertexLayout",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3290364171
+  },
+  {
+    "id": 3931,
+    "name": "_grGlideGetVertexLayout@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2499739096,
+    "handler": "grGlideGetVertexLayout"
+  },
+  {
+    "id": 3932,
+    "name": "grGlideSetVertexLayout",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 25154887
+  },
+  {
+    "id": 3933,
+    "name": "_grGlideSetVertexLayout@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1343695572,
+    "handler": "grGlideSetVertexLayout"
+  },
+  {
+    "id": 3934,
+    "name": "guFogGenerateExp2",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2526294507
+  },
+  {
+    "id": 3935,
+    "name": "_guFogGenerateExp2@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 259188646,
+    "handler": "guFogGenerateExp2"
+  },
+  {
+    "id": 3936,
+    "name": "guFogGenerateLinear",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1102595037
+  },
+  {
+    "id": 3937,
+    "name": "_guFogGenerateLinear@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1793565779,
+    "handler": "guFogGenerateLinear"
+  },
+  {
+    "id": 3938,
+    "name": "guFogTableIndexToW",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 577190211
+  },
+  {
+    "id": 3939,
+    "name": "_guFogTableIndexToW@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4009926724,
+    "handler": "guFogTableIndexToW"
+  },
+  {
+    "id": 3940,
+    "name": "glide3_grGlideInit",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3338543036,
+    "handler": "glide3_grGlideInit"
+  },
+  {
+    "id": 3941,
+    "name": "glide3_grSstWinClose",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 539628539,
+    "handler": "glide3_grSstWinClose"
+  },
+  {
+    "id": 3942,
+    "name": "_grSstWinClose@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2759042553,
+    "handler": "glide3_grSstWinClose"
+  },
+  {
+    "id": 3943,
+    "name": "glide3_grTexDownloadTable",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2622981862,
+    "handler": "glide3_grTexDownloadTable"
+  },
+  {
+    "id": 3944,
+    "name": "_grTexDownloadTable@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4245139420,
+    "handler": "glide3_grTexDownloadTable"
+  },
+  {
+    "id": 3945,
+    "name": "glide3_grLfbWriteRegion",
+    "nargs": 9,
+    "convention": "stdcall",
+    "hash": 726499634,
+    "handler": "glide3_grLfbWriteRegion"
+  },
+  {
+    "id": 3946,
+    "name": "_grLfbWriteRegion@36",
+    "nargs": 9,
+    "convention": "stdcall",
+    "hash": 2584968025,
+    "handler": "glide3_grLfbWriteRegion"
+  },
+  {
+    "id": 3947,
+    "name": "IDirectMusic_EnumPort",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 386437615
+  },
+  {
+    "id": 3948,
+    "name": "IDirectMusic_CreateMusicBuffer",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2334005562,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3949,
+    "name": "IDirectMusic_CreatePort",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1356003098,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3950,
+    "name": "IDirectMusic_EnumMasterClock",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3562733196,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3951,
+    "name": "IDirectMusic_GetMasterClock",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1935237977,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3952,
+    "name": "IDirectMusic_SetMasterClock",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2396515021,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3953,
+    "name": "IDirectMusic_Activate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 575003748
+  },
+  {
+    "id": 3954,
+    "name": "IDirectMusic_GetDefaultPort",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2559606087,
+    "handler": "ftm_unimplemented"
+  },
+  {
+    "id": 3955,
+    "name": "IDirectMusic_SetDirectSound",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1597275093
+  },
+  {
+    "id": 3956,
+    "name": "IVBImageSurface7_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 39649529,
+    "handler": "VBImage_QueryInterface"
+  },
+  {
+    "id": 3957,
+    "name": "IVBImageSurface7_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3776332234,
+    "handler": "VBImage_AddRef"
+  },
+  {
+    "id": 3958,
+    "name": "IVBImageSurface7_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1218098855,
+    "handler": "VBImage_Release"
+  },
+  {
+    "id": 3959,
+    "name": "IVBImageSurface7_InternalSetObject",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1174337806
+  },
+  {
+    "id": 3960,
+    "name": "IVBImageSurface7_InternalGetObject",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 369590034
+  },
+  {
+    "id": 3961,
+    "name": "IVBImageSurface7_AddAttachedSurface",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3201711460
+  },
+  {
+    "id": 3962,
+    "name": "IVBImageSurface7_Blt",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1132678132,
+    "handler": "VBImage_Blt"
+  },
+  {
+    "id": 3963,
+    "name": "IVBImageSurface7_BltColorFill",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1926458746,
+    "handler": "VBImage_BltColorFill"
+  },
+  {
+    "id": 3964,
+    "name": "IVBImageSurface7_BltFast",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 2728014834,
+    "handler": "VBImage_BltFast"
+  },
+  {
+    "id": 3965,
+    "name": "IVBImageSurface7_BltFx",
+    "nargs": 7,
+    "stub": {
+      "pop": 32,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1582368202
+  },
+  {
+    "id": 3966,
+    "name": "IVBImageSurface7_BltToDC",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 157989768
+  },
+  {
+    "id": 3967,
+    "name": "IVBImageSurface7_ChangeUniquenessValue",
+    "nargs": 1,
+    "stub": {
+      "pop": 8,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2879974435
+  },
+  {
+    "id": 3968,
+    "name": "IVBImageSurface7_DeleteAttachedSurface",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2204261632
+  },
+  {
+    "id": 3969,
+    "name": "IVBImageSurface7_DrawBox",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1784641409
+  },
+  {
+    "id": 3970,
+    "name": "IVBImageSurface7_DrawCircle",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4055710604
+  },
+  {
+    "id": 3971,
+    "name": "IVBImageSurface7_DrawEllipse",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 801014742
+  },
+  {
+    "id": 3972,
+    "name": "IVBImageSurface7_DrawLine",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1417156466
+  },
+  {
+    "id": 3973,
+    "name": "IVBImageSurface7_DrawRoundedBox",
+    "nargs": 7,
+    "stub": {
+      "pop": 32,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3755965758
+  },
+  {
+    "id": 3974,
+    "name": "IVBImageSurface7_DrawText",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 352336527,
+    "handler": "VBImage_DrawText"
+  },
+  {
+    "id": 3975,
+    "name": "IVBImageSurface7_Flip",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 102578973
+  },
+  {
+    "id": 3976,
+    "name": "IVBImageSurface7_GetAttachedSurface",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4054031841
+  },
+  {
+    "id": 3977,
+    "name": "IVBImageSurface7_GetAttachedSurfaceEnum",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1474161996
+  },
+  {
+    "id": 3978,
+    "name": "IVBImageSurface7_GetBltStatus",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3460978458
+  },
+  {
+    "id": 3979,
+    "name": "IVBImageSurface7_GetCaps",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1625636155
+  },
+  {
+    "id": 3980,
+    "name": "IVBImageSurface7_GetClipper",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4078766547
+  },
+  {
+    "id": 3981,
+    "name": "IVBImageSurface7_GetColorKey",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 733813780
+  },
+  {
+    "id": 3982,
+    "name": "IVBImageSurface7_GetDC",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1175896747
+  },
+  {
+    "id": 3983,
+    "name": "IVBImageSurface7_GetDirectDraw",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2657117129
+  },
+  {
+    "id": 3984,
+    "name": "IVBImageSurface7_GetDirectDrawColorControl",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1509262321
+  },
+  {
+    "id": 3985,
+    "name": "IVBImageSurface7_GetDirectDrawGammaControl",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3973990211
+  },
+  {
+    "id": 3986,
+    "name": "IVBImageSurface7_getDrawStyle",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 624602585
+  },
+  {
+    "id": 3987,
+    "name": "IVBImageSurface7_getDrawWidth",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4160182064
+  },
+  {
+    "id": 3988,
+    "name": "IVBImageSurface7_GetFillColor",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3080142790
+  },
+  {
+    "id": 3989,
+    "name": "IVBImageSurface7_GetFillStyle",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1566849928
+  },
+  {
+    "id": 3990,
+    "name": "IVBImageSurface7_GetFlipStatus",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4251152363
+  },
+  {
+    "id": 3991,
+    "name": "IVBImageSurface7_GetFontTransparency",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1559110757
+  },
+  {
+    "id": 3992,
+    "name": "IVBImageSurface7_GetForeColor",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2930348667
+  },
+  {
+    "id": 3993,
+    "name": "IVBImageSurface7_GetLockedPixel",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4178817468
+  },
+  {
+    "id": 3994,
+    "name": "IVBImageSurface7_GetPalette",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1481512053
+  },
+  {
+    "id": 3995,
+    "name": "IVBImageSurface7_GetPixelFormat",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3469662445
+  },
+  {
+    "id": 3996,
+    "name": "IVBImageSurface7_GetSurfaceDesc",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1794663092,
+    "handler": "VBImage_GetSurfaceDesc"
+  },
+  {
+    "id": 3997,
+    "name": "IVBImageSurface7_GetUniquenessValue",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1237818499
+  },
+  {
+    "id": 3998,
+    "name": "IVBImageSurface7_isLost",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4171767584
+  },
+  {
+    "id": 3999,
+    "name": "IVBImageSurface7_Lock",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2154603193
+  },
+  {
+    "id": 4000,
+    "name": "IVBImageSurface7_ReleaseDC",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1667419630
+  },
+  {
+    "id": 4001,
+    "name": "IVBImageSurface7_restore",
+    "nargs": 1,
+    "stub": {
+      "pop": 8,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 844658988
+  },
+  {
+    "id": 4002,
+    "name": "IVBImageSurface7_SetClipper",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 412866071,
+    "handler": "VBImage_SetClipper"
+  },
+  {
+    "id": 4003,
+    "name": "IVBImageSurface7_SetColorKey",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2615454496,
+    "handler": "VBImage_SetColorKey"
+  },
+  {
+    "id": 4004,
+    "name": "IVBImageSurface7_setDrawStyle",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 886430069
+  },
+  {
+    "id": 4005,
+    "name": "IVBImageSurface7_setDrawWidth",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1927399068
+  },
+  {
+    "id": 4006,
+    "name": "IVBImageSurface7_SetFillColor",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2046056458
+  },
+  {
+    "id": 4007,
+    "name": "IVBImageSurface7_SetFillStyle",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 351008940
+  },
+  {
+    "id": 4008,
+    "name": "IVBImageSurface7_SetFont",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1144881607
+  },
+  {
+    "id": 4009,
+    "name": "IVBImageSurface7_SetFontTransparency",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2994268769
+  },
+  {
+    "id": 4010,
+    "name": "IVBImageSurface7_SetForeColor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2326229631,
+    "handler": "VBImage_SetForeColor"
+  },
+  {
+    "id": 4011,
+    "name": "IVBImageSurface7_SetLockedPixel",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3610299536
+  },
+  {
+    "id": 4012,
+    "name": "IVBImageSurface7_SetPalette",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4079028289
+  },
+  {
+    "id": 4013,
+    "name": "IVBImageSurface7_Unlock",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2105882842
+  },
+  {
+    "id": 4014,
+    "name": "IVBImageSurface7_SetPriority",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2331958826
+  },
+  {
+    "id": 4015,
+    "name": "IVBImageSurface7_GetPriority",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 929156510
+  },
+  {
+    "id": 4016,
+    "name": "IVBImageSurface7_GetLOD",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2398707513
+  },
+  {
+    "id": 4017,
+    "name": "IVBImageSurface7_SetLOD",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3963908549
+  },
+  {
+    "id": 4018,
+    "name": "IVBImageSurface7_GetLockedArray",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3460097025
+  },
+  {
+    "id": 4019,
+    "name": "IVBImageSurface7_SetFontBackColor",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3136384167
+  },
+  {
+    "id": 4020,
+    "name": "IVBImageSurface7_GetFontBackColor",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3775657467
+  },
+  {
+    "id": 4021,
+    "name": "IVBImageSurface7_UpdateOverlay",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2454914893
+  },
+  {
+    "id": 4022,
+    "name": "IVBImageSurface7_UpdateOverlayZOrder",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3081784647
+  },
+  {
+    "id": 4023,
+    "name": "IVBImageSurface7_GetOverlayPosition",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 33370293
+  },
+  {
+    "id": 4024,
+    "name": "IVBImageSurface7_SetOverlayPosition",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1613490185
+  },
+  {
+    "id": 4025,
+    "name": "IVBImageSurface7_GetOverlayZOrdersEnum",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1348966156
+  },
+  {
+    "id": 4026,
+    "name": "IVBImageSurface7_UpdateOverlayFx",
+    "nargs": 6,
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 494854795
+  },
+  {
+    "id": 4027,
+    "name": "IVBDirectX7_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 123260090,
+    "handler": "IDirectX7_QueryInterface"
+  },
+  {
+    "id": 4028,
+    "name": "IVBDirectX7_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2057485729,
+    "handler": "dx_com_addref"
+  },
+  {
+    "id": 4029,
+    "name": "IVBDirectX7_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 403641174,
+    "handler": "dx_com_release_basic"
+  },
+  {
+    "id": 4030,
+    "name": "IVBDirectX7_Direct3DRMCreate",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3702949342
+  },
+  {
+    "id": 4031,
+    "name": "IVBDirectX7_DirectDrawCreate",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3528583906,
+    "handler": "IDirectX7_DirectDrawCreate"
+  },
+  {
+    "id": 4032,
+    "name": "IVBDirectX7_GetDDEnum",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1728988838
+  },
+  {
+    "id": 4033,
+    "name": "IVBDirectX7_DirectSoundCreate",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 865874251,
+    "handler": "IDirectX7_DirectSoundCreate"
+  },
+  {
+    "id": 4034,
+    "name": "IVBDirectX7_DirectSoundCaptureCreate",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 250790003
+  },
+  {
+    "id": 4035,
+    "name": "IVBDirectX7_GetDSEnum",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4003356743
+  },
+  {
+    "id": 4036,
+    "name": "IVBDirectX7_GetDSCaptureEnum",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 692976257
+  },
+  {
+    "id": 4037,
+    "name": "IVBDirectX7_DirectInputCreate",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2752976748,
+    "handler": "IDirectX7_DirectInputCreate"
+  },
+  {
+    "id": 4038,
+    "name": "IVBDirectX7_DirectPlayCreate",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2172081738
+  },
+  {
+    "id": 4039,
+    "name": "IVBDirectX7_DirectPlayLobbyCreate",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2787095442
+  },
+  {
+    "id": 4040,
+    "name": "IVBDirectX7_GetDPEnum",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1166373050
+  },
+  {
+    "id": 4041,
+    "name": "IVBDirectX7_ColorGetAlpha",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1941068272
+  },
+  {
+    "id": 4042,
+    "name": "IVBDirectX7_ColorGetBlue",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4213690912
+  },
+  {
+    "id": 4043,
+    "name": "IVBDirectX7_ColorGetGreen",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 113327735
+  },
+  {
+    "id": 4044,
+    "name": "IVBDirectX7_ColorGetRed",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 499782955
+  },
+  {
+    "id": 4045,
+    "name": "IVBDirectX7_CreateColorRGB",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1586742539
+  },
+  {
+    "id": 4046,
+    "name": "IVBDirectX7_CreateColorRGBA",
+    "nargs": 6,
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 748655486
+  },
+  {
+    "id": 4047,
+    "name": "IVBDirectX7_MatrixFromQuaternion",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2945656356
+  },
+  {
+    "id": 4048,
+    "name": "IVBDirectX7_QuaternionRotation",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1166128735
+  },
+  {
+    "id": 4049,
+    "name": "IVBDirectX7_QuaternionMultiply",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 594123077
+  },
+  {
+    "id": 4050,
+    "name": "IVBDirectX7_QuaternionSlerp",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3845501047
+  },
+  {
+    "id": 4051,
+    "name": "IVBDirectX7_VectorAdd",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3805468369
+  },
+  {
+    "id": 4052,
+    "name": "IVBDirectX7_VectorCrossProduct",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 815429897
+  },
+  {
+    "id": 4053,
+    "name": "IVBDirectX7_VectorDotProduct",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2875096480
+  },
+  {
+    "id": 4054,
+    "name": "IVBDirectX7_VectorModulus",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1736112463
+  },
+  {
+    "id": 4055,
+    "name": "IVBDirectX7_VectorNormalize",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2523441409
+  },
+  {
+    "id": 4056,
+    "name": "IVBDirectX7_VectorRandom",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3035489349
+  },
+  {
+    "id": 4057,
+    "name": "IVBDirectX7_VectorReflect",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 647164543
+  },
+  {
+    "id": 4058,
+    "name": "IVBDirectX7_VectorRotate",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2045386729
+  },
+  {
+    "id": 4059,
+    "name": "IVBDirectX7_VectorScale",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 307219744
+  },
+  {
+    "id": 4060,
+    "name": "IVBDirectX7_VectorSubtract",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 980518542
+  },
+  {
+    "id": 4061,
+    "name": "IVBDirectX7_VectorCopy",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3680522679
+  },
+  {
+    "id": 4062,
+    "name": "IVBDirectX7_RotateXMatrix",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3071331467
+  },
+  {
+    "id": 4063,
+    "name": "IVBDirectX7_RotateYMatrix",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2080829256
+  },
+  {
+    "id": 4064,
+    "name": "IVBDirectX7_RotateZMatrix",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1960877761
+  },
+  {
+    "id": 4065,
+    "name": "IVBDirectX7_ViewMatrix",
+    "nargs": 6,
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3532617785
+  },
+  {
+    "id": 4066,
+    "name": "IVBDirectX7_MatrixMultiply",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3530970380
+  },
+  {
+    "id": 4067,
+    "name": "IVBDirectX7_ProjectionMatrix",
+    "nargs": 5,
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3990817873
+  },
+  {
+    "id": 4068,
+    "name": "IVBDirectX7_CopyMatrix",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1391033285
+  },
+  {
+    "id": 4069,
+    "name": "IVBDirectX7_IdentityMatrix",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2091388118
+  },
+  {
+    "id": 4070,
+    "name": "IVBDirectX7_ZeroMatrix",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2312926414
+  },
+  {
+    "id": 4071,
+    "name": "IVBDirectX7_TickCount",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4213315811
+  },
+  {
+    "id": 4072,
+    "name": "IVBDirectX7_SystemBpp",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 752504498
+  },
+  {
+    "id": 4073,
+    "name": "IVBDirectX7_DirectMusicLoaderCreate",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1096173496
+  },
+  {
+    "id": 4074,
+    "name": "IVBDirectX7_DirectMusicComposerCreate",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2525960521
+  },
+  {
+    "id": 4075,
+    "name": "IVBDirectX7_DirectMusicPerformanceCreate",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2651754595
+  },
+  {
+    "id": 4076,
+    "name": "IVBDirectX7_GetWindowRect",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 238158849,
+    "handler": "IVBDirectX7_GetWindowRect"
+  },
+  {
+    "id": 4077,
+    "name": "IVBDirectX7_CreateEvent",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 214104335
+  },
+  {
+    "id": 4078,
+    "name": "IVBDirectX7_SetEvent",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2741431321
+  },
+  {
+    "id": 4079,
+    "name": "IVBDirectX7_DestroyEvent",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1603096711
+  },
+  {
+    "id": 4080,
+    "name": "IVBDirectX7_CreateD3DVertex",
+    "nargs": 10,
+    "stub": {
+      "pop": 44,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 892446170
+  },
+  {
+    "id": 4081,
+    "name": "IVBDirectX7_CreateD3DLVertex",
+    "nargs": 9,
+    "stub": {
+      "pop": 40,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 106286942
+  },
+  {
+    "id": 4082,
+    "name": "IVBDirectX7_CreateD3DTLVertex",
+    "nargs": 10,
+    "stub": {
+      "pop": 44,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 4120706298
+  },
+  {
+    "id": 4083,
+    "name": "IVBDirectX7_DirectDraw4Create",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 2325110034
+  },
+  {
+    "id": 4084,
+    "name": "IVBDirectX7_CreateNewGuid",
+    "nargs": 2,
+    "stub": {
+      "pop": 12,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3160843392
+  },
+  {
+    "id": 4085,
+    "name": "_mbsstr",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 1036335673
+  },
+  {
+    "id": 4086,
+    "name": "PathAppendW",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1115347343,
+    "args": [
+      {
+        "name": "pszPath",
+        "type": "LPWSTR",
+        "out": true
+      },
+      {
+        "name": "pszMore",
+        "type": "LPCWSTR"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 4087,
+    "name": "PathFileExistsW",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 959442917,
+    "args": [
+      {
+        "name": "pszPath",
+        "type": "LPCWSTR"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 4088,
+    "name": "SHCreateDirectoryExW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2815537801,
+    "args": [
+      {
+        "name": "hwnd",
+        "type": "HWND"
+      },
+      {
+        "name": "pszPath",
+        "type": "LPCWSTR"
+      },
+      {
+        "name": "psa",
+        "type": "LPVOID"
+      }
+    ],
+    "ret": "DWORD"
+  },
+  {
+    "id": 4089,
+    "name": "IVBDirectDraw7_SetDisplayMode",
+    "nargs": 6,
+    "stub": {
+      "pop": 28,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 3405772288
+  },
+  {
+    "id": 4090,
+    "name": "IVBDirectDraw7_TestCooperativeLevel",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 586502962,
+    "handler": "IVBDirectDraw7_TestCooperativeLevel"
+  },
+  {
+    "id": 4091,
+    "name": "IVBDirectDraw7_WaitForVerticalBlank",
+    "nargs": 4,
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1356986969
+  },
+  {
+    "id": 4092,
+    "name": "IVBDirectDraw7_GetDeviceIdentifier",
+    "nargs": 3,
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "convention": "stdcall",
+    "hash": 1168585098
+  },
+  {
+    "id": 4093,
+    "name": "_hwrite",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3025282013
+  },
+  {
+    "id": 4094,
+    "name": "acmDriverEnum",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3370924607,
+    "args": [
+      {
+        "name": "fnCallback",
+        "type": "DWORD"
+      },
+      {
+        "name": "dwInstance",
+        "type": "DWORD"
+      },
+      {
+        "name": "fdwEnum",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 4095,
+    "name": "acmDriverDetailsA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1073823375,
+    "args": [
+      {
+        "name": "hadid",
+        "type": "HANDLE"
+      },
+      {
+        "name": "padd",
+        "type": "LPVOID"
+      },
+      {
+        "name": "fdwDetails",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 4096,
+    "name": "grDrawPolygonVertexList",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3644333370
+  },
+  {
+    "id": 4097,
+    "name": "_grDrawPolygonVertexList@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3776656871,
+    "handler": "grDrawPolygonVertexList"
+  },
+  {
+    "id": 4098,
+    "name": "_IPX_Initialise",
+    "nargs": 0,
+    "stub": {
+      "pop": 4,
+      "ret": 0
+    },
+    "convention": "cdecl",
+    "hash": 3679586753,
+    "ret": "BOOL"
+  },
+  {
+    "id": 4099,
+    "name": "LZInit",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2732690397,
+    "ret": "INT"
+  },
+  {
+    "id": 4100,
+    "name": "StringFromIID",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2069023294,
+    "handler": "StringFromCLSID"
+  },
+  {
+    "id": 4101,
+    "name": "GetProcessHeaps",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2746033651,
+    "ret": "DWORD"
+  },
+  {
+    "id": 4102,
+    "name": "PathAppendA",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 813350201,
+    "args": [
+      {
+        "name": "pszPath",
+        "type": "LPSTR",
+        "out": true
+      },
+      {
+        "name": "pszMore",
+        "type": "LPCSTR"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 4103,
+    "name": "PathFileExistsA",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1127219107,
+    "args": [
+      {
+        "name": "pszPath",
+        "type": "LPCSTR"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 4104,
+    "name": "IDirectPlay4W_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2038522316
+  },
+  {
+    "id": 4105,
+    "name": "IDirectPlay4W_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1974688471
+  },
+  {
+    "id": 4106,
+    "name": "IDirectPlay4W_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 809369056
+  },
+  {
+    "id": 4107,
+    "name": "IDirectPlay4W_AddPlayerToGroup",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2730284589
+  },
+  {
+    "id": 4108,
+    "name": "IDirectPlay4W_Close",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 826840265
+  },
+  {
+    "id": 4109,
+    "name": "IDirectPlay4W_CreateGroup",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3473053498
+  },
+  {
+    "id": 4110,
+    "name": "IDirectPlay4W_CreatePlayer",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 2206250930
+  },
+  {
+    "id": 4111,
+    "name": "IDirectPlay4W_DeletePlayerFromGroup",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3911717148
+  },
+  {
+    "id": 4112,
+    "name": "IDirectPlay4W_DestroyGroup",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1895657570
+  },
+  {
+    "id": 4113,
+    "name": "IDirectPlay4W_DestroyPlayer",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4288400858
+  },
+  {
+    "id": 4114,
+    "name": "IDirectPlay4W_EnumGroupPlayers",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3114817905
+  },
+  {
+    "id": 4115,
+    "name": "IDirectPlay4W_EnumGroups",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2024472010
+  },
+  {
+    "id": 4116,
+    "name": "IDirectPlay4W_EnumPlayers",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1632630928
+  },
+  {
+    "id": 4117,
+    "name": "IDirectPlay4W_EnumSessions",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2655119431
+  },
+  {
+    "id": 4118,
+    "name": "IDirectPlay4W_GetCaps",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1800695760
+  },
+  {
+    "id": 4119,
+    "name": "IDirectPlay4W_GetGroupData",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 69376364
+  },
+  {
+    "id": 4120,
+    "name": "IDirectPlay4W_GetGroupName",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 214644831
+  },
+  {
+    "id": 4121,
+    "name": "IDirectPlay4W_GetMessageCount",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3689347107
+  },
+  {
+    "id": 4122,
+    "name": "IDirectPlay4W_GetPlayerAddress",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "hash": 485626152
+  },
+  {
+    "id": 4123,
+    "name": "IDirectPlay4W_GetPlayerCaps",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1305783993
+  },
+  {
+    "id": 4124,
+    "name": "IDirectPlay4W_GetPlayerData",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3485786720
+  },
+  {
+    "id": 4125,
+    "name": "IDirectPlay4W_GetPlayerName",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1806096347
+  },
+  {
+    "id": 4126,
+    "name": "IDirectPlay4W_GetSessionDesc",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3556815770
+  },
+  {
+    "id": 4127,
+    "name": "IDirectPlay4W_Initialize",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1841572441
+  },
+  {
+    "id": 4128,
+    "name": "IDirectPlay4W_Open",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1824581663
+  },
+  {
+    "id": 4129,
+    "name": "IDirectPlay4W_Receive",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3882055488
+  },
+  {
+    "id": 4130,
+    "name": "IDirectPlay4W_Send",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 4173012965
+  },
+  {
+    "id": 4131,
+    "name": "IDirectPlay4W_SetGroupData",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3233982512
+  },
+  {
+    "id": 4132,
+    "name": "IDirectPlay4W_SetGroupName",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1463872203
+  },
+  {
+    "id": 4133,
+    "name": "IDirectPlay4W_SetPlayerData",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 303445444
+  },
+  {
+    "id": 4134,
+    "name": "IDirectPlay4W_SetPlayerName",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2967643095
+  },
+  {
+    "id": 4135,
+    "name": "IDirectPlay4W_SetSessionDesc",
+    "nargs": 3,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 16,
+      "ret": 2147500033
+    },
+    "hash": 594765774
+  },
+  {
+    "id": 4136,
+    "name": "IDirectPlay4W_AddGroupToGroup",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 716267867
+  },
+  {
+    "id": 4137,
+    "name": "IDirectPlay4W_CreateGroupInGroup",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 4100188876
+  },
+  {
+    "id": 4138,
+    "name": "IDirectPlay4W_DeleteGroupFromGroup",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1823252278
+  },
+  {
+    "id": 4139,
+    "name": "IDirectPlay4W_EnumConnections",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2617749511
+  },
+  {
+    "id": 4140,
+    "name": "IDirectPlay4W_EnumGroupsInGroup",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2750328412
+  },
+  {
+    "id": 4141,
+    "name": "IDirectPlay4W_GetGroupConnectionSettings",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "hash": 1877399065
+  },
+  {
+    "id": 4142,
+    "name": "IDirectPlay4W_InitializeConnection",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 552187317
+  },
+  {
+    "id": 4143,
+    "name": "IDirectPlay4W_SecureOpen",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "hash": 1573461258
+  },
+  {
+    "id": 4144,
+    "name": "IDirectPlay4W_SendChatMessage",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "hash": 2867113778
+  },
+  {
+    "id": 4145,
+    "name": "IDirectPlay4W_SetGroupConnectionSettings",
+    "nargs": 4,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 20,
+      "ret": 2147500033
+    },
+    "hash": 2551992781
+  },
+  {
+    "id": 4146,
+    "name": "IDirectPlay4W_StartSession",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1719735331
+  },
+  {
+    "id": 4147,
+    "name": "IDirectPlay4W_GetGroupFlags",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2303101911
+  },
+  {
+    "id": 4148,
+    "name": "IDirectPlay4W_GetGroupParent",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1931597164
+  },
+  {
+    "id": 4149,
+    "name": "IDirectPlay4W_GetPlayerAccount",
+    "nargs": 5,
+    "convention": "stdcall",
+    "stub": {
+      "pop": 24,
+      "ret": 2147500033
+    },
+    "hash": 3569725351
+  },
+  {
+    "id": 4150,
+    "name": "IDirectPlay4W_GetPlayerFlags",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 817584683
+  },
+  {
+    "id": 4151,
+    "name": "IDirectPlay4W_GetGroupOwner",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2179673315
+  },
+  {
+    "id": 4152,
+    "name": "IDirectPlay4W_SetGroupOwner",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1514097407
+  },
+  {
+    "id": 4153,
+    "name": "IDirectPlay4W_SendEx",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 3910256456
+  },
+  {
+    "id": 4154,
+    "name": "IDirectPlay4W_GetMessageQueue",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2332345523
+  },
+  {
+    "id": 4155,
+    "name": "IDirectPlay4W_CancelMessage",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1432922132
+  },
+  {
+    "id": 4156,
+    "name": "IDirectPlay4W_CancelPriority",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4186605625
+  },
+  {
+    "id": 4157,
+    "name": "_mkdir",
+    "nargs": 1,
+    "convention": "cdecl",
+    "hash": 192858669
+  },
+  {
+    "id": 4158,
+    "name": "setvbuf",
+    "nargs": 4,
+    "convention": "cdecl",
+    "hash": 917302912
+  },
+  {
+    "id": 4159,
+    "name": "getc",
+    "nargs": 1,
+    "convention": "cdecl",
+    "hash": 2213230300
+  },
+  {
+    "id": 4160,
+    "name": "__p___mb_cur_max",
+    "nargs": 0,
+    "convention": "cdecl",
+    "hash": 3092716855
+  },
+  {
+    "id": 4161,
+    "name": "__p__pctype",
+    "nargs": 0,
+    "convention": "cdecl",
+    "hash": 3267043826
+  },
+  {
+    "id": 4162,
+    "name": "fgetc",
+    "nargs": 1,
+    "convention": "cdecl",
+    "hash": 2489769320
+  },
+  {
+    "id": 4163,
+    "name": "_makepath",
+    "nargs": 5,
+    "convention": "cdecl",
+    "hash": 539032803
+  },
+  {
+    "id": 4164,
+    "name": "QueueUserAPC",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2299245819,
+    "ret": "DWORD"
+  },
+  {
+    "id": 4165,
+    "name": "acmGetVersion",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 4130544480,
+    "ret": "DWORD"
+  },
+  {
+    "id": 4166,
+    "name": "ValidateRgn",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1205302862,
+    "ret": "BOOL"
+  },
+  {
+    "id": 4167,
+    "name": "DebugBreak",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1703094871
+  },
+  {
+    "id": 4168,
+    "name": "FatalAppExitA",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2465888635
+  },
+  {
+    "id": 4169,
+    "name": "ModifyWorldTransform",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2841028271,
+    "ret": "BOOL"
+  },
+  {
+    "id": 4170,
+    "name": "WSACancelBlockingCall",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1649100535,
+    "ret": "int"
+  },
+  {
+    "id": 4171,
+    "name": "glDrawArrays",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1326080162
+  },
+  {
+    "id": 4172,
+    "name": "GetDiskFreeSpaceExW",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1342375048
+  },
+  {
+    "id": 4173,
+    "name": "guTexCombineFunction",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1613751871,
+    "handler": "grTexCombineFunction"
+  },
+  {
+    "id": 4174,
+    "name": "_guTexCombineFunction@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2686407032,
+    "handler": "grTexCombineFunction"
+  },
+  {
+    "id": 4175,
+    "name": "grDrawPlanarPolygonVertexList",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4057487734,
+    "handler": "grDrawPolygonVertexList"
+  },
+  {
+    "id": 4176,
+    "name": "_grDrawPlanarPolygonVertexList@8",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 901186867,
+    "handler": "grDrawPolygonVertexList"
+  },
+  {
+    "id": 4177,
+    "name": "guColorCombineFunction",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 504871953
+  },
+  {
+    "id": 4178,
+    "name": "_guColorCombineFunction@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3737785026,
+    "handler": "guColorCombineFunction"
+  },
+  {
+    "id": 4179,
+    "name": "guAlphaSource",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1430497082
+  },
+  {
+    "id": 4180,
+    "name": "_guAlphaSource@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3305388475,
+    "handler": "guAlphaSource"
+  },
+  {
+    "id": 4181,
+    "name": "grTexDownloadMipMapLevel",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 3990653977
+  },
+  {
+    "id": 4182,
+    "name": "_grTexDownloadMipMapLevel@32",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 336516747,
+    "handler": "grTexDownloadMipMapLevel"
+  },
+  {
+    "id": 4183,
+    "name": "grTexDownloadMipMapLevelPartial",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 2002360966
+  },
+  {
+    "id": 4184,
+    "name": "_grTexDownloadMipMapLevelPartial@40",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 1143815817,
+    "handler": "grTexDownloadMipMapLevelPartial"
+  },
+  {
+    "id": 4185,
+    "name": "timeGetSystemTime",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1653245560
+  },
+  {
+    "id": 4186,
+    "name": "IDirectPlayLobby3W_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 655769907,
+    "handler": "IDirectPlayLobby2_QueryInterface"
+  },
+  {
+    "id": 4187,
+    "name": "IDirectPlayLobby3W_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 485171328,
+    "handler": "dx_com_addref"
+  },
+  {
+    "id": 4188,
+    "name": "IDirectPlayLobby3W_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 623936649,
+    "handler": "dx_com_release_basic"
+  },
+  {
+    "id": 4189,
+    "name": "IDirectPlayLobby3W_Connect",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1548391082
+  },
+  {
+    "id": 4190,
+    "name": "IDirectPlayLobby3W_CreateAddress",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3743209472,
+    "handler": "IDirectPlayLobby2_CreateAddress"
+  },
+  {
+    "id": 4191,
+    "name": "IDirectPlayLobby3W_EnumAddress",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2195588847,
+    "handler": "IDirectPlayLobby2_EnumAddress"
+  },
+  {
+    "id": 4192,
+    "name": "IDirectPlayLobby3W_EnumAddressTypes",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2303496844,
+    "handler": "IDirectPlayLobby2_EnumAddressTypes"
+  },
+  {
+    "id": 4193,
+    "name": "IDirectPlayLobby3W_EnumLocalApplications",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3849648731,
+    "handler": "IDirectPlayLobby2_EnumLocalApplications"
+  },
+  {
+    "id": 4194,
+    "name": "IDirectPlayLobby3W_GetConnectionSettings",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 713423925,
+    "handler": "IDirectPlayLobby2_GetConnectionSettings"
+  },
+  {
+    "id": 4195,
+    "name": "IDirectPlayLobby3W_ReceiveLobbyMessage",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2063356254,
+    "handler": "IDirectPlayLobby2_ReceiveLobbyMessage"
+  },
+  {
+    "id": 4196,
+    "name": "IDirectPlayLobby3W_RunApplication",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3546508057,
+    "handler": "IDirectPlayLobby2_RunApplication"
+  },
+  {
+    "id": 4197,
+    "name": "IDirectPlayLobby3W_SendLobbyMessage",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2072153793,
+    "handler": "IDirectPlayLobby2_SendLobbyMessage"
+  },
+  {
+    "id": 4198,
+    "name": "IDirectPlayLobby3W_SetConnectionSettings",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 184823153,
+    "handler": "IDirectPlayLobby2_SetConnectionSettings"
+  },
+  {
+    "id": 4199,
+    "name": "IDirectPlayLobby3W_SetLobbyMessageEvent",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1962688105,
+    "handler": "IDirectPlayLobby2_SetLobbyMessageEvent"
+  },
+  {
+    "id": 4200,
+    "name": "IDirectPlayLobby3W_CreateCompoundAddress",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1645668251,
+    "handler": "IDirectPlayLobby2_CreateCompoundAddress"
+  },
+  {
+    "id": 4201,
+    "name": "IDirectPlayLobby3W_ConnectEx",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 209335967,
+    "handler": "IDirectPlayLobby3_ConnectEx"
+  },
+  {
+    "id": 4202,
+    "name": "IDirectPlayLobby3W_RegisterApplication",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4134921693
+  },
+  {
+    "id": 4203,
+    "name": "IDirectPlayLobby3W_UnregisterApplication",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3803468376,
+    "handler": "dplobby3_application_unsupported"
+  },
+  {
+    "id": 4204,
+    "name": "IDirectPlayLobby3W_WaitForConnectionSettings",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 300648885,
+    "handler": "IDirectPlayLobby3_WaitForConnectionSettings"
+  },
+  {
+    "id": 4205,
+    "name": "GetLongPathNameA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2694077008
+  },
+  {
+    "id": 4206,
+    "name": "GetLongPathNameW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2526300818
+  },
+  {
+    "id": 4207,
+    "name": "guDrawTriangleWithClip",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2537645813,
+    "handler": "grDrawTriangle"
+  },
+  {
+    "id": 4208,
+    "name": "_guDrawTriangleWithClip@12",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 51546553,
+    "handler": "grDrawTriangle"
+  },
+  {
+    "id": 4209,
+    "name": "glAccum",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4053872309,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4210,
+    "name": "glAreTexturesResident",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3345315088,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4211,
+    "name": "glBitmap",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3504426053
+  },
+  {
+    "id": 4212,
+    "name": "glCallList",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 248177406
+  },
+  {
+    "id": 4213,
+    "name": "glCallLists",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3596788727
+  },
+  {
+    "id": 4214,
+    "name": "glClearAccum",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3378134478,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4215,
+    "name": "glClearDepth",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3394571592
+  },
+  {
+    "id": 4216,
+    "name": "glClearIndex",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1151101333,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4217,
+    "name": "glClearStencil",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1687502789
+  },
+  {
+    "id": 4218,
+    "name": "glClipPlane",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2518167642,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4219,
+    "name": "glColor3b",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3758493084,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4220,
+    "name": "glColor3bv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2475157342,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4221,
+    "name": "glColor3d",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3724937846,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4222,
+    "name": "glColor3dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2206318080,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4223,
+    "name": "glColor3i",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3943046893,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4224,
+    "name": "glColor3iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2510433793,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4225,
+    "name": "glColor3s",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3506828799,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4226,
+    "name": "glColor3sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2506196651,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4227,
+    "name": "glColor3ub",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2707233889
+  },
+  {
+    "id": 4228,
+    "name": "glColor3ui",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2522680080,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4229,
+    "name": "glColor3uiv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 444133778,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4230,
+    "name": "glColor3us",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2422014366,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4231,
+    "name": "glColor3usv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 711589944,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4232,
+    "name": "glColor4b",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3524047703,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4233,
+    "name": "glColor4bv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3405642995,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4234,
+    "name": "glColor4d",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 3490492465,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4235,
+    "name": "glColor4dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3405348805,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4236,
+    "name": "glColor4i",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3406604370,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4237,
+    "name": "glColor4iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3370954924,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4238,
+    "name": "glColor4s",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3775711988,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4239,
+    "name": "glColor4sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3374500518,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4240,
+    "name": "glColor4ui",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3357428709,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4241,
+    "name": "glColor4uiv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2595289193,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4242,
+    "name": "glColor4us",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3726536327,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4243,
+    "name": "glColor4usv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2598937955,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4244,
+    "name": "glColorMask",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2216263645
+  },
+  {
+    "id": 4245,
+    "name": "glColorSubTableEXT",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2645535030,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4246,
+    "name": "glColorTableEXT",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1518335638,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4247,
+    "name": "glCopyPixels",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2926253350,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4248,
+    "name": "glCopyTexImage1D",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1015384472,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4249,
+    "name": "glCopyTexImage2D",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 781042259,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4250,
+    "name": "glCopyTexSubImage1D",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1979036634,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4251,
+    "name": "glCopyTexSubImage2D",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 1207119065,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4252,
+    "name": "glDeleteLists",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3424876370
+  },
+  {
+    "id": 4253,
+    "name": "glDrawPixels",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 932088857,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4254,
+    "name": "glEdgeFlag",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1320812425,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4255,
+    "name": "glEdgeFlagPointer",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2682520694,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4256,
+    "name": "glEdgeFlagv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3989700205,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4257,
+    "name": "glEndList",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2514076291
+  },
+  {
+    "id": 4258,
+    "name": "glEvalCoord1d",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3165597868,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4259,
+    "name": "glEvalCoord1dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3788105518,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4260,
+    "name": "glEvalCoord1f",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3199153106,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4261,
+    "name": "glEvalCoord1fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3519957804,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4262,
+    "name": "glEvalCoord2d",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4004920103,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4263,
+    "name": "glEvalCoord2dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 434069635,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4264,
+    "name": "glEvalCoord2f",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4038475341,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4265,
+    "name": "glEvalCoord2fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 702805729,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4266,
+    "name": "glEvalMesh1",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 265051324,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4267,
+    "name": "glEvalMesh2",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 315384181,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4268,
+    "name": "glEvalPoint1",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1623610901,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4269,
+    "name": "glEvalPoint2",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1573278044,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4270,
+    "name": "glFeedbackBuffer",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1957509147,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4271,
+    "name": "glFogiv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2580535473,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4272,
+    "name": "glGenLists",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 6702901
+  },
+  {
+    "id": 4273,
+    "name": "glGetBooleanv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 603315500,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4274,
+    "name": "glGetClipPlane",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3484929470,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4275,
+    "name": "glGetColorTableEXT",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2771411226,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4276,
+    "name": "glGetColorTableParameterfvEXT",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2387016153,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4277,
+    "name": "glGetColorTableParameterivEXT",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 736054296,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4278,
+    "name": "glGetDoublev",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3539617267,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4279,
+    "name": "glGetLightfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 394865258,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4280,
+    "name": "glGetLightiv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 159831497,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4281,
+    "name": "glGetMapdv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2816348658,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4282,
+    "name": "glGetMapfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2816746016,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4283,
+    "name": "glGetMapiv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2852022467,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4284,
+    "name": "glGetMaterialfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4003991015,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4285,
+    "name": "glGetMaterialiv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3701449420,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4286,
+    "name": "glGetPixelMapfv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 121990212,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4287,
+    "name": "glGetPixelMapuiv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2053668292,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4288,
+    "name": "glGetPixelMapusv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2049431150,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4289,
+    "name": "glGetPointerv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2774712999,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4290,
+    "name": "glGetPolygonStipple",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2289857601,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4291,
+    "name": "glGetTexEnvfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1574874430,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4292,
+    "name": "glGetTexEnviv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1341223765,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4293,
+    "name": "glGetTexGendv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3376895889,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4294,
+    "name": "glGetTexGenfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3108159795,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4295,
+    "name": "glGetTexGeniv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3072780176,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4296,
+    "name": "glGetTexImage",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1965967156,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4297,
+    "name": "glGetTexLevelParameterfv",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2209778378,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4298,
+    "name": "glGetTexLevelParameteriv",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1974744617,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4299,
+    "name": "glGetTexParameterfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3347005802
+  },
+  {
+    "id": 4300,
+    "name": "glGetTexParameteriv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3111972041,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4301,
+    "name": "glIndexd",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1002911090,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4302,
+    "name": "glIndexdv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 513307980,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4303,
+    "name": "glIndexf",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 969355852,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4304,
+    "name": "glIndexfv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 781455694,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4305,
+    "name": "glIndexi",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1086799185,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4306,
+    "name": "glIndexiv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 547701861,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4307,
+    "name": "glIndexMask",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3953228106,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4308,
+    "name": "glIndexPointer",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2842639523,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4309,
+    "name": "glIndexs",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1187464899,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4310,
+    "name": "glIndexsv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 548687599,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4311,
+    "name": "glIndexub",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 885225717,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4312,
+    "name": "glIndexubv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2461447737,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4313,
+    "name": "glInitNames",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3794929508,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4314,
+    "name": "glInterleavedArrays",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3220552727,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4315,
+    "name": "glIsList",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3892698318
+  },
+  {
+    "id": 4316,
+    "name": "glIsTexture",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3124442213,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4317,
+    "name": "glLighti",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4012332113,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4318,
+    "name": "glLightiv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2716432741,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4319,
+    "name": "glLightModelf",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2324296571,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4320,
+    "name": "glLightModeliv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 304268636,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4321,
+    "name": "glLineStipple",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3043607833,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4322,
+    "name": "glListBase",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3613272967
+  },
+  {
+    "id": 4323,
+    "name": "glLoadMatrixd",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2672760829,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4324,
+    "name": "glLoadName",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4133864253,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4325,
+    "name": "glLockArraysEXT",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 818055582,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4326,
+    "name": "glLogicOp",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3516458443,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4327,
+    "name": "glMap1d",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 1844543069,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4328,
+    "name": "glMap1f",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1810987831,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4329,
+    "name": "glMap2d",
+    "nargs": 14,
+    "convention": "stdcall",
+    "hash": 2348018734,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4330,
+    "name": "glMap2f",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 2314463496,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4331,
+    "name": "glMapGrid1d",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3499103869,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4332,
+    "name": "glMapGrid1f",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3465548631,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4333,
+    "name": "glMapGrid2d",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 4002579534,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4334,
+    "name": "glMapGrid2f",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3969024296,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4335,
+    "name": "glMaterialiv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1765296568,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4336,
+    "name": "glMultiTexCoord1fARB",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 329861533,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4337,
+    "name": "glMultiTexCoord1fvARB",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4224085547,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4338,
+    "name": "glMultiTexCoord2fvARB",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2196628464,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4339,
+    "name": "glMultiTexCoord3fARB",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 770281527,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4340,
+    "name": "glMultiTexCoord3fvARB",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 223840765,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4341,
+    "name": "glMultiTexCoord4fARB",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3564003166,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4342,
+    "name": "glMultiTexCoord4fvARB",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 226138626,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4343,
+    "name": "glMultMatrixd",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1152402571,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4344,
+    "name": "glMultMatrixf",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1185957809
+  },
+  {
+    "id": 4345,
+    "name": "glNewList",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3094182928
+  },
+  {
+    "id": 4346,
+    "name": "glNormal3b",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1813816296,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4347,
+    "name": "glNormal3bv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3474297274,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4348,
+    "name": "glNormal3d",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1914482010,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4349,
+    "name": "glNormal3dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3475283012,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4350,
+    "name": "glNormal3i",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1729928201,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4351,
+    "name": "glNormal3iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3507117037,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4352,
+    "name": "glNormal3s",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1562152011,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4353,
+    "name": "glNormal3sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3505439751,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4354,
+    "name": "glPassThrough",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2625785572,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4355,
+    "name": "glPixelMapfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 49403264,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4356,
+    "name": "glPixelMapuiv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1860601096,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4357,
+    "name": "glPixelMapusv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1587922050,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4358,
+    "name": "glPixelStoref",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 585549431,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4359,
+    "name": "glPixelTransferf",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1894232325,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4360,
+    "name": "glPixelTransferi",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1911009944,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4361,
+    "name": "glPixelZoom",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2886141361,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4362,
+    "name": "glPolygonStipple",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1773272613,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4363,
+    "name": "glPopClientAttrib",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2112515186,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4364,
+    "name": "glPopName",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 345809854,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4365,
+    "name": "glPrioritizeTextures",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1518120815,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4366,
+    "name": "glPushClientAttrib",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1343635417,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4367,
+    "name": "glPushName",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2338014613,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4368,
+    "name": "glRasterPos2d",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3735310609,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4369,
+    "name": "glRasterPos2dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3819709733,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4370,
+    "name": "glRasterPos2f",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3701755371
+  },
+  {
+    "id": 4371,
+    "name": "glRasterPos2fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4087754279,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4372,
+    "name": "glRasterPos2i",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3651422514,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4373,
+    "name": "glRasterPos2iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3785315852,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4374,
+    "name": "glRasterPos2s",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4020530132,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4375,
+    "name": "glRasterPos2sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3788861446,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4376,
+    "name": "glRasterPos3d",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 4171381608,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4377,
+    "name": "glRasterPos3dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2237861946,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4378,
+    "name": "glRasterPos3f",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4204936846,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4379,
+    "name": "glRasterPos3fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2238259304,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4380,
+    "name": "glRasterPos3i",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4121048751,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4381,
+    "name": "glRasterPos3iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2270975899,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4382,
+    "name": "glRasterPos3s",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4020383037,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4383,
+    "name": "glRasterPos3sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2269990161,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4384,
+    "name": "glRasterPos4d",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 3667905943,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4385,
+    "name": "glRasterPos4dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 177281331,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4386,
+    "name": "glRasterPos4f",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3701461181,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4387,
+    "name": "glRasterPos4fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 446017425,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4388,
+    "name": "glRasterPos4i",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3449796896,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4389,
+    "name": "glRasterPos4iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 141607522,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4390,
+    "name": "glRasterPos4s",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3886014990,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4391,
+    "name": "glRasterPos4sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 414286568,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4392,
+    "name": "glRectd",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 2059700056,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4393,
+    "name": "glRectdv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1902169450,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4394,
+    "name": "glRectf",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2093255294,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4395,
+    "name": "glRectfv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1902463640,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4396,
+    "name": "glRecti",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2009367199,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4397,
+    "name": "glRectiv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1935283403,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4398,
+    "name": "glRects",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2445585293,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4399,
+    "name": "glRectsv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1939520545,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4400,
+    "name": "glRenderMode",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1275256249,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4401,
+    "name": "glScaled",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1174487656,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4402,
+    "name": "glSelectBuffer",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1873869072,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4403,
+    "name": "glStencilFunc",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2395659844
+  },
+  {
+    "id": 4404,
+    "name": "glStencilMask",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 89924970
+  },
+  {
+    "id": 4405,
+    "name": "glStencilOp",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3124205573
+  },
+  {
+    "id": 4406,
+    "name": "glTexCoord1d",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1163476005,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4407,
+    "name": "glTexCoord1dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2121922217,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4408,
+    "name": "glTexCoord1f",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1129920767,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4409,
+    "name": "glTexCoord1fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2389966763,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4410,
+    "name": "glTexCoord1i",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1213808862,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4411,
+    "name": "glTexCoord1iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2357250168,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4412,
+    "name": "glTexCoord1s",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1314474576,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4413,
+    "name": "glTexCoord1sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2089794002,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4414,
+    "name": "glTexCoord2d",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1666951670,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4415,
+    "name": "glTexCoord2dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3914060928,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4416,
+    "name": "glTexCoord2i",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1885060717,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4417,
+    "name": "glTexCoord2iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4218176641,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4418,
+    "name": "glTexCoord2s",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1448842623,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4419,
+    "name": "glTexCoord2sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4213939499,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4420,
+    "name": "glTexCoord3d",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1365101623,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4421,
+    "name": "glTexCoord3dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1470663251,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4422,
+    "name": "glTexCoord3f",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1398656861,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4423,
+    "name": "glTexCoord3fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1739399345,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4424,
+    "name": "glTexCoord3i",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1146992576,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4425,
+    "name": "glTexCoord3iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1434989442,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4426,
+    "name": "glTexCoord3s",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1583210670,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4427,
+    "name": "glTexCoord3sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1707668488,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4428,
+    "name": "glTexCoord4d",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 1868577288,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4429,
+    "name": "glTexCoord4dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3531347034,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4430,
+    "name": "glTexCoord4f",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1902132526,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4431,
+    "name": "glTexCoord4fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3531641224,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4432,
+    "name": "glTexCoord4i",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1818244431,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4433,
+    "name": "glTexCoord4iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3564357819,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4434,
+    "name": "glTexCoord4s",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1717578717,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4435,
+    "name": "glTexCoord4sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3563372081,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4436,
+    "name": "glTexEnvfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3996550074,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4437,
+    "name": "glTexEnviv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3761516313,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4438,
+    "name": "glTexGend",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2128753545,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4439,
+    "name": "glTexGendv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3172457069,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4440,
+    "name": "glTexGeniv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3140623044,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4441,
+    "name": "glTexImage1D",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 3454809797,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4442,
+    "name": "glTexParameterfv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3449537550
+  },
+  {
+    "id": 4443,
+    "name": "glTexParameteriv",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3215783717,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4444,
+    "name": "glTexSubImage1D",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 218817537,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4445,
+    "name": "glTranslated",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 4030969880,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4446,
+    "name": "glUnlockArraysEXT",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1414930011,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4447,
+    "name": "glVertex2d",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4052569066,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4448,
+    "name": "glVertex2dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3714975380,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4449,
+    "name": "glVertex2iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3746809405,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4450,
+    "name": "glVertex2s",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4237122875,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4451,
+    "name": "glVertex2sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3750354999,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4452,
+    "name": "glVertex3d",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 261077435,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4453,
+    "name": "glVertex3dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1279360439,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4454,
+    "name": "glVertex3i",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 177189340,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4455,
+    "name": "glVertex3iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1244966558,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4456,
+    "name": "glVertex3s",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 76523626,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4457,
+    "name": "glVertex3sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1243980820,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4458,
+    "name": "glVertex4d",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 226389364,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4459,
+    "name": "glVertex4dv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1074108966,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4460,
+    "name": "glVertex4f",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 259944602
+  },
+  {
+    "id": 4461,
+    "name": "glVertex4fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1342948228
+  },
+  {
+    "id": 4462,
+    "name": "glVertex4i",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 41835555,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4463,
+    "name": "glVertex4iv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1105942991,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4464,
+    "name": "glVertex4s",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4236137137,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4465,
+    "name": "glVertex4sv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1104957253,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4466,
+    "name": "wglGetCurrentContext",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2339120867
+  },
+  {
+    "id": 4467,
+    "name": "wglGetCurrentDC",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 548415565
+  },
+  {
+    "id": 4468,
+    "name": "wglShareLists",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2397422737,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4469,
+    "name": "wglCopyContext",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 765119519,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4470,
+    "name": "wglCreateLayerContext",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1320404273,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4471,
+    "name": "wglSwapIntervalEXT",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 25254542,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4472,
+    "name": "wcschr",
+    "nargs": 2,
+    "convention": "cdecl",
+    "hash": 614637455
+  },
+  {
+    "id": 4473,
+    "name": "__p___argv",
+    "nargs": 0,
+    "convention": "cdecl",
+    "hash": 2542902502
+  },
+  {
+    "id": 4474,
+    "name": "__p___argc",
+    "nargs": 0,
+    "convention": "cdecl",
+    "hash": 2895232501
+  },
+  {
+    "id": 4475,
+    "name": "SysReAllocStringLen",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2347731600
+  },
+  {
+    "id": 4476,
+    "name": "EnumResourceTypesA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3117921588
+  },
+  {
+    "id": 4477,
+    "name": "EnumResourceLanguagesA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1757009474
+  },
+  {
+    "id": 4478,
+    "name": "VerLanguageNameA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2732692406
+  },
+  {
+    "id": 4479,
+    "name": "VerLanguageNameW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2497805740
+  },
+  {
+    "id": 4480,
+    "name": "CreateToolhelp32Snapshot",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 408385205
+  },
+  {
+    "id": 4481,
+    "name": "Heap32ListFirst",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 246457628
+  },
+  {
+    "id": 4482,
+    "name": "Heap32ListNext",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3235491987
+  },
+  {
+    "id": 4483,
+    "name": "Heap32First",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1920996232
+  },
+  {
+    "id": 4484,
+    "name": "Heap32Next",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2505533439
+  },
+  {
+    "id": 4485,
+    "name": "WriteProcessMemory",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3221786346
+  },
+  {
+    "id": 4486,
+    "name": "InterlockedExchangeAdd",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1070996781
+  },
+  {
+    "id": 4487,
+    "name": "mouse_event",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 544758939
+  },
+  {
+    "id": 4488,
+    "name": "MsgWaitForMultipleObjectsEx",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3987726159
+  },
+  {
+    "id": 4489,
+    "name": "IDirectSoundNotify_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4230143513,
+    "handler": "IDirectSoundBuffer_QueryInterface"
+  },
+  {
+    "id": 4490,
+    "name": "IDirectSoundNotify_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3667229034,
+    "handler": "dx_com_addref"
+  },
+  {
+    "id": 4491,
+    "name": "IDirectSoundNotify_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2175128327,
+    "handler": "IDirectSoundBuffer_Release"
+  },
+  {
+    "id": 4492,
+    "name": "IDirectSoundNotify_SetNotificationPositions",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3187835619
+  },
+  {
+    "id": 4493,
+    "name": "IDirectSoundPropertySet_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3978713211,
+    "handler": "IDirectSoundBuffer_QueryInterface"
+  },
+  {
+    "id": 4494,
+    "name": "IDirectSoundPropertySet_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2733553592,
+    "handler": "dx_com_addref"
+  },
+  {
+    "id": 4495,
+    "name": "IDirectSoundPropertySet_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1364753313,
+    "handler": "IDirectSoundBuffer_Release"
+  },
+  {
+    "id": 4496,
+    "name": "IDirectSoundPropertySet_Get",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 517610008
+  },
+  {
+    "id": 4497,
+    "name": "IDirectSoundPropertySet_Set",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 2697823108
+  },
+  {
+    "id": 4498,
+    "name": "IDirectSoundPropertySet_QuerySupport",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 543993839
+  },
+  {
+    "id": 4499,
+    "name": "SHDeleteKeyA",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 788449459
+  },
+  {
+    "id": 4500,
+    "name": "SHDeleteKeyW",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1157557077
+  },
+  {
+    "id": 4501,
+    "name": "WSASendTo",
+    "nargs": 9,
+    "convention": "stdcall",
+    "hash": 2029120561
+  },
+  {
+    "id": 4502,
+    "name": "WSARecvFrom",
+    "nargs": 9,
+    "convention": "stdcall",
+    "hash": 3113742666
+  },
+  {
+    "id": 4503,
+    "name": "FindFirstFileExA",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3829035782
+  },
+  {
+    "id": 4504,
+    "name": "IDirect3DCubeTexture8_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2312711840
+  },
+  {
+    "id": 4505,
+    "name": "IDirect3DCubeTexture8_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 24775715,
+    "handler": "IDirect3DCubeTexture9_AddRef"
+  },
+  {
+    "id": 4506,
+    "name": "IDirect3DCubeTexture8_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1540882532,
+    "handler": "IDirect3DCubeTexture9_Release"
+  },
+  {
+    "id": 4507,
+    "name": "IDirect3DCubeTexture8_GetDevice",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3524718471,
+    "handler": "IDirect3DCubeTexture9_GetDevice"
+  },
+  {
+    "id": 4508,
+    "name": "IDirect3DCubeTexture8_SetPrivateData",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 532917700,
+    "handler": "IDirect3DCubeTexture9_SetPrivateData"
+  },
+  {
+    "id": 4509,
+    "name": "IDirect3DCubeTexture8_GetPrivateData",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 448013496,
+    "handler": "IDirect3DCubeTexture9_GetPrivateData"
+  },
+  {
+    "id": 4510,
+    "name": "IDirect3DCubeTexture8_FreePrivateData",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1640651900,
+    "handler": "IDirect3DCubeTexture9_FreePrivateData"
+  },
+  {
+    "id": 4511,
+    "name": "IDirect3DCubeTexture8_SetPriority",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 709516601,
+    "handler": "IDirect3DCubeTexture9_SetPriority"
+  },
+  {
+    "id": 4512,
+    "name": "IDirect3DCubeTexture8_GetPriority",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3248724717,
+    "handler": "IDirect3DCubeTexture9_GetPriority"
+  },
+  {
+    "id": 4513,
+    "name": "IDirect3DCubeTexture8_PreLoad",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3920210996,
+    "handler": "IDirect3DCubeTexture9_PreLoad"
+  },
+  {
+    "id": 4514,
+    "name": "IDirect3DCubeTexture8_GetType",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3944146497,
+    "handler": "IDirect3DCubeTexture9_GetType"
+  },
+  {
+    "id": 4515,
+    "name": "IDirect3DCubeTexture8_SetLOD",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 606632264,
+    "handler": "IDirect3DCubeTexture9_SetLOD"
+  },
+  {
+    "id": 4516,
+    "name": "IDirect3DCubeTexture8_GetLOD",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 431416988,
+    "handler": "IDirect3DCubeTexture9_GetLOD"
+  },
+  {
+    "id": 4517,
+    "name": "IDirect3DCubeTexture8_GetLevelCount",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1893743320,
+    "handler": "IDirect3DCubeTexture9_GetLevelCount"
+  },
+  {
+    "id": 4518,
+    "name": "IDirect3DCubeTexture8_GetLevelDesc",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3862719212
+  },
+  {
+    "id": 4519,
+    "name": "IDirect3DCubeTexture8_GetCubeMapSurface",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 834407465
+  },
+  {
+    "id": 4520,
+    "name": "IDirect3DCubeTexture8_LockRect",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 402715334,
+    "handler": "IDirect3DCubeTexture9_LockRect"
+  },
+  {
+    "id": 4521,
+    "name": "IDirect3DCubeTexture8_UnlockRect",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2011744073,
+    "handler": "IDirect3DCubeTexture9_UnlockRect"
+  },
+  {
+    "id": 4522,
+    "name": "IDirect3DCubeTexture8_AddDirtyRect",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1017740128,
+    "handler": "IDirect3DCubeTexture9_AddDirtyRect"
+  },
+  {
+    "id": 4523,
+    "name": "MessageBoxExA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 645508403,
+    "args": [
+      {
+        "name": "hWnd",
+        "type": "HWND"
+      },
+      {
+        "name": "lpText",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpCaption",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "uType",
+        "type": "UINT"
+      },
+      {
+        "name": "wLanguageId",
+        "type": "WORD"
+      }
+    ],
+    "ret": "int"
+  },
+  {
+    "id": 4524,
+    "name": "acmDriverOpen",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1872202158,
+    "args": [
+      {
+        "name": "phad",
+        "type": "LPVOID"
+      },
+      {
+        "name": "hadid",
+        "type": "HANDLE"
+      },
+      {
+        "name": "fdwOpen",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 4525,
+    "name": "acmDriverClose",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 829166234,
+    "args": [
+      {
+        "name": "had",
+        "type": "HANDLE"
+      },
+      {
+        "name": "fdwClose",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 4526,
+    "name": "acmDriverPriority",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 505214578,
+    "args": [
+      {
+        "name": "hadid",
+        "type": "HANDLE"
+      },
+      {
+        "name": "dwPriority",
+        "type": "DWORD"
+      },
+      {
+        "name": "fdwPriority",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "MMRESULT"
+  },
+  {
+    "id": 4527,
+    "name": "grTexDetailControl",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2736147873
+  },
+  {
+    "id": 4528,
+    "name": "_grTexDetailControl@16",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3733229377,
+    "handler": "grTexDetailControl"
+  },
+  {
+    "id": 4529,
+    "name": "_grTexDownloadTablePartial@20",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 46278517,
+    "handler": "glide2_grTexDownloadTablePartial"
+  },
+  {
+    "id": 4530,
+    "name": "grSstPerfStats",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3665096948
+  },
+  {
+    "id": 4531,
+    "name": "_grSstPerfStats@4",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2064468303,
+    "handler": "grSstPerfStats"
+  },
+  {
+    "id": 4532,
+    "name": "grSstResetPerfStats",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1120035525
+  },
+  {
+    "id": 4533,
+    "name": "_grSstResetPerfStats@0",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 1976379696,
+    "handler": "grSstResetPerfStats"
+  },
+  {
+    "id": 4534,
+    "name": "ReBaseImage",
+    "nargs": 11,
+    "convention": "stdcall",
+    "hash": 155023466
+  },
+  {
+    "id": 4535,
+    "name": "wglDescribeLayerPlane",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 119477637
+  },
+  {
+    "id": 4536,
+    "name": "wglGetLayerPaletteEntries",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 639467637,
+    "handler": "wgl_layer_palette_entries"
+  },
+  {
+    "id": 4537,
+    "name": "wglSetLayerPaletteEntries",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3391838593,
+    "handler": "wgl_layer_palette_entries"
+  },
+  {
+    "id": 4538,
+    "name": "wglRealizeLayerPalette",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1294332905
+  },
+  {
+    "id": 4539,
+    "name": "wglUseFontBitmapsA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2470985246,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4540,
+    "name": "wglUseFontOutlinesA",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 2793894589,
+    "handler": "gl_unimplemented"
+  },
+  {
+    "id": 4541,
+    "name": "WSAConnect",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 2233096024
+  },
+  {
+    "id": 4542,
+    "name": "WSACreateEvent",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3245002554
+  },
+  {
+    "id": 4543,
+    "name": "WSASetEvent",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2771504150
+  },
+  {
+    "id": 4544,
+    "name": "WSAResetEvent",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3455686295
+  },
+  {
+    "id": 4545,
+    "name": "WSACloseEvent",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1504196434
+  },
+  {
+    "id": 4546,
+    "name": "WSAEventSelect",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4042022542
+  },
+  {
+    "id": 4547,
+    "name": "WSAEnumNetworkEvents",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2291620022
+  },
+  {
+    "id": 4548,
+    "name": "WSAEnumProtocolsA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2672033743
+  },
+  {
+    "id": 4549,
+    "name": "WSAEnumProtocolsW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2370036601
+  },
+  {
+    "id": 4550,
+    "name": "WSAEnumProtocols",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 994237972
+  },
+  {
+    "id": 4551,
+    "name": "WSARecv",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3419542478
+  },
+  {
+    "id": 4552,
+    "name": "WSASend",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1618775544
+  },
+  {
+    "id": 4553,
+    "name": "WSASocketA",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2494112742
+  },
+  {
+    "id": 4554,
+    "name": "WSASocketW",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2796109884
+  },
+  {
+    "id": 4555,
+    "name": "WSASocket",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1847186435
+  },
+  {
+    "id": 4556,
+    "name": "_putenv",
+    "nargs": 1,
+    "convention": "cdecl",
+    "hash": 3240813966
+  },
+  {
+    "id": 4557,
+    "name": "ImmGetDescriptionA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3270008883,
+    "handler": "ImmGetConversionStatus"
+  },
+  {
+    "id": 4558,
+    "name": "ImmGetDescriptionW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3639116501,
+    "handler": "ImmGetConversionStatus"
+  },
+  {
+    "id": 4559,
+    "name": "WinGRecommendDIBFormat",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 336948736
+  },
+  {
+    "id": 4560,
+    "name": "WinGCreateDC",
+    "nargs": 0,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2495126439
+  },
+  {
+    "id": 4561,
+    "name": "WinGCreateBitmap",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2927932245
+  },
+  {
+    "id": 4562,
+    "name": "WinGSetDIBColorTable",
+    "nargs": 4,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2661732232
+  },
+  {
+    "id": 4563,
+    "name": "WinGBitBlt",
+    "nargs": 8,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 401627309
+  },
+  {
+    "id": 4564,
+    "name": "mmioWrite",
+    "nargs": 3,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 1752324714
+  },
+  {
+    "id": 4565,
+    "name": "FreeLibraryAndExitThread",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2679068727,
+    "handler": "FreeLibraryAndExitThread"
+  },
+  {
+    "id": 4566,
     "name": "ImmSetCompositionWindow",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 915565444
   },
   {
-    "id": 3690,
+    "id": 4567,
     "name": "ImmSetCompositionFontA",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 821956012
   },
   {
-    "id": 3691,
+    "id": 4568,
     "name": "ImmGetCompositionStringW",
     "nargs": 4,
     "convention": "stdcall",
     "hash": 708737070
   },
   {
-    "id": 3692,
+    "id": 4569,
     "name": "htonl",
     "nargs": 1,
     "convention": "stdcall",
-    "hash": 2734536568
+    "hash": 2734536568,
+    "test_call": true
   },
   {
-    "id": 3693,
+    "id": 4570,
     "name": "inet_pton",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 3317905125
+    "hash": 3317905125,
+    "test_call": true
   },
   {
-    "id": 3694,
+    "id": 4571,
     "name": "inet_ntop",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 3753247261
+    "hash": 3753247261,
+    "test_call": true
   },
   {
-    "id": 3695,
+    "id": 4572,
     "name": "WSAHtons",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3267209284
   },
   {
-    "id": 3696,
+    "id": 4573,
     "name": "WSANtohs",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3921936444
   },
   {
-    "id": 3697,
+    "id": 4574,
     "name": "WSAHtonl",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3384652617
   },
   {
-    "id": 3698,
+    "id": 4575,
     "name": "WSANtohl",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3770937873
   },
   {
-    "id": 3699,
+    "id": 4576,
     "name": "gethostbyaddr",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3907152291
   },
   {
-    "id": 3700,
+    "id": 4577,
     "name": "getaddrinfo",
     "nargs": 4,
     "convention": "stdcall",
-    "hash": 2489840940
+    "hash": 2489840940,
+    "test_call": true
   },
   {
-    "id": 3701,
+    "id": 4578,
     "name": "freeaddrinfo",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 918316552
   },
   {
-    "id": 3702,
+    "id": 4579,
     "name": "getservbyport",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 3864718989
   },
   {
-    "id": 3703,
+    "id": 4580,
     "name": "getprotobynumber",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3358182331
   },
   {
-    "id": 3704,
+    "id": 4581,
     "name": "WSASetBlockingHook",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 4164697230
   },
   {
-    "id": 3705,
+    "id": 4582,
     "name": "WSAUnhookBlockingHook",
     "nargs": 0,
     "convention": "stdcall",
     "hash": 1244460290
   },
   {
-    "id": 3706,
-    "name": "WSACancelBlockingCall",
-    "nargs": 0,
-    "convention": "stdcall",
-    "hash": 1649100535
-  },
-  {
-    "id": 3707,
-    "name": "WSAIsBlocking",
-    "nargs": 0,
-    "convention": "stdcall",
-    "hash": 3164277069
-  },
-  {
-    "id": 3708,
+    "id": 4583,
     "name": "WSAAsyncGetHostByName",
     "nargs": 5,
     "convention": "stdcall",
     "hash": 1834724666
   },
   {
-    "id": 3709,
+    "id": 4584,
     "name": "WSAAsyncGetHostByAddr",
     "nargs": 7,
     "convention": "stdcall",
     "hash": 2364661438
   },
   {
-    "id": 3710,
+    "id": 4585,
     "name": "WSACancelAsyncRequest",
     "nargs": 1,
     "convention": "stdcall",

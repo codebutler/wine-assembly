@@ -62,9 +62,8 @@ const extraWat = String.raw`
 
   e.set_post_queue_count(0);
   e.test_call_show_window(secondary);
-  assert.strictEqual(e.post_queue_depth(), 1,
-    'showing an already-visible top-level does not synthesize another WM_SIZE');
-  assert.strictEqual(e.post_queue_peek(0, 1) >>> 0, 0x0018);
+  assert.strictEqual(e.post_queue_depth(), 0,
+    'showing an already-visible top-level sends neither WM_SIZE nor WM_SHOWWINDOW');
 
   console.log('PASS ShowWindow sizes a hidden secondary top-level on first show');
 })().catch(error => {

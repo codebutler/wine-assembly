@@ -34,6 +34,25 @@ package is not directly recoverable, it is too large to pull as part of a
 routine candidate setup, or the archived package is not the required Windows
 build.
 
+The five `reflexive-*` entries are also manual because preparation uses the
+external Reflexive static extractor/unwrapper. Their local fixtures retain
+the complete unwrapped `game/` tree, original installer in `sources/`, and
+SHA-256 provenance in `.candidate-source.json`. See
+[Reflexive probe notes](../../docs/re-notes/reflexive.md) for preparation,
+launch settings, and observed blockers. The survey mounts companion assets
+and seeds the listed DLLs; use the documented direct commands for the
+800×600 display and setup-dialog input needed by individual games.
+
+Ricochet Xtreme and Alien Shooter also have local app entries. After manually
+extracting their fixtures, regenerate the browser asset inventories with:
+
+```sh
+node tools/fetch-candidate-corpus.js --id=reflexive-ricochet-xtreme,reflexive-alien-shooter --prepare
+```
+
+They are selectable on localhost as `ricochet_xtreme` and `alien_shooter`,
+and the same entries work with `node test/run.js --app=ID --no-close`.
+
 ## Run
 
 Run the local candidate survey in the CLI harness:
@@ -113,3 +132,9 @@ ZIPs prepare Track 01 into a local `cd/` tree and retain the CUE plus all raw
 CD-audio tracks. The CLI attaches that CUE lazily through MCI, so launching the
 game does not load the soundtrack. GOG does not currently sell a Civilization
 II release, so there is no GOG package recipe to maintain yet.
+
+## Dungeons of Dredmor archived beta
+
+Fetch with `node tools/fetch-candidate-corpus.js --id=dungeons-of-dredmor`. This is the community-archived Windows Steam beta depot 98811 revision 8, not a demo. The local experimental selector `dungeons_of_dredmor` mounts its complete asset tree, including the original Steam DLL. No compatibility or Steam availability claim is made; the entry is excluded from the public desktop. See [provenance and static dependency notes](../../docs/re-notes/dungeons-of-dredmor.md).
+
+The separate `dungeons-of-dredmor-release` candidate preserves archived public-game Steam depot98801 revision17, alongside beta98811. It requires manual Steam2 archive preparation; `--id=dungeons-of-dredmor-release --prepare` regenerates the manifest after restoration. Local experimental app: `dungeons_of_dredmor_release`. [Release provenance and limitations](../../docs/re-notes/dungeons-of-dredmor-release.md).

@@ -366,6 +366,8 @@
       (then
         (if (global.get $clipboard_ptr)
           (then (call $heap_free (global.get $clipboard_ptr))
+                (global.set $clipboard_text_present (i32.const 0))
+                (global.set $clipboard_len (i32.const 0))
                 (global.set $clipboard_ptr (i32.const 0))))
         (local.set $cap (i32.and (i32.add (local.get $need) (i32.const 63)) (i32.const -64)))
         (global.set $clipboard_ptr (call $heap_alloc (local.get $cap)))
@@ -377,7 +379,7 @@
       (i32.add (call $g2w (local.get $src_g)) (local.get $lo))
       (local.get $len))
     (i32.store8 (i32.add (call $g2w (local.get $dst_g)) (local.get $len)) (i32.const 0))
-    (global.set $clipboard_len (local.get $len))
+    (global.set $clipboard_text_present (i32.const 1)) (global.set $clipboard_len (local.get $len))
     (call $richedit_clipboard_clear_format)
     (call $clipboard_clear_rtf_data)
   )
@@ -401,12 +403,13 @@
     (local.set $pos (i32.const 0))
     (block $done (loop $scan
       (br_if $done (i32.gt_u (local.get $pos) (local.get $text_len)))
-      (local.set $len (call $edit_line_len (local.get $state_w) (local.get $pos)))
+      (local.set $len (call $edit_line_text_len (local.get $state_w) (local.get $pos)))
       (if (i32.gt_u (local.get $len) (local.get $best_len))
         (then
           (local.set $best_len (local.get $len))
           (local.set $best_start (local.get $pos))))
-      (local.set $pos (i32.add (i32.add (local.get $pos) (local.get $len)) (i32.const 1)))
+      (local.set $pos (i32.add (i32.add (local.get $pos)
+        (call $edit_line_len (local.get $state_w) (local.get $pos))) (i32.const 1)))
       (br $scan)))
     (if (i32.eqz (local.get $best_len)) (then (return (i32.const 0))))
     (local.set $w (call $host_measure_text (local.get $hdc)
@@ -460,7 +463,7 @@
     (if (i32.ge_u (local.get $line_num) (local.get $total_lines))
       (then (local.set $line_num (i32.sub (local.get $total_lines) (i32.const 1)))))
     (local.set $line_start (call $edit_line_index (local.get $state_w) (local.get $line_num)))
-    (local.set $line_len (call $edit_line_len (local.get $state_w) (local.get $line_start)))
+    (local.set $line_len (call $edit_line_text_len (local.get $state_w) (local.get $line_start)))
     (local.set $line_w (i32.add (call $g2w (local.get $buf_g)) (local.get $line_start)))
     (local.set $prev_w (i32.const 0))
     (local.set $i (i32.const 0))
@@ -741,14 +744,14 @@
     (global.set $steps (i32.const 0))
     (global.set $yield_reason (i32.const 0))
     (global.set $yield_flag (i32.const 0))
-    (global.set $sync_msg_depth (i32.add (global.get $sync_msg_depth) (i32.const 1)))
+    (call $sync_depth_enter)
     (block $done (loop $run_callback
       (call $run (i32.const 1000000))
       (br_if $done (i32.eqz (global.get $eip)))
       (local.set $rounds (i32.add (local.get $rounds) (i32.const 1)))
       (br_if $done (i32.ge_u (local.get $rounds) (i32.const 64)))
       (br $run_callback)))
-    (global.set $sync_msg_depth (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
+    (call $sync_depth_leave)
     (local.set $result
       (select (i32.load offset=0 (global.get $reg_base)) (i32.const 1) (i32.eqz (global.get $eip))))
     (global.set $eip (local.get $old_eip))
@@ -854,7 +857,10 @@
                   (br $scan)))
               (if (i32.eq (local.get $ch) (i32.const 0x2A)) ;; \* destination marker
                 (then
-                  (if (local.get $group_start) (then (local.set $skip_depth (local.get $depth))))
+                  ;; Keep the outermost ignored destination until its closing
+                  ;; brace. Nested panose/falt groups must not end fonttbl.
+                  (if (i32.and (local.get $group_start) (i32.eqz (local.get $skip_depth)))
+                    (then (local.set $skip_depth (local.get $depth))))
                   (local.set $i (i32.add (local.get $i) (i32.const 1)))
                   (br $scan)))
               (if (i32.or (i32.eq (local.get $ch) (i32.const 0x7E))
@@ -901,7 +907,8 @@
                                (i32.eq (i32.load8_u (i32.add (local.get $src) (local.get $i))) (i32.const 0x20)))
                     (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))))
               ;; Destination groups whose payload is not document text.
-              (if (i32.and (local.get $group_start)
+              (if (i32.and
+                    (i32.and (local.get $group_start) (i32.eqz (local.get $skip_depth)))
                     (i32.or
                       (i32.or (i32.eq (local.get $hash) (i32.const 0xB3049312)) ;; fonttbl
                               (i32.eq (local.get $hash) (i32.const 0xB5E90F1A))) ;; colortbl
@@ -950,14 +957,16 @@
     (store.field.memarg EditState sel_anchor (local.get $state_w) (local.get $out))
     (local.get $out))
 
-  ;; Read a documented EDITSTREAM through its callback.  The 64K ceiling is
-  ;; the same bound the old host-side fallback used and exceeds the Win9x
-  ;; RichEdit default text limit; it also keeps a malicious callback bounded.
+  ;; Read EDITSTREAM until callback EOF/error. RTF metadata can exceed 64K
+  ;; before any visible text, independently of the control's text limit.
+  ;; Grow the raw buffer geometrically; allocation failure is dwError=8,
+  ;; never a silently successful truncated document.
   (func $edit_stream_read
     (param $state_w i32) (param $stream_g i32) (param $flags i32) (result i32)
     (local $stream_w i32) (local $cookie i32) (local $callback i32)
     (local $raw i32) (local $pcb i32) (local $len i32) (local $capacity i32)
-    (local $got i32) (local $error i32)
+    (local $got i32) (local $error i32) (local $allocated i32)
+    (local $new_size i32) (local $new_raw i32)
     (local.set $stream_w (call $g2w (local.get $stream_g)))
     (local.set $cookie (i32.load (local.get $stream_w)))
     (local.set $callback (i32.load offset=8 (local.get $stream_w)))
@@ -970,34 +979,53 @@
         (return (call $edit_stream_project
           (local.get $state_w) (local.get $cookie) (local.get $len)
           (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0))))))
-    (local.set $raw (call $heap_alloc (i32.const 65540)))
+    (local.set $allocated (i32.const 4096))
+    (local.set $raw (call $heap_alloc (local.get $allocated)))
     (if (i32.eqz (local.get $raw))
       (then
         (i32.store offset=4 (local.get $stream_w) (i32.const 8))
         (return (i32.const 0))))
-    (local.set $pcb (i32.add (local.get $raw) (i32.const 65536)))
+    (local.set $pcb (call $heap_alloc (i32.const 4)))
+    (if (i32.eqz (local.get $pcb))
+      (then
+        (call $heap_free (local.get $raw))
+        (i32.store offset=4 (local.get $stream_w) (i32.const 8))
+        (return (i32.const 0))))
     (block $done (loop $read
-      (br_if $done (i32.ge_u (local.get $len) (i32.const 65535)))
+      (if (i32.eq (local.get $len) (local.get $allocated))
+        (then
+          (local.set $error (i32.const 8))
+          (br_if $done (i32.gt_u (local.get $allocated) (i32.const 0x3FFFFFFF)))
+          (local.set $new_size (i32.shl (local.get $allocated) (i32.const 1)))
+          (local.set $new_raw (call $heap_alloc (local.get $new_size)))
+          (br_if $done (i32.eqz (local.get $new_raw)))
+          (call $memcpy (call $g2w (local.get $new_raw))
+            (call $g2w (local.get $raw)) (local.get $len))
+          (call $heap_free (local.get $raw))
+          (local.set $raw (local.get $new_raw))
+          (local.set $allocated (local.get $new_size))))
       (local.set $capacity
-        (select (i32.const 4096) (i32.sub (i32.const 65535) (local.get $len))
-          (i32.gt_u (i32.sub (i32.const 65535) (local.get $len)) (i32.const 4096))))
+        (select (i32.const 4096) (i32.sub (local.get $allocated) (local.get $len))
+          (i32.gt_u (i32.sub (local.get $allocated) (local.get $len)) (i32.const 4096))))
       (call $gs32 (local.get $pcb) (i32.const 0))
       (local.set $error (call $edit_stream_call
         (local.get $callback) (local.get $cookie)
         (i32.add (local.get $raw) (local.get $len))
         (local.get $capacity) (local.get $pcb)))
+      ;; A failing callback's buffer is not part of the document.
+      (br_if $done (i32.ne (local.get $error) (i32.const 0)))
       (local.set $got (call $gl32 (local.get $pcb)))
       (if (i32.gt_u (local.get $got) (local.get $capacity))
         (then (local.set $got (local.get $capacity))))
       (local.set $len (i32.add (local.get $len) (local.get $got)))
-      (br_if $done (i32.or (i32.ne (local.get $error) (i32.const 0))
-                           (i32.eqz (local.get $got))))
+      (br_if $done (i32.eqz (local.get $got)))
       (br $read)))
     (i32.store offset=4 (local.get $stream_w) (local.get $error))
     (local.set $len (call $edit_stream_project
       (local.get $state_w) (local.get $raw) (local.get $len)
       (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0))))
     (call $heap_free (local.get $raw))
+    (call $heap_free (local.get $pcb))
     (local.get $len))
 
   (func $edit_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
@@ -1448,7 +1476,7 @@
               (else
                 (local.set $lo (call $edit_line_start (local.get $state_w) (local.get $cur)))
                 (local.set $cur (i32.add (local.get $lo)
-                  (call $edit_line_len (local.get $state_w) (local.get $lo))))))
+                  (call $edit_line_text_len (local.get $state_w) (local.get $lo))))))
             (store.field.memarg EditState cursor (local.get $state_w) (local.get $cur))
             (if (i32.eqz (local.get $a))
               (then (store.field.memarg EditState sel_anchor (local.get $state_w) (local.get $cur))))
@@ -1500,7 +1528,7 @@
                 ;; find start of previous line
                 (local.set $lo (call $edit_line_start (local.get $state_w) (i32.sub (local.get $lo) (i32.const 1))))
                 ;; prev line length
-                (local.set $px (call $edit_line_len (local.get $state_w) (local.get $lo)))
+                (local.set $px (call $edit_line_text_len (local.get $state_w) (local.get $lo)))
                 ;; clamp col to prev line length
                 (if (i32.gt_u (local.get $hi) (local.get $px))
                   (then (local.set $hi (local.get $px))))
@@ -1523,7 +1551,7 @@
                 ;; next line starts after the \n
                 (local.set $lo (i32.add (local.get $px) (i32.const 1)))
                 ;; next line length
-                (local.set $px (call $edit_line_len (local.get $state_w) (local.get $lo)))
+                (local.set $px (call $edit_line_text_len (local.get $state_w) (local.get $lo)))
                 ;; clamp col
                 (if (i32.gt_u (local.get $hi) (local.get $px))
                   (then (local.set $hi (local.get $px))))
@@ -1873,7 +1901,7 @@
         ;; owns both and may have translated them into a backing bitmap.
         (if (i32.eqz (local.get $wParam))
           (then
-            (drop (call $host_gdi_select_clip_rgn (local.get $hdc) (i32.const 0)))
+            (drop (call $gdi_native_select_clip_rgn (local.get $hdc) (i32.const 0)))
             (call $dc_apply_client_clip (local.get $hdc) (local.get $hwnd))))
         ;; ctrl_get_wh_packed reads CONTROL_GEOM (works for WAT-only children
         ;; that have no JS-side window record).
@@ -1907,15 +1935,15 @@
         ;; Use the font installed with WM_SETFONT, falling back to the default
         ;; GUI font. Paint relies on this when committing its text object into
         ;; the picture memory DC.
-        (drop (call $host_gdi_select_object
+        (drop (call $gdi_native_select_object
           (local.get $hdc)
           (select
             (load.field.memarg EditState font (local.get $state_w))
             (i32.const 0x30021)
             (i32.ne (load.field.memarg EditState font (local.get $state_w)) (i32.const 0)))))
-        (drop (call $host_gdi_set_bk_mode (local.get $hdc) (i32.const 1)))
+        (drop (call $gdi_native_set_bk_mode (local.get $hdc) (i32.const 1)))
         ;; 1) White background (WHITE_BRUSH stock obj 0 = 0x30010)
-        (drop (call $host_gdi_fill_rect (local.get $hdc)
+        (drop (call $gdi_native_fill_rect (local.get $hdc)
                 (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
                 (i32.const 0x30010)))
         ;; 2) Sunken edge: BDR_SUNKENOUTER(0x02)|BDR_SUNKENINNER(0x08) = 0x0A;
@@ -1923,7 +1951,7 @@
         ;; outermost chrome and the scrollbar strips (5, 6) sit inside it.
         (if (i32.eqz (local.get $wParam))
           (then
-            (drop (call $host_gdi_draw_edge (local.get $hdc)
+            (drop (call $gdi_native_draw_edge (local.get $hdc)
                     (i32.const 0) (i32.const 0) (local.get $full_w) (local.get $full_h)
                     (i32.const 0x0A) (i32.const 0x0F)))))
         ;; 3) Text — draw line by line, splitting on \n. Each line is split
@@ -1990,26 +2018,26 @@
                     (local.get $pre_w)))
                   (if (i32.eqz (local.get $sel_w))
                     (then (local.set $sel_w (i32.mul (i32.sub (local.get $b) (local.get $a)) (i32.const 8)))))
-                  (local.set $brush (call $host_gdi_create_solid_brush (i32.const 0x00800000)))
-                  (drop (call $host_gdi_fill_rect (local.get $hdc)
+                  (local.set $brush (call $gdi_native_create_solid_brush (i32.const 0x00800000)))
+                  (drop (call $gdi_native_fill_rect (local.get $hdc)
                           (i32.add (local.get $pre_w) (i32.const 4))
                           (i32.sub (local.get $line_y) (i32.const 2))
                           (i32.add (i32.add (local.get $pre_w) (local.get $sel_w)) (i32.const 4))
                           (i32.add (local.get $line_y) (i32.const 13))
                           (local.get $brush)))
-                  (drop (call $host_gdi_delete_object (local.get $brush)))
+                  (drop (call $gdi_native_delete_object (local.get $brush)))
                   (if (local.get $a)
-                    (then (drop (call $host_gdi_text_out
+                    (then (drop (call $gdi_native_text_out
                       (local.get $hdc) (i32.const 4) (local.get $line_y)
                       (local.get $line_buf_w) (local.get $a) (i32.const 0)))))
-                  (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x00FFFFFF)))
-                  (drop (call $host_gdi_text_out
+                  (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x00FFFFFF)))
+                  (drop (call $gdi_native_text_out
                     (local.get $hdc) (i32.add (local.get $pre_w) (i32.const 4)) (local.get $line_y)
                     (i32.add (local.get $line_buf_w) (local.get $a))
                     (i32.sub (local.get $b) (local.get $a)) (i32.const 0)))
-                  (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x00000000)))
+                  (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x00000000)))
                   (if (i32.lt_u (local.get $b) (local.get $hi))
-                    (then (drop (call $host_gdi_text_out
+                    (then (drop (call $gdi_native_text_out
                       (local.get $hdc)
                       (i32.add (i32.add (local.get $pre_w) (local.get $sel_w)) (i32.const 4))
                       (local.get $line_y)
@@ -2017,7 +2045,7 @@
                       (i32.sub (local.get $hi) (local.get $b)) (i32.const 0))))))
                 (else
                   (if (local.get $hi)
-                    (then (drop (call $host_gdi_text_out
+                    (then (drop (call $gdi_native_text_out
                       (local.get $hdc) (i32.const 4) (local.get $line_y)
                       (local.get $line_buf_w) (local.get $hi) (i32.const 0)))))))
               (local.set $lo (i32.add (local.get $lo) (i32.const 1)))
@@ -2050,7 +2078,7 @@
                       (i32.ge_s (local.get $a) (i32.const 0))
                       (i32.lt_s (local.get $hi) (local.get $h)))
                   (then
-                    (drop (call $host_gdi_fill_rect (local.get $hdc)
+                    (drop (call $gdi_native_fill_rect (local.get $hdc)
                             (i32.add (local.get $px) (i32.const 4))
                             (i32.add (local.get $hi) (i32.const 2))
                             (i32.add (local.get $px) (i32.const 6))
@@ -2089,6 +2117,8 @@
               (br_if $lines_done (i32.gt_u (local.get $lo) (local.get $text_len)))
               (local.set $hi (call $edit_line_len (local.get $state_w) (local.get $lo)))
               (local.set $line_end (i32.add (local.get $lo) (local.get $hi)))
+              ;; line_end (the \n) steps the loop; only the text is drawn.
+              (local.set $hi (call $edit_line_text_len (local.get $state_w) (local.get $lo)))
               (local.set $line_buf_w (i32.add (call $g2w (local.get $buf)) (local.get $lo)))
               ;; Selection intersection within this line (relative to line start).
               (local.set $a (i32.const 0))
@@ -2103,7 +2133,16 @@
                   (local.set $b (local.get $sel_hi))
                   (if (i32.gt_u (local.get $b) (local.get $line_end)) (then (local.set $b (local.get $line_end))))
                   (local.set $b (i32.sub (local.get $b) (local.get $lo)))))
-              (if (i32.lt_u (local.get $a) (local.get $b))
+              ;; A selection may cover the CR; it is not drawn.
+              (if (i32.gt_u (local.get $b) (local.get $hi)) (then (local.set $b (local.get $hi))))
+              (if (i32.gt_u (local.get $a) (local.get $hi)) (then (local.set $a (local.get $hi))))
+              ;; ...but a selection running on past the line break still pads
+              ;; to the right edge, even on a blank CRLF line.
+              (if (i32.or
+                    (i32.lt_u (local.get $a) (local.get $b))
+                    (i32.and (i32.lt_u (local.get $sel_lo) (local.get $sel_hi))
+                             (i32.and (i32.le_u (local.get $sel_lo) (local.get $line_end))
+                                      (i32.gt_u (local.get $sel_hi) (local.get $line_end)))))
                 (then
                   ;; Highlight rect: measure widths up to $a and up to $b.
                   (local.set $pre_w (i32.const 0))
@@ -2119,36 +2158,36 @@
                   (if (i32.gt_u (local.get $sel_hi) (local.get $line_end))
                     (then (local.set $sel_w (i32.sub (local.get $w)
                             (i32.add (local.get $pre_w) (local.get $tx))))))
-                  (local.set $brush (call $host_gdi_create_solid_brush (i32.const 0x00800000)))
-	                  (drop (call $host_gdi_fill_rect (local.get $hdc)
+                  (local.set $brush (call $gdi_native_create_solid_brush (i32.const 0x00800000)))
+	                  (drop (call $gdi_native_fill_rect (local.get $hdc)
 	                          (i32.add (local.get $pre_w) (local.get $tx))
 	                          (i32.sub (local.get $line_y) (i32.const 2))
 	                          (i32.add (i32.add (local.get $pre_w) (local.get $sel_w)) (local.get $tx))
 	                          (i32.add (local.get $line_y) (i32.const 13))
 	                          (local.get $brush)))
-                  (drop (call $host_gdi_delete_object (local.get $brush)))
+                  (drop (call $gdi_native_delete_object (local.get $brush)))
                   ;; pre-sel text (black)
                   (if (local.get $a)
-                    (then (drop (call $host_gdi_text_out (local.get $hdc)
+                    (then (drop (call $gdi_native_text_out (local.get $hdc)
                                   (local.get $tx) (local.get $line_y)
                                   (local.get $line_buf_w) (local.get $a) (i32.const 0)))))
                   ;; selected text (white)
-                  (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x00FFFFFF)))
-                  (drop (call $host_gdi_text_out (local.get $hdc)
+                  (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x00FFFFFF)))
+                  (drop (call $gdi_native_text_out (local.get $hdc)
                           (i32.add (local.get $pre_w) (local.get $tx)) (local.get $line_y)
                           (i32.add (local.get $line_buf_w) (local.get $a))
                           (i32.sub (local.get $b) (local.get $a)) (i32.const 0)))
-                  (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x00000000)))
+                  (drop (call $gdi_native_set_text_color (local.get $hdc) (i32.const 0x00000000)))
                   ;; post-sel text (black)
                   (if (i32.lt_u (local.get $b) (local.get $hi))
-                    (then (drop (call $host_gdi_text_out (local.get $hdc)
+                    (then (drop (call $gdi_native_text_out (local.get $hdc)
                                   (i32.add (i32.add (local.get $pre_w) (local.get $sel_w)) (local.get $tx))
                                   (local.get $line_y)
                                   (i32.add (local.get $line_buf_w) (local.get $b))
                                   (i32.sub (local.get $hi) (local.get $b)) (i32.const 0))))))
                 (else
                   (if (local.get $hi)
-                    (then (drop (call $host_gdi_text_out (local.get $hdc)
+                    (then (drop (call $gdi_native_text_out (local.get $hdc)
                                   (local.get $tx) (local.get $line_y)
                                   (local.get $line_buf_w) (local.get $hi) (i32.const 0)))))))
               (local.set $lo (i32.add (local.get $line_end) (i32.const 1)))
@@ -2247,7 +2286,7 @@
             ;; The dead square where the two strips meet is scrollbar-grey,
             ;; not white: it belongs to neither track.
             (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00200000))
-              (then (drop (call $host_gdi_fill_rect (local.get $hdc)
+              (then (drop (call $gdi_native_fill_rect (local.get $hdc)
                 (i32.sub (local.get $full_w) (i32.const 18))
                 (i32.sub (local.get $full_h) (i32.const 18))
                 (i32.sub (local.get $full_w) (i32.const 2))
@@ -2508,7 +2547,7 @@
         (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
         (local.set $state_w (call $g2w (local.get $state)))
         (local.set $lo (call $edit_line_start (local.get $state_w) (local.get $wParam)))
-        (return (call $edit_line_len (local.get $state_w) (local.get $lo)))))
+        (return (call $edit_line_text_len (local.get $state_w) (local.get $lo)))))
 
     ;; ---------- EM_SCROLLCARET (0x00B7) ----------
     ;; The EM_SETSEL + EM_SCROLLCARET pair is how an app (notepad's Find, for
@@ -2590,6 +2629,24 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.sub (local.get $i) (local.get $line_start)))
+
+  ;; The line's text length: $edit_line_len without the CR of a CRLF break.
+  ;; $edit_line_len stops at the \n and so still counts that CR, which is
+  ;; right for stepping to the next line (start + len + 1) and wrong for
+  ;; anything that draws, measures or places a caret in the line: USER's
+  ;; EM_LINELENGTH excludes it, and drawn it is a '?' glyph at every line end
+  ;; (SC2000's budget header "New City\r\n1903 Budget\r\n...").
+  (func $edit_line_text_len (param $state_w ptr<EditState>) (param $line_start i32) (result i32)
+    (local $len i32)
+    (local.set $len (call $edit_line_len (local.get $state_w) (local.get $line_start)))
+    (if (i32.eqz (local.get $len)) (then (return (i32.const 0))))
+    (if (i32.eq
+          (i32.load8_u (i32.add
+            (call $g2w (load.field EditState text_buf_ptr (local.get $state_w)))
+            (i32.sub (i32.add (local.get $line_start) (local.get $len)) (i32.const 1))))
+          (i32.const 0x0D))
+      (then (return (i32.sub (local.get $len) (i32.const 1)))))
+    (local.get $len))
 
   ;; Return 0-based line number containing char at $pos.
   (func $edit_line_from_char (param $state_w ptr<EditState>) (param $pos i32) (result i32)

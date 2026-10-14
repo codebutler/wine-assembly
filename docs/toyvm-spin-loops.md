@@ -310,3 +310,72 @@ it would change when the key arrives. The twin declines it — the port test
 takes the interpreter path — and CMA_SHRT is a keyboard-model question, not a
 spin one. daretro's `in_8 -> test_ri8` (2.7%) sits behind a `jmp`, a 3-op
 block, so it gets the clock and not the twin.
+
+## Skipping identical turns, and every spelling of the poll (2026-09-22)
+
+Turning the loop inside one handler still turns it: a 70Hz frame is ~143k
+dispatches, so a poll that waits most of a frame goes round ~48k times per
+frame at 3 steps each. But a turn's outcome is a function of the status alone,
+and the status is a pure function of the clock, so turns that read the same
+answer are identical except for their steps. `$vga_run` says how many
+dispatches the current answer holds (to the end of vertical blanking, else the
+next horizontal edge or the frame wrap), and the pspin twin charges every whole
+further turn that would read it, and pass the budget test at its branch, in one
+subtraction. That was e9da9915: 199/199 programs exact on dispatches and frame
+against the turn-by-turn twin, geomean x0.658, CHROME x0.097.
+
+The twin still only takes `in al,dx / alu al,imm / jcc head`, and the corpus
+spells the wait several other ways — `mov dx,3DAh` inside the loop (BTW,
+alpha), `and al,8 / cmp al,8 / jnz` (DIESEL, DRAGON), `in / jmp $+2 / test al,8
+/ jz` across two blocks (XMAS, KUKOO2), `mov ah,0 / test ax,8`. A fused twin
+per spelling does not scale, so `generalPortSpin` in compile.js proves the
+property the skip needs instead, and puts `in_8_gspin` on the `in`:
+
+- **Pure ops.** Registers and flags only, every register index resolved by
+  handler-effects.js, a known step charge (1, 2 for a fused compare-and-branch,
+  0 for `jmp_syn`). No memory, stack, segment write, other port, FPU or
+  CX-counting op.
+- **No carried state.** From some rotation of the loop, every register byte
+  read is never written in it or written earlier in the pass, and every flag
+  read follows an op that writes all flags. `inc bx` in the loop declines.
+- **No tie.** The twin arms on (site, `$steps`, status) and matches "one pass
+  of steps later, same site, same status". An exit followed by other code
+  that gets back to the `in` could in principle arrive at the same count. So
+  from each exit's target the compiled code is walked by exact step count,
+  and the site declines if any route reaches the `in` at exactly the cost the
+  loop itself takes from that exit. A route the walk cannot follow (a return,
+  an indirect jump, an edge out of this compile, an op with no fixed charge)
+  counts as a tie if it is taken early enough that some landing could still
+  make up the difference. A handback ends a route harmlessly, because run()
+  clears the arm each slice. The one variable-charge op the walk does see
+  through is the pspin twin: it only takes steps (at least 3) and leaves by
+  its own edges, so the walk carries on from it with the cost as a lower
+  bound.
+
+The loop itself is the *shortest* cycle back to the `in` (a BFS over the arena
+edges), not the first one a depth-first walk meets — BABYTRO's wait exits into
+a frame loop that comes back round too, and the first-edge walk handed the
+purity test the whole frame loop.
+
+That takes BABYTRO's `L: mov dx,3DAh / in / and / cmp / jz out / jmp L`, whose
+`jz` exit is not the loop's last op, and still declines the same loop followed
+by `out: ret`, where the return could land on `L` at exactly the `jmp`'s cost.
+A first version treated the pspin twin as unknown and so declined every
+`jnz L1 / L2: in / test / jz L2` pair whose second wait was already a twin
+(JULTRO lost 5 of its 10 sites, and 25% of its time); following the twin as a
+lower bound gave them back. Against a53e91b2: **199/199 exact**, BABYTRO
+x0.35 (~210 -> 74ms, interleaved three times), JULTRO at parity, and nothing
+else outside noise when re-timed interleaved.
+
+Then a pass is a function of the status it reads, a hit proves the last pass
+went round, and every pass that reads the same status again does too.
+
+**199/199 exact** on dispatches and frame against HEAD, geomean x0.944, total
+33.0s -> 31.7s. BTW x0.168, KUKOO2 x0.187, XMAS x0.192, alpha x0.201, BAGGER
+x0.271, NFO x0.37, brainbug x0.48, DIESEL x0.65, DRAGON x0.68. The slow tail
+(RUN_IT x1.14, DFUSE x1.08, BLUE x1.16) re-timed interleaved three times is
+within noise. `test/test-toyvm-retrace.js` runs each spelling folded and with
+`spinLoops: false` and requires the same dispatches, BIOS ticks and 3DAh read
+count, that the pure spellings were rewritten and that the counter was not;
+its compile-only `tie()` checks the `ret` tie declines, an exit into
+straight-line code is taken, and a wait falling into a twin gives two sites.

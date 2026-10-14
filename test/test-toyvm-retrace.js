@@ -41,6 +41,7 @@ const path = require('path');
 const { makeVm } = require('../tools/toyvm/vm');
 const { runDos } = require('../tools/toyvm/run-dos');
 const { PSP_SEG } = require('../tools/toyvm/dos');
+const { compileProgram } = require('../tools/toyvm/compile');
 
 const fail = [];
 const check = (ok, msg) => { if (!ok) fail.push(msg); console.log(`${ok ? 'PASS' : 'FAIL'}  ${msg}`); };
@@ -116,32 +117,54 @@ async function shape() {
 // and not some shape only this test writes.
 const FRAMES = 182;
 
-function retraceCom() {
+// One poll loop per spelling: `until` spins while bit 3 is clear, `!until`
+// while it is set. Each returns its bytes with the backward jcc's rel8 filled.
+// `canonical` is the pair the fused in_*_pspin twin takes; the rest are what
+// the corpus writes instead, which the general port spin (compile.js
+// generalPortSpin) takes -- except `counter`, which carries state from pass to
+// pass and must be left to run turn by turn.
+const loop = (body, jcc) => [...body, jcc, (-(body.length + 2)) & 0xFF];
+const SHAPES = {
+  // in al,dx / test al,8 / jcc
+  canonical: (until) => loop([0xEC, 0xA8, 0x08], until ? 0x74 : 0x75),
+  // mov dx,3DAh / in / and al,8 / cmp al,8 / jcc               (DIESEL)
+  andcmp: (until) => loop([0xBA, 0xDA, 0x03, 0xEC, 0x24, 0x08, 0x3C, 0x08], until ? 0x75 : 0x74),
+  // in / jmp $+2 / test al,8 / jcc, two blocks                  (XMAS)
+  jmpnext: (until) => loop([0xEC, 0xEB, 0x00, 0xA8, 0x08], until ? 0x74 : 0x75),
+  // mov dx,3DAh / in / mov ah,0 / test ax,8 / jcc               (alpha)
+  testax: (until) => loop([0xBA, 0xDA, 0x03, 0xEC, 0xB4, 0x00, 0xA9, 0x08, 0x00], until ? 0x74 : 0x75),
+  // L: mov dx,3DAh / in / and al,8 / cmp al,8 / jcc out / jmp L / out:
+  // -- the exit is not the loop's last op, so a route out could in principle
+  // tie with the `jmp` round; the exit search has to clear it  (BABYTRO)
+  jmpback: (until) => [0xBA, 0xDA, 0x03, 0xEC, 0x24, 0x08, 0x3C, 0x08,
+    until ? 0x74 : 0x75, 0x02, 0xEB, 0xF4],
+  // L: mov dx,3DAh / in / test al,8 / jnz L, then the canonical `jz` wait,
+  // which the twin takes -- the first wait's exit runs straight into that
+  // twin, which the exit search must see through                 (JULTRO)
+  intotwin: (until) => (until ? SHAPES.canonical(true)
+    : loop([0xBA, 0xDA, 0x03, 0xEC, 0xA8, 0x08], 0x75)),
+  // in / inc bx / test al,8 / jcc -- a pass count, so NOT a pure spin
+  counter: (until) => loop([0xEC, 0x43, 0xA8, 0x08], until ? 0x74 : 0x75),
+};
+
+function retraceCom(shape = 'canonical') {
+  const wait = SHAPES[shape];
+  const w1 = [...wait(false), ...wait(true)];
   return Uint8Array.from([
-    0xB8, 0x40, 0x00,               // 0100  mov ax,0x40        (BIOS data area)
-    0x8E, 0xC0,                     // 0103  mov es,ax
-    0xBA, 0xDA, 0x03,               // 0105  mov dx,0x3DA
+    0xB8, 0x40, 0x00,               // mov ax,0x40        (BIOS data area)
+    0x8E, 0xC0,                     // mov es,ax
+    0xBA, 0xDA, 0x03,               // mov dx,0x3DA
     // Align on a rising edge, so every counted frame below is a whole one.
-    0xEC,                           // 0108  w0:  in al,dx
-    0xA8, 0x08,                     // 0109  test al,8
-    0x75, 0xFB,                     // 010B  jnz w0             (wait out a retrace)
-    0xEC,                           // 010D  w0b: in al,dx
-    0xA8, 0x08,                     // 010E  test al,8
-    0x74, 0xFB,                     // 0110  jz w0b             (wait for the next one)
-    0x26, 0x8B, 0x36, 0x6C, 0x00,   // 0112  mov si,es:[0x6C]   (tick count, low word)
-    0xB9, FRAMES & 0xFF, FRAMES >> 8, // 0117 mov cx,FRAMES
-    0xEC,                           // 011A  w1:  in al,dx
-    0xA8, 0x08,                     // 011B  test al,8
-    0x75, 0xFB,                     // 011D  jnz w1             (wait for retrace to end)
-    0xEC,                           // 011F  w2:  in al,dx
-    0xA8, 0x08,                     // 0120  test al,8
-    0x74, 0xFB,                     // 0122  jz w2              (wait for it to start)
-    0xE2, 0xF4,                     // 0124  loop w1
-    0x26, 0x8B, 0x1E, 0x6C, 0x00,   // 0126  mov bx,es:[0x6C]
-    0x29, 0xF3,                     // 012B  sub bx,si
-    0x89, 0x1E, 0x00, 0x02,         // 012D  mov [0x0200],bx    (the answer)
-    0xB8, 0x00, 0x4C,               // 0131  mov ax,0x4C00
-    0xCD, 0x21,                     // 0134  int 21h
+    ...w1,
+    0x26, 0x8B, 0x36, 0x6C, 0x00,   // mov si,es:[0x6C]   (tick count, low word)
+    0xB9, FRAMES & 0xFF, FRAMES >> 8, // mov cx,FRAMES
+    ...w1,                          // w1: wait out a retrace, wait for the next
+    0xE2, (-(w1.length + 2)) & 0xFF, // loop w1
+    0x26, 0x8B, 0x1E, 0x6C, 0x00,   // mov bx,es:[0x6C]
+    0x29, 0xF3,                     // sub bx,si
+    0x89, 0x1E, 0x00, 0x02,         // mov [0x0200],bx    (the answer)
+    0xB8, 0x00, 0x4C,               // mov ax,0x4C00
+    0xCD, 0x21,                     // int 21h
   ]);
 }
 
@@ -164,7 +187,72 @@ async function rate(com) {
       + ` ${(r.dispatched / 1e6).toFixed(1)}M dispatches)`);
     check(ticks >= EXPECT * 0.88 && ticks <= EXPECT * 1.12,
       `${name}: ${FRAMES} retraces take ${ticks} BIOS ticks, want ~${EXPECT.toFixed(0)}`);
+    // 3. THE FOLD IS EXACT. The port-poll superop charges a run of turns that
+    // read the same status at once instead of turning through them; with the
+    // spin folds off every turn is dispatched. Same clock, same answer.
+    const u = await runDos({
+      exe: com, budget: BUDGET, log: () => {}, pitClock, stuckLimit: 0, spinLoops: false,
+    });
+    const uticks = u.vm.mem[at] | (u.vm.mem[at + 1] << 8);
+    check(u.dispatched === r.dispatched && uticks === ticks && u.machine.exitCode === r.machine.exitCode,
+      `${name}: folded and unfolded polls retire the same clock (${r.dispatched} vs ${u.dispatched}`
+      + ` dispatches, ${ticks} vs ${uticks} ticks)`);
   }
+}
+
+// 4. EVERY SPELLING. The same wait written the ways the corpus writes it, on
+// the default clock: each must retire exactly the unfolded clock, and the pure
+// ones must actually have been folded (spinBlocks counts rewritten sites) while
+// the one with a pass counter must not.
+async function spellings(dir) {
+  const at = (PSP_SEG << 4) + 0x200;
+  for (const shape of Object.keys(SHAPES)) {
+    if (shape === 'canonical') continue;
+    const com = path.join(dir, `R_${shape.toUpperCase().slice(0, 6)}.COM`);
+    fs.writeFileSync(com, retraceCom(shape));
+    const run = (spinLoops) => runDos({ exe: com, budget: BUDGET, log: () => {}, stuckLimit: 0, spinLoops });
+    const r = await run(true);
+    const u = await run(false);
+    const ticks = r.vm.mem[at] | (r.vm.mem[at + 1] << 8);
+    const uticks = u.vm.mem[at] | (u.vm.mem[at + 1] << 8);
+    check(r.machine.exited === true && r.machine.exitCode === 0 && ticks >= EXPECT * 0.88 && ticks <= EXPECT * 1.12,
+      `${shape}: exits after ${FRAMES} retraces in ${ticks} ticks, want ~${EXPECT.toFixed(0)}`);
+    check(u.dispatched === r.dispatched && uticks === ticks
+      && r.machine.clock.retrace === u.machine.clock.retrace,
+      `${shape}: folded and unfolded retire the same clock (${r.dispatched} vs ${u.dispatched} dispatches,`
+      + ` ${r.machine.clock.retrace} vs ${u.machine.clock.retrace} 3DAh reads)`);
+    const want = shape !== 'counter';
+    check((r.spinBlocks > 0) === want,
+      `${shape}: ${want ? 'folded' : 'left alone'} (${r.spinBlocks} spin site(s) rewritten)`);
+  }
+}
+
+// 5. THE TIE. `L: mov dx,3DAh / in / and / cmp / jz out / jmp L` with
+// `out: ret` must NOT be taken: a return to L after the `jz` costs exactly
+// what the `jmp` round does, so the arm could not tell that pass from one
+// round the loop, and the ret's target is unknown at compile time. The same
+// loop exiting into straight-line code that cannot get back that cheaply
+// must be taken. Compile-only: this is the compiler's decision, not a clock.
+function tie() {
+  const poll = [0xBA, 0xDA, 0x03, 0xEC, 0x24, 0x08, 0x3C, 0x08, 0x74, 0x02, 0xEB, 0xF4];
+  const spins = (out) => {
+    const mem = new Uint8Array(0x10000);
+    mem.set([...poll, ...out], 0x100);
+    return compileProgram((a) => mem[a & 0xFFFF], 0, 0x100, { arenaBase: 0x100000 }).spinBlocks;
+  };
+  const ret = spins([0xC3]);
+  check(ret === 0, `a ret right behind the exit ties with the loop's own jmp: not taken (${ret})`);
+  // out: mov ax,[bp-2] / cmp ax,[bp-6] / int 20h -- three steps before anything can jump
+  const far = spins([0x8B, 0x46, 0xFE, 0x3B, 0x46, 0xFA, 0xCD, 0x20]);
+  check(far === 1, `an exit into code that cannot get back in two steps: taken (${far})`);
+  // JULTRO: `L1: mov dx,3DAh / in / test al,8 / jnz L1 / L2: in / test al,8 /
+  // jz L2 / int 20h`. L2 becomes a port-spin twin first, which has no fixed
+  // charge; it only takes steps, so the search follows it as a lower bound and
+  // L1 is taken too -- two sites, not one.
+  const mem = new Uint8Array(0x10000);
+  mem.set([0xBA, 0xDA, 0x03, 0xEC, 0xA8, 0x08, 0x75, 0xF8, 0xEC, 0xA8, 0x08, 0x74, 0xFB, 0xCD, 0x20], 0x100);
+  const both = compileProgram((a) => mem[a & 0xFFFF], 0, 0x100, { arenaBase: 0x100000 }).spinBlocks;
+  check(both === 2, `a wait whose exit falls into a twin: both folded (${both} site(s))`);
 }
 
 async function main() {
@@ -172,7 +260,9 @@ async function main() {
   const com = path.join(dir, 'RETRACE.COM');
   fs.writeFileSync(com, retraceCom());
   await shape();
+  tie();
   await rate(com);
+  await spellings(dir);
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(fail.length ? `\n${fail.length} FAILED` : '\nall retrace checks passed');
   process.exit(fail.length ? 1 : 0);

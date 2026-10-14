@@ -40,7 +40,7 @@
 //
 // usage: node tools/mobile-app-sweep.js --out=DIR [--apps=a,b] [--orientations=portrait,landscape]
 //                                       [--settle=14000] [--jobs=4] [--timeout=240]
-//                                       [--url=http://127.0.0.1:8080]
+//                                       [--url=http://127.0.0.1:8080] [--query=mm-thread=0]
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -66,7 +66,13 @@ const TIMEOUT_S = Number(arg('timeout', 240));
 // (Winamp, StarCraft, Heroes II, RollerCoaster Tycoon) do not make the 90s
 // default on a loaded box and report as launch failures they are not.
 const LAUNCH_MS = Number(arg('launch', 150000));
+// How long the probe waits for the launch window to come down before the
+// recipe's first key; it is reported per row when it never does.
+const LAUNCHER_MS = Number(arg('launcher-wait', 45000));
 const URL_BASE = arg('url', '');
+// Extra page switches on top of the shipping shell, e.g. `mm-thread=0`, so
+// one build can be swept both ways without an edit.
+const QUERY = String(arg('query', '')).replace(/^\?/, '');
 
 const ORIENTS = {
   portrait: '375x667',   // iPhone SE, the smallest screen we claim to support
@@ -189,8 +195,9 @@ function runOne(id, orient) {
   // --query='' is the SHIPPING shell. The probe's default is ?debug, which puts
   // a toolbar above the stage -- a different layout from the one a phone user
   // gets, and every number below describes the layout.
-  const args = [PROBE, `--app=${id}`, '--query=', `--viewport=${ORIENTS[orient]}`,
-    `--launch=${LAUNCH_MS}`, '--touch', `--steps=${steps}`,
+  // --query=mm-thread=0 (no '?') adds A/B switches to that shell.
+  const args = [PROBE, `--app=${id}`, `--query=${QUERY ? '?' + QUERY : ''}`, `--viewport=${ORIENTS[orient]}`,
+    `--launch=${LAUNCH_MS}`, `--launcher-wait=${LAUNCHER_MS}`, '--touch', `--steps=${steps}`,
     `--eval=JSON.stringify({fit: window.__fit, fill: ${LAYOUT_OBJ}})`];
   if (URL_BASE) args.push(`--url=${URL_BASE}`);
 
@@ -213,8 +220,15 @@ function runOne(id, orient) {
       } else {
         error = `no eval line (exit ${code})`;
       }
+      // The probe waits for the launch window before any step and reports
+      // it; a recipe's Enter landing on a launch window is not a test of the
+      // app, so a row whose launcher never cleared says so.
+      const stuck = out.split('\n').find(l => l.startsWith('launcher: STILL UP'));
+      const atEnd = out.split('\n').find(l => l.startsWith('launcher at end: '));
+      const launcher = stuck ? stuck.slice('launcher: '.length)
+        : atEnd && atEnd !== 'launcher at end: down' ? atEnd.slice('launcher '.length) : null;
       resolve({
-        id, orient, viewport: ORIENTS[orient], recipe: CLASS_OF[id] || 'plain',
+        id, orient, viewport: ORIENTS[orient], recipe: CLASS_OF[id] || 'plain', launcher,
         restShot: fs.existsSync(restShot) ? restShot : null,
         shot: fs.existsSync(shot) ? shot : null,
         fillShot: fs.existsSync(fillShot) ? fillShot : null,
@@ -265,7 +279,8 @@ function runOne(id, orient) {
       // still going, and a partial file beats no file if it is interrupted.
       fs.writeFileSync(rowsPath, JSON.stringify(rows, null, 1));
       console.log(`${rows.length - keptFromPrior}/${jobs.length}  ${id} ${orient}` +
-        (row.error ? `  ERROR ${row.error}` : ''));
+        (row.error ? `  ERROR ${row.error}` : '') +
+        (row.launcher ? `  LAUNCHER ${row.launcher}` : ''));
     }
   };
   await Promise.all(Array.from({ length: Math.min(JOBS, jobs.length) }, worker));

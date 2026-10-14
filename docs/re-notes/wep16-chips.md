@@ -1,5 +1,41 @@
 # Chip's Challenge (Win16 WEP4)
 
+## Background music — 2026-10-13
+
+A fresh profile starts with Background Music unchecked. Enabling it through
+Options (command 117) previously produced “The MIDI Mapper is not available.
+Continue?” and no music. Both `CHIP01.MID` and `CHIP02.MID` were already mounted.
+
+The MMSYSTEM.701 bridge converted the outer `mciSendCommand` parameter pointer
+but forwarded its nested selector:offset strings as flat addresses. The resulting
+MCI device had neither the intended sequencer type nor the MIDI file. Marshal
+MCI_OPEN into stack scratch, translate flagged string fields, retain numeric
+TYPE_ID/ELEMENT_ID fields, and copy only the returned WORD device ID back.
+Win16 has a reserved WORD after that ID, so the remaining offsets match Win32;
+the reserved WORD and caller strings must remain intact. Layout reference:
+[Wine's MCI_OPEN_PARMS16](https://github.com/wine-mirror/wine/blob/master/include/wine/mmsystem16.h).
+
+The second failure was the host sequencer's MCI_SEQ_STATUS_PORT query returning
+zero. It now reports MIDI_MAPPER (`0xffffffff`) for its default synth output.
+The game then issues MCI_PLAY itself, without dismissing a warning or patching
+guest memory.
+
+Validation: full build, `test-win16-task-args-mmsystem.js`, `test-midi-mci.js`,
+and `test-win16-wep4-gameplay.js chips` pass. The adapter regression uses real
+Win16 Pascal frames, checks translated pointers and TYPE_ID, and verifies that
+only the two device-ID bytes change in the caller's block. Chrome cooperative
+mode loads `chip02.mid`, parses 1,466 notes, and emits nonzero PCM at the master
+bus after ordinary Options > Background Music clicks. This verifies playback
+startup; Safari and an entire song/end-of-song transition were not tested.
+
+Evidence is in `scratch/runs/20261013-chips-music-before/` (failed command trace)
+and `scratch/runs/20261013-chips-music-after/` (successful command trace,
+reviewed browser screenshot, browser menu/on-off log and PCM measurements).
+The tested WASM SHA-256 is
+`d19c10b798cf71449551fa0387ce5e971c3c3c083aa47ca78f800a0fb7364d58`.
+There is no Chip's Challenge candidate-corpus ID, so no unrelated dashboard
+candidate is attached to this evidence.
+
 ## Gameplay regression workflow — 2026-09-19
 
 `test/test-win16-wep4-gameplay.js` formerly clicked screen (200,310), then

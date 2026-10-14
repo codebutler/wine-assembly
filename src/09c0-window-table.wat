@@ -496,10 +496,36 @@
           ;; path now rechecks while holding this same lock; one final purge
           ;; after hwnd=0 therefore closes both sides of that race.
           (call $shared_post_queue_purge_hwnd (local.get $hwnd))
+          (call $wnd_legacy_dc_release (local.get $hwnd))
+          ;; A Win16 task's narrow handles for this window (and its DCs) die
+          ;; with it; HWNDs are never reissued, so a kept slot is a leak.
+          (call $win16_h16_forget_window (local.get $hwnd)
+            (i32.load (call $wnd_own_dc_addr_for_slot (local.get $i))))
           (return)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
   )
+
+  ;; The internal window DCs, hwnd+0x40000 (client) and hwnd+0xC0000 (whole
+  ;; window), are never handed out by GetDC, so nothing ever ReleaseDCs them:
+  ;; $gdi_dc_state_entry adopts a record for one the first time a native
+  ;; control paints through it, and that record outlived the window. Every
+  ;; dialog leaked one per control; SimCity 2000's yearly budget dialog has
+  ;; ~70, so by its seventh January all 512 DC slots belonged to dead windows,
+  ;; GetDC returned NULL and MFC threw CResourceException on every repaint.
+  ;; Runs after the hwnd is unpublished: the lookup adopts a record for a
+  ;; *live* window's encoding, so releasing earlier would just recreate it.
+  ;; Each encoding is only that window's inside its own range; past it the
+  ;; same number is another window's DC of the other kind.
+  (func $wnd_legacy_dc_release (param $hwnd i32)
+    (if (i32.and (i32.ge_u (local.get $hwnd) (i32.const 0x00010000))
+                 (i32.lt_u (local.get $hwnd) (i32.const 0x00090000)))
+      (then (drop (call $host_release_dc
+        (i32.add (local.get $hwnd) (i32.const 0x00040000))))))
+    (if (i32.and (i32.ge_u (local.get $hwnd) (i32.const 0x00010000))
+                 (i32.lt_u (local.get $hwnd) (i32.const 0x00110000)))
+      (then (drop (call $host_release_dc
+        (i32.add (local.get $hwnd) (i32.const 0x000C0000)))))))
 
   ;; Recursively destroy a window and all its children. Real DestroyWindow
   ;; notifies the wndproc before the HWND finally disappears; MFC relies on
@@ -519,13 +545,19 @@
         (then (call $wnd_destroy_recursive (local.get $other))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
-    ;; Notify the app/control proc before removing the record.
-    (drop (call $wnd_send_message (local.get $hwnd)
-      (i32.const 0x0002)  ;; WM_DESTROY
-      (i32.const 0) (i32.const 0)))
-    (drop (call $wnd_send_message (local.get $hwnd)
-      (i32.const 0x0082)  ;; WM_NCDESTROY
-      (i32.const 0) (i32.const 0)))
+    ;; Notify the app/control proc before removing the record -- unless it is
+    ;; a 16-bit procedure Win16 DestroyWindow has already sent both messages
+    ;; to through far calls ($win16_DestroyWindow); from here they could only
+    ;; be posted, and the post dies with the window.
+    (if (i32.eqz (i32.and (i32.ne (global.get $win16_destroy_notified) (i32.const 0))
+                          (call $win16_is_far_proc (call $wnd_table_get (local.get $hwnd)))))
+      (then
+        (drop (call $wnd_send_message (local.get $hwnd)
+          (i32.const 0x0002)  ;; WM_DESTROY
+          (i32.const 0) (i32.const 0)))
+        (drop (call $wnd_send_message (local.get $hwnd)
+          (i32.const 0x0082)  ;; WM_NCDESTROY
+          (i32.const 0) (i32.const 0)))))
     (call $timer_kill_hwnd (local.get $hwnd))
     ;; A destroyed window cannot keep the focus or the capture. USER drops both
     ;; as the HWND dies; we used to clear focus only in $handle_DestroyWindow,
@@ -634,26 +666,28 @@
   ;; Registered classes may reserve cbWndExtra bytes addressed by nonnegative
   ;; Get/SetWindowLong indices. Keep the first four LONG slots independent of
   ;; GWL_USERDATA; authentic WinHelp uses offsets 4, 8, and 12 concurrently.
+  ;; Each window owns $WND_EXTRA_STRIDE (40) bytes, Win9x's cbWndExtra limit.
   (func $wnd_extra_addr (param $slot i32) (param $index i32) (result i32)
     (i32.add (global.get $WINDOW_EXTRA_TABLE)
-      (i32.add (i32.mul (local.get $slot) (i32.const 16)) (local.get $index))))
+      (i32.add (i32.mul (local.get $slot) (global.get $WND_EXTRA_STRIDE))
+        (local.get $index))))
 
   (func $wnd_extra_reset_slot (param $slot i32)
-    (local $p i32)
-    (local.set $p (call $wnd_extra_addr (local.get $slot) (i32.const 0)))
-    (i32.store (local.get $p) (i32.const 0))
-    (i32.store offset=4 (local.get $p) (i32.const 0))
-    (i32.store offset=8 (local.get $p) (i32.const 0))
-    (i32.store offset=12 (local.get $p) (i32.const 0)))
+    (call $zero_memory (call $wnd_extra_addr (local.get $slot) (i32.const 0))
+      (global.get $WND_EXTRA_STRIDE)))
+
+  ;; True when a LONG at byte offset $index lies wholly inside the window's
+  ;; extra bytes. Unsigned, so a negative index is refused too.
+  (func $wnd_extra_long_index_ok (param $index i32) (result i32)
+    (i32.le_u (local.get $index)
+      (i32.sub (global.get $WND_EXTRA_STRIDE) (i32.const 4))))
 
   (func $wnd_extra_get (param $hwnd i32) (param $index i32) (result i32)
     (local $slot i32)
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (if (i32.or
           (i32.lt_s (local.get $slot) (i32.const 0))
-          (i32.or
-            (i32.gt_u (local.get $index) (i32.const 12))
-            (i32.ne (i32.and (local.get $index) (i32.const 3)) (i32.const 0))))
+          (i32.eqz (call $wnd_extra_long_index_ok (local.get $index))))
       (then (return (i32.const 0))))
     (i32.load (call $wnd_extra_addr (local.get $slot) (local.get $index))))
 
@@ -662,9 +696,7 @@
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (if (i32.or
           (i32.lt_s (local.get $slot) (i32.const 0))
-          (i32.or
-            (i32.gt_u (local.get $index) (i32.const 12))
-            (i32.ne (i32.and (local.get $index) (i32.const 3)) (i32.const 0))))
+          (i32.eqz (call $wnd_extra_long_index_ok (local.get $index))))
       (then (return (i32.const 0))))
     (local.set $p (call $wnd_extra_addr (local.get $slot) (local.get $index)))
     (local.set $old (i32.load (local.get $p)))
@@ -685,7 +717,49 @@
     (i32.store (local.get $p) (i32.const 0))
     (i32.store offset=4 (local.get $p) (i32.const 0))
     (i32.store offset=8 (local.get $p) (i32.const 0))
-    (i32.store offset=12 (local.get $p) (i32.const 0)))
+    (i32.store offset=12 (local.get $p) (i32.const 0))
+    (call $dialog_font_reset_slot (local.get $slot)))
+
+  ;; A DS_SETFONT dialog owns the font the dialog manager created for it, and
+  ;; USER deletes that font with the dialog. Its base units are measured from
+  ;; the same font, so MapDialogRect and the template layout cannot disagree.
+  (func $dialog_font_addr (param $slot i32) (result i32)
+    (i32.add (global.get $DIALOG_FONT_TABLE)
+      (i32.shl (local.get $slot) (i32.const 3))))
+
+  (func $dialog_font_reset_slot (param $slot i32)
+    (local $p i32)
+    (local.set $p (call $dialog_font_addr (local.get $slot)))
+    (if (i32.load (local.get $p))
+      (then (drop (call $gdi_object_delete_full (i32.load (local.get $p))))))
+    (i64.store (local.get $p) (i64.const 0)))
+
+  (func $dialog_font_set (param $slot i32) (param $font i32) (param $units i32)
+    (local $p i32)
+    (local.set $p (call $dialog_font_addr (local.get $slot)))
+    (i32.store (local.get $p) (local.get $font))
+    (i32.store offset=4 (local.get $p) (local.get $units)))
+
+  (func $dialog_font_get (param $hwnd i32) (result i32)
+    (local $slot i32)
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0))
+      (then (return (i32.const 0))))
+    (i32.load (call $dialog_font_addr (local.get $slot))))
+
+  ;; x | y<<16. A dialog without a measured font, or a window that is no
+  ;; dialog at all, gets the stock base: Win16's 8x16 SYSTEM_FONT or Win32's
+  ;; 6x13 8pt MS Sans Serif.
+  (func $dialog_base_units (param $hwnd i32) (result i32)
+    (local $slot i32) (local $units i32)
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.ge_s (local.get $slot) (i32.const 0))
+      (then (local.set $units
+        (i32.load offset=4 (call $dialog_font_addr (local.get $slot))))))
+    (if (result i32) (local.get $units)
+      (then (local.get $units))
+      (else (select (i32.const 0x00100008) (i32.const 0x000D0006)
+        (global.get $is_win16)))))
 
   (func $dialog_proc_get (param $hwnd i32) (result i32)
     (local $slot i32)
@@ -1568,6 +1642,10 @@
                 (i32.const 0x74))
               (i32.eqz (i32.load8_u offset=9 (local.get $wa))))))
       (then (return (i32.const 33))))
+    ;; "sysa"+"nima" -> SysAnimate32
+    (if (i32.and (i32.eq (local.get $d0) (i32.const 0x61737973))
+                 (i32.eq (local.get $d1) (i32.const 0x616d696e)))
+      (then (return (i32.const 34))))
     ;; "syst"+"reev" -> TreeView
     (if (i32.and (i32.eq (local.get $d0) (i32.const 0x74737973))
                  (i32.eq (local.get $d1) (i32.const 0x76656572)))
@@ -1897,6 +1975,9 @@
     ;; non-client handling and only owns its own private message range.
     (if (i32.eq (local.get $wp) (global.get $WNDPROC_DISPDIB))
       (then (return (call $dispdib_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
+    ;; 0xFFFF0006 = MCIWnd (09a7i-video-mciwnd.wat), a child with no chrome.
+    (if (i32.eq (local.get $wp) (global.get $WNDPROC_MCIWND))
+      (then (return (call $mciwnd_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; 0xFFFF0001 = help wndproc
     (call $help_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam))
   )

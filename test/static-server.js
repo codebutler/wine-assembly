@@ -65,7 +65,12 @@ async function resolveStaticPath(root, rawUrl, options = {}) {
   let stat;
   try {
     real = await fs.promises.realpath(candidate);
-    if (!insideRoot(rootReal, real)) return { status: 403, message: 'forbidden' };
+    // Worktree fixtures can be linked to a shared corpus. Only a test's
+    // explicit filesystem allowlist may extend the realpath boundary; URL
+    // traversal must still resolve inside the served checkout above.
+    const allowed = options.allowedRealRoots || [];
+    if (!insideRoot(rootReal, real) && !allowed.some(base => insideRoot(fs.realpathSync(base), real)))
+      return { status: 403, message: 'forbidden' };
     stat = await fs.promises.stat(real);
   } catch (error) {
     const missing = error && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
@@ -103,14 +108,35 @@ function createStaticHandler(options = {}) {
         headers['Cross-Origin-Opener-Policy'] = 'same-origin';
         headers['Cross-Origin-Embedder-Policy'] = 'require-corp';
       }
+      headers['Accept-Ranges'] = 'bytes';
       Object.assign(headers, typeof options.headers === 'function'
         ? options.headers(request, resolved) : (options.headers || {}));
-      response.writeHead(200, headers);
+      // One `bytes=a-b` range, as tools/dev-server.js serves: the page reads a
+      // registered CD image's data track through HttpRangeProvider, and a 200
+      // there would pull a whole 450MB track in to read one sector.
+      const size = resolved.stat.size;
+      let range = null;
+      const rangeHeader = request.headers.range;
+      if (rangeHeader) {
+        const m = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader).trim());
+        let start = m && m[1] !== '' ? Number(m[1]) : NaN;
+        let end = m && m[2] !== '' ? Number(m[2]) : size - 1;
+        if (m && m[1] === '' && m[2] !== '') { start = Math.max(0, size - Number(m[2])); end = size - 1; }
+        if (!m || !(start >= 0) || start >= size || end < start) {
+          response.writeHead(416, { 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes' });
+          response.end();
+          return;
+        }
+        range = { start, end: Math.min(end, size - 1) };
+        headers['Content-Length'] = range.end - range.start + 1;
+        headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`;
+      }
+      response.writeHead(range ? 206 : 200, headers);
       if (request.method === 'HEAD') {
         response.end();
         return;
       }
-      const stream = fs.createReadStream(resolved.file);
+      const stream = fs.createReadStream(resolved.file, range || undefined);
       stream.on('error', () => response.destroy());
       stream.pipe(response);
     } catch (error) {

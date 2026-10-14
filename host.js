@@ -97,6 +97,25 @@ function resolveShellLaunchPath(file, vfs, isWinExec) {
   return vfs._resolvePath(file);
 }
 
+// Cooperative-scheduler timing arms on by default; see _schedArm. Arm f
+// (free-running worker threads, worker mode only) measured level with w on
+// MH2's audio, HUD on and off (2026-09-22), and is on for throughput: a
+// thread no longer waits for the page's next step to get its next slice.
+// Arm p (worker mode only): a guest main thread parked in GetMessage parks the
+// host step until its next WM_TIMER, as the cooperative loop does, instead of
+// re-polling every step (~30K blocks/s on every idle app, 2026-09-23).
+const SCHED_ARMS_DEFAULT = 'b,e,g,w,f,p,m';
+// Arm w: a safety bound on how long a guest thread's Worker holds its slice
+// through local Sleeps — the step epoch normally ends it first, when the main
+// slice returns (measured on Moorhuhn 2: ~64ms per main slice) — and the
+// longest a sleeping main thread holds a step open for its threads.
+const WORKER_LOCAL_SLEEP_MAX_MS = 250;
+const WORKER_MAIN_ASLEEP_HOLD_MS = 16;
+// Arm f: a free-running thread's slice (it does not wait for the host step)
+// ends after this long at the latest, so per-instance state that is only
+// synced at slice boundaries -- the loaded-DLL count -- is never staler.
+const WORKER_FREE_RUN_SLICE_MS = 50;
+
 // ---------------------------------------------------------------------------
 // Frozen (agent-stepped) mode — docs/design-agent-control.md
 // ---------------------------------------------------------------------------
@@ -536,6 +555,55 @@ class WineAssembly {
   // damage when one of those deadlines is wrong or a wake source is missing,
   // turning a hang into 20Hz polling.
   static MAX_PARK_SLEEP_MS = 50;
+  // Wall clock for scheduling deadlines; the vm sandboxes the Worker tests
+  // run this file in have no `performance`.
+  static _wallNow() {
+    return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  }
+  // Worker mode: park the next host step until `park` ms after the slice
+  // ended (a deadline, not a delay — the present runs in between, and counting
+  // from after it made every WM_TIMER that much late). Runnable guest threads
+  // bound it, as in _parkedSleepMs; input cancels it through _wakeStep. The
+  // step tail consumes _workerMsgParkUntil. Arm p gates it for an A/B.
+  // wakeOnSignal (the spin parks): a guest thread's SetEvent, ReleaseSemaphore
+  // or ReleaseMutex ends the park as well, because what a spinning main thread
+  // polls for is often that thread's work. Blitz's frame loop spins on
+  // PeekMessage until its winmm timer callback bumps a counter and SetEvents;
+  // parked until input or a WM_TIMER, Jardinains ran at ~30fps against 62.
+  _workerParkMain(park, sliceDoneAt, wakeOnSignal = false) {
+    const tm = this.threadManager;
+    if (tm && tm.hasActiveThreads && tm.hasActiveThreads()) {
+      // Free-running threads do not need the step unless one is idle or
+      // sleeping on a page-side deadline; anything else keeps the old bound
+      // (parkedThreadDelay is 0 in worker mode, i.e. no park).
+      park = Math.min(park, tm.freeRunParkBound
+        ? tm.freeRunParkBound(WineAssembly.MAX_PARK_SLEEP_MS)
+        : tm.parkedThreadDelay ? tm.parkedThreadDelay(WineAssembly.MAX_PARK_SLEEP_MS) : 0);
+      if (park > 0 && !tm.onRunnable) tm.onRunnable = () => this._wakeStep();
+      if (park > 0 && !tm.onSignal) tm.onSignal = () => {
+        if (this._workerParkSignalWakes) this._wakeStep();
+      };
+    }
+    if (park > 0 && this._schedArm('p')) {
+      this._workerMsgParkUntil = sliceDoneAt +
+        Math.min(WineAssembly.MAX_PARK_SLEEP_MS, park);
+      this._workerMsgParkSignalWakes = !!wakeOnSignal;
+    }
+  }
+  // The live key-down table as 8 words, bit vKey — what host-window's
+  // _keyDownState answers when no event snapshot is open. Published to the
+  // guest-main Worker so a GetAsyncKeyState sweep reads it locally.
+  _workerKeyBitmap() {
+    const r = this.renderer;
+    const peek = r && (r.peekKeyDownState || r.peekAsyncKeyState);
+    const out = this._workerKeyWords || (this._workerKeyWords = new Int32Array(8));
+    out.fill(0);
+    if (!peek) return out;
+    for (let key = 0; key < 256; key++) {
+      if (peek.call(r, key) & 0x8000) out[key >>> 5] |= (1 << (key & 31));
+    }
+    return out;
+  }
   static CLOCK_SPIN_PARK_MS = 1;
   // Browser performance.now() is much more expensive than the integer-ms
   // result the guest receives. Reuse each within-slice sample for four calls;
@@ -550,6 +618,105 @@ class WineAssembly {
   static FROZEN_MAX_STEPS = 2000000;
   static FROZEN_STALL_MS = 5000;
   static _nextProcessId = 1000;
+
+  // An HTTP-range provider for `url`, or for the deployer's parts of it
+  // (url.part000, url.part001, ...) when the release host stores it split, as
+  // fetchAssetBytes already handles for whole-file loads. A part shorter than
+  // ASSET_PART_SIZE is the last one. Rejects with the original error when
+  // neither form exists, so loadFiles keeps its whole-file fallback.
+  static async _openRangeProvider(url, options, providers = window.byteProvider) {
+    const notFound = error => /HEAD .* → 404/.test(String(error && error.message));
+    try {
+      return await providers.HttpRangeProvider.open(url, options);
+    } catch (error) {
+      if (!notFound(error)) throw error;
+      const parts = [];
+      for (let index = 0; ; index++) {
+        let part;
+        try {
+          part = await providers.HttpRangeProvider.open(WineAssembly._assetPartUrl(url, index), options);
+        } catch (partError) {
+          if (index === 0) throw error;
+          if (notFound(partError)) break;
+          throw partError;
+        }
+        parts.push(part);
+        if (part.size < WineAssembly.ASSET_PART_SIZE) break;
+      }
+      return parts.length === 1 ? parts[0]
+        : new providers.ConcatProvider(parts, String(url).replace(/^.*\//, ''));
+    }
+  }
+
+  // Satisfy a guest read parked on a lazy byte range (io_wait), on whichever
+  // guest thread parked it. Game data fetched over HTTP ranges (a provider
+  // loadFiles marked `gameData`) gets the in-game wait window
+  // (lib/game-wait.js): nothing for a wait under 500 ms, a Loading window
+  // after that, and on a fetch that still fails after two quiet retries a
+  // Retry/Quit question while the guest stays parked on the same call. Any
+  // other provider (a dropped File, a mounted ISO) keeps the VFS contract: a
+  // failed fill becomes ERROR_READ_FAULT for the guest.
+  async _fillParkedRead(vfs, pending) {
+    const cache = pending && pending.provider;
+    const GW = typeof window !== 'undefined' && window.GameWait;
+    if (!cache || !cache.gameData || typeof cache.fill !== 'function') {
+      return vfs.fillPendingRead(pending);
+    }
+    if (!this._gameWait && GW) {
+      const doc = typeof document !== 'undefined' ? document : null;
+      this._gameWait = GW.createGameWaitController({});
+      if (doc) {
+        this._gameWait.setView(GW.createDomView(doc, {
+          onAction: name => this._gameWait.action(name),
+          anchor: () => {
+            const canvas = this.renderer && this.renderer.canvas;
+            return canvas && canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+          },
+        }));
+      }
+    }
+    const wait = this._gameWait || null;
+    const chunk = cache.chunkSize || 0;
+    const first = chunk ? Math.floor(pending.offset / chunk) : 0;
+    const last = chunk ? Math.floor((pending.offset + Math.max(1, pending.length) - 1) / chunk) : 0;
+    const total = chunk ? (last - first + 1) * chunk : null;
+    const token = wait ? wait.begin({
+      label: this._gameDataLabel || 'The game',
+      file: String(pending.path || '').replace(/^.*\\/, ''),
+      total,
+    }) : 0;
+    let attempt = 0;
+    try {
+      for (;;) {
+        try {
+          await cache.fill(pending.offset, pending.length);
+          if (wait) wait.progress(token, total || 0);
+          break;
+        } catch (error) {
+          if (!this.running) throw error;
+          if (attempt++ < 2) {
+            await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+            continue;
+          }
+          this.logToUI(`[io] ${pending.path}: ${error && error.message}`);
+          const answer = wait ? await wait.fail(token, error) : 'quit';
+          if (!this.running) return false;
+          if (answer === 'retry' && this.running) { attempt = 0; continue; }
+          // Quit: leave the guest parked and stop it. The desktop shell's
+          // ordinary close path tears the instance down.
+          this.logToUI(`--- ${this._gameDataLabel || 'Program'} closed while loading game data ---`);
+          if (this._onGameDataQuit) this._onGameDataQuit();
+          else this.stop();
+          return false;
+        }
+      }
+      // The bytes are resident now; this takes the cache hit and retires the
+      // parked request through the VFS's identity checks.
+      return this.running ? await vfs.fillPendingRead(pending) : false;
+    } finally {
+      if (wait) wait.end(token);
+    }
+  }
 
   static _assetPartUrl(url, index) {
     const match = String(url).match(/^([^?#]*)(.*)$/);
@@ -569,28 +736,295 @@ class WineAssembly {
 
   // Keep split assets a transport detail. Normal files take one request; only
   // a 404 tries the deployer's name.part000, name.part001, ... convention.
-  static async fetchAssetBytes(url) {
+  //
+  // `options` is the launch window's view of a download (lib/launch-progress.js):
+  //   signal      aborts the request (Cancel)
+  //   onTransfer  {kind:'start'|'progress'|'done'|'error', id, url, loaded,
+  //               total, source} -- total is null unless the server said how
+  //               big the body is; source is 'cache' only when Resource Timing
+  //               says the browser cache answered
+  //   retained    Map url -> bytes: a Retry's already-downloaded files
+  // Without options this is the plain one-request path the CLI has always used.
+  static async fetchAssetBytes(url, options = {}) {
+    WineAssembly._throwIfAssetAborted(options.signal);
+    const transfer = WineAssembly._beginTransfer(url, options);
+    const kept = options.retained && options.retained.get(url);
+    if (kept) {
+      transfer.emit('progress', kept.length, kept.length, 'kept');
+      WineAssembly._throwIfAssetAborted(options.signal);
+      transfer.emit('done', kept.length, kept.length, 'kept');
+      // Retention owns source bytes. Callers (notably writable VFS mounts)
+      // receive their own storage, including on every retry.
+      return kept.slice();
+    }
     try {
-      return await WineAssembly._fetchAssetCandidate(url);
+      let bytes;
+      try {
+        bytes = await WineAssembly._fetchAssetCandidate(url, options, transfer);
+      } catch (e) {
+        const alt = WineAssembly._spaceFreeUrl(url);
+        if (!alt || !/HTTP 404$/.test(String(e && e.message))) throw e;
+        transfer.reset();
+        bytes = await WineAssembly._fetchAssetCandidate(alt, options, transfer);
+      }
+      WineAssembly._throwIfAssetAborted(options.signal);
+      if (options.retained) options.retained.set(url, bytes.slice());
+      transfer.emit('done', bytes.length, bytes.length, transfer.source);
+      return bytes;
     } catch (e) {
-      const alt = WineAssembly._spaceFreeUrl(url);
-      if (!alt || !/HTTP 404$/.test(String(e && e.message))) throw e;
-      return await WineAssembly._fetchAssetCandidate(alt);
+      // Tag the failure so a launch can tell "a file did not download" (the
+      // launch window's Retry) from everything else (the crash report).
+      if (e && typeof e === 'object' && e.name !== 'AbortError') {
+        e.isDownloadError = true;
+        if (!e.assetUrl) e.assetUrl = url;
+      }
+      transfer.emit('error', transfer.loaded, null, null, e);
+      throw e;
     }
   }
 
-  static async _fetchAssetCandidate(url) {
-    const direct = await fetch(url);
-    if (direct.ok) return new Uint8Array(await direct.arrayBuffer());
+  static _transferSeq = 0;
+
+  static _throwIfAssetAborted(signal) {
+    if (!signal || !signal.aborted) return;
+    const error = new Error('Asset loading cancelled');
+    error.name = 'AbortError';
+    throw error;
+  }
+
+  // The reader for lib/file-bundle.js: "WAB1", u32 LE header length, a JSON
+  // header of {f, size} | {f, status}, then the sized files back to back.
+  // Returns Map(name -> Uint8Array) of the files that came, or null for a body
+  // that is not a well-formed bundle (a static host answering an unknown path
+  // with its index page, say).
+  static parseFileBundle(bytes) {
+    if (!bytes || bytes.length < 8 || bytes[0] !== 0x57 || bytes[1] !== 0x41 ||
+        bytes[2] !== 0x42 || bytes[3] !== 0x31) return null;
+    const headerLength = new DataView(bytes.buffer, bytes.byteOffset, 8).getUint32(4, true);
+    if (8 + headerLength > bytes.length) return null;
+    let header;
+    try { header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + headerLength))); } catch (_) { return null; }
+    if (!Array.isArray(header)) return null;
+    const out = new Map();
+    let at = 8 + headerLength;
+    for (const entry of header) {
+      if (!entry || typeof entry.f !== 'string' || !Number.isSafeInteger(entry.size)) continue;
+      if (entry.size < 0 || at + entry.size > bytes.length) return null;
+      // A view, not a copy: every file of an eager list stays mounted, so the
+      // one response buffer lives as long as its files anyway.
+      out.set(entry.f, bytes.subarray(at, at + entry.size));
+      at += entry.size;
+    }
+    return at === bytes.length ? out : null;
+  }
+
+  // The __bundle name for a file URL: the path relative to the page's own
+  // directory, which is what the server resolves. A relative URL is already
+  // that; an absolute one (browser-shell resolves manifest entries to hrefs)
+  // qualifies only on this origin and under the page directory. null = not
+  // bundleable (another origin, a data: URL, a path outside the page dir).
+  static bundleName(url, pageHref) {
+    if (typeof url !== 'string' || !url) return null;
+    if (!/^[a-z][a-z0-9+.-]*:|^\//i.test(url)) {
+      return /(?:^|\/)\.\.(?:\/|$)/.test(url) ? null : url;
+    }
+    if (!pageHref) return null;
+    let target, page;
+    try { target = new URL(url, pageHref); page = new URL('.', pageHref); } catch (_) { return null; }
+    if (target.origin !== page.origin || target.search || target.hash ||
+        !target.pathname.startsWith(page.pathname)) return null;
+    try { return decodeURIComponent(target.pathname.slice(page.pathname.length)) || null; } catch (_) { return null; }
+  }
+
+  // Fetch whole files through the host's __bundle route, a few requests for
+  // the whole list instead of one per file. Anything not returned (a static
+  // host has no such route; a file past the server's byte cap) is left to
+  // the caller's ordinary per-file fetch. The first refusal turns bundling
+  // off for the page, so a static host costs one extra request per session.
+  // `entries` is [{url, name}]; the result maps each original url to its bytes.
+  static async _prefetchBundled(entries, transferOpts = {}) {
+    const got = new Map();
+    const urlOf = new Map(entries.map(e => [e.name, e.url]));
+    const urls = [...urlOf.keys()];
+    // What each call's bundling did, for page probes and the debug log.
+    const stats = { asked: urls.length, requests: 0, files: 0, bytes: 0, stopped: null };
+    (WineAssembly._bundleStats = WineAssembly._bundleStats || []).push(stats);
+    if (WineAssembly._bundleUnsupported || typeof fetch !== 'function' || urls.length < 2) {
+      stats.stopped = WineAssembly._bundleUnsupported ? 'unsupported' : 'too few';
+      return got;
+    }
+    const groups = [];
+    let group = [], length = 0;
+    for (const url of urls) {
+      const part = 'f=' + encodeURIComponent(url);
+      if (group.length && (group.length >= 200 || length + part.length > 6000)) {
+        groups.push(group); group = []; length = 0;
+      }
+      group.push(url); length += part.length + 1;
+    }
+    if (group.length) groups.push(group);
+    // Up to three bundle requests in flight; a refusal stops the rest.
+    const fetchGroup = async (names) => {
+      if (WineAssembly._bundleUnsupported) return;
+      WineAssembly._throwIfAssetAborted(transferOpts.signal);
+      const transfer = WineAssembly._beginTransfer(`${names.length} files (bundled)`, transferOpts);
+      try {
+        const response = await fetch('__bundle?' + names.map(n => 'f=' + encodeURIComponent(n)).join('&'),
+          { signal: transferOpts.signal, cache: 'no-store' });
+        stats.requests++;
+        const bytes = response.ok ? new Uint8Array(await response.arrayBuffer()) : null;
+        const files = bytes ? WineAssembly.parseFileBundle(bytes) : null;
+        if (!files) {
+          WineAssembly._bundleUnsupported = true;
+          stats.stopped = 'HTTP ' + response.status + (bytes ? ' (not a bundle)' : '');
+          transfer.emit('done', 0, 0, 'network');
+          return;
+        }
+        for (const [name, data] of files) if (urlOf.has(name)) got.set(urlOf.get(name), data);
+        stats.files += files.size;
+        stats.bytes += bytes.length;
+        transfer.emit('done', bytes.length, bytes.length, 'network');
+      } catch (error) {
+        if (transferOpts.signal && transferOpts.signal.aborted) throw error;
+        stats.stopped = String(error && error.message || error);
+        // A network failure here is not a verdict on the files: fetch them
+        // one by one, with that path's own retries.
+        transfer.emit('done', 0, 0, 'network');
+      }
+    };
+    const queue = groups.slice();
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (queue.length) await fetchGroup(queue.shift());
+    }));
+    return got;
+  }
+
+  static _beginTransfer(url, options) {
+    const on = options && options.onTransfer;
+    const t = {
+      id: options && options.transferId ? options.transferId : ++WineAssembly._transferSeq,
+      loaded: 0,
+      total: null,
+      source: null,
+      started: false,
+      emit(kind, loaded, total, source, error) {
+        if (!on) return;
+        if (kind !== 'start' && !t.started) t.emit('start', 0, t.total, null);
+        if (kind === 'start') t.started = true;
+        try {
+          on({ kind, id: t.id, url, loaded, total: total === undefined ? t.total : total,
+            source: source || null, reason: error ? WineAssembly._downloadReason(error) : null });
+        } catch (_) { /* a progress view must never fail a download */ }
+      },
+      reset() { t.loaded = 0; t.total = null; },
+    };
+    return t;
+  }
+
+  static _downloadReason(error) {
+    const message = String(error && error.message || error || '');
+    const http = message.match(/HTTP (\d{3})$/);
+    if (http) {
+      const code = Number(http[1]);
+      if (code === 404) return 'not found on the server (HTTP 404)';
+      if (code >= 500) return `server error (HTTP ${code})`;
+      return `HTTP ${code}`;
+    }
+    if (/missing .*\.part\d+/.test(message)) return 'part of the file is missing on the server';
+    return 'network error';
+  }
+
+  // Was this response answered by the browser's HTTP cache? Only claimed when
+  // Resource Timing can actually say so: same origin (cross-origin entries
+  // report transferSize 0 without Timing-Allow-Origin) and no service worker
+  // in between (sw-coi.js answers every fetch, so its entries say nothing
+  // about the HTTP cache either).
+  static _cacheSource(url) {
+    if (typeof performance === 'undefined' || !performance.getEntriesByName ||
+        typeof location === 'undefined') return null;
+    try {
+      const abs = new URL(url, location.href);
+      if (abs.origin !== location.origin) return null;
+      if (typeof navigator !== 'undefined' && navigator.serviceWorker &&
+          navigator.serviceWorker.controller) return null;
+      const entries = performance.getEntriesByName(abs.href);
+      const entry = entries[entries.length - 1];
+      if (!entry || !('transferSize' in entry)) return null;
+      if (entry.transferSize === 0 && entry.decodedBodySize > 0) return 'cache';
+      return entry.transferSize > 0 ? 'network' : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // The Resource Timing entry for a fetch is queued after its body completes,
+  // not before the last read resolves; give it two short turns to land. No
+  // entry means "not known", never "network".
+  static async _cacheSourceSettled(url) {
+    for (const wait of [0, 0, 25]) {
+      const source = WineAssembly._cacheSource(url);
+      if (source) return source;
+      await new Promise(resolve => setTimeout(resolve, wait));
+    }
+    return WineAssembly._cacheSource(url);
+  }
+
+  // Read a response body, reporting bytes as they arrive when a launch window
+  // is listening. The size is trusted only when the server sent it for the
+  // bytes we will actually read (no content coding in between).
+  static async _readBody(response, transfer, partial) {
+    if (!response.body || !response.body.getReader) {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      transfer.loaded += bytes.length;
+      transfer.emit('progress', transfer.loaded, partial ? null : bytes.length, null);
+      return bytes;
+    }
+    const lengthHeader = response.headers.get('content-length');
+    const coding = (response.headers.get('content-encoding') || 'identity').toLowerCase();
+    const declared = lengthHeader != null && /^\d+$/.test(lengthHeader) && coding === 'identity'
+      ? Number(lengthHeader) : null;
+    if (!partial) transfer.total = declared;
+    transfer.emit('start', transfer.loaded, transfer.total, null);
+    const reader = response.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      transfer.loaded += value.length;
+      if (transfer.total != null && transfer.loaded > transfer.total) transfer.total = null;
+      transfer.emit('progress', transfer.loaded, transfer.total, null);
+    }
+    const out = new Uint8Array(got);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
+    return out;
+  }
+
+  static async _fetchAssetCandidate(url, options = {}, transfer = null) {
+    const init = options.signal ? { signal: options.signal } : undefined;
+    const listening = !!(options && options.onTransfer);
+    const direct = await fetch(url, init);
+    if (direct.ok) {
+      const bytes = listening
+        ? await WineAssembly._readBody(direct, transfer, false)
+        : new Uint8Array(await direct.arrayBuffer());
+      if (listening) transfer.source = await WineAssembly._cacheSourceSettled(direct.url || url);
+      return bytes;
+    }
     if (direct.status !== 404) {
       throw new Error(`Unable to load ${url}: HTTP ${direct.status}`);
     }
 
+    // A split asset's whole size is not known until its last part arrives.
+    if (listening) transfer.total = null;
     const parts = [];
     let total = 0;
     for (let index = 0; ; index++) {
       const partUrl = WineAssembly._assetPartUrl(url, index);
-      const response = await fetch(partUrl);
+      const response = await fetch(partUrl, init);
       if (response.status === 404) {
         if (index === 0) throw new Error(`Unable to load ${url}: HTTP 404`);
         throw new Error(`Unable to load ${url}: missing ${partUrl}`);
@@ -598,7 +1032,9 @@ class WineAssembly {
       if (!response.ok) {
         throw new Error(`Unable to load ${partUrl}: HTTP ${response.status}`);
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = listening
+        ? await WineAssembly._readBody(response, transfer, true)
+        : new Uint8Array(await response.arrayBuffer());
       parts.push(bytes);
       total += bytes.length;
       if (bytes.length < WineAssembly.ASSET_PART_SIZE) break;
@@ -688,31 +1124,121 @@ class WineAssembly {
     // no-window interval without weakening normal last-window teardown.
     this.windowlessGraceMs = 750;
     this.verbose = false;
+    // Where the sparse VirtualAlloc arena starts handing out reservations
+    // (top-down). 0 keeps the default top of user space; an app that masks
+    // its heap pointers to 28 bits sets 0x10000000 (lib/apps.js
+    // virtualAllocTop).
+    this.virtualAllocTop = 0;
     // Some WinMM clients intentionally wait for a timeSetEvent callback while
     // they are not pumping messages. This remains opt-in per app: the normal
     // path still delivers the callback through the guest message loop.
     this.asyncMultimediaTimer = false;
-    // Decode-time x87 fusion is still opt-in. Browser-shell may enable it for
-    // a measured app without changing the CPU path of every other program.
-    this.x87Fusion = false;
+    // Run timeSetEvent callbacks on a winmm timer guest thread of their own,
+    // the Windows model, instead of on the application's thread (via its
+    // message pump, or asyncMultimediaTimer's injection between slices). On
+    // for every app: through the pump, a callback stalls whenever the app is
+    // busy (Heroes II's Miles MIDI), and Threads mode never served
+    // asyncMultimediaTimer at all (Jardinains' menu froze). An app opts out
+    // with `mmTimerThread: false` in lib/apps.js; ?mm-thread=0 for one load.
+    this.mmTimerThread = true;
+    // Decode-time x87 fusion is on by default. An app opts out with
+    // `x87Fusion: false` in lib/apps.js (browser-shell copies it here), and the
+    // page opts out with ?no-x87-fold or the debug toolbar box.
+    this.x87Fusion = true;
+    // `nullPageFaults: true` in lib/apps.js: reads and writes in the 4KB NULL
+    // guard page raise an access violation into the guest's own SEH, as on
+    // Win98, instead of answering 0 (set_fault_unmapped mode 4; Dark Reign).
+    this.nullPageFaults = false;
+    // `reservedPageFaults: true`: a touch of a MEM_RESERVE'd page that was never
+    // committed runs the guest's exception filters synchronously, as Windows
+    // raises an access violation there (set_fault_unmapped mode 5; Serious
+    // Sam's CTStream commits stream pages from its filter). Takes precedence.
+    this.reservedPageFaults = false;
+    // The micro-op tier is on by default too; `uop: false` on an app, the
+    // debug toolbar box or ?no-uop turns it off.
+    this.uop = true;
+    // The tier's aggressive stack elision is opt-in: `aggressiveStack: true`
+    // on an app or ?aggressive-stack (docs/uop-tier-design.md).
+    this.aggressiveStack = false;
+    // Worker threads follow the page (window.WINE_THREADS, on by default);
+    // `threads: false` on an app keeps that app cooperative.
+    this.threads = true;
     // CPUID SSE advertisement is opt-in until each app's reachable SIMD path
     // has passed an authentic run against the decoder.
     this.cpuSSE = false;
+    // Explicit frame ends (Flip, D3D Present, SwapBuffers, a full blit to the
+    // primary) are paced to at most this many per second; 0 = unpaced. A rate
+    // cap, not vsync: see $present_pace. lib/browser-shell.js sets it.
+    this.presentCap = 0;
+    // How $present_pace spends the cap: 'smooth' (default) or 'deadline'.
+    this.presentPace = 'smooth';
+    // What the cap paces when the app names its game step (lib/apps.js
+    // perf.logicalFrame): 'logical' (default) paces once per step; 'pump'
+    // keeps the pump-bounded rule, for the A/B. ?present-at= sets it.
+    this.presentAt = 'logical';
   }
 
+  // A Win16 app names its step (and verifier) as { seg, off }: an NE segment
+  // number of its own module and an offset, kept as given here and turned
+  // into a linear address by _resolvePerfAddress once the task is loaded.
   _normalizePerfLogicalFrame(perf) {
     const metric = perf && perf.logicalFrame;
     if (!metric) return null;
-    const address = Number(metric.address);
-    if (!Number.isFinite(address) || address <= 0) return null;
+    const segOff = a => a && typeof a === 'object' && Number(a.seg) > 0
+      ? { seg: Number(a.seg) | 0, off: Number(a.off) & 0xFFFF } : null;
+    const address = segOff(metric.address) || Number(metric.address);
+    if (typeof address === 'number' && (!Number.isFinite(address) || address <= 0)) return null;
     const out = {
       label: String(metric.label || 'GAME').slice(0, 12) || 'GAME',
-      address: address >>> 0,
+      address: typeof address === 'number' ? address >>> 0 : address,
       verifier: 0,
     };
-    const verifier = Number(metric.verifier);
-    if (Number.isFinite(verifier) && verifier > 0) out.verifier = verifier >>> 0;
+    const verifier = segOff(metric.verifier) || Number(metric.verifier);
+    if (typeof verifier === 'object') out.verifier = verifier;
+    else if (Number.isFinite(verifier) && verifier > 0) out.verifier = verifier >>> 0;
     return out;
+  }
+
+  // Linear address of a perf address: a number as is, a Win16 { seg, off }
+  // through the loader's segment table, 0 if that segment is not loaded.
+  _resolvePerfAddress(a) {
+    if (typeof a !== 'object' || !a) return a >>> 0;
+    const ex = this.instance && this.instance.exports;
+    if (!ex || !ex.win16_seg_base || !(ex.is_win16 && ex.is_win16())) return 0;
+    const base = ex.win16_seg_base(a.seg) >>> 0;
+    return base ? (base + a.off) >>> 0 : 0;
+  }
+
+  // lib/apps.js `startupClock` (lib/startup-clock.js): the guest clock runs
+  // slow until the app's startup ends. Every guest clock here is derived from
+  // `now - wallStartMs` through _startupElapsed, so ticks, the audio clock and
+  // thread waits all see the same dilated time.
+  configureStartupClock(cfg) {
+    const lib = (typeof window !== 'undefined' && window.StartupClock) || null;
+    const off = /[?&]no-startup-clock(?:[=&]|$)/.test(
+      (typeof location !== 'undefined' && location.search) || '');
+    this._startupClock = lib && cfg && !off ? lib.createStartupClock(cfg) : null;
+    if (this._startupClock && !this._startupClock.active) this._startupClock = null;
+    if (!this._startupClock) return false;
+    const c = this._startupClock.config;
+    console.log(`[startup-clock] factor=${c.factor} maxMs=${c.maxMs} endOn=${c.endOn}`);
+    const ctx = this.hostCtx;
+    if (ctx) {
+      ctx.startupClockEvent = (name) => {
+        const sc = this._startupClock;
+        if (!sc || !sc.active || name !== sc.config.endOn) return;
+        const st = this._guestTickState(ctx.sharedAudio);
+        const raw = st.wallStartMs > 0 ? this._audioSchedulerNow() - st.wallStartMs : 0;
+        sc.end(raw, name);
+        console.log(`[startup-clock] ended by ${name} at raw ${Math.round(raw)} ms = ` +
+          `guest ${Math.round(sc.map(raw))} ms`);
+      };
+    }
+    return true;
+  }
+
+  _startupElapsed(raw) {
+    return this._startupClock ? this._startupClock.map(raw) : raw;
   }
 
   async configurePerf(perf) {
@@ -720,19 +1246,38 @@ class WineAssembly {
     this._perfLogicalFrame = this._normalizePerfLogicalFrame(perf);
     const hud = (typeof window !== 'undefined' && window.WinePerf) || null;
     if (!this._perfLogicalFrame) {
-      if (hud && hud.setLogicalFrameMetric) hud.setLogicalFrameMetric(null);
+      this._releasePerfHud(hud);
       return false;
     }
 
     const metric = this._perfLogicalFrame;
-    if (hud && hud.setLogicalFrameMetric) hud.setLogicalFrameMetric(metric);
+    metric.address = this._resolvePerfAddress(metric.address);
+    metric.verifier = this._resolvePerfAddress(metric.verifier);
+    if (!metric.address) {
+      console.warn('[perf] logical frame step is not a loaded Win16 segment; counter off');
+      this._perfLogicalFrame = null;
+      this._releasePerfHud(hud);
+      return false;
+    }
+    // The verifier is a second address that should fire at the same rate: a
+    // check on the RE, armed through the --count hit counters, so only worth
+    // their debug-mode cost with the HUD open.
+    if (!(hud && hud.enabled)) metric.verifier = 0;
+    this._claimPerfHud(hud, metric);
     try {
-      await this._armPerfCounter(0, metric.address);
+      // The step is counted by the decoder's marker ($th_logical_frame), which
+      // costs one op on that one block. The --count hit counters this used to
+      // arm switch on $dbg_any, which turns off block chaining and the
+      // micro-op tier for the whole session -- and this ran for every
+      // StarCraft launch, HUD or not. The same marker paces the cap when one
+      // is set, unless ?present-at=pump asks for the pump-bounded rule.
+      const pace = (this.presentCap | 0) > 0 && this.presentAt !== 'pump' ? 1 : 0;
+      await this._setLogicalFrame(metric.address, pace);
       if (metric.verifier) await this._armPerfCounter(1, metric.verifier);
     } catch (err) {
       console.warn('[perf] logical frame counter disabled:', err && err.message || err);
       this._perfLogicalFrame = null;
-      if (hud && hud.setLogicalFrameMetric) hud.setLogicalFrameMetric(null);
+      this._releasePerfHud(hud);
       return false;
     }
     this._startPerfCounterPoll();
@@ -748,6 +1293,39 @@ class WineAssembly {
     }
     const ex = this.instance && this.instance.exports;
     if (ex && typeof ex.set_count === 'function') ex.set_count(slot, address);
+  }
+
+  // Hand the game step to every instance: this one, the guest Worker that owns
+  // the main thread in threads mode, and every guest thread spawned later.
+  async _setLogicalFrame(address, pace) {
+    address >>>= 0;
+    pace = pace ? 1 : 0;
+    const ex = this.instance && this.instance.exports;
+    if (!ex || typeof ex.set_logical_frame !== 'function') throw new Error('set_logical_frame not exported');
+    ex.set_logical_frame(address, pace);
+    if (this.guestWorker) await this.guestWorker.callExport('set_logical_frame', address, pace);
+    if (this.threadManager && this.threadManager.setWasmGlobalAll) {
+      this.threadManager.setWasmGlobalAll('set_logical_frame', address, pace);
+    }
+  }
+
+  // The step counter is a per-instance global, so the total is main's plus
+  // every guest thread's: NFS II enters its game step on a worker thread.
+  async _readLogicalFrameCount() {
+    let total;
+    if (this.guestWorker) {
+      total = (await this.guestWorker.callExport('get_logical_frame_count')) >>> 0;
+    } else {
+      const ex = this.instance && this.instance.exports;
+      total = ex && typeof ex.get_logical_frame_count === 'function'
+        ? ex.get_logical_frame_count() >>> 0 : 0;
+    }
+    if (this.threadManager && this.threadManager.readWasmExportAll) {
+      for (const { value } of await this.threadManager.readWasmExportAll('get_logical_frame_count')) {
+        total = (total + value) >>> 0;
+      }
+    }
+    return total;
   }
 
   async _readPerfCounter(slot) {
@@ -767,7 +1345,7 @@ class WineAssembly {
       if (!hud || !hud.logicalFrameCount) return;
       this._perfCounterPollBusy = true;
       try {
-        const primary = await this._readPerfCounter(0);
+        const primary = await this._readLogicalFrameCount();
         const verifier = this._perfLogicalFrame.verifier ? await this._readPerfCounter(1) : null;
         hud.logicalFrameCount(primary, verifier);
       } catch (_) {
@@ -784,9 +1362,91 @@ class WineAssembly {
     if (this._perfCounterPoll) clearInterval(this._perfCounterPoll);
     this._perfCounterPoll = null;
     this._perfCounterPollBusy = false;
-    if (typeof window !== 'undefined' && window.WinePerf && window.WinePerf.setLogicalFrameMetric) {
-      window.WinePerf.setLogicalFrameMetric(null);
+    this._releasePerfHud(typeof window !== 'undefined' ? window.WinePerf : null);
+  }
+
+  // The HUD's game-step metric is page-wide, and more than one host can run on
+  // a page: Moorhuhn 3 ShellExecutes a helper exe, which launches as its own
+  // app with no perf entry, configures (null) and exits within milliseconds.
+  // Unconditional clears from that host wiped the game's metric, so the HUD
+  // dropped every count while the game's poll kept running. Only the host that
+  // set the metric may clear it.
+  _claimPerfHud(hud, metric) {
+    if (!hud || !hud.setLogicalFrameMetric) return;
+    hud._logicalFrameOwner = this;
+    hud.setLogicalFrameMetric(metric);
+  }
+
+  _releasePerfHud(hud) {
+    if (!hud || !hud.setLogicalFrameMetric || hud._logicalFrameOwner !== this) return;
+    hud._logicalFrameOwner = null;
+    hud.setLogicalFrameMetric(null);
+  }
+
+  async _offerWaveCallback(item) {
+    const registration=item.registration, owner=registration && registration.owner;
+    if(!this.running || !owner || (registration.retired && !owner.link?._waveOffer)) return {status:'retired'};
+    const tm=this.threadManager;
+    if(owner.kind==='worker') {
+      const backend=owner.backend;
+      if(this.guestWorker!==backend) return {status:'retired'};
+      const live=owner.slot===0 ? backend.link : backend.threadLinks.get(owner.slot);
+      if(!owner.link) owner.link=live || null;
+      if(!owner.link) return {status:'busy'};
+      if(live!==owner.link || !live.worker) return {status:'retired'};
+      const stream=live.waveRegistrations.get(registration.handle);
+      if(!stream && !live._waveOffer) return owner.stream ? {status:'retired'} : {status:'busy'};
+      if(!owner.stream) {
+        if(stream.callback!==registration.callback || stream.instance!==registration.instance) return {status:'retired'};
+        owner.stream=stream;
+      }
+      if(stream!==owner.stream && !live._waveOffer) return {status:'retired'};
+      if(owner.slot===0 && (!this._workerLastSlice || tm?.isMainThreadSuspended?.())) return {status:'busy'};
+      const thread=owner.slot===0 ? null : [...(tm?.threads?.values() || [])].find(t=>t.link===live);
+      if(owner.slot!==0 && !thread) return {status:'busy'};
+      if(thread && thread.state!=='active') return {status:'retired'};
+      if(thread && thread.suspendCount>0) return {status:'busy'};
+      if(thread && (thread.inFlight || thread.freeRunPending || thread.parkedWaitDone)) return {status:'busy'};
+      const state=thread || (tm ? (tm._mainWaitState || (tm._mainWaitState={})) : {});
+      const saved={waitStartedAt:state.waitStartedAt||0,waitPolls:state.waitPolls||0,lastPollAt:state.lastPollAt||0};
+      const result=await live.offerWaveCallback(owner.stream,item.waveHdrGA,1000,registration.retired);
+      if(result.status==='accepted') {
+        if(!this.running || !live.worker || (thread && thread.state!=='active')) return {status:'retired'};
+        // Only the accepted callback changes run eligibility; original WAT wait
+        // stays saved until its real return continuation, never completed here.
+        if(thread) {thread.waveWaitSaved=saved;thread.parkedWait=null;thread.parkedWaitDone=null;}
+        else {this._waveMainWaitSaved=saved;this._workerMainParkedWait=null;}
+        state.waitStartedAt=state.waitPolls=state.lastPollAt=0;
+        this._wakeStep();
+      }
+      return result;
     }
+    const ex=owner.exports;
+    const thread=owner.tid ? [...(tm?.threads?.values() || [])].find(t=>t.tid===owner.tid && t.instance?.exports===ex) : null;
+    if(owner.tid && (!thread || thread.state!=='active')) return {status:'retired'};
+    if(!owner.tid && this.instance?.exports!==ex) return {status:'retired'};
+    if(!owner.tid && tm?.isMainThreadSuspended?.()) return {status:'busy'};
+    if(thread?.suspendCount>0) return {status:'busy'};
+    if(!ex.get_eip() || ex.get_yield_reason()===2) return {status:'retired'};
+    const saved=thread ? {waitStartedAt:thread.waitStartedAt||0,waitPolls:thread.waitPolls||0}
+      : {waitStartedAt:tm?._mainWaitStartedAt||0,waitPolls:tm?._mainWaitPolls||0};
+    if(!ex.fire_wave_out_callback_bound(registration.handle,item.waveHdrGA,registration.callback,registration.instance)) return {status:'busy'};
+    if(thread) {thread.waveWaitSaved=saved;thread.waitStartedAt=thread.waitPolls=0;}
+    else if(tm) {this._waveMainWaitSaved=saved;tm._mainWaitStartedAt=tm._mainWaitPolls=0;}
+    return {status:'accepted'};
+  }
+
+  async _pumpWaveCallbacksAtBoundary() {
+    if(!this.running) return;
+    if(!this.guestWorker && this._waveMainWaitSaved && !this.instance.exports.is_mm_timer_callback_active()) {
+      if(this.threadManager) {
+        this.threadManager._mainWaitStartedAt=this._waveMainWaitSaved.waitStartedAt;
+        this.threadManager._mainWaitPolls=this._waveMainWaitSaved.waitPolls;
+      }
+      this._waveMainWaitSaved=null;
+    }
+    this.hostCtx?.pumpAudioCompletions?.();
+    await this.hostCtx?.pumpWaveCallbacks?.();
   }
 
   _pumpMultimediaTimer() {
@@ -810,6 +1470,22 @@ class WineAssembly {
       (ex.is_mm_timer_callback_active() | 0));
   }
 
+  // The guest-main Worker's twin of the cooperative self-SuspendThread park.
+  // SuspendThread(GetCurrentThread()) completes the call and leaves the private
+  // yield 11 (09a0b $handle_SuspendThread): Windows would not run this thread's
+  // next instruction until another thread resumed it. The cooperative loop
+  // skips main while _isMainExecutionSuspended(); the Worker-main loop parks
+  // the slice here instead, and once the thread manager no longer counts main
+  // suspended, consumes the yield so main continues after SuspendThread (as
+  // thread-manager does for a resumed worker thread). True while parked.
+  async _workerMainSelfSuspendParked() {
+    if (!this._workerMainSelfSuspend) return false;
+    if (this._isMainExecutionSuspended()) return true;
+    this._workerMainSelfSuspend = null;
+    await this.guestWorker.callExport('clear_yield');
+    return false;
+  }
+
   _closeSyncHandle(handle) {
     return !!(this.threadManager && this.threadManager.closeSyncHandle &&
       this.threadManager.closeSyncHandle(handle >>> 0));
@@ -830,7 +1506,7 @@ class WineAssembly {
     if (this._frozen) { st.callsInBatch = 0; return; }
     const now = this._audioSchedulerNow();
     if (!Number.isFinite(st.wallStartMs) || st.wallStartMs <= 0) st.wallStartMs = now;
-    const elapsed = Math.max(0, Math.floor(now - st.wallStartMs));
+    const elapsed = Math.max(0, Math.floor(this._startupElapsed(now - st.wallStartMs)));
     st.batchMs = Math.max(Number.isFinite(st.batchMs) ? st.batchMs : 0, elapsed) & 0x7FFFFFFF;
     st.callsInBatch = 0;
   }
@@ -857,13 +1533,15 @@ class WineAssembly {
     if ((calls % stride) === 0) {
       const now = this._audioSchedulerNow();
       if (!Number.isFinite(st.wallStartMs) || st.wallStartMs <= 0) st.wallStartMs = now;
-      elapsed = Math.max(0, Math.floor(now - st.wallStartMs));
+      elapsed = Math.max(0, Math.floor(this._startupElapsed(now - st.wallStartMs)));
     }
     const batchMs = Math.max(Number.isFinite(st.batchMs) ? st.batchMs : 0, elapsed);
     const last = Number.isFinite(st.lastReturnedMs) ? st.lastReturnedMs : 0;
     const tick = Math.max(batchMs, last) & 0x7FFFFFFF;
     st.batchMs = tick;
     st.lastReturnedMs = tick;
+    const tm = this.threadManager;
+    if (tm && tm.deadlineClock) return Math.floor(tm._waitNow()) & 0x7FFFFFFF;
     return tick;
   }
 
@@ -881,6 +1559,23 @@ class WineAssembly {
   }
 
   _guestAudioClockMs(sharedAudio) {
+    const tm = this.threadManager;
+    if (tm && tm.deadlineClock) return tm._waitNow();
+    return this._guestAudioClockRawMs(sharedAudio);
+  }
+
+  // Wall time since the guest clock's origin, unstepped (fractional ms), and
+  // never behind what the stepped clock already handed out.
+  _guestContinuousMs(sharedAudio) {
+    const st = this._guestTickState(sharedAudio);
+    const base = Math.max(Number.isFinite(st.batchMs) ? st.batchMs : 0,
+      Number.isFinite(st.lastReturnedMs) ? st.lastReturnedMs : 0);
+    if (!Number.isFinite(st.wallStartMs) || st.wallStartMs <= 0) return base;
+    return Math.max(base, this._startupElapsed(this._audioSchedulerNow() - st.wallStartMs));
+  }
+
+  // The real (host-advanced) guest clock, never held back by the deadline clock.
+  _guestAudioClockRawMs(sharedAudio) {
     const st = this._guestTickState(sharedAudio);
     return Number.isFinite(st.batchMs) ? st.batchMs : 0;
   }
@@ -908,12 +1603,16 @@ class WineAssembly {
       'c:\\' + lowerName.replace(/^\\+/, ''),
       'c:\\' + lowerBase,
     ];
+    // A streamed entry's `data` getter throws until it is materialized.
+    const resident = entry => { try { return entry && entry.data; } catch (_) { return null; } };
     for (const p of candidates) {
-      const entry = vfs.files.get(p);
-      if (entry && entry.data) return entry.data;
+      const data = resident(vfs.files.get(p));
+      if (data) return data;
     }
     for (const [p, entry] of vfs.files) {
-      if (String(p).split('\\').pop() === lowerBase && entry && entry.data) return entry.data;
+      if (String(p).split('\\').pop() !== lowerBase) continue;
+      const data = resident(entry);
+      if (data) return data;
     }
     return null;
   }
@@ -922,6 +1621,27 @@ class WineAssembly {
   // so every later read is a plain VFS hit. Both outcomes are remembered:
   // an app that probes the same missing name in a loop costs one request, not
   // one per probe, and a 404 is remembered as a 404.
+  // The async read behind ctx.readFileAsync (MCI open, wallpaper). A streamed
+  // (lazy) entry has no `data` until it is materialized, so _vfsLookup misses
+  // it and _fetchMissingFile would fetch exeDir + basename -- the wrong URL
+  // for c:\game\sounds\crowd\crowd.wav. Resolve the guest path in this
+  // instance's VFS first and materialize what is mounted there; only a file
+  // nobody mounted falls back to the by-name fetch.
+  _readFileAsync(name, instanceVfs) {
+    const vfs = instanceVfs || (this._helpCtx && this._helpCtx.vfs);
+    if (vfs && vfs.files && typeof vfs._resolvePath === 'function' &&
+        typeof vfs.materialize === 'function') {
+      let resolved = '';
+      try { resolved = vfs._resolvePath(name); } catch (_) {}
+      if (resolved && vfs.files.has(resolved)) {
+        return Promise.resolve(vfs.materialize(resolved)).catch(() => null);
+      }
+    }
+    const have = this._vfsLookup(name, vfs);
+    if (have) return Promise.resolve(have);
+    return this._fetchMissingFile(name, vfs);
+  }
+
   _fetchMissingFile(name, instanceVfs) {
     const baseName = String(name).replace(/^.*[\\\/]/, '');
     if (!this._missingFetches) this._missingFetches = new Map();
@@ -1045,12 +1765,28 @@ class WineAssembly {
     const ctx = {
       getMemory: () => self.memory.buffer,
       d3d9Bridge: opts.d3d9Bridge,
-      // The ?debug toolbar's D3D select; unset falls through to the
+      glideBridge: opts.glideBridge,
+      // The ?debug toolbar's shared GPU select; unset falls through to the
       // ?d3d9-renderer query and then WebGL inside host-imports.js.
       d3d9Backend: self.d3d9Backend ||
         (typeof window !== 'undefined' && window.WineD3D && window.WineD3D.renderer) || null,
+      glideBackend: self.d3d9Backend ||
+        (typeof window !== 'undefined' && window.WineD3D && window.WineD3D.renderer) || null,
       d3d9Programmable: self.d3d9Programmable === true,
+      // `wallClock` in lib/apps.js: the calendar (GetLocalTime and friends)
+      // is moved back a whole number of days onto that date, for demos that
+      // refuse to run after an expiry date. Only the date moves: the time of
+      // day stays real, because games seed rand() from time() and two players
+      // pinned to one instant draw the same network id and drop each other's
+      // packets as their own (Atomic Bomberman).
+      wallNowMs: Number.isFinite(self.wallClockMs)
+        ? (shift => () => Date.now() - shift)(
+          Math.floor((Date.now() - self.wallClockMs) / 86400000) * 86400000)
+        : undefined,
       createD3DRenderWorker: () => self._createD3DRenderWorker(),
+      createRenderEndpoint: options => self._createRenderWorkerEndpoint(options),
+      createRenderWorker: options => self._createRenderWorkerConsumer(options),
+      get sharedRenderWorkerEnabled() { return !!self.guestWorker; },
       apiTable: self.apiTable,
       get renderer() { return self.renderer; },
       get resourceJson() { return self.resourceJson; },
@@ -1071,6 +1807,7 @@ class WineAssembly {
       // browser context on the same path so short-lived Storm events release
       // their fixed-table slots instead of leaking until creation fails.
       closeSyncHandle: handle => self._closeSyncHandle(handle),
+      isEventHandle: handle => !!(self.threadManager && self.threadManager.isEventHandle(handle)),
       signalSyncHandle: handle => self.threadManager
         ? self.threadManager.setEvent(handle >>> 0) : 0,
       resetSyncHandle: handle => self.threadManager
@@ -1105,7 +1842,22 @@ class WineAssembly {
       sharedGdi: opts.sharedGdi || null,
       sharedAudio,
       sharedMixer,
+      get waveCallbackOwner() {
+        const backend=self.guestWorker;
+        if(backend) {
+          const slot=backend.audioRpcSlot;
+          return Number.isInteger(slot) ? {kind:'worker',backend,slot,link:null} : null;
+        }
+        return this.exports ? {kind:'cooperative',exports:this.exports,tid:opts.threadId|0} : null;
+      },
+      offerWaveCallback:item=>self._offerWaveCallback(item),
+      wakeWaveCallback:()=>self._wakeStep(),
       audioClockMs: () => self._guestAudioClockMs(sharedAudio),
+      // How far the global deadline clock trails real time (0 when off).
+      deadlineLagMs: () => {
+        const tm = self.threadManager;
+        return tm && tm.deadlineClock ? tm.deadlineLagMs() : 0;
+      },
       // Frozen session recorder (docs/design-frozen-recording.md): host-audio
       // asks for a tap on every PCM submit and gets null unless one is armed,
       // so an unrecorded session pays one property read per buffer. The pump
@@ -1155,11 +1907,7 @@ class WineAssembly {
       // wallpaper set and an MCI open, and MCI is allowed to still be
       // spinning a device up when open returns. So the miss now starts an
       // async fetch and the caller applies the bytes when they land.
-      readFileAsync: (name) => {
-        const have = self._vfsLookup(name, ctx.vfs);
-        if (have) return Promise.resolve(have);
-        return self._fetchMissingFile(name, ctx.vfs);
-      },
+      readFileAsync: (name) => self._readFileAsync(name, ctx.vfs),
       onTopLevelWindowDestroyed: (hwnd, destroyed) => {
         if (!self._multiApp || !self.renderer || !self._hwndBase) return;
         const lo = self._hwndBase;
@@ -1192,6 +1940,20 @@ class WineAssembly {
     if (!opts.detached) {
       self._helpCtx = ctx;
       self.hostCtx = ctx;
+      // A LoadLibraryA raised inside a nested synchronous send (Diablo's
+      // Select Connection dialog loads its *.snp from WM_INITDIALOG) cannot
+      // come back to the step loop, so finish it in place when the bytes are
+      // resident. Only for a guest running on this thread: with the guest's
+      // main thread in a Worker, the instance answering is not this one.
+      ctx.serviceLoadLibrary = () => {
+        if (self.guestWorker || !self.instance) return false;
+        const onLoadLibraryYield = ex => ProcessBoot.serviceLoadLibraryYieldSync({
+          exports: ex, memoryBuffer: self.memory.buffer, resourceHost: self, log: console.log,
+          advanceGuestTime: ms => self._advanceGuestTickMs(ms, ctx.sharedAudio), onLoadLibraryYield,
+          findDllSync: (fileName, fullName) => self._findDllBytesSync(fileName, fullName),
+        });
+        return onLoadLibraryYield(self.instance.exports);
+      };
     }
     const base = createHostImports(ctx);
     ctx.sharedGdi = base.gdi;
@@ -1225,12 +1987,29 @@ class WineAssembly {
         self._dxDirty = true;   // a released write is a finished write
       } else if (kind === 5 || kind === 6) {
         self._dxDirty = true;
+        // Worker mode presents only at a step's end. A frame finished by a
+        // free-running guest thread while the main step is parked (GetMessage,
+        // spin or Sleep park) would otherwise wait out the park, up to
+        // MAX_PARK_SLEEP_MS. An early step just re-yields; frames are rare.
+        if (self.guestWorker && self._stepTimeoutId) self._wakeStep();
         if (typeof self.onGuestFrame === 'function') {
           self.onGuestFrame({ kind: 'directdraw' });
         }
       }
       return rawDxTrace ? rawDxTrace(kind, slot, a1, a2, a3) : undefined;
     };
+    // The GDI half of the wake above. A guest thread drawing through GDI
+    // (Blobby's SDL game thread) uploads its frame while the main thread is
+    // parked in GetMessage; left parked, measured on ascii.dev, that frame
+    // reached the screen at 35-38/s against 53-58 cooperative.
+    const rawSurfaceUpload = h.gdi_surface_upload;
+    if (rawSurfaceUpload) {
+      h.gdi_surface_upload = (...args) => {
+        const r = rawSurfaceUpload(...args);
+        if (self.guestWorker && self._stepTimeoutId) self._wakeStep();
+        return r;
+      };
+    }
 
     // Run slices are macrotasks and there are far more of them than there are
     // display frames, so a dirty flag alone would upload the surface hundreds
@@ -1266,18 +2045,36 @@ class WineAssembly {
       return Math.floor(now / 16.7);
     };
 
-    self._presentDxIfDirty = () => {
-      if (!self._dxDirty) return;
+    // Returns 1 when it uploaded a surface to the canvas, 0 otherwise.
+    //
+    // `paced` means the caller is already running once per display frame
+    // (the requestAnimationFrame present in _presentNow, or a frozen/stop
+    // flush that must show the newest frame whatever the clock says), so the
+    // wall-clock frame bucket below is skipped. It has to be: rAF callbacks
+    // arrive every ~16.67ms and the bucket is 16.7ms wide, so two consecutive
+    // display frames can land in the same bucket and the second one would
+    // silently skip its upload -- a dropped frame manufactured by the throttle.
+    self._presentDxIfDirty = (paced) => {
+      // Under Worker dx_trace filtering (guest-rpc dxTraceLocal) Unlocks and
+      // lock depth arrive through shared memory instead of dx_trace.
+      const broker = self.guestWorker && self.guestWorker.broker;
+      const dxShared = broker && broker.dxState ? broker.dxState() : null;
+      if (dxShared && dxShared.dirty !== self._dxSharedDirtySeen) {
+        self._dxSharedDirtySeen = dxShared.dirty;
+        self._dxDirty = true;
+      }
+      if (!self._dxDirty) return 0;
       const gdi = self.hostCtx && self.hostCtx.sharedGdi;
-      if (!gdi || !gdi.presentBestDxOffscreen) return;
+      if (!gdi || !gdi.presentBestDxOffscreen) return 0;
       // One upload per display frame. A null sequence means "do not present
       // at all" (hidden tab); on a non-DOM host with no clock at all the
       // counter is undefined and every dirty slice presents, which is the old
-      // unthrottled behaviour rather than none.
-      const frameSeq = self._dxFrameSeqNow ? self._dxFrameSeqNow() : undefined;
-      if (frameSeq === null) return;
+      // unthrottled behaviour rather than none. Only the unpaced path (a host
+      // with no requestAnimationFrame) still needs this.
+      const frameSeq = (!paced && self._dxFrameSeqNow) ? self._dxFrameSeqNow() : undefined;
+      if (frameSeq === null) return 0;
       if (frameSeq !== undefined) {
-        if (frameSeq === self._dxPresentedSeq) return;
+        if (frameSeq === self._dxPresentedSeq) return 0;
         self._dxPresentedSeq = frameSeq;
       }
       // Don't upload a surface the guest is part-way through writing. Every
@@ -1286,14 +2083,20 @@ class WineAssembly {
       // waiting costs one frame at most. A lock still held several frames
       // later is a retained pointer into what the guest believes is video
       // memory -- present it anyway, which is what real DirectDraw does.
-      if (dxLockDepth.size) {
+      if (dxLockDepth.size || (dxShared && dxShared.locks > 0)) {
         self._dxLockHeld = (self._dxLockHeld || 0) + 1;
-        if (self._dxLockHeld < 3) return;
+        if (self._dxLockHeld < 3) {
+          // Still dirty; the paced presenter re-arms for the next frame on
+          // this flag rather than on _dxDirty alone, which can stay set for
+          // good on a host with no DirectDraw surfaces to present.
+          self._dxLockDeferred = true;
+          return 0;
+        }
       } else {
         self._dxLockHeld = 0;
       }
       self._dxDirty = false;
-      gdi.presentBestDxOffscreen(true);
+      return gdi.presentBestDxOffscreen(true) ? 1 : 0;
     };
 
     const traceApiNames = (typeof window !== 'undefined' && window.__waTraceApiNames)
@@ -1303,7 +2106,10 @@ class WineAssembly {
     let pendingTraceComApiId = -1;
 
     // --- Browser-specific overrides ---
-    h.log = (ptr, len) => {
+    // `stack` is present when a guest Worker forwarded the call (lib/guest-rpc.js
+    // createWorkerImports): [esp, return address, arg0..arg7] read on that
+    // thread at call time. This page's instance runs no guest code then.
+    h.log = (ptr, len, ...stack) => {
       let text = '';
       if (self.verbose || (traceApiNames && traceApiNames.size)) {
         const view = new Uint8Array(self.memory.buffer, ptr, Math.min(len, 256));
@@ -1324,15 +2130,17 @@ class WineAssembly {
           const entry = self.apiTable && self.apiTable.find(item => item.name === apiName);
           if (ex && ex.get_esp && ex.guest_read32 && entry) {
             const raw = [];
-            const esp = ex.get_esp() >>> 0;
+            const fromWorker = stack.length >= 10;
+            const esp = fromWorker ? stack[0] >>> 0 : ex.get_esp() >>> 0;
             for (let i = 0; i < Math.min(entry.nargs || 0, 8); i++) {
-              raw.push(ex.guest_read32((esp + 4 + i * 4) >>> 0) >>> 0);
+              raw.push(fromWorker ? stack[2 + i] >>> 0
+                : ex.guest_read32((esp + 4 + i * 4) >>> 0) >>> 0);
             }
             // The word at ESP on entry to a stdcall thunk is the return
             // address, i.e. the instruction after the call. "Which of the 117
             // callers was this one" is the question every API trace ends at,
             // and the answer is already on the guest stack.
-            const ret = ex.guest_read32(esp) >>> 0;
+            const ret = fromWorker ? stack[1] >>> 0 : ex.guest_read32(esp) >>> 0;
             suffix = `(${raw.map(v => `0x${v.toString(16).padStart(8, '0')}`).join(', ')})`
               + ` ret=0x${ret.toString(16).padStart(8, '0')}`;
             // Browser acceptance tests occasionally need to distinguish two
@@ -1458,6 +2266,118 @@ class WineAssembly {
     // Resolve the exe against the app registry and boot it as a second
     // guest; anything that is not a registered exe keeps the base behaviour
     // (open http links in a tab, otherwise report success).
+    // CreateProcess with redirected std handles (src/09d7-pipes.wat): the
+    // child is a second in-page instance launched from this process's VFS,
+    // on a private LoopbackSegment shared with this one, its std handles
+    // attached before its first slice. Synchronous: the launch is
+    // fire-and-forget, and frames sent before the child runs wait in its
+    // wire's inbox. 0 = "cannot", and the guest falls back to its old path.
+    h.process_spawn = (cmdWa, dirWa, childIp, specWa, count) => {
+      // An ordinary CreateProcess (no redirected std handles) is a child too
+      // when the app runs children for every CreateProcess (`spawnProcesses`
+      // in lib/apps.js, as test/run.js --spawn-processes): a visible instance
+      // on a copy of this C:\, whose files come back here when it ends,
+      // before a wait on it returns. Otherwise it keeps the old visible chain
+      // launch through shell_execute. The registry needs no merge: every
+      // instance on the page shares one store.
+      const pipes = count > 0;
+      if (!pipes && !self.spawnProcesses) return 0;
+      const shell = window.wineShell;
+      const Vlan = window.VlanWire;
+      if (!shell || !shell.launchVfsExe) return 0;
+      if (pipes && (!Vlan || !Vlan.LoopbackSegment)) return 0;
+      if (pipes && self.vlanWire && !self._childSegment) {
+        console.log('[process_spawn] this process is already in a room; nested children are not supported');
+        return 0;
+      }
+      const cmd = cmdWa ? self.readString(cmdWa) : '';
+      const parsed = parseShellLaunchCommand(cmd, '', 'open');
+      const vfs = self._helpCtx && self._helpCtx.vfs;
+      let file = resolveShellLaunchPath(parsed.file.trim(), vfs, false);
+      if (vfs && !/\.[a-z0-9]+$/i.test(file)) file += '.exe';
+      const dir = dirWa ? self.readString(dirWa) : (vfs && vfs.getCurrentDirectory ? vfs.getCurrentDirectory() : '');
+      const parentIp = (self.vlanLocalIp || 0x0A000001) >>> 0;
+      const view = new DataView(self.memory.buffer);
+      const spec = [];
+      for (let i = 0; i < count; i++) {
+        const at = specWa + i * 16;
+        spec.push({ which: view.getInt32(at, true), end: view.getInt32(at + 4, true),
+          lport: view.getInt32(at + 8, true), rport: view.getInt32(at + 12, true) });
+      }
+      if (!self._children) {
+        self._children = new Map();
+        // A parent that ends takes its children with it.
+        self._stopChildren = () => { for (const c of self._children.values()) if (c.wine && c.exitCode === 259) c.wine.stop(); };
+      }
+      if (pipes && !self._childSegment) {
+        self._childSegment = new Vlan.LoopbackSegment();
+        self.vlanWire = self._childSegment.attach();
+      }
+      // What C:\ held when the child started, by entry identity: the child's
+      // copy shares these entries, so one it replaced or added is its write.
+      const before = !pipes && vfs ? new Map(vfs.files) : null;
+      // Waits on the child's hProcess are answered by the thread manager.
+      if (self.threadManager) self.threadManager.processCtl = (op, p, arg) => h.process_ctl(op, p, arg);
+      const ip = childIp >>> 0;
+      const ipText = [ip >>> 24, (ip >>> 16) & 255, (ip >>> 8) & 255, ip & 255].join('.');
+      const pid = (0x4000 + (self._children.size + 1) * 4) & 0xFFFF;
+      const rec = { wine: null, exitCode: 259, ip };
+      self._children.set(pid, rec);
+      const beforeRun = async (child) => {
+        rec.wine = child;
+        if (!pipes) return;
+        await child.callGuest('set_vlan_local_ip', ip | 0);
+        await child.callGuest('pipe_detach_console');
+        const byPort = new Map();
+        for (const e of spec) {
+          const known = byPort.get(e.lport);
+          if (known) { await child.callGuest('pipe_set_std', e.which | 0, known | 0); continue; }
+          const hnd = (await child.callGuest('pipe_attach_std', e.which | 0, e.end | 0,
+            e.lport | 0, parentIp | 0, e.rport | 0)) >>> 0;
+          if (!hnd) throw new Error(`process_spawn: could not attach std ${e.which}`);
+          byPort.set(e.lport, hnd);
+        }
+        console.log(`[process_spawn] ${file} at ${ipText}: std handles attached`);
+      };
+      const onExit = (child) => {
+        if (rec.exitCode !== 259) return;
+        const childVfs = child && child._helpCtx && child._helpCtx.vfs;
+        if (before && childVfs) {
+          try {
+            const r = vfs.mergeChildFrom(before, childVfs);
+            console.log(`[process_spawn] ${file} ended: ${r.written} file(s) written back, ${r.deleted} deleted`);
+          } catch (e) {
+            console.log(`[process_spawn] merging ${file}'s files back failed: ${e.message}`);
+          }
+        }
+        rec.exitCode = (child && child._exitCode != null) ? (child._exitCode >>> 0) : (child ? 0 : 1);
+        // EOF for the parent's ends of the child's pipes.
+        if (pipes && self.vlanWire && self.vlanWire.peerGone) self.vlanWire.peerGone(ip);
+      };
+      const ok = shell.launchVfsExe(file, self, dir, parsed.params.trim(), {
+        ...(pipes ? { lanLink: { wire: self._childSegment.attach(), address: ipText, local: true } } : {}),
+        bypassSingleApp: true, hidden: pipes, beforeRun, onExit,
+      });
+      if (!ok) { self._children.delete(pid); return 0; }
+      console.log(`[process_spawn] CreateProcess "${cmd}" -> ${file} at ${ipText}, pid ${pid}`);
+      return pid;
+    };
+    // op 0: a child's exit code (259 while it runs); op 1: terminate it.
+    h.process_ctl = (op, pid, arg) => {
+      const rec = self._children && self._children.get(pid & 0xFFFF);
+      if (!rec) return -1;
+      if (op === 0) return rec.exitCode >>> 0;
+      if (op === 1) {
+        if (rec.exitCode === 259) {
+          const child = rec.wine;
+          rec.exitCode = arg >>> 0;
+          if (self.vlanWire && self.vlanWire.peerGone) self.vlanWire.peerGone(rec.ip);
+          if (child) child.stop();
+        }
+        return 1;
+      }
+      return -1;
+    };
     h.shell_execute = (hwnd, opWa, fileWa, paramsWa, dirWa, nShow) => {
       const rawFile = fileWa ? self.readString(fileWa) : '';
       const op = opWa ? self.readString(opWa) : 'open';
@@ -1480,6 +2400,15 @@ class WineAssembly {
           typeof vfs.getCurrentDirectory === 'function' ? vfs.getCurrentDirectory() : dir;
         if (absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params)) {
           self.logToUI(`[ShellExecute] launching ${launchFile} from the caller's filesystem`);
+          return 33;
+        }
+        // A relative name the caller's own filesystem has is that file too:
+        // Win98's CreateProcess looks in the current directory before any
+        // search path. NFS II's AUTORUN.EXE changes into SETUP\ENGLISH and
+        // starts a bare "setup.exe", which the basename heuristic below
+        // resolved to an unrelated registered app (Moorhuhn 3 Puzzle).
+        if (!absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params)) {
+          self.logToUI(`[ShellExecute] launching ${launchFile} from the caller's current directory`);
           return 33;
         }
         if (/\.exe$/i.test(file) && shell.launchExe(file)) {
@@ -1519,6 +2448,8 @@ class WineAssembly {
     };
     h.exit = (code) => {
       console.log('[ExitProcess] code:', code);
+      // A parent's GetExitCodeProcess on this process reads it (process_spawn).
+      self._exitCode = code >>> 0;
       if (!self._inDllInit) {
         self.logToUI('[ExitProcess] code: ' + code);
         self.logToUI('--- Program exited ---');
@@ -1615,6 +2546,24 @@ class WineAssembly {
     h.check_input_wparam = () => {
       return self._lastInputEvent ? (self._lastInputEvent.wParam | 0) : 0;
     };
+    // One `_lastInputEvent` serves every guest thread, but a Worker thread
+    // reads an event's lParam/wParam/hwnd with RPCs that follow its
+    // check_input, and another thread's empty poll in between clears it. The
+    // broker (lib/guest-rpc.js) saves each slot's event when its check_input
+    // takes one and swaps it back in around that slot's follow-up reads.
+    // Moorhuhn with its main thread in a Worker got lParam 0 for every
+    // keyup -- a press to its WH_KEYBOARD hook -- so Space never came up.
+    Object.defineProperty(h, 'inputEventScope', {
+      enumerable: false,
+      value: {
+        save: () => [self._lastInputEvent || null,
+          self.renderer ? self.renderer._activeInputEvent || null : null],
+        restore: (saved) => {
+          self._lastInputEvent = saved[0];
+          if (self.renderer) self.renderer._activeInputEvent = saved[1];
+        },
+      },
+    });
     h.check_input_hwnd = (focusHwnd) => {
       const evt = self._lastInputEvent;
       if (!evt) return 0;
@@ -1645,6 +2594,9 @@ class WineAssembly {
     h.duplicate_current_thread = (tid) => self.threadManager ? self.threadManager.duplicateCurrentThread(tid) : 0;
     h.suspend_thread = (handle) => self.threadManager ? self.threadManager.suspendThread(handle) : 0xFFFFFFFF;
     h.resume_thread = (handle) => self.threadManager ? self.threadManager.resumeThread(handle) : 0xFFFFFFFF;
+    h.thread_apc_target = (handle, tid) => self.threadManager
+      ? self.threadManager.threadApcTarget(handle, tid) : 0;
+    h.thread_alert = (tid) => { if (self.threadManager) self.threadManager.alertThread(tid); };
     h.get_thread_priority = (handle, tid) => self.threadManager
       ? self.threadManager.getThreadPriority(handle, tid) : 0x7FFFFFFF;
     h.set_thread_priority = (handle, priority, tid) => self.threadManager
@@ -1663,7 +2615,7 @@ class WineAssembly {
       ? self.threadManager.terminateThread(handle, exitCode) : 0;
     const readSyncName = (nameWa, flags) =>
       HostMemUtils ? HostMemUtils.readSyncObjectName(self.memory, nameWa, flags) : '';
-    const win32ThreadId = () => ((ctx.threadId | 0) + 1) | 0;
+    const win32ThreadId = () => self.threadManager.currentWin32ThreadId();
     h.create_event = (m, i, nameWa, wide) => {
       if (!self.threadManager) return 0;
       const name = readSyncName(nameWa, wide);
@@ -1676,6 +2628,7 @@ class WineAssembly {
       const name = readSyncName(nameWa, wide);
       return (wide & 2) ? self.threadManager.openMutex(name) : self.threadManager.openEvent(name);
     };
+    h.close_event = handle => self.threadManager ? self.threadManager.closeEvent(handle) : 0;
     h.set_event = (handle) => {
       if (!self.threadManager) return 1;
       const value = handle >>> 0;
@@ -1707,6 +2660,20 @@ class WineAssembly {
         : self.threadManager.waitMultiple(n, ha, wa, t, win32ThreadId());
     };
     h.cs_pump = () => self.threadManager ? self.threadManager.pumpThreadsOnce() : 0;
+    // A guest Worker's nested run (11-seh $seh_fault_sync) parked a ReadFile
+    // on a lazy file and cannot yield back to us. The WAT only asks from a
+    // guest Worker, whose brokered call stays parked until this Promise
+    // settles (lib/guest-rpc.js respond), so fill the read and answer 1; the
+    // nested run then re-enters the same ReadFile for the cache hit.
+    h.io_fill_sync = (threadKey) => {
+      const vfs = self._helpCtx && self._helpCtx.vfs;
+      const pending = vfs && vfs.getPendingRead(threadKey | 0);
+      if (!pending) return 1;
+      return Promise.resolve(self._fillParkedRead(vfs, pending)).then(() => 1, (e) => {
+        self.logToUI(`[io] ${pending.path}: ${e && e.message}`);
+        return 0;
+      });
+    };
     h.create_semaphore = (initial, max, nameWa, wide) => {
       if (!self.threadManager) return 0;
       const name = readSyncName(nameWa, wide);
@@ -1851,7 +2818,12 @@ class WineAssembly {
     const compileEl = typeof document !== 'undefined' && document.getElementById('compile-status');
     let showTimeout = null;
     const cacheWarm = !!WineAssembly._wasmModulePromise;
-    if (compileEl && !cacheWarm) {
+    // A launch with a launch window (lib/launch-progress.js) already says
+    // "Preparing emulator" -- and only after 500ms; this box would flash at
+    // 100ms on top of it.
+    const launchUi = typeof globalThis !== 'undefined' ? globalThis.wineLaunchUi : null;
+    const launchWindowOwns = !!(launchUi && launchUi.current && launchUi.current.status === 'pending');
+    if (compileEl && !cacheWarm && !launchWindowOwns) {
       showTimeout = setTimeout(() => {
         compileEl.style.display = 'block';
       }, 100);
@@ -1985,20 +2957,45 @@ class WineAssembly {
     if (this.instance.exports.set_process_id) {
       this.instance.exports.set_process_id(this.processId);
     }
+    // `workerHeavyCodeCache: true` in lib/apps.js: the app's game loop runs on
+    // a worker thread, so trade main-thread page-index slots for worker ones
+    // (main 256 / workers 32). Process-wide in shared memory, so it must be set
+    // here, before the first decode and before any guest thread (or a
+    // Worker-hosted main) runs init_thread.
+    if (this.workerHeavyCodeCache && this.instance.exports.set_page_index_layout) {
+      this.instance.exports.set_page_index_layout(1);
+    }
     // Decode-time superop switches, applied before the first decode. These are
     // per-instance mut globals, so a worker thread has to be told separately
     // (see thread-manager.js) or an A/B measures the folded build on one side.
     if (window.WineSuperops && this.instance.exports.set_rle_run) {
       this.instance.exports.set_rle_run(window.WineSuperops.rleRun === false ? 0 : 1);
     }
-    const x87Fusion = (this.x87Fusion === true ||
-      (window.WineSuperops && window.WineSuperops.x87Fusion === true)) ? 1 : 0;
+    const x87Fusion = (this.x87Fusion !== false &&
+      !(window.WineSuperops && window.WineSuperops.x87Fusion === false)) ? 1 : 0;
     if (this.instance.exports.set_x87_pipeline4_fusion) {
       this.instance.exports.set_x87_pipeline4_fusion(x87Fusion);
     }
     if (this.instance.exports.set_x87_affine_fusion) {
       this.instance.exports.set_x87_affine_fusion(x87Fusion);
     }
+    if ((this.reservedPageFaults || this.nullPageFaults) && this.instance.exports.set_fault_unmapped) {
+      this.instance.exports.set_fault_unmapped(this.reservedPageFaults ? 5 : 4);
+    }
+    // The micro-op tier (07d/07e). Not decode-time: a hot head is compiled on
+    // its 256th entry whenever the tier is on, and turning it off flushes every
+    // program, so setUop() below can flip it on a running app too.
+    const uop = (this.uop !== false &&
+      !(window.WineSuperops && window.WineSuperops.uop === false)) ? 1 : 0;
+    if (this.instance.exports.set_uop) this.instance.exports.set_uop(uop);
+    const aggressiveStack = (uop && (this.aggressiveStack === true ||
+      (window.WineSuperops && window.WineSuperops.aggressiveStack === true))) ? 1 : 0;
+    if (this.instance.exports.set_aggressive_stack) this.instance.exports.set_aggressive_stack(aggressiveStack);
+    // Trace heads: hot heads with no back edge become forward traces
+    // (07e $uc_form_trace) instead of no-backedge declines. On by default;
+    // ?no-uop-trace-heads turns them off.
+    const uopTraceHeads = (uop && !(window.WineSuperops && window.WineSuperops.uopTraceHeads === false)) ? 1 : 0;
+    if (this.instance.exports.set_uop_trace_heads) this.instance.exports.set_uop_trace_heads(uopTraceHeads);
     // ?x87-fuse-debug=MASK[,LO,HI] -- the bisect knob for a fold divergence.
     // MASK picks families (1 pipeline4, 2 short, 4 tree4, 8 affine, 16 island)
     // and only blocks whose guest start is in [LO,HI) are offered to them.
@@ -2016,6 +3013,28 @@ class WineAssembly {
     }
     const cpuSSE = this.cpuSSE === true ? 1 : 0;
     if (this.instance.exports.set_cpu_sse) this.instance.exports.set_cpu_sse(cpuSSE);
+    const presentCap = Math.max(0, this.presentCap | 0);
+    if (this.instance.exports.set_present_cap) this.instance.exports.set_present_cap(presentCap);
+    const presentPaceMode = this.presentPace === 'deadline' ? 0 : 1;
+    if (this.instance.exports.set_present_pace_mode) {
+      this.instance.exports.set_present_pace_mode(presentPaceMode);
+    }
+    // ?mm-thread[=0] and ?async-mm[=0] override the app's timeSetEvent
+    // delivery, so the two models can be A/B'd on one app without an edit.
+    try {
+      const q = new URLSearchParams(location.search);
+      if (q.has('mm-thread')) this.mmTimerThread = q.get('mm-thread') !== '0';
+      if (q.has('async-mm')) this.asyncMultimediaTimer = q.get('async-mm') !== '0';
+    } catch (_) {}
+    // Process-wide (shared memory), so the main instance setting it reaches a
+    // guest Worker too; set before any guest code can call timeSetEvent.
+    if (this.instance.exports.set_mm_timer_thread_mode) {
+      this.instance.exports.set_mm_timer_thread_mode(this.mmTimerThread ? 1 : 0);
+    }
+    // Shared with guest Workers; set once before any guest window is created.
+    if (this.instance.exports.set_desktop_color_depth) {
+      this.instance.exports.set_desktop_color_depth(this.desktopColorDepth === 8 ? 8 : 32);
+    }
     this._wasmModule = wasmModule;
     // Kept so an experimental guest worker can be handed the SAME host import
     // table this instance uses — the point of the broker is that there is one
@@ -2027,19 +3046,6 @@ class WineAssembly {
     // Worker builds its own (lib/guest-worker.js) and this is the cooperative
     // case only — with a guest Worker running, this.instance executes nothing.
     if (window.WINE_D3DIM_GPU === true && !this.guestWorker) this._startD3DIMGpu();
-    // Opt-in A/B for the counted dword-copy superinstruction. Configure both
-    // decoders before any PE bytes are loaded or translated; ordinary runs
-    // retain the conservative off default.
-    const copy32Params = typeof location !== 'undefined'
-      ? new URLSearchParams(location.search) : null;
-    const copy32Counted = copy32Params && copy32Params.has('copy32-counted') &&
-      !copy32Params.has('no-copy32-counted') ? 1 : 0;
-    if (copy32Counted && this.instance.exports.set_loop_copy32_counted_emit) {
-      this.instance.exports.set_loop_copy32_counted_emit(1);
-      if (this.guestWorker) {
-        await this.guestWorker.callExport('set_loop_copy32_counted_emit', 1);
-      }
-    }
     // In real-thread mode slot 0 owns a second WASM instance in a Worker.
     // Configure that live decoder too; the browser-thread instance above is
     // then only an ownership token and host-call mirror.
@@ -2050,12 +3056,30 @@ class WineAssembly {
       if (this.instance.exports.set_x87_affine_fusion) {
         await this.guestWorker.callExport('set_x87_affine_fusion', x87Fusion);
       }
+      if ((this.reservedPageFaults || this.nullPageFaults) && this.instance.exports.set_fault_unmapped) {
+        await this.guestWorker.callExport('set_fault_unmapped', this.reservedPageFaults ? 5 : 4);
+      }
+      if (this.instance.exports.set_uop) {
+        await this.guestWorker.callExport('set_uop', uop);
+      }
+      if (this.instance.exports.set_aggressive_stack) {
+        await this.guestWorker.callExport('set_aggressive_stack', aggressiveStack);
+      }
+      if (this.instance.exports.set_uop_trace_heads) {
+        await this.guestWorker.callExport('set_uop_trace_heads', uopTraceHeads);
+      }
       if (x87FuseDebug && this.instance.exports.set_x87_fuse_debug) {
         await this.guestWorker.callExport('set_x87_fuse_debug',
           x87FuseDebug[0] | 0, x87FuseDebug[1] | 0, x87FuseDebug[2] | 0);
       }
       if (this.instance.exports.set_cpu_sse) {
         await this.guestWorker.callExport('set_cpu_sse', cpuSSE);
+      }
+      if (this.instance.exports.set_present_cap) {
+        await this.guestWorker.callExport('set_present_cap', presentCap);
+      }
+      if (this.instance.exports.set_present_pace_mode) {
+        await this.guestWorker.callExport('set_present_pace_mode', presentPaceMode);
       }
     }
     if (this.renderer) {
@@ -2131,6 +3155,8 @@ class WineAssembly {
       // Worker; without it (no isolation, CLI, Safari private) ThreadManager runs
       // the cooperative one and says so.
       workerBackend: this.guestWorker || null,
+      // Spawned guest threads take the app's NULL-guard-page rule too.
+      faultUnmapped: this.reservedPageFaults ? 5 : this.nullPageFaults ? 4 : 0,
       threadsRequested: !!(typeof window !== 'undefined' && window.WINE_THREADS),
       // So a trapped thread's EIP prints as a module and an offset. In worker
       // mode a DLL's load address depends on load order, so the raw number is
@@ -2144,10 +3170,11 @@ class WineAssembly {
       // ReadFile off a mounted ISO). Read late: the VFS is attached to the
       // help context after init().
       getVfs: () => (self._helpCtx && self._helpCtx.vfs) || null,
+      fillIoRead: (vfs, pending) => self._fillParkedRead(vfs, pending),
       onRenderWait: token => self.hostCtx.waitD3DRender(token),
       hasMessage: () => !!(self.renderer && self.renderer.inputQueue && self.renderer.inputQueue.length),
       now: () => self.renderer && self.renderer._profileNow ? self.renderer._profileNow() : Date.now(),
-      waitNow: () => self._guestAudioClockMs(self.hostCtx && self.hostCtx.sharedAudio),
+      waitNow: () => self._guestAudioClockRawMs(self.hostCtx && self.hostCtx.sharedAudio),
       resolveThreadSendExternalYield: async (link, r) => {
         if (r.yield === 3) await self._handleComDllLoadThreaded(link);
         else if (r.yield === 5) await self._handleLoadLibraryThreaded(link);
@@ -2161,10 +3188,31 @@ class WineAssembly {
         }
       },
     });
+    const serviceCooperativeDllYield = ex => ProcessBoot.serviceLoadLibraryYieldSync({
+      exports: ex, memoryBuffer: this.memory.buffer, resourceHost: this, log: console.log,
+      onLoadLibraryYield: serviceCooperativeDllYield,
+      advanceGuestTime: ms => this._advanceGuestTickMs(ms, this.hostCtx && this.hostCtx.sharedAudio),
+      findDllSync: (fileName, fullName) => this._findDllBytesSync(fileName, fullName),
+    });
+    this.threadManager._serviceDllYield = serviceCooperativeDllYield;
+
+    // Arm `g` (default on): one shared clock that stands at the earliest
+    // overdue timed-sleep deadline (see ThreadManager). Not in frozen mode,
+    // whose clock only moves when the agent steps it.
+    this.threadManager.deadlineClock = !this._frozen && this._schedArm('g');
+    // Its real time is continuous, not the stepped batch clock: the audible
+    // cursor it is compared against moves continuously too, and a stepped
+    // base shows a sleeper the cursor as it was at the last step instead.
+    if (this.threadManager.deadlineClock) {
+      this.threadManager._realWaitNow = () => self._guestContinuousMs(self.hostCtx && self.hostCtx.sharedAudio);
+    }
     // Future CreateThread instances need the same decoder configuration. A
     // mutable WASM global is instance-local, including the meaningful OFF=0.
     this.threadManager.recordInheritedWasmGlobal('set_x87_pipeline4_fusion', x87Fusion);
     this.threadManager.recordInheritedWasmGlobal('set_x87_affine_fusion', x87Fusion);
+    this.threadManager.recordInheritedWasmGlobal('set_uop', uop);
+    this.threadManager.recordInheritedWasmGlobal('set_aggressive_stack', aggressiveStack);
+    this.threadManager.recordInheritedWasmGlobal('set_uop_trace_heads', uopTraceHeads);
     // The bisect mask has to reach every guest thread for the same reason the
     // fold flags do: a thread decodes in its own instance, so a mask set only
     // here leaves the threads folding under the default (every family on) and
@@ -2174,12 +3222,19 @@ class WineAssembly {
         x87FuseDebug[0] | 0, x87FuseDebug[1] | 0, x87FuseDebug[2] | 0);
     }
     this.threadManager.recordInheritedWasmGlobal('set_cpu_sse', cpuSSE);
+    this.threadManager.recordInheritedWasmGlobal('set_present_cap', presentCap);
+    this.threadManager.recordInheritedWasmGlobal('set_present_pace_mode',
+      this.presentPace === 'deadline' ? 0 : 1);
 
     // A room address is a property of this whole process, and the guest reads
     // it the moment it opens a socket, so it has to be in place before the
     // program runs rather than when a connection is attempted.
     if (this.vlanLocalIp && this.instance.exports.set_vlan_local_ip) {
       this.instance.exports.set_vlan_local_ip(this.vlanLocalIp | 0);
+    }
+    // Per-app pacing of small virtual-LAN TCP sends (lib/apps.js vlanNagleMs).
+    if ((this.vlanNagleMs | 0) > 0 && this.instance.exports.set_vlan_nagle_ms) {
+      this.instance.exports.set_vlan_nagle_ms(this.vlanNagleMs | 0);
     }
 
     if (canvas && !this.renderer) {
@@ -2416,10 +3471,7 @@ class WineAssembly {
       (typeof appProfiles !== 'undefined' ? appProfiles : null);
     if (!profiles || !this.instance) return;
     const buffer = this.memory && this.memory.buffer;
-    const disableCopy32Counted = typeof location !== 'undefined' &&
-      new URLSearchParams(location.search).has('no-copy32-counted');
-    profiles.applyExeCompatibilityPatches(exeName, this.instance.exports, buffer,
-      { disableCopy32Counted });
+    profiles.applyExeCompatibilityPatches(exeName, this.instance.exports, buffer);
     // Screen-size-driven defaults (an app's own resolution setting, say) come
     // from the same table. The canvas is already sized to the viewport by the
     // time an exe loads, so this is the real screen the guest will see.
@@ -2451,6 +3503,10 @@ class WineAssembly {
       this.d3dimGpu = new gpu.D3DIMGpu({
         getExports: () => self.instance.exports,
         getMemory: () => self.memory.buffer,
+        // This executor runs on the guest main thread's own instance, so a
+        // Flip may queue its readback and swap the chain here (d3dim-gpu.js
+        // _flip); the shared render Worker keeps the synchronous Flip.
+        asyncFlip: true,
         createCanvas: (width, height) => {
           const canvas = document.createElement('canvas');
           canvas.width = width; canvas.height = height;
@@ -2479,6 +3535,10 @@ class WineAssembly {
   async _maybeStartGuestWorker(wasmModule) {
     if (typeof window === 'undefined') return;
     if (!window.WINE_THREADS) return;
+    if (this.threads === false) {
+      this.logToUI('[threads] this app opts out (threads: false) — running single-threaded');
+      return;
+    }
     if (!(typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated)) {
       this.logToUI('[threads] not cross-origin isolated — running single-threaded');
       return;
@@ -2491,16 +3551,43 @@ class WineAssembly {
       const res = await fetch(WineAssembly.versionedUrl('lib/host-import-sigs.generated.json'));
       if (!res.ok) throw new Error(`sigs HTTP ${res.status}`);
       const sigs = (await res.json()).sigs;
+      if (this._stopped) return;
       const self = this;
+      // Guest threads are about to run at the same time, so a LOCK-prefixed
+      // instruction has to be atomic across Workers (07-decoder.wat
+      // $try_emit_locked). Process-wide, and set before any guest code is
+      // decoded; cleared again below if the Worker never comes up.
+      if (this.instance.exports.set_lock_atomic_mode) this.instance.exports.set_lock_atomic_mode(1);
       const worker = new GuestThreadHost({
+        findDll: async (_fileName, fullName) => (await this._resolveDllBytes(fullName)).dllBytes,
+        onDllMapped: record => {
+          ProcessBoot.registerMappedDll(this, this.instance.exports, this.memory.buffer, record, console.log);
+        },
+        onDllRetired: row => {
+          this.unregisterDllModule(row);
+          if (this.dllResources && this.dllResources[row.loadAddr] &&
+              this.dllResources[row.loadAddr].generation === row.generation) delete this.dllResources[row.loadAddr];
+        },
         memory: this.memory,
         module: wasmModule,
         sigs,
         hostImports: this._mainImports.host,
         workerUrl: WineAssembly.versionedUrl('lib/guest-worker.js'),
         forwardGlLogs: !!this.verbose || !!(window.__waTraceApiNames && window.__waTraceApiNames.size),
+        // Keep DirectDraw lock/unlock bookkeeping in the Worker (guest-rpc
+        // dxTraceLocal) unless something on this page prints the dx trace.
+        dxTraceLocal: !(window.__waTraceCategories && window.__waTraceCategories.has &&
+          window.__waTraceCategories.has('dx')) &&
+          !(window.__waTraceHostNames && [...window.__waTraceHostNames].includes('dx_trace')),
         d3dRenderWorker: window.WINE_D3D_RENDER_WORKER === true,
         d3dimGpu: window.WINE_D3DIM_GPU === true,
+        d3dimLazySync: window.WINE_D3DIM_LAZY_SYNC !== false,
+        sharedRenderWorker: true,
+        createRenderEndpoint: options => self._createRenderWorkerEndpoint(options),
+        // ?rpc-census: count every host import a guest thread hands back to
+        // this thread (broker.stats().calls) — the browser twin of run.js's
+        // --rpc-census, and the first question when Worker mode is slower.
+        countCalls: /[?&]rpc-census\b/.test(location.search),
         log: msg => { console.log(msg); self.logToUI(msg); },
         tickMs: () => self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio),
         advanceGuestTime: ms => {
@@ -2508,16 +3595,43 @@ class WineAssembly {
           return self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio);
         },
       });
+      this._guestWorkerStarting = worker;
       await worker.start();
+      if (this._stopped) { this._guestWorkerStarting = null; return; }
+      // The toolbar can change while the main worker is instantiating too.
+      while (worker.d3dimLazySync !== (window.WINE_D3DIM_LAZY_SYNC !== false)) {
+        await worker.setLazySync(window.WINE_D3DIM_LAZY_SYNC !== false);
+        if (this._stopped) { worker.stop(); this._guestWorkerStarting = null; return; }
+      }
       this.guestWorker = worker;
+      this._guestWorkerStarting = null;
       // Renderer windows still retain the browser-side WebAssembly.Instance
       // as their ownership token. Mark that token so keyboard handling queues
       // messages for slot 0 instead of calling exports on the idle instance.
       if (!this.renderer._guestWorkerWasms) this.renderer._guestWorkerWasms = new WeakSet();
       this.renderer._guestWorkerWasms.add(this.instance);
-      this.logToUI('[threads] guest main thread is running in a Worker (experimental)');
+      // Guest threads now run beside the page rather than inside its steps, so
+      // a DirectSound ring is kept full on its own and the AudioWorklet may
+      // play it straight out of shared memory (lib/host-audio.js playRing).
+      if (this.hostCtx) this.hostCtx.liveAudioRing = true;
+      this.logToUI('[threads] guest main thread is running in a Worker');
     } catch (err) {
+      const starting = this._guestWorkerStarting;
+      if (starting && starting.stop) {
+        // Keep the owner reachable while its render endpoint drains, even
+        // when initialization failed before it became guestWorker.
+        const retirement = await this._stopGuestRuntime();
+        if (!retirement.ok) {
+          this._guestRuntimeRetirementError = retirement.error;
+          throw retirement.error;
+        }
+      }
+      this._guestWorkerStarting = null;
       this.guestWorker = null;
+      if (this._stopped) return;
+      if (this.instance && this.instance.exports && this.instance.exports.set_lock_atomic_mode) {
+        this.instance.exports.set_lock_atomic_mode(0);
+      }
       this.logToUI(`[threads] worker start failed (${err.message}) — running single-threaded`);
     }
   }
@@ -2534,7 +3648,7 @@ class WineAssembly {
     // program came off a dropped zip/ISO or out of the OPFS library, so there
     // is no URL to fetch and `url` is only the name the guest should see for
     // itself. Everything below treats the two identically.
-    const exeBytes = opts.bytes || await WineAssembly.fetchAssetBytes(url);
+    const exeBytes = opts.bytes || await WineAssembly.fetchAssetBytes(url, this._launchTransfer || {});
     this._exeBytes = exeBytes;
 
     // Resource parsing lives in WAT ($find_resource, $dlg_load,
@@ -2548,6 +3662,17 @@ class WineAssembly {
     // read image_base off it (SEH and callstack formatting) and would otherwise
     // translate every guest address against zero.
     const exeName = url.replace(/^.*[\\\/]/, '');
+    // What GetModuleFileName and the command line report after "<drive>:\":
+    // the whole drive-relative path for an exe launched from a guest path
+    // (imported media, a disc launcher's child), as the CLI's --exe-guest-path
+    // does. NFS II's 16-bit InstallShield is D:\SETUP\ENGLISH\SETUP.EXE and
+    // looks for _SETUP.DLL beside the path it is given; a bare basename sent
+    // it to D:\. A registry app's URL is a server path, not a guest one.
+    // A registry app may instead name the guest path its installed tree puts
+    // the image at (`exeGuestPath` in lib/apps.js); the CLI takes the same.
+    const guestPath = opts.guestPath || (/^[a-z]:[\\/]/i.test(url) ? url : null);
+    const processName = guestPath
+      ? guestPath.slice(3).replace(/\//g, '\\') : exeName;
     this._exeName = exeName;
     this._exeUrl = url;
     if (opts.args) this._extraArgs = opts.args;
@@ -2558,7 +3683,7 @@ class WineAssembly {
       // queue and lock ownership must remain distinct from every guest slot.
       this.instance.exports.set_host_shadow(1);
       entry = await this.guestWorker.loadPe(
-        exeBytes, exeName, this.processId, {
+        exeBytes, processName, this.processId, {
           extraArgs: this._extraArgs || '',
           exeDrive: ProcessBoot.exeDriveForPath(url),
         });
@@ -2585,7 +3710,7 @@ class WineAssembly {
       this._publishWorkerDllCount(meta.get_dll_count | 0);
     } else {
       ProcessBoot.setExeDrive(this.instance.exports, url);
-      ProcessBoot.setExeName(this.instance.exports, this.memory.buffer, exeName);
+      ProcessBoot.setExeName(this.instance.exports, this.memory.buffer, processName);
       if (this._extraArgs) {
         ProcessBoot.setExtraCmdline(this.instance.exports, this.memory.buffer, this._extraArgs);
       }
@@ -2593,6 +3718,7 @@ class WineAssembly {
       // shared with the CLI harness.
       ({ entry } = ProcessBoot.stageAndLoadPe(
         this.instance.exports, this.memory.buffer, exeBytes));
+      ProcessBoot.applyVirtualAllocTop(this.instance.exports, this.virtualAllocTop);
     }
 
     this._applyExeCompatibilityPatches(exeName, opts.launchPrefs);
@@ -2608,11 +3734,11 @@ class WineAssembly {
     }
 
     if (this._helpCtx && this._helpCtx.vfs) {
-      VfsSeed.seedExeImage(this._helpCtx.vfs, exeBytes, exeName);
+      VfsSeed.seedExeImage(this._helpCtx.vfs, exeBytes, exeName, opts.guestPath);
     }
     if (this.guestWorker) {
       ProcessBoot.setExeDrive(this.instance.exports, url);
-      ProcessBoot.setExeName(this.instance.exports, this.memory.buffer, exeName);
+      ProcessBoot.setExeName(this.instance.exports, this.memory.buffer, processName);
     }
 
     return entry;
@@ -2696,11 +3822,13 @@ class WineAssembly {
   // _loadWin16Dlls fetched. False is a LoadLibrary failure, not an error.
   _stageWin16Module(name, id) {
     let bytes = this._win16Modules && this._win16Modules.get(String(name).toUpperCase());
+    let resolvedPath = null;
     if (!bytes && typeof VfsSeed !== 'undefined' && VfsSeed.residentWin16Module) {
       const vfs = this._helpCtx && this._helpCtx.vfs;
       const resident = VfsSeed.residentWin16Module(vfs, name);
       if (resident) {
         bytes = resident.bytes;
+        resolvedPath = resident.path;
         if (resident.format === 'w32inst') return (bytes.length | 0x80000000) >>> 0;
       }
     }
@@ -2712,6 +3840,17 @@ class WineAssembly {
     if (bytes.length > room) return false;
     const base = exports.win16_dll_staging(id);
     const memory = new Uint8Array(this.memory.buffer);
+    if (resolvedPath && exports.win16_dll_path_alloc) {
+      // Preserve the file the loader actually selected; resource reopening
+      // must not guess C:\NAME.DLL or borrow another thread's scratch buffer.
+      if (resolvedPath.length >= 260 || resolvedPath.includes(String.fromCharCode(0))) return false;
+      const encoded = Uint8Array.from(resolvedPath, c => c.charCodeAt(0));
+      if (Array.from(resolvedPath).some(c => c.charCodeAt(0) > 255)) return false;
+      const pathBase = exports.win16_dll_path_alloc(id);
+      if (!pathBase || pathBase + 260 > memory.length) return false;
+      memory.fill(0, pathBase, pathBase + 260);
+      memory.set(encoded, pathBase);
+    }
     memory.fill(0, base, base + room);
     memory.set(bytes, base);
     return bytes.length;
@@ -2780,7 +3919,41 @@ class WineAssembly {
     }
   }
 
+  // Background is an explicit prefix warmup, never an eager whole-tree load.
+  // It starts after run(), is bounded to eight 64KiB prefixes, and its errors
+  // remain retryable through the ordinary parked-read UI.
+  startBackgroundAssets() {
+    if (this._backgroundAssetsPromise) return this._backgroundAssetsPromise;
+    const jobs = (this._backgroundAssetJobs || []).splice(0, 8);
+    const signal = this._manifestAssetAbort && this._manifestAssetAbort.signal;
+    const state = this.backgroundAssets = { total: jobs.length, deferred: this._backgroundAssetDeferred || 0, completed: 0, failed: [], cancelled: false };
+    this._backgroundAssetsPromise = (async () => {
+      for (const job of jobs) {
+        if (signal && signal.aborted) { state.cancelled = true; break; }
+        try { await job.cache.fill(0, Math.min(65536, job.cache.size)); state.completed++; }
+        catch (error) {
+          if (signal && signal.aborted) { state.cancelled = true; break; }
+          state.failed.push({ url: job.url, reason: String(error && error.message || error) });
+          console.warn('[files] background prefix failed; guest read can retry: ' + job.url);
+        }
+      }
+      return state;
+    })();
+    return this._backgroundAssetsPromise;
+  }
+
   async loadFiles(urls, options = {}) {
+    const transferOpts = options.transfer || {};
+    const checkCancelled = () => WineAssembly._throwIfAssetAborted(transferOpts.signal);
+    checkCancelled();
+    // A host can be loaded again after stop(). New mounts get a fresh lifetime;
+    // already stopped providers keep their captured aborted signal.
+    if (this._manifestAssetAbort && this._manifestAssetAbort.signal.aborted) {
+      this._manifestAssetAbort = new AbortController();
+      this._backgroundAssetJobs = [];
+      this._backgroundAssetsPromise = null;
+      this._backgroundAssetDeferred = 0;
+    }
     const vfs = this._helpCtx && this._helpCtx.vfs;
     if (!vfs) return;
     const concurrency = Math.max(1, options.concurrency || 6);
@@ -2788,15 +3961,45 @@ class WineAssembly {
     const failures = [];
     const assetLoads = new Map();
     const total = urls.length;
+    const declarations = new Map();
+    for (const item of urls) {
+      if (!item || typeof item !== 'object' || item.loadMode === undefined) continue;
+      if (!['required', 'lazy', 'background'].includes(item.loadMode)) throw new Error('Invalid asset loadMode: ' + item.loadMode);
+      if (item.loadMode === 'required' && item.optional) throw new Error('Required manifest asset cannot be optional: ' + item.url);
+      if (!Number.isSafeInteger(item.size) || item.size < 0) throw new Error('Invalid manifest size: ' + item.url);
+      if (item.loadMode !== 'required' && (item.decodeImage || item.preloadRanges)) throw new Error('Lazy manifest cannot require synchronous image decode or preload ranges: ' + item.url);
+      const identity = item.loadMode + ':' + item.size;
+      if (declarations.has(item.url) && declarations.get(item.url) !== identity) throw new Error('Conflicting manifest declarations: ' + item.url);
+      declarations.set(item.url, identity);
+    }
+    // The launch window's listener and Cancel, passed by the launch that owns
+    // this file list (lib/browser-shell.js); internal lists such as the boot
+    // fonts are not the app's download and are not reported.
+    // The __bundle prefetch below runs beside the per-file workers: a file it
+    // carries waits for it, everything else is fetched at once. Each bundled
+    // file is consumed once.
+    let bundledUrls = new Set();
+    let bundled = Promise.resolve(new Map());
     const fetchWithRetry = async (url) => {
+      if (bundledUrls.has(url)) {
+        bundledUrls.delete(url);
+        const pre = (await bundled).get(url);
+        if (pre) return pre;
+      }
+      // One id for every attempt, so the launch window shows one file being
+      // retried rather than a failed file and a new one.
+      const transferId = ++WineAssembly._transferSeq;
       for (let attempt = 0; ; attempt++) {
+        checkCancelled();
         try {
-          return await WineAssembly.fetchAssetBytes(url);
+          return await WineAssembly.fetchAssetBytes(url, { ...transferOpts, transferId });
         } catch (error) {
+          if (transferOpts.signal && transferOpts.signal.aborted) throw error;
           const reason = String(error && error.message || error);
           const http = reason.match(/HTTP (\d{3})$/);
           const retryable = (!http || [408, 429].includes(Number(http[1])) ||
             Number(http[1]) >= 500) && !/missing .*\.part\d+|out of memory/i.test(reason);
+          if (error && typeof error === 'object') error.attempts = attempt + 1;
           if (!retryable || attempt >= 2) throw error;
           // Mobile Safari sometimes drops a LAN response while several large
           // game archives are being loaded. Retry only that file, leaving
@@ -2812,19 +4015,101 @@ class WineAssembly {
       const explicit = (typeof item === 'object') ? item.vfsPath : null;
       const explicitPaths = (typeof item === 'object' && Array.isArray(item.vfsPaths)) ? item.vfsPaths : null;
       try {
+        checkCancelled();
         // Keep large read-only archives on the server. The VFS parks a guest
         // read on a cache miss and fetches only the needed HTTP byte range.
         // Duplicate URL aliases share one load and one cache.
-        const useRange = !!(item && item.httpRange && typeof window !== 'undefined' &&
-          window.byteProvider && vfs.setProviderFile);
+        const sizedRange = !!(item && ['lazy', 'background'].includes(item.loadMode));
+        const rangeAvailable = typeof window !== 'undefined' && window.byteProvider && vfs.setProviderFile;
+        if (sizedRange && !rangeAvailable) throw new Error('Manifest requires range-capable VFS: ' + url);
+        const useRange = !!(rangeAvailable && (sizedRange || (item && item.httpRange && item.loadMode !== 'required')));
         const key = `${useRange ? 'range' : 'bytes'}:${url}`;
         if (!assetLoads.has(key)) {
           assetLoads.set(key, (async () => {
             if (useRange) {
               try {
-                const provider = await window.byteProvider.HttpRangeProvider.open(url);
-                return { provider: window.byteProvider.cached(provider) };
+                if (sizedRange && (!this._manifestAssetAbort || this._manifestAssetAbort.signal.aborted)) this._manifestAssetAbort = new AbortController();
+                const lifetimeSignal = sizedRange ? this._manifestAssetAbort.signal : null;
+                const rangeOptions = {
+                  validateRange: sizedRange,
+                  // Only launch-time discovery belongs to this AbortSignal.
+                  // The provider retains this adapter for later gameplay GETs;
+                  // those must remain usable after the launch controller ends.
+                  fetch: (source, init = {}) => {
+                    if (init.method === 'HEAD') {
+                      checkCancelled();
+                      return fetch(source, { ...init, signal: transferOpts.signal });
+                    }
+                    return fetch(source, sizedRange ? { ...init, signal: lifetimeSignal } : init);
+                  },
+                };
+                // A stat-verified manifest already knows the length. Mount it
+                // synchronously without a HEAD for every asset in the tree.
+                // An httpRange entry that carries its size (lib/app-files.js
+                // default for every streamed file) mounts the same way, no
+                // HEAD -- thousands of small files would otherwise cost a
+                // HEAD each -- as long as it is not over one release part
+                // (larger files may be published as name.partNNN, which only
+                // the HEAD path discovers). Without Range support its first
+                // read takes the whole body (acceptWhole), once.
+                const sizedHttpRange = !sizedRange && item && item.httpRange === true &&
+                  Number.isSafeInteger(item.size) && item.size >= 0 &&
+                  item.size <= WineAssembly.ASSET_PART_SIZE && !item.preloadRanges;
+                const provider = sizedRange
+                  ? new window.byteProvider.HttpRangeProvider(url, item.size, rangeOptions)
+                  : sizedHttpRange
+                    ? new window.byteProvider.HttpRangeProvider(url, item.size, { ...rangeOptions, acceptWhole: true })
+                    : await WineAssembly._openRangeProvider(url, rangeOptions);
+                checkCancelled();
+                // One cache shape for every streamed file: 1MB chunks, and
+                // read-ahead/prefetch only while reads are sequential
+                // (lib/byte-provider.js ChunkCache), bounded per file.
+                const cache = window.byteProvider.cached(provider);
+                if (item.loadMode === 'background') {
+                  if (!this._backgroundAssetJobs) this._backgroundAssetJobs = [];
+                  if (this._backgroundAssetJobs.length < 8) this._backgroundAssetJobs.push({url, cache});
+                  else this._backgroundAssetDeferred = (this._backgroundAssetDeferred || 0) + 1;
+                }
+                // Game data on the server: a parked read of it gets the
+                // in-game wait window and Retry (see _fillParkedRead).
+                cache.gameData = true;
+                if (item.preloadRanges) {
+                  // Some of this file is read where the guest cannot park
+                  // (Diablo: Storm's UI art, read inside a synchronous
+                  // WM_INITDIALOG). Those measured ranges are part of the
+                  // launch and stay resident; the rest streams in play.
+                  let ranges = null;
+                  try {
+                    ranges = window.byteProvider.preloadRangesFor(item.preloadRanges, provider.size);
+                  } catch (error) {
+                    // Measured on other bytes: the ranges would pin the wrong
+                    // data, so take the whole file, as before ranges existed.
+                    console.warn(`[files] ${url}: ${error.message}; loading the whole file`);
+                  }
+                  if (!ranges) return { data: await fetchWithRetry(url) };
+                  const transfer = WineAssembly._beginTransfer(url,
+                    { ...transferOpts, transferId: ++WineAssembly._transferSeq });
+                  try {
+                    const done = await cache.preload(ranges, {
+                      signal: transferOpts.signal,
+                      concurrency: 4,
+                      onProgress: ({ loaded, total }) => transfer.emit('progress', loaded, total, 'network'),
+                    });
+                    transfer.emit('done', done.bytes, done.bytes, 'network');
+                  } catch (error) {
+                    if (error && typeof error === 'object' && error.name !== 'AbortError') {
+                      error.isDownloadError = true;
+                      if (!error.assetUrl) error.assetUrl = url;
+                    }
+                    transfer.emit('error', transfer.loaded, null, null, error);
+                    throw error;
+                  }
+                  checkCancelled();
+                }
+                return { provider: cache };
               } catch (error) {
+                checkCancelled();
+                if (sizedRange) throw error; // Never silently turn lazy metadata into eager downloads.
                 // A static host without Range support keeps the eager path.
                 if (!/does not advertise Accept-Ranges|HEAD .* → (?:404|405|501)/.test(
                   String(error && error.message))) throw error;
@@ -2834,25 +4119,35 @@ class WineAssembly {
           })());
         }
         const asset = await assetLoads.get(key);
-        const data = asset.data;
+        checkCancelled();
+        let data = asset.data;
+        if (typeof item === 'object' && item.iniSet) {
+          // Registry INI edits; test/run.js applies the same helper.
+          const appFiles = typeof window !== 'undefined' ? window.appFiles : null;
+          if (!appFiles || !data) throw new Error('iniSet needs lib/app-files.js and an eager file: ' + url);
+          data = appFiles.applyIniSet(data instanceof Uint8Array ? data : new Uint8Array(data), item.iniSet);
+        }
         const decodedImage = (typeof item === 'object' && item.decodeImage)
           ? await this._decodeMountedImage(data, url)
           : null;
+        checkCancelled();
         const addFile = (rawPath) => {
+          checkCancelled();
           let vfsPath = String(rawPath).toLowerCase().replace(/\//g, '\\');
           if (!/^[a-z]:/.test(vfsPath)) vfsPath = 'c:\\' + vfsPath.replace(/^\\+/, '');
           // Also register the drive root and every parent directory so CD
           // scans can chdir to D:\ and GetFileAttributes(dir) sees directories.
           vfs.ensureParentDirs(vfsPath);
-          if (asset.provider) vfs.setProviderFile(vfsPath, { provider: asset.provider });
-          else vfs.files.set(vfsPath, { data, attrs: 0x20, decodedImage });
+          const name = String(rawPath).replace(/^.*[\\/]/, '');
+          if (asset.provider) vfs.setProviderFile(vfsPath.slice(0, vfsPath.lastIndexOf('\\') + 1) + name, { provider: asset.provider });
+          else vfs.files.set(vfsPath, { data, attrs: 0x20, decodedImage, name });
         };
         if (explicitPaths && explicitPaths.length) {
           for (const p of explicitPaths) addFile(p);
         } else if (explicit) {
           addFile(explicit);
         } else {
-          addFile('c:\\' + url.replace(/^.*[\\\/]/, '').toLowerCase());
+          addFile('c:\\' + url.replace(/^.*[\\\/]/, ''));
         }
         // A font an app ships was put in the Windows font directory by its
         // installer on a real machine, and that is the only reason an app
@@ -2868,25 +4163,69 @@ class WineAssembly {
         }
         loaded++;
       } catch (error) {
-        failed++;
-        failures.push({ url, reason: String(error && error.message || error) });
+        // Cancel is not a missing file: stop the whole list.
+        if (transferOpts.signal && transferOpts.signal.aborted) throw error;
+        // {optional: true}: a component a real install may or may not have
+        // put there (Civ2's Indeo codec). Its absence is the app's to handle,
+        // so it neither fails a requiredFiles launch nor counts as a failure.
+        if (typeof item === 'object' && item && item.optional) {
+          console.log(`[files] optional ${url} not loaded: ${error && error.message || error}`);
+        } else {
+          failed++;
+          failures.push({ url, required: item && item.loadMode === 'required', reason: String(error && error.message || error),
+            attempts: (error && error.attempts) || 1, error });
+        }
       } finally {
         if (options.onProgress) options.onProgress({ loaded, failed, total, url });
       }
     };
 
+    // The files that will be fetched whole (no range mount, no preloaded
+    // ranges) go out first as a few __bundle requests; see _prefetchBundled.
+    // ?no-bundle is the control arm.
+    {
+      const rangeCapable = typeof window !== 'undefined' && window.byteProvider && vfs.setProviderFile;
+      const noBundle = typeof location !== 'undefined' && /[?&]no-bundle(?:[=&]|$)/.test(location.search);
+      const pageHref = typeof location !== 'undefined' ? location.href : null;
+      const whole = new Map();
+      for (const item of noBundle ? [] : urls) {
+        const url = typeof item === 'string' ? item : item && item.url;
+        const name = WineAssembly.bundleName(url, pageHref);
+        if (!name || whole.has(name)) continue;
+        const sizedRange = !!(item && ['lazy', 'background'].includes(item.loadMode));
+        const range = !!(rangeCapable && (sizedRange || (item && item.httpRange && item.loadMode !== 'required')));
+        if (!range && !(item && item.preloadRanges)) whole.set(name, url);
+      }
+      bundledUrls = new Set(whole.values());
+      bundled = WineAssembly._prefetchBundled(
+        [...whole].map(([name, url]) => ({ name, url })), transferOpts).catch(() => new Map());
+    }
     const workers = Array.from({ length: Math.min(concurrency, total) }, async () => {
       while (next < total) {
+        checkCancelled();
         const item = urls[next++];
         await loadOne(item);
       }
     });
-    await Promise.all(workers);
-    if (failed && options.required) {
+    // A rejection is not proof that sibling HEAD/decode work has unwound.
+    // Do not let callers clean up the instance while another worker can still
+    // resume and touch its VFS. Post-await guards above prevent late mounts.
+    const settled = await Promise.allSettled(workers);
+    checkCancelled();
+    const rejected = settled.find(result => result.status === 'rejected');
+    if (rejected) throw rejected.reason;
+    if (failed && (options.required || failures.some(failure => failure.required))) {
       const details = failures.slice(0, 5).map(({ url, reason }) =>
         `${url}: ${reason}`).join('; ');
       const more = failures.length > 5 ? `; ${failures.length - 5} more` : '';
-      throw new Error(`failed to load ${failed} of ${total} data files: ${details}${more}`);
+      const error = new Error(`failed to load ${failed} of ${total} data files: ${details}${more}`);
+      const first = failures[0];
+      error.isDownloadError = !!(first.error && first.error.isDownloadError);
+      error.assetUrl = first.url;
+      error.attempts = first.attempts;
+      error.downloadReason = WineAssembly._downloadReason(first.error || first.reason);
+      error.failedFiles = failures.length;
+      throw error;
     }
   }
 
@@ -2912,7 +4251,7 @@ class WineAssembly {
       if (typeof item === 'string') {
         let bytes;
         try {
-          bytes = await WineAssembly.fetchAssetBytes(item);
+          bytes = await WineAssembly.fetchAssetBytes(item, this._launchTransfer || {});
         } catch (_) {
           console.error('Failed to fetch DLL:', item);
           return null;
@@ -2949,6 +4288,16 @@ class WineAssembly {
     } else {
       opts.advanceGuestTime = ms => this._advanceGuestTickMs(ms,
         this.hostCtx && this.hostCtx.sharedAudio);
+      // A LoadLibraryA from inside a DllMain (UBER.DLL loading Myth's
+      // modules\TCPIP.DLL) must be serviced in place: callDllMain is
+      // synchronous. Only resident bytes qualify; anything needing a fetch
+      // falls back to the async yield path as before.
+      const onLoadLibraryYield = ex => ProcessBoot.serviceLoadLibraryYieldSync({
+        exports: ex, memoryBuffer: this.memory.buffer, resourceHost: this, log: console.log,
+        advanceGuestTime: opts.advanceGuestTime, onLoadLibraryYield,
+        findDllSync: (fileName, fullName) => this._findDllBytesSync(fileName, fullName),
+      });
+      opts.onLoadLibraryYield = onLoadLibraryYield;
       results = _loadDlls(this.instance.exports, this.memory.buffer, exeBytes, readyConfigs, console.log, opts);
     }
     // Where a `module+0xVA` probe in the browser gets its arithmetic from. The
@@ -2960,7 +4309,7 @@ class WineAssembly {
     for (let i = 0; results && i < results.length; i++) {
       const r = results[i];
       if (!r || !r.name) continue;
-      const entry = { loadAddr: r.loadAddr >>> 0, origBase: r.origBase >>> 0 };
+      const entry = { loadAddr: r.loadAddr >>> 0, origBase: r.origBase >>> 0, generation: r.generation >>> 0 };
       this.moduleBases[String(r.name).toLowerCase()] = entry;
       this.moduleBases[String(r.name).toLowerCase().replace(/\.[^.]+$/, '')] = entry;
     }
@@ -2978,6 +4327,26 @@ class WineAssembly {
   // VFS the app mounted, whatever was already fetched for it, then the served
   // directories. The CLI answers the same question against the filesystem —
   // the yield pumps themselves are shared (lib/process-boot.js).
+  // Synchronous subset of _findDllBytes: an exact VFS entry whose bytes are
+  // already resident, or a DLL this page already loaded. Anything else returns
+  // a Promise, which tells serviceLoadLibraryYieldSync to leave the yield for
+  // the async path.
+  _findDllBytesSync(fileName, fullName) {
+    const vfs = this._helpCtx && this._helpCtx.vfs;
+    if (vfs && typeof vfs._resolvePath === 'function') {
+      let resolved = '';
+      try { resolved = vfs._resolvePath(fullName); } catch (_) {}
+      const entry = resolved && vfs.files.get(resolved);
+      if (entry && !entry._provider) {
+        try { if (entry.data) return entry.data; } catch (_) {}
+      }
+    }
+    if (this._loadedDllBytesByName && this._loadedDllBytesByName[fileName]) {
+      return this._loadedDllBytesByName[fileName];
+    }
+    return Promise.resolve(null);
+  }
+
   async _findDllBytes(fileName, fullName, { exeDir = false, vfsPaths = null } = {}) {
     const ctx = this._helpCtx;
     // Resolve a bare LoadLibrary name exactly as the guest filesystem does
@@ -3108,27 +4477,7 @@ class WineAssembly {
   async _handleLoadLibraryThreaded(targetLink) {
     const gw = this.guestWorker;
     const link = targetLink || gw.link;
-    const nameWA = (await link.callExport('get_loadlib_name')) >>> 0;
-    let dllName = '';
-    if (nameWA) {
-      const mem = new Uint8Array(this.memory.buffer);
-      for (let i = 0; i < 260 && mem[nameWA + i]; i++) dllName += String.fromCharCode(mem[nameWA + i]);
-    }
-    const { fileName, dllBytes } = dllName ? await this._resolveDllBytes(dllName) : { fileName: '', dllBytes: null };
-    if (!dllBytes) {
-      if (fileName) console.error(`[LoadLibrary] DLL not found: ${fileName}`);
-      await gw.loadLibrary(null, fileName, link);
-      return;
-    }
-    const res = await gw.loadLibrary(dllBytes, fileName, link);
-    if (res && res.loadAddr) {
-      console.log(`[LoadLibrary] ${fileName} loaded at 0x${(res.loadAddr >>> 0).toString(16)} (worker)`);
-      this.registerModule(fileName, res.loadAddr);
-      this._registerDllBitmapResources(fileName, dllBytes, res.loadAddr);
-    }
-    // Same per-instance-counter gap as the COM path below: a module this worker
-    // just mapped is invisible to every main-thread host import that walks the
-    // DLL table until main's count catches up.
+    await gw.serviceDllYield(link);
     await this._publishLinkLoaderState(link);
   }
 
@@ -3137,10 +4486,19 @@ class WineAssembly {
   // address inside a module is always above its base and below the next one's.
   // Answering with the wrong module is still better than answering with a bare
   // number, and being explicit about that is the point of the name it prints.
-  registerModule(name, base) {
+  registerModule(name, base, generation = 0) {
     if (!name || !base) return;
-    this.moduleMap.push({ name, base: base >>> 0 });
+    this.moduleMap = this.moduleMap.filter(item => item.base !== (base >>> 0));
+    this.moduleMap.push({ name, base: base >>> 0, generation: generation >>> 0 });
     this.moduleMap.sort((a, b) => a.base - b.base);
+  }
+
+  unregisterDllModule(row) {
+    this.moduleMap = (this.moduleMap || []).filter(item =>
+      item.base !== (row.loadAddr >>> 0) || item.generation !== row.generation);
+    for (const [key, item] of Object.entries(this.moduleBases || {})) {
+      if (item.loadAddr === (row.loadAddr >>> 0) && item.generation === row.generation) delete this.moduleBases[key];
+    }
   }
 
   describeAddr(addr) {
@@ -3238,7 +4596,7 @@ class WineAssembly {
 
   _publishWorkerDllCount(count) {
     const main = this.instance && this.instance.exports;
-    if (!main || !main.get_dll_count) return;
+    if (!main || !main.get_dll_count || main.has_shared_dll_registry?.()) return;
     // Monotonic for the same reason as the thunk cursor above.
     if ((count | 0) <= (main.get_dll_count() | 0)) return;
     const set = main.set_dll_count || main.test_set_dll_count;
@@ -3363,7 +4721,23 @@ class WineAssembly {
   // repaint had the opposite fault: a crash left the dead app's last frame on
   // screen. Repainting last, once, fixes both.
   stop(options = {}) {
+    // Child processes this guest started (process_spawn) end with it.
+    if (this._stopChildren) { const stopKids = this._stopChildren; this._stopChildren = null; stopKids(); }
+    if (this._manifestAssetAbort) this._manifestAssetAbort.abort();
+    if (this._backgroundAssetJobs) this._backgroundAssetJobs.length = 0;
+    // Put the final frame on the canvas before stepping ends, then drop the
+    // pending rAF: a scheduled frame holds this host alive, and nothing will
+    // present for a stopped host again. A dirty DirectDraw surface counts even
+    // with no rAF armed: a slice that ends in a trap or an exit calls stop()
+    // before it reaches its boundary, so nothing has queued that last frame.
+    if (this._presentRaf || this._presentFrameDue || this._dxDirty || this._dxLockDeferred) {
+      try { this._presentNow(); } catch (_) {}
+    }
+    this._cancelPresentFrame();
     this.running = false;
+    if (this._gameWait) this._gameWait.reset();
+    this.hostCtx?.retireWaveCallbacks?.();
+    this._waveMainWaitSaved=null;
     // A pending parked-sleep timeout and the visibilitychange listener both
     // close over this WineHost, and a WineHost owns a 512MB shared memory.
     // Same leak the DX rAF chain had.
@@ -3380,6 +4754,7 @@ class WineAssembly {
     // loop that restarted itself on the second launch would be back to
     // holding a dead host forever.
     this._stopped = true;
+    this._stopGuestRuntime();
     this._stopPerfCounterPoll();
     this._cleanupAudio();
     // A deferred last-window teardown has nothing left to finish, and leaving
@@ -3392,6 +4767,10 @@ class WineAssembly {
       if (this._rendererInputPendingPublisher && this.renderer._inputPendingPublishers) {
         this.renderer._inputPendingPublishers.delete(this._rendererInputPendingPublisher);
         this._rendererInputPendingPublisher = null;
+      }
+      if (this._rendererMousePublisher && this.renderer._mousePointPublishers) {
+        this.renderer._mousePointPublishers.delete(this._rendererMousePublisher);
+        this._rendererMousePublisher = null;
       }
       if (this._rendererFocusPublisher && this.renderer._guestWorkerFocusPublishers) {
         this.renderer._guestWorkerFocusPublishers.delete(this._rendererFocusPublisher);
@@ -3451,6 +4830,29 @@ class WineAssembly {
     }
   }
 
+  _stopGuestRuntime() {
+    // Stop producers now, but preserve scheduler/instance references until
+    // the current guest slice unwinds and deferred memory release runs.
+    if (this._guestRuntimeStopPromise) return this._guestRuntimeStopPromise;
+    const backend = this.threadManager && this.threadManager.workerBackend;
+    const candidates = new Set([backend, this._guestWorkerStarting, this.guestWorker]);
+    const retirements = [];
+    for (const worker of candidates) {
+      if (!worker || typeof worker.stop !== 'function') continue;
+      try { retirements.push(Promise.resolve(worker.stop())); }
+      catch (error) { retirements.push(Promise.reject(error)); }
+    }
+    if (!retirements.length) return null;
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Guest worker retirement timed out')),
+        this._guestRuntimeRetirementTimeoutMs ?? 10000);
+    });
+    this._guestRuntimeStopPromise = Promise.race([Promise.all(retirements), deadline]).then(
+      () => ({ ok: true }), error => ({ ok: false, error })).finally(() => clearTimeout(timer));
+    return this._guestRuntimeStopPromise;
+  }
+
   // Every launch commits a 512MB guest memory (`initial === maximum` and
   // `shared`, so it is all resident the moment it is instantiated). Nothing
   // reclaims that unless the WebAssembly.Memory itself becomes unreachable --
@@ -3467,6 +4869,84 @@ class WineAssembly {
   // they still point at us: a later app has already overwritten them with its
   // own and must not be unwired by a straggling stop().
   _releaseGuestMemory() {
+    const ownsGuestWorker = !!(this.guestWorker || this._guestWorkerStarting
+      || (this.threadManager && this.threadManager.workerBackend));
+    if (ownsGuestWorker || this._guestRuntimeStopPromise) {
+      const retirement = this._stopGuestRuntime();
+      if (this._guestRuntimeRetirementError) return;
+      if (!this._guestRuntimeRetired) {
+        if (!this._guestRuntimeReleaseWait) {
+          this._guestRuntimeReleaseWait = retirement.then(result => {
+            this._guestRuntimeReleaseWait = null;
+            if (!result.ok) {
+              this._guestRuntimeRetirementError = result.error;
+              this.logToUI(`[threads] guest worker retirement failed: ${result.error && result.error.message}`);
+              return;
+            }
+            this._guestRuntimeRetired = true;
+            if (this._stopped) this._releaseGuestMemory();
+          });
+        }
+        return;
+      }
+    }
+    if (this._renderWorkerManagerReady && !this._renderWorkerRetired) {
+      if (!this._renderWorkerRetirement) {
+        // Keep the module, guest memory and allocator owner alive until every
+        // API endpoint is closed and the ONE process render heap is returned.
+        this._renderWorkerRetirement = Promise.resolve().then(async () => {
+          const errors = [];
+          let manager = this._renderWorkerManager;
+          const preparation = (async () => {
+            if (this.hostCtx && this.hostCtx.flushGLCommands && !this._glCommandsRetired) {
+              try { await this.hostCtx.flushGLCommands(this.instance && this.instance.exports); }
+              catch (error) { errors.push(error); }
+              finally { this._glCommandsRetired = true; }
+            }
+            const ctx = this.hostCtx;
+            // Defer invocation as well as awaiting: one synchronous close error
+            // must not prevent the remaining API endpoints from retiring.
+            const retirements = ['closeGlide', 'closeD3DRender', 'closeGLRender', 'closeD3DIMRender']
+              .filter(name => ctx && typeof ctx[name] === 'function')
+              .map(name => Promise.resolve().then(() => ctx[name]()));
+            const results = await Promise.allSettled(retirements);
+            for (const result of results) if (result.status === 'rejected') errors.push(result.reason);
+            try { manager = await this._renderWorkerManagerReady; }
+            catch (error) { errors.push(error); }
+          })();
+          let preparationTimer;
+          try {
+            await Promise.race([preparation, new Promise((_, reject) => {
+              preparationTimer = setTimeout(() => reject(new Error('Render endpoint drain timed out')),
+                this._renderWorkerPreparationTimeoutMs ?? 10000);
+            })]);
+          } catch (error) {
+            errors.push(error);
+            manager ||= this._renderWorkerManager;
+            // No returned manager means initialization may still create one.
+            // Retain its allocator owner instead of freeing live memory.
+            if (!manager) throw error;
+          } finally { clearTimeout(preparationTimer); }
+          // A rejected factory has no worker/native heap to retire. Once a
+          // manager exists, failed retirement must retain the allocator owner.
+          for (const error of errors) this.logToUI(`[render] cleanup reported: ${error && error.message}`);
+          if (manager) await manager.stop();
+          this._renderWorkerRetired = true;
+          this._d3dRenderRetired = true;
+          this._renderWorkerManager = null;
+          this._renderWorkerManagerReady = null;
+          if (this._stopped) this._releaseGuestMemory();
+        }).catch(error => {
+          this._renderWorkerRetirementError = error;
+          this.logToUI(`[render] shared worker retirement failed: ${error && error.message}`);
+        });
+      }
+      return;
+    }
+    if (this.hostCtx && this.hostCtx.closeGlide) {
+      try { this.hostCtx.closeGlide(); }
+      catch (error) { this.logToUI(`[Glide] teardown failed: ${error && error.message}`); }
+    }
     // The final non-barrier GL calls still own bytes in their encoder range.
     // Drain while the instance and shared memory are both reachable; replay is
     // synchronous, so return also closes the range's host-side lifetime.
@@ -3510,6 +4990,8 @@ class WineAssembly {
     this._hostImports = null;
     // Holds the same memory and instance plus one per worker thread.
     this.threadManager = null;
+    this.guestWorker = null;
+    this._guestWorkerStarting = null;
     this.instance = null;
     this.memory = null;
     this._wasmModule = null;
@@ -3545,16 +5027,58 @@ class WineAssembly {
   }
 
   async _createD3DRenderWorker() {
+    return this._createRenderWorkerConsumer({ api: 'neutral', backend: 'software' });
+  }
+
+  _getRenderWorkerManager() {
+    if (this._renderWorkerRetired || this._stopped) return Promise.reject(new Error('Render process is stopped'));
+    if (this._renderWorkerManagerReady) return this._renderWorkerManagerReady;
     const memory = this.memory, module = this._wasmModule, e = this.instance && this.instance.exports;
-    if (!memory || !module || !e || typeof D3DCommandStream === 'undefined')
-      throw new Error('D3D9 software worker runtime is unavailable');
-    const response = await fetch(WineAssembly.versionedUrl('lib/host-import-sigs.generated.json'));
-    if (!response.ok) throw new Error(`render worker signatures HTTP ${response.status}`);
-    const sigs = (await response.json()).sigs;
-    const worker = new Worker(WineAssembly.versionedUrl('lib/d3d-render-worker.js'));
-    return new D3DCommandStream.WorkerConsumer(worker, {module,memory,sigs,
-      imageBase:e.get_image_base() >>> 0, sourceVersion:globalThis.WINE_SOURCE_VERSION,
-      reclaimHeap: head => e.d3d_render_adopt_free_list(head)});
+    this._renderWorkerManagerReady = Promise.resolve().then(async () => {
+      if (!memory || !module || !e || typeof RenderWorker === 'undefined')
+        throw new Error('Shared render Worker runtime is unavailable');
+      const response = await fetch(WineAssembly.versionedUrl('lib/host-import-sigs.generated.json'));
+      if (!response.ok) throw new Error(`render worker signatures HTTP ${response.status}`);
+      const sigs = (await response.json()).sigs;
+      if (this._stopped || this._renderWorkerRetired) throw new Error('Render process stopped during initialization');
+      return this._renderWorkerManager = new RenderWorker.Manager({ module, memory, sigs,
+        workerUrl: WineAssembly.versionedUrl('lib/d3d-render-worker.js'),
+        imageBase: e.get_image_base() >>> 0, sourceVersion: globalThis.WINE_SOURCE_VERSION,
+        reclaimHeap: head => e.d3d_render_adopt_free_list(head) });
+    });
+    return this._renderWorkerManagerReady;
+  }
+
+  async _createRenderWorkerEndpoint(options) {
+    const manager = await this._getRenderWorkerManager();
+    const endpoint = manager.createEndpoint(options);
+    await endpoint.ready;
+    return endpoint;
+  }
+
+  async _createRenderWorkerConsumer(options) {
+    if (typeof D3DCommandStream === 'undefined') throw new Error('Render command stream is unavailable');
+    return new D3DCommandStream.WorkerConsumer(await this._createRenderWorkerEndpoint(options));
+  }
+
+  // A cooperative main thread parked on a lazy ReadFile (io_wait, yield 12):
+  // true while it must stay parked. lib/main-io-wait.js runs the fill in the
+  // background so worker threads, timers and the audio refill keep going while
+  // only the main guest thread waits (awaiting it inside the step froze the
+  // whole scheduler; Heroes III's DirectSound ring looped). When the fill lands
+  // the yield clears and the identical ReadFile re-enters for the cache hit.
+  _pollMainIo() {
+    if (!this._mainIo) {
+      const api = (typeof window !== 'undefined' && window.mainIoWait) ||
+        (typeof require === 'function' ? require('./lib/main-io-wait.js') : null);
+      if (!api) throw new Error('lib/main-io-wait.js is not loaded (index.html script list)');
+      this._mainIo = api.createMainIoWait({
+        fill: (vfs, pending) => this._fillParkedRead(vfs, pending),
+        onDone: () => this._wakeStep(),
+        onError: (e, path) => this.logToUI(`[io] ${path}: ${e && e.message}`),
+      });
+    }
+    return this._mainIo.poll(this.instance.exports, this._helpCtx && this._helpCtx.vfs);
   }
 
   _beginD3DRenderWait(token) {
@@ -3680,12 +5204,24 @@ class WineAssembly {
         self.guestWorker.broker.publish({
           inputPending: depth | 0,
           inputWake: !!wake,
+          keys: self._workerKeyBitmap(),
         });
       };
       if (!self.renderer._inputPendingPublishers) {
         self.renderer._inputPendingPublishers = new Set();
       }
       self.renderer._inputPendingPublishers.add(self._rendererInputPendingPublisher);
+    }
+    if (self.renderer && self.guestWorker && self.guestWorker.broker &&
+        !self._rendererMousePublisher) {
+      self._rendererMousePublisher = (x, y) => {
+        self.guestWorker.broker.publish({ mouseX: x, mouseY: y });
+      };
+      if (!self.renderer._mousePointPublishers) {
+        self.renderer._mousePointPublishers = new Set();
+      }
+      self.renderer._mousePointPublishers.add(self._rendererMousePublisher);
+      self._rendererMousePublisher(self.renderer._mouseX || 0, self.renderer._mouseY || 0);
     }
     if (self.renderer && self.guestWorker && !self._rendererFocusPublisher) {
       self._rendererFocusPublisher = (wasm, hwnd) => {
@@ -3709,7 +5245,16 @@ class WineAssembly {
         ? window.WinePerf : null;
       if (perf) perf.stepBegin();
       try {
+        // A CreateThread from the preceding slice may still need its WASM
+        // instance. Finish that setup before resuming the creating thread:
+        // otherwise its timer/readiness deadline runs during worker startup.
+        if (self.threadManager && self.threadManager._pendingThreads?.length) {
+          await self.threadManager.spawnPending();
+          if (!self.running) return;
+        }
         self._beginGuestTickBatch();
+        await self._pumpWaveCallbacksAtBoundary();
+        if(!self.running) return;
         if (self.guestWorker.broker) {
           // The guest's message-wait resume runs inside the worker and needs to
           // know whether the renderer has input queued — that queue is here, so
@@ -3718,6 +5263,7 @@ class WineAssembly {
           self.guestWorker.broker.publish({
             tickMs: self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio),
             inputPending: q,
+            keys: self._workerKeyBitmap(),
           });
         }
         const configuredSteps = Math.max(1000, (self.stepsPerSlice | 0) || stepsPerSlice);
@@ -3747,14 +5293,133 @@ class WineAssembly {
           ? sync
           : Object.assign({}, sync || {}, { focusHwnd: pendingFocus | 0 });
         let r, threadsRun;
+        // Arm w: the step epoch. Threads keep their slice through short Sleeps
+        // until endStep() below; serial mode runs them after the main slice,
+        // so there would be nothing left to end it.
+        const Rpc = typeof GuestRpc !== 'undefined' ? GuestRpc : null;
+        const serial = typeof window !== 'undefined' && !!window.WINE_THREADS_SERIAL;
+        const localSleep = !!(Rpc && Rpc.endStepEpoch && self.memory && !serial && !self._frozen
+          && self.threadManager && self.threadManager.backend === 'worker' && self._schedArm('w'));
+        const freeRun = localSleep && self._schedArm('f');
+        const mainWaitArm = freeRun && self._schedArm('m');
+        if (self.threadManager) {
+          self.threadManager.workerFreeRun = freeRun;
+          self.threadManager.workerLocalSleep = localSleep
+            ? { epoch: Rpc.readStepEpoch(self.memory),
+                maxMs: freeRun ? WORKER_FREE_RUN_SLICE_MS : WORKER_LOCAL_SLEEP_MAX_MS }
+            : null;
+        }
+        // Free-running threads are not ended by the step at all.
+        let stepEnded = !localSleep || freeRun;
+        const endStep = () => {
+          if (stepEnded) return;
+          stepEnded = true;
+          Rpc.endStepEpoch(self.memory);
+        };
         const runMain = async () => {
+          if (self.guestWorker.link.threadSendDepth > 0)
+            return { threadSendPending: true, blocks: 0, ms: 0 };
+          if(self.guestWorker.link._waveOffer) return {...self._workerLastSlice,blocks:0,ms:0,waveOfferPending:true};
           const wait = self._d3dMainWait;
           if (wait) {
             if (!wait.done) return Object.assign({}, self._d3dParkedSlice, {blocks:0,ms:0});
             self._d3dMainWait = null; self._d3dParkedSlice = null;
             await self.guestWorker.callExport('clear_yield');
           }
-          return self.guestWorker.slice(steps, mainSync);
+          // A main thread parked on a lazy ReadFile (yield 12): its fill runs in
+          // the background (see the yield-12 branch below) and only this slice
+          // waits for it -- the step, the wave pump and the other threads go on.
+          const ioWait = self._workerMainIoWait;
+          if (ioWait) {
+            if (!ioWait.done) return Object.assign({}, ioWait.slice, { blocks: 0, ms: 0 });
+            self._workerMainIoWait = null;
+            await self.guestWorker.callExport('clear_yield');
+          }
+          // A main thread that suspended itself (yield 11) runs nothing until
+          // another thread resumes it; its threads keep their turns meanwhile.
+          const selfSuspended = self._workerMainSelfSuspend;
+          if (selfSuspended && await self._workerMainSelfSuspendParked()) {
+            return Object.assign({}, selfSuspended, { blocks: 0, ms: 0 });
+          }
+          // A main-thread Sleep(n) holds the guest's main thread until its
+          // deadline on the guest clock, exactly as checkMainYield does in
+          // cooperative mode. Its threads keep their turns meanwhile.
+          if (self._workerMainSleepUntil) {
+            if (self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio)
+                < self._workerMainSleepUntil) {
+              return Object.assign({}, self._workerLastSlice,
+                { blocks: 0, ms: 0, sleepYielded: false, sleepMs: 0 });
+            }
+            self._workerMainSleepUntil = 0;
+          }
+          // A main thread parked on an unsatisfied WaitFor* (yield 1) has
+          // nothing to run: its slice would return at once with the same
+          // yield. Poll the wait here, as sibling waits are polled
+          // (thread-manager _pollParkedWait), and post a slice only once it is
+          // satisfied. StarCraft's every file read is such a wait on Storm's
+          // read thread, and re-slicing it cost ~1700 empty round trips a
+          // second.
+          const parked = self._workerMainParkedWait;
+          if (parked && mainWaitArm) {
+            const done = self.threadManager ? self.threadManager.resolveMainWorkerWait(parked, { parked: true }) : null;
+            if (!done) return Object.assign({}, parked, { blocks: 0, ms: 0, waitPolled: true });
+            self._workerMainParkedWait = null;
+            await self.guestWorker.link.completeWait(done.result, done.waitStackBytes);
+          }
+          // A vblank the page delivered while the main thread sat in yield 13
+          // rides on this slice; the worker ticks and clears it before run.
+          let sliceSync = mainSync;
+          if (self._workerVblankDue) {
+            self._workerVblankDue = false;
+            sliceSync = Object.assign({}, mainSync || {}, { vblank: 1 });
+          }
+          // asyncMultimediaTimer: the Worker serves timeSetEvent between its
+          // own run quanta (lib/guest-worker.js runServingMmTimers); the page
+          // cannot, because it never holds the guest's registers.
+          if (self.asyncMultimediaTimer) {
+            sliceSync = Object.assign({}, sliceSync || {}, { mmTimer: 1 });
+          }
+          const slice = await self.guestWorker.slice(steps, sliceSync);
+          if (slice.threadSendPending) return slice;
+          if(self._waveMainWaitSaved && !slice.waveCallbackActive) {
+            if(self.threadManager) Object.assign(self.threadManager._mainWaitState || (self.threadManager._mainWaitState={}),self._waveMainWaitSaved);
+            self._waveMainWaitSaved=null;
+          }
+          self._workerLastSlice = slice;
+          // The worker reports a Sleep it yielded for; nothing else will make
+          // the guest wait it out. Ignored, Sleep(1001) lasted one slice
+          // (~15ms): Moorhuhn 3 calibrates RDTSC across that Sleep, got 3 MHz
+          // for a 200 MHz counter, and its speed-hack watchdog exited the game.
+          if (slice && slice.sleepMs && !slice.trapped) {
+            self._workerMainSleepUntil =
+              self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio) + (slice.sleepMs >>> 0);
+          }
+          return slice;
+        };
+        // Arm w: the step ends when the main slice does. A main thread that is
+        // itself asleep ran nothing, so its threads get until its deadline
+        // (bounded) rather than one run each.
+        const runMainThenEnd = async () => {
+          try {
+            const slice = await runMain();
+            // This slice may have set what a parked sibling waits on (a job
+            // queued for a helper thread): start that thread now, not at the
+            // next step's scan.
+            if (mainWaitArm && slice && slice.yield === 1 && !slice.waitPolled && self.threadManager &&
+                self.threadManager.offerSatisfiedWaiters) {
+              self.threadManager.offerSatisfiedWaiters();
+            }
+            const until = self._workerMainSleepUntil;
+            if (!stepEnded && slice && !(slice.blocks | 0) && until) {
+              const left = until - self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio);
+              if (left > 0) {
+                await new Promise(res => setTimeout(res, Math.min(left, WORKER_MAIN_ASLEEP_HOLD_MS)));
+              }
+            }
+            return slice;
+          } finally {
+            endStep();
+          }
         };
         if (self.renderer && self.renderer.beginWorkerGuestSlice) {
           self.renderer.beginWorkerGuestSlice();
@@ -3763,6 +5428,9 @@ class WineAssembly {
         // step's time — see the mark below for why it cannot be r.ms.
         const perfRendezvousStart = perf ? performance.now() : 0;
         let perfRendezvousMs = 0;
+        // When the slices came back — the reference a GetMessage park's
+        // timer deadline is measured from (see the yield 7 branch).
+        let perfSliceDoneAt = 0;
         try {
           if (typeof window !== 'undefined' && window.WINE_THREADS_SERIAL) {
             // Diagnostic only: the same slices, one at a time. A bug that appears
@@ -3771,9 +5439,12 @@ class WineAssembly {
             r = await runMain();
             threadsRun = await runThreads();
           } else {
-            [r, threadsRun] = await Promise.all([runMain(), runThreads()]);
+            [r, threadsRun] = await Promise.all([runMainThenEnd(), runThreads()]);
           }
         } finally {
+          perfSliceDoneAt = WineAssembly._wallNow();
+          endStep();
+          if (self.threadManager) self.threadManager.workerLocalSleep = null;
           if (perf) perfRendezvousMs = performance.now() - perfRendezvousStart;
           if (self.renderer && self.renderer.endWorkerGuestSlice) {
             self.renderer.endWorkerGuestSlice();
@@ -3791,6 +5462,15 @@ class WineAssembly {
         if (!inputBurstSlice && ranBlocks >= steps * 0.75 && ranMs > 0) {
           const measured = Math.round((ranBlocks * 12 / ranMs) / 1000) * 1000;
           self._workerAdaptiveSteps = Math.max(1000, Math.min(configuredSteps, measured));
+        }
+        // Nothing ran this step while threads are still mid-slice: park until
+        // one of them finishes (or the main thread's Sleep is up) rather than
+        // spinning steps that each find everything busy.
+        self._workerIdleMs = 0;
+        if (freeRun && !(ranBlocks > 0) && !(threadsRun > 0)) {
+          const until = self._workerMainSleepUntil;
+          const left = until ? until - self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio) : 0;
+          self._workerIdleMs = left > 0 ? Math.min(left, WORKER_MAIN_ASLEEP_HOLD_MS) : 2;
         }
         self._workerFocusHwnd = r.focusHwnd | 0;
         if (self.threadManager) self.threadManager.publishWorkerThunkState(r);
@@ -3842,19 +5522,17 @@ class WineAssembly {
           self.stop({ repaint: false });
           return;
         }
-        const presentStart = perf ? performance.now() : 0;
         // Worker-hosted DirectDraw calls mark the same browser-side dirty flag
-        // as cooperative execution. Flush that frame at the slice boundary
-        // before compositing it; otherwise the Worker loop keeps repainting
-        // the last uploaded layer forever even while the guest updates the
-        // shared primary surface (AoE II's New Player screen is the visible
-        // case). Both cooperative scheduler paths do this at their matching
-        // boundaries below.
-        if (self._presentDxIfDirty) self._presentDxIfDirty();
-        if (self.renderer && self.renderer.flushRepaint) self.renderer.flushRepaint(true);
-        if (perf) perf.mark('present', performance.now() - presentStart);
+        // as cooperative execution. This slice boundary is where that frame
+        // becomes publishable; without it the Worker loop keeps showing the
+        // last uploaded layer forever even while the guest updates the shared
+        // primary surface (AoE II's New Player screen is the visible case).
+        // The upload itself waits for the display frame (see _presentNow),
+        // unless one already came due while this slice held publication.
+        // Both cooperative scheduler paths do the same at their boundaries.
+        self._presentAtBoundary(perf);
 
-        if (!r.eip && !r.yield) {
+        if (!r.threadSendPending && !r.eip && !r.yield) {
           self.logToUI(`--- Program exited (worker) --- ${self._exitSiteText()}`);
           self.stop({ repaint: false });
           return;
@@ -3867,7 +5545,12 @@ class WineAssembly {
         // (help_load) is named in thread-manager.js's map but is never set by
         // any WAT or JS path, so there is nothing to port for it. The fallback
         // below stays as a guard for anything added later.
-        if (r.yield === 1) {
+        if (r.waveOfferPending || r.threadSendPending) {
+          // The cached result describes the interrupted frame, not the current
+          // owning EIP/ESP. Never complete a wait or handle another old yield
+          // until the exact offer's accepted/not-admitted reply is known.
+          self._workerIdleMs=Math.max(self._workerIdleMs || 0,2);
+        } else if (r.yield === 1) {
           // A parked WaitForSingleObject/WaitForMultipleObjects. This used to
           // just clear the yield and let the guest re-poll, which is wrong in a
           // way that only shows up once a wait can actually be satisfied: $run
@@ -3876,14 +5559,35 @@ class WineAssembly {
           // wait drops them. Clearing instead leaked 12 bytes of guest stack per
           // wait, and Winamp died minutes later at EIP=0xffffffff — which is why
           // nothing caught it before guest threads ran in this mode.
-          const done = self.threadManager ? self.threadManager.resolveMainWorkerWait(r) : null;
-          if (done) await self.guestWorker.link.completeWait(done.result, done.waitStackBytes);
-          // Unsatisfied: leave the yield set. The next slice re-polls, and the
-          // worker's run() returns immediately while parked.
+          // runMain already polled a wait it found parked (waitPolled).
+          const done = r.waitPolled ? null
+            : self.threadManager ? self.threadManager.resolveMainWorkerWait(r) : null;
+          if (done) {
+            await self.guestWorker.link.completeWait(done.result, done.waitStackBytes);
+          } else {
+            // Unsatisfied: leave the yield set, and let runMain poll it on
+            // this thread from now on. Free-running, whatever satisfies it is
+            // most likely a sibling's slice (SetEvent), so park the step until
+            // one completes -- a short bound covers timeouts and page-side
+            // signals.
+            if (mainWaitArm) {
+              self._workerMainParkedWait = r;
+              self._workerIdleMs = Math.max(self._workerIdleMs, 2);
+            }
+          }
         } else if (r.yield === 7) {
           // The message-wait resume runs inside the worker at the top of each
           // slice, where the instance is. Nothing to do here — and specifically
           // not clear_yield, for the same reason as above.
+          //
+          // But do not re-poll straight away: that is the cooperative loop's
+          // _parkedSleepMs case, and without it an idle app in this mode ran
+          // a step (and ~30K blocks/s) forever where the cooperative one ran
+          // none. Park until the guest's next WM_TIMER, capped; input cancels
+          // the park through _wakeStep. Runnable guest threads bound it the
+          // same way they do there.
+          self._workerParkMain(Number.isFinite(r.timerDue) && r.timerDue >= 0
+            ? r.timerDue : WineAssembly.MAX_PARK_SLEEP_MS, perfSliceDoneAt);
         } else if (r.yield === 3) {
           await self._handleComDllLoadThreaded();
         } else if (r.yield === 5) {
@@ -3908,6 +5612,17 @@ class WineAssembly {
             wparam: r.sendWparam | 0, lparam: r.sendLparam | 0,
             postKind: r.sendPostKind | 0,
           });
+        } else if (r.yield === 17) {
+          // Main's message call stopped for a send a guest thread parked on
+          // it (guest-thread-host _awaitMainMessagePoint): deliver it now.
+          // While it runs main stays parked; the backend clears the yield.
+          // The worker scheduler's next round delivers the parked sends and
+          // clears 17 (ThreadManager yield-10 branch); with none parked any
+          // more, the message call just runs again.
+          const tm = self.threadManager;
+          if (!(tm && tm.hasDeferredMainSends && tm.hasDeferredMainSends())) {
+            await self.guestWorker.callExport('clear_yield');
+          }
         } else if (r.yield === 8) {
           await self.guestWorker.callExport('clear_yield');
           try { await self.guestWorker.callExport('vlan_pump'); } catch (_) {}
@@ -3917,31 +5632,37 @@ class WineAssembly {
         } else if (r.yield === 12) {
           // io_wait: ReadFile parked on a provider-backed VFS entry (mounted
           // zip/iso, dropped File, remote URL over Range). The brokered fs
-          // import already ran here on the main thread, so the pending-read
-          // record is ours to fill; clearing the yield re-enters the same call
-          // in the worker, which then takes the synchronous cache hit.
+          // import already ran here on the main thread, carrying guest thread
+          // ID 1. Clearing the yield retries that same worker's call.
+          //
+          // The fill runs in the background and only the guest main thread
+          // waits for it: runMain returns an empty slice until it lands, then
+          // clears the yield. Awaiting it here held the whole host step --
+          // the wave pump and every other thread's turn -- for the fetch.
           const pvfs = self._helpCtx && self._helpCtx.vfs;
-          const pending = pvfs && pvfs.pendingRead;
-          if (pending) {
-            try { await pvfs.fillPendingRead(pending); }
-            catch (e) { self.logToUI(`[io] ${pending.path}: ${e && e.message}`); }
-            pvfs.pendingRead = null;
+          const pending = pvfs && pvfs.getPendingRead(1);
+          if (!self._workerMainIoWait) {
+            const ioWait = { done: false, slice: r };
+            self._workerMainIoWait = ioWait;
+            // fillPendingRead owns identity-guarded cleanup; a peer may have
+            // published a different request while this fill was in flight.
+            ioWait.promise = (pending ? self._fillParkedRead(pvfs, pending) : Promise.resolve())
+              .catch(e => self.logToUI(`[io] ${pending && pending.path}: ${e && e.message}`))
+              .then(() => { ioWait.done = true; self._wakeStep(); });
           }
-          await self.guestWorker.callExport('clear_yield');
         } else if (r.yield === 13) {
           // vblank_wait: the live instance is in the guest-main Worker, not
-          // self.instance. Route the display tick and yield clear to that
-          // owner, in order, then retry the parked thunk. Scheduling another
-          // slice before the rAF would just rediscover reason 13 in a hot loop.
-          const advanceVblank = async () => {
-            await self.guestWorker.callExport('vblank_tick');
-            await self.guestWorker.callExport('clear_yield');
-          };
+          // self.instance. The display tick and yield clear travel on the
+          // next slice message (see _workerVblankDue at the slice), so the
+          // owner applies them in order right before it retries the parked
+          // thunk. Scheduling another slice before the rAF would just
+          // rediscover reason 13 in a hot loop.
+          const advanceVblank = () => { self._workerVblankDue = true; };
           // Frozen stepping defines one step as one display beat; waiting for
           // a real compositor frame would make step:N cost N frames of wall
           // time and let a supposedly frozen game animate independently.
           if (self._frozen) {
-            await advanceVblank();
+            advanceVblank();
             if (self.running) self._scheduleStep(step, 0);
             return;
           }
@@ -3955,6 +5676,28 @@ class WineAssembly {
           // has to exist: the catch-all below stops the app outright, so a
           // busy-wait the detector caught would have ended the session.
           await self.guestWorker.callExport('clear_yield');
+          // And sleep it out as the cooperative loop does (_spinParkDelay),
+          // or the detector's whole point is lost: re-slicing at once had
+          // Heroes II's menu retiring ~30M blocks/s here against 0.07M there
+          // for the same frames.
+          let park;
+          if (r.yield === 14) {
+            const configured = Number.isFinite(self.spinParkClockMs)
+              ? Math.max(1, Math.min(WineAssembly.MAX_PARK_SLEEP_MS,
+                Math.round(self.spinParkClockMs))) : WineAssembly.CLOCK_SPIN_PARK_MS;
+            park = Math.max(configured, Math.max(1,
+              Math.min(WineAssembly.MAX_PARK_SLEEP_MS, r.spinOwedMs | 0)));
+          } else {
+            park = Number.isFinite(r.timerDue) && r.timerDue >= 0
+              ? Math.max(1, r.timerDue) : WineAssembly.MAX_PARK_SLEEP_MS;
+          }
+          self._workerParkMain(park, perfSliceDoneAt, true);
+        } else if (r.yield === 11) {
+          // Self-SuspendThread on the guest's MAIN thread: park it (runMain's
+          // gate, _workerMainSelfSuspendParked) until another thread resumes
+          // it. Baldur's Gate chapters 1-2 hit the catch-all below here and
+          // stopped ("yield 11 is not supported in worker mode yet").
+          if (!self._workerMainSelfSuspend) self._workerMainSelfSuspend = r;
         } else if (r.yield === 6) {
           // modal_dialog: the single-threaded loop does nothing special here
           // either — the WAT side drives the dialog — so neither does this.
@@ -3967,6 +5710,9 @@ class WineAssembly {
           }
         }
       } catch (err) {
+        // stop() terminates the worker, which rejects the slice in flight:
+        // that is the requested close, not a loop failure.
+        if (self._stopped) return;
         self.logToUI(`[threads] worker loop failed: ${err.message}`);
         self.stop({ repaint: false });
         return;
@@ -3976,6 +5722,43 @@ class WineAssembly {
       // Same unclamped scheduling the single-threaded loop uses: a nested
       // setTimeout chain is capped at 4ms once it is five deep, which would
       // hold worker mode to ~250 slices a second no matter how fast a slice is.
+      // A sleeping main thread with no guest thread to run has nothing to do
+      // until its deadline, so park rather than re-ask a thousand times.
+      if (self.running && self._workerMainSleepUntil &&
+          !(self.threadManager && self.threadManager.hasActiveThreads &&
+            self.threadManager.hasActiveThreads())) {
+        const left = self._workerMainSleepUntil -
+          self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio);
+        if (left > 0) {
+          self._scheduleStep(step,
+            Math.max(1, Math.min(WineAssembly.MAX_PARK_SLEEP_MS, Math.round(left))));
+          return;
+        }
+      }
+      // A main thread parked in GetMessage (yield 7, above): single-use, so a
+      // park can never outlive the step that decided it.
+      const msgParkUntil = self._workerMsgParkUntil || 0;
+      self._workerMsgParkUntil = 0;
+      const parkSignalWakes = !!self._workerMsgParkSignalWakes;
+      self._workerMsgParkSignalWakes = false;
+      self._workerParkSignalWakes = false;
+      if (self.running && msgParkUntil > 0) {
+        const left = Math.round(msgParkUntil - WineAssembly._wallNow());
+        if (left > 0) {
+          self._workerParkSignalWakes = parkSignalWakes;
+          self._scheduleStep(step, left);
+          return;
+        }
+      }
+      if (self.running && self._workerIdleMs > 0 && self.threadManager
+          && self.threadManager.waitForWorkerSlice) {
+        const ms = self._workerIdleMs;
+        self._workerIdleMs = 0;
+        self.threadManager.waitForWorkerSlice(ms).then(() => {
+          if (self.running) self._scheduleStep(step);
+        });
+        return;
+      }
       if (self.running) self._scheduleStep(step);
     };
     // Frozen at launch (a ?frozen tile, or the box checked before the app
@@ -4025,7 +5808,16 @@ class WineAssembly {
         this._stepTimeoutId = 0;
         const fn = this._delayedStep;
         this._delayedStep = null;
-        if (fn && this.running) fn();
+        // Run the slice from a MessageChannel task, never from inside this
+        // timer's own callback. Browsers clamp a timer to >=4ms once it was
+        // scheduled from five nested timer callbacks, and a guest that parks
+        // on every slice (a 1ms clock-spin park, a Sleep(1)) would otherwise
+        // chain setTimeout -> slice -> setTimeout forever: every requested
+        // 1ms became ~3.8ms. Heroes II waits per walk frame on ~25 of those,
+        // so its hero walked ~5x slower than its own clock asked for. A slice
+        // posted through the port starts at timer nesting level 0, so its
+        // next park gets the delay it requested. Longer parks are unaffected.
+        if (fn && this.running) this._postStep(fn);
       }, delay);
       return;
     }
@@ -4111,6 +5903,40 @@ class WineAssembly {
     }, extra || {});
   }
 
+  // The debug toolbar's "uop tier" box, on a running app: every instance that
+  // executes guest code -- this one, the guest Worker that owns the main
+  // thread in real-thread mode, and each guest thread -- plus the setting
+  // future threads inherit. Off flushes the programs (set_uop in 07d).
+  setUop(on) {
+    const v = on ? 1 : 0;
+    const ex = this.instance && this.instance.exports;
+    if (!ex || !ex.set_uop) return false;
+    ex.set_uop(v);
+    if (this.guestWorker) {
+      Promise.resolve(this.guestWorker.callExport('set_uop', v)).catch(() => {});
+    }
+    if (this.threadManager) this.threadManager.setWasmGlobalAll('set_uop', v);
+    return true;
+  }
+
+  // Micro-op tier counters of the instance running the main thread: installs,
+  // kills, enters, blocks run inside programs. Null while the tier is off or
+  // Only active guest workers may fence the process render owner; never make
+  // the idle page instance block on a shared surface's readback.
+  async setLazySync(on) {
+    if (!this.guestWorker) return false;
+    await this.guestWorker.setLazySync(on);
+    return true;
+  }
+
+  // when a guest Worker owns the main thread (its counters live there).
+  uopStats() {
+    const ex = this.instance && this.instance.exports;
+    if (this.guestWorker || !ex || !ex.get_uop || !ex.get_uop()) return null;
+    const [installs, kills, enters, blocks] = [2, 3, 4, 5].map(k => ex.uop_stats(k) >>> 0);
+    return { installs, kills, enters, blocks };
+  }
+
   setFrozen(on) {
     const next = !!on;
     this._frozenTickMs = Number.isFinite(this._frozenTickMs) ? this._frozenTickMs : frozenBus.tickMs;
@@ -4134,7 +5960,9 @@ class WineAssembly {
       // did not experience, or it gets the whole frozen interval as one jump:
       // every timer instantly overdue, every timeGetTime delta enormous.
       const st = this._guestTickState(this.hostCtx && this.hostCtx.sharedAudio);
-      if (st) st.wallStartMs = this._audioSchedulerNow() - (st.batchMs | 0);
+      // batchMs is guest time; a startup clock maps raw wall time onto it.
+      const rawMs = this._startupClock ? this._startupClock.unmap(st ? st.batchMs | 0 : 0) : null;
+      if (st) st.wallStartMs = this._audioSchedulerNow() - (rawMs === null ? (st.batchMs | 0) : rawMs);
       const pending = this._frozenStep;
       this._frozenStep = null;
       this._frozenBudget = 0;
@@ -4157,8 +5985,9 @@ class WineAssembly {
     // step, tagged with the guest time that produced it — the recorder's
     // whole timeline, and the reason a clip has no agent think-time in it.
     if (frozenRecorder.active && (this._frozenSteps % frozenRecorder.everyNSteps) === 0) {
-      try { if (this._presentDxIfDirty) this._presentDxIfDirty(); } catch (_) {}
-      try { if (this.renderer && this.renderer.flushRepaint) this.renderer.flushRepaint(true); } catch (_) {}
+      // Not paced by the display: a recording samples every k-th step, and
+      // each sample must carry that step's pixels, not wait for a rAF.
+      try { this._presentNow(); } catch (_) {}
       try { if (this.renderer && this.renderer.repaint) this.renderer.repaint(); } catch (_) {}
       frozenRecorder.pumpAudio();
       frozenRecorder.capture(this._frozenSteps | 0, this.frozenGuestMs(), this._frozenTickMs);
@@ -4169,14 +5998,16 @@ class WineAssembly {
   }
 
   // At rest: flush whatever the last step drew before anyone screenshots it.
-  // The run loop presents inside a step, but a repaint the renderer deferred
-  // would otherwise land on the next step — which, frozen, may never come.
+  // The run loop leaves the upload to the next display frame, and a repaint
+  // the renderer deferred would otherwise land on the next step — which,
+  // frozen, may never come.
   _frozenIdle() {
     const waiters = this._frozenWaiters;
     if (!waiters || !waiters.length) return;
     this._frozenWaiters = [];
-    try { if (this._presentDxIfDirty) this._presentDxIfDirty(); } catch (_) {}
-    try { if (this.renderer && this.renderer.flushRepaint) this.renderer.flushRepaint(true); } catch (_) {}
+    // Synchronously, not at the next rAF: "step, then screenshot" reads the
+    // canvas as soon as this resolves.
+    try { this._presentNow(); } catch (_) {}
     try { if (this.renderer && this.renderer.repaint) this.renderer.repaint(); } catch (_) {}
     for (const waiter of waiters) { try { waiter(); } catch (_) {} }
   }
@@ -4228,6 +6059,143 @@ class WineAssembly {
     const fn = this._delayedStep;
     this._delayedStep = null;
     if (fn) this._scheduleStep(fn, 0);
+  }
+
+  // ---- presentation ---------------------------------------------------
+  //
+  // A step used to end by uploading the DirectDraw surface and compositing
+  // the desktop. Steps are macrotasks and there are more of them than display
+  // frames: Moorhuhn 3 presents ~90 times a second on a 60 Hz display, and
+  // any upload beyond one per frame is overwritten before the screen shows
+  // it. A wall-clock bucket capped the count near 60, but it was not the
+  // display's beat -- two uploads could land in one vsync interval and none
+  // in the next, which is a stutter with nothing to blame it on.
+  //
+  // So a step now only notes that a frame is waiting, and the upload runs
+  // once per display frame from requestAnimationFrame, always taking the
+  // newest pixels. That adds no latency beyond the next rAF: the old upload
+  // could not reach the screen before that frame either.
+  //
+  // Worker mode has one complication. The guest's main thread runs in a
+  // Worker, and publishing while its slice is in flight would expose a
+  // half-drawn WM_PAINT (renderer._workerPublicationHeld). A rAF that fires
+  // then marks the frame due and the step publishes it at its own slice
+  // boundary, which is exactly where it used to publish -- just once per
+  // frame instead of once per step.
+  //
+  // With no requestAnimationFrame at all (the vm-context tests, a non-DOM
+  // host) the boundary presents synchronously, as it always did.
+
+  // Is there anything a present would put on screen? Cheap by design: it runs
+  // every step, and an idle app must not keep a rAF armed (every scheduled
+  // frame holds this host -- and its 512MB memory -- alive).
+  _presentWanted() {
+    if (this._dxDirty || this._dxLockDeferred) return true;
+    const broker = this.guestWorker && this.guestWorker.broker;
+    const dxShared = broker && broker.dxState ? broker.dxState() : null;
+    if (dxShared && dxShared.dirty !== this._dxSharedDirtySeen) return true;
+    const r = this.renderer;
+    return !!(r && (r._repaintScheduled || r._repaintPending || r._workerRepaintDeferred));
+  }
+
+  // Where every run loop used to present: the end of a completed slice.
+  _presentAtBoundary(perf) {
+    if (typeof requestAnimationFrame !== 'function') {
+      const t0 = perf ? performance.now() : 0;
+      if (this._presentDxIfDirty) this._presentDxIfDirty();
+      if (this.renderer && this.renderer.flushRepaint) this.renderer.flushRepaint(true);
+      if (perf) perf.mark('present', performance.now() - t0);
+      return;
+    }
+    // A display frame came and went while the Worker slice held publication.
+    // This boundary is the first safe moment to show it.
+    if (this._presentFrameDue) {
+      // Re-arm straight away when pixels moved. The next slice starts as soon
+      // as this returns and the next display frame will land inside it; a
+      // rAF armed only at the NEXT boundary fires one slice later, so a guest
+      // whose slices are longer than a display frame got an upload at every
+      // other boundary (dx_donuts, Worker: 26.7 -> 13.8 uploads/s). An idle
+      // guest stops the chain: its due frame moves nothing. A surface still
+      // locked mid-write keeps it going, as the rAF path does, so the retry
+      // lands in the next slice rather than the one after.
+      if (this._presentNow() || this._dxLockDeferred) this._queuePresentFrame();
+      return;
+    }
+    if (this._presentWanted()) this._queuePresentFrame();
+  }
+
+  // The renderer arms a rAF of its own on every scheduleRepaint(). While a
+  // present rAF is pending that one is redundant -- _presentNow composites
+  // whatever is scheduled -- and harmful: it was usually armed earlier in the
+  // step, so it runs FIRST in the frame, composites the desktop without the
+  // new DirectDraw frame, and then the present composites again. Measured on
+  // Moorhuhn 3 (cooperative): 120 composites/s against 60 uploads/s. Dropping
+  // it leaves _repaintScheduled set, so the present still composites, and a
+  // later scheduleRepaint() in the same frame coalesces into that flag.
+  _dropRendererFrame() {
+    const r = this.renderer;
+    if (!r || r._repaintRaf === null || r._repaintRaf === undefined) return;
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(r._repaintRaf);
+    r._repaintRaf = null;
+  }
+
+  _queuePresentFrame() {
+    if (this._stopped) return;
+    if (this._presentRaf) { this._dropRendererFrame(); return; }
+    this._dropRendererFrame();
+    this._presentRaf = requestAnimationFrame(() => {
+      this._presentRaf = 0;
+      if (this._stopped) return;
+      const r = this.renderer;
+      if (r && r._workerPublicationHeld && r._workerPublicationHeld()) {
+        this._presentFrameDue = true;
+        return;
+      }
+      this._presentNow();
+      // A surface still locked mid-write was held back; try the next frame.
+      if (this._dxLockDeferred) this._queuePresentFrame();
+    });
+  }
+
+  _cancelPresentFrame() {
+    if (this._presentRaf && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(this._presentRaf);
+    }
+    this._presentRaf = 0;
+    this._presentFrameDue = false;
+  }
+
+  // Upload the newest guest frame and composite, now. Called from the rAF,
+  // from a step boundary when a frame fell due mid-slice, and wherever
+  // stepping comes to rest (frozen park, recording tap, stop) so the last
+  // frame is on the canvas before anyone looks at it. Returns 1 when pixels
+  // moved to the screen.
+  _presentNow() {
+    this._cancelPresentFrame();
+    this._dxLockDeferred = false;
+    const perf = (typeof window !== 'undefined' && window.WinePerf && window.WinePerf.enabled)
+      ? window.WinePerf : null;
+    const t0 = perf ? performance.now() : 0;
+    const dx = this._presentDxIfDirty ? this._presentDxIfDirty(true) : 0;
+    const r = this.renderer;
+    let composited = 0;
+    if (r && r.flushRepaint) {
+      const held = r._workerPublicationHeld && r._workerPublicationHeld();
+      if (!held && typeof requestAnimationFrame === 'function' && !r._isNode) {
+        // Paced already, so no 16ms guard: composite whatever is scheduled.
+        composited = r._repaintScheduled ? 1 : 0;
+        r.flushRepaint(false);
+        r._workerRepaintDeferred = false;
+        // The upload above re-armed the renderer's rAF for a composite that
+        // has just happened.
+        if (!r._repaintScheduled) this._dropRendererFrame();
+      } else {
+        r.flushRepaint(true);
+      }
+    }
+    const uploaded = (dx || composited) ? 1 : 0;
+    if (perf && perf.frameUpload) perf.frameUpload(performance.now() - t0, uploaded);
+    return uploaded;
   }
 
   // ---- vertical blank -------------------------------------------------
@@ -4530,6 +6498,40 @@ class WineAssembly {
   // non-preemptible (including a native guest API), so use small measured
   // quanta and check elapsed host time between them. A guest yield/debug halt
   // must return to the existing host state machine, never be resumed here.
+  // Cooperative-scheduler timing arms. The default, SCHED_ARMS_DEFAULT, is
+  // what keeps a Sleep(5) DirectSound mixer (fmod in Moorhuhn 2) at real
+  // time while the page runs guest threads in bursts 17-63ms apart:
+  //   b  run due sleepers between main-slice quanta, not only once a step
+  //   e  catch up: a late periodic sleeper's next deadline counts from the
+  //      one it missed, so owed wakes run back to back instead of being lost
+  //   g  global deadline clock: those wakes see the time they were due at
+  //      (ThreadManager.deadlineNow), and every clock read agrees on it
+  //   a  (off) exempt timed sleepers from idle demotion; `g` implies it
+  //   f  Worker mode, with w: guest threads free-run -- the host step neither
+  //      waits for their slices nor ends them, so a thread sleeping through
+  //      its slice keeps running while the page presents or stalls
+  //   w  Worker mode: a guest thread's Worker waits out a short Sleep itself
+  //      and keeps running until the host step's main slice is done, instead
+  //      of waking at most once per host step (lib/guest-worker.js)
+  //   p  Worker mode: a main thread parked in GetMessage parks the host step
+  //      until its next WM_TIMER (capped, input wakes it), as the
+  //      cooperative loop's _parkedSleepMs does, instead of re-polling
+  //   m  Worker mode, with f: a main thread parked in WaitFor* is polled here
+  //      instead of re-sliced every step, the threads its slice woke are
+  //      started at once, and the step parks until a sibling slice returns
+  // `?sched-arm=LIST` replaces the default set for an A/B; `?sched-arm=none`
+  // turns every arm off.
+  _schedArm(name) {
+    if (this._schedArms === undefined) {
+      let v = null;
+      try {
+        if (typeof location !== 'undefined') v = new URLSearchParams(location.search).get('sched-arm');
+      } catch (_) {}
+      this._schedArms = new Set((v === null ? SCHED_ARMS_DEFAULT : v).split(',').filter(Boolean));
+    }
+    return this._schedArms.has(name);
+  }
+
   _runCooperativeSlice(maxBlocks) {
     const ex = this.instance.exports;
     const now = () => this._audioSchedulerNow();
@@ -4537,16 +6539,29 @@ class WineAssembly {
     let blocks = 0;
     let remaining = Math.max(1, maxBlocks | 0);
     let hitDeadline = false;
+    // asyncMultimediaTimer: serve timeSetEvent at every quantum boundary, and
+    // end a quantum at the next timer deadline, so a 5ms timer is late by at
+    // most one ~1ms quantum rather than by a whole host step.
+    const mmPump = !this._frozen && this.asyncMultimediaTimer && !!ex.mm_timer_ms_until_due;
     do {
-      const quantum = this._frozen ? remaining : Math.min(remaining,
+      let quantum = this._frozen ? remaining : Math.min(remaining,
         Math.max(1, this._cooperativeQuantumBlocks || 128));
+      let capped = false;
+      if (mmPump) {
+        this._pumpMultimediaTimer();
+        const due = ex.mm_timer_ms_until_due() | 0;
+        if (due > 0) {
+          const cap = Math.max(16, Math.ceil(due * (this._cooperativeQuantumBlocks || 128)));
+          if (cap < quantum) { quantum = cap; capped = true; }
+        }
+      }
       const before = now();
       ex.run(quantum);
       const ran = ex.get_last_run_blocks ? Math.max(0, ex.get_last_run_blocks()) : 0;
       const elapsed = Math.max(0, now() - before);
       blocks += ran;
       remaining -= ran;
-      if (!this._frozen && ran >= quantum && elapsed > 0) {
+      if (!this._frozen && !capped && ran >= quantum && elapsed > 0) {
         // Target roughly 1ms per quantum; limit growth after a cheap phase.
         this._cooperativeQuantumBlocks = Math.max(1,
           Math.min(2048, quantum * 2, Math.floor(ran / elapsed)));
@@ -4558,6 +6573,16 @@ class WineAssembly {
       if (!this._frozen && now() - start >= 8) {
         hitDeadline = true;
         break;
+      }
+      // A quantum boundary is the only point inside a host step where another
+      // guest thread can run. A mixer thread that slept 5ms is otherwise not
+      // seen again until this step's thread phase.
+      if (!this._frozen && this._schedArm('b') && this.threadManager &&
+          this.threadManager.hasDueSleeper && this.threadManager.hasDueSleeper()) {
+        this.threadManager.runDueSleepers({ maxWallMs: 2,
+          catchUpSleep: this._schedArm('e'),
+          // The deadline clock serves one overdue wake per thread per round.
+          rounds: this._schedArm('g') ? 32 : (this._schedArm('e') ? 8 : 1) });
       }
     } while (remaining > 0);
     return { blocks, hitDeadline, elapsedMs: Math.max(0, now() - start) };
@@ -4599,6 +6624,8 @@ class WineAssembly {
         // slice. The guest-Worker path keeps its separate 1k floor above.
         const activeStepsPerSlice = Math.max(1, (self.stepsPerSlice | 0) || stepsPerSlice);
         self._beginGuestTickBatch();
+        await self._pumpWaveCallbacksAtBoundary();
+        if(!self.running) return;
         // Check if main thread is waiting
         if (self.threadManager) await self.threadManager.resolveMainThreadSend();
         let renderWaiting = false;
@@ -4607,7 +6634,11 @@ class WineAssembly {
           if (wait.done) { self._d3dMainWait = null; self.instance.exports.clear_yield(); }
           else renderWaiting = true;
         }
-        const mainThreadWaiting = renderWaiting || (self.threadManager &&
+        // A lazy-read park on the main thread (see _beginMainIoWait): until its
+        // fill lands only the main guest thread waits; then the yield clears
+        // and the same ReadFile re-enters.
+        const ioWaiting = self.instance.exports.get_yield_reason() === 12 && self._pollMainIo();
+        const mainThreadWaiting = renderWaiting || ioWaiting || (self.threadManager &&
           (self._isMainExecutionSuspended() || self.threadManager.checkMainYield()));
         if (mainThreadWaiting) {
           mainParked = true;
@@ -4689,12 +6720,7 @@ class WineAssembly {
               ms: self.renderer._profileNow() - runStart,
             });
           }
-          const perfPresentStart = perf ? performance.now() : 0;
-          if (self._presentDxIfDirty) self._presentDxIfDirty();
-          if (self.renderer && self.renderer.flushRepaint) {
-            self.renderer.flushRepaint(true);
-          }
-          if (perf) perf.mark('present', performance.now() - perfPresentStart);
+          self._presentAtBoundary(perf);
           self._runSliceCount = (self._runSliceCount || 0) + 1;
           if (self.instance && self.instance.exports) {
             const ex = self.instance.exports;
@@ -4748,16 +6774,13 @@ class WineAssembly {
           // ReadFile parked with its stdcall frame restored and EIP on the
           // thunk, so filling the chunk and clearing the yield re-enters the
           // same call — which then takes the synchronous cache hit.
-          const vfs = self._helpCtx && self._helpCtx.vfs;
-          const pending = vfs && vfs.pendingRead;
-          if (pending) {
-            try { await vfs.fillPendingRead(pending); }
-            catch (e) { self.logToUI(`[io] ${pending.path}: ${e && e.message}`); }
-            vfs.pendingRead = null;
-          }
-          self.instance.exports.clear_yield();
-          if (self.running) { self._scheduleStep(step); }
-          return;
+          //
+          // Only the main guest thread waits for that chunk: the fill runs in
+          // the background (_beginMainIoWait) and this step falls through like
+          // a spin park, so worker threads, timers and the audio refill keep
+          // running. The yield stays set until the step head sees the fill
+          // done. (The VFS retires only this fill's pending record.)
+          if (self._pollMainIo()) mainParked = true;
         }
         if (yieldReason === 13) {
           // vblank_wait: a DirectDraw call is parked on the display. EIP is
@@ -4796,8 +6819,10 @@ class WineAssembly {
           // loop already knows how to sleep one. Falling through records the
           // deadline for _parkedSleepMs() and lets the tail below post the
           // next step with it — which means worker threads still get their
-          // slice while the main thread waits, and the nested-setTimeout 4ms
-          // clamp coalesces the 1ms clock sleeps for free.
+          // slice while the main thread waits. The 1ms clock sleep is a real
+          // 1ms: _scheduleStep wakes through the port, so the nested-timer 4ms
+          // clamp no longer stretches it (that stretch was Heroes II's slow
+          // hero walk).
           self._spinParkSleepMs = self._spinParkDelay(yieldReason);
           self.instance.exports.clear_yield();
           mainParked = true;
@@ -4880,8 +6905,17 @@ class WineAssembly {
                   quantumSteps,
                   maxWallMs,
                   prioritizeAudioThreads: audioHot && !menuOpen,
+                  exemptTimedSleepers: self._schedArm('a'),
+                  catchUpSleep: self._schedArm('e'),
                   stopIfMessagePending: false,
                 });
+                // Catch-up arm: wakes owed to periodic sleepers at the end of
+                // the step, before the render gap in which nothing can run.
+                if (self._schedArm('e') && self.threadManager.hasDueSleeper &&
+                    self.threadManager.hasDueSleeper()) {
+                  self.threadManager.runDueSleepers({ maxWallMs: 3, catchUpSleep: true,
+                    rounds: self._schedArm('g') ? 32 : 8 });
+                }
                 // hitDeadline means the worker was cut off by maxWallMs with
                 // work still to do — the guest is being throttled by us, not
                 // by its own idle loop. That distinction is invisible from
@@ -4897,12 +6931,7 @@ class WineAssembly {
             }
             if (perf) perf.mark('workers', performance.now() - perfThreadStart);
             await self.handleCooperativeThreadLoadLibraries();
-            const perfPresentStart2 = perf ? performance.now() : 0;
-            if (self._presentDxIfDirty) self._presentDxIfDirty();
-            if (self.renderer && self.renderer.flushRepaint) {
-              self.renderer.flushRepaint(true);
-            }
-            if (perf) perf.mark('present', performance.now() - perfPresentStart2);
+            self._presentAtBoundary(perf);
           }
         }
       } catch (e) {

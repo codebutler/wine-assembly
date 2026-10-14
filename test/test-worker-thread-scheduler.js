@@ -116,6 +116,143 @@ function makeManager(backend, extraOpts) {
 (async () => {
   console.log('ThreadManager worker backend\n');
 
+  // A parked helper must not force the host's idle GetMessage worker to spin.
+  // Exercise real wait bookkeeping, including consuming an auto-reset event
+  // exactly once between the parking decision and dispatch.
+  {
+    const backend = makeBackend([[]]);
+    const tm = makeManager(backend);
+    let now = 1000;
+    tm._waitNow = () => now;
+    const event = tm.createEvent(false, false);
+    const wait = { yield: 1, eip: 0x401000, waitHandle: event,
+      waitTimeout: 30, waitStackBytes: 12 };
+    // Spawn normally before enabling free-run; no uncontrolled async chain.
+    tm.createThread(0x401500, 0, 0, 0);
+    await tm._spawnPendingWorkers();
+    const thread = [...tm.threads.values()][0];
+    thread.link.script = [wait, { yield: 0 }];
+    await tm.runWorkerSlices(1000);
+    tm.workerFreeRun = true;
+    assert.strictEqual(tm.freeRunParkBound(50), 30);
+    now += 17;
+    assert.strictEqual(tm.freeRunParkBound(50), 13,
+      'a blocked helper bounds parking by its remaining timeout');
+    tm.setEvent(event);
+    await Promise.resolve();
+    assert.strictEqual(tm.freeRunParkBound(50), 0,
+      'a signaled helper needs a slice immediately');
+    assert.strictEqual(tm.freeRunParkBound(50), 0,
+      'rechecking the bound retains an already consumed signal');
+    assert.strictEqual(tm.waitSingle(event, 0), 0x102,
+      'the auto-reset signal was consumed exactly once');
+    tm.workerFreeRun = false;
+    await tm.runWorkerSlices(1000);
+    assert.deepStrictEqual(thread.link.completed, [{ result: 0, waitStackBytes: 12 }]);
+
+    thread.link.script = [wait];
+    await tm.runWorkerSlices(1000);
+    tm.workerFreeRun = true;
+    now += 30;
+    assert.strictEqual(tm.freeRunParkBound(50), 0,
+      'an expired helper timeout is immediately runnable');
+    tm.workerFreeRun = false;
+    thread.link.script = [{ yield: 0 }];
+    await tm.runWorkerSlices(1000);
+    assert.strictEqual(thread.link.completed[1].result, 0x102);
+
+    thread.link.script = [{ ...wait, waitTimeout: 0xFFFFFFFF }];
+    await tm.runWorkerSlices(1000);
+    tm.workerFreeRun = true;
+    assert.strictEqual(tm.freeRunParkBound(50), 50,
+      'an infinite unsatisfied wait permits the full park bound');
+    tm._freeRunStepAt = now;
+    tm._freeRunSliceSize = 1000;
+    let offered = 0;
+    tm._freeRunDispatch = (_handle, target) => {
+      assert.strictEqual(target, thread);
+      offered++;
+      target.inFlight = true;
+    };
+    tm.setEvent(event);
+    await Promise.resolve();
+    assert.strictEqual(offered, 1,
+      'a signal dispatches its parked worker without waiting for the host timer');
+    thread.inFlight = true;
+    assert.strictEqual(tm.freeRunParkBound(50), 50,
+      'an independently running sibling does not need a host step');
+    thread.inFlight = false;
+    thread.parkedWait = null;
+    assert.strictEqual(tm.freeRunParkBound(50), 0,
+      'an idle runnable sibling still prevents parking');
+    thread.sleepUntil = now + 8;
+    assert.strictEqual(tm.freeRunParkBound(50), 8);
+    tm.serialSlices = true;
+    assert.strictEqual(tm.freeRunParkBound(50), 0,
+      'serial scheduling keeps its existing no-park behavior');
+    check(true, 'free-run host parking respects event signals, finite deadlines and runnable siblings');
+  }
+
+  // A sibling's signal tells the host (onSignal), which may end a step parked
+  // on the main thread's behalf: Jardinains' main thread spins on PeekMessage
+  // until its winmm timer thread SetEvents. One call per microtask burst, and
+  // none outside free-run, where the drive loop polls every step anyway.
+  {
+    const tm = makeManager(makeBackend([[]]));
+    const event = tm.createEvent(false, false);
+    let signals = 0;
+    tm.onSignal = () => { signals++; };
+    tm.setEvent(event);
+    await Promise.resolve();
+    assert.strictEqual(signals, 0, 'no signal wake outside free-run');
+    tm.workerFreeRun = true;
+    tm.setEvent(event);
+    tm.setEvent(event);
+    await Promise.resolve();
+    assert.strictEqual(signals, 1, 'a burst of signals wakes the host once');
+    tm.setEvent(event);
+    await Promise.resolve();
+    assert.strictEqual(signals, 2, 'each later signal wakes it again');
+    tm.workerFreeRun = false;
+    check(true, 'free-run signals reach the host through onSignal');
+  }
+
+  // I/O selection belongs to the yielding thread in both scheduling modes.
+  for (const workerMode of [true, false]) {
+    const { VirtualFS } = require('../lib/filesystem');
+    const vfs = new VirtualFS(), fills = [];
+    for (const tid of [1, 2]) {
+      const name = `c:\\thread-${tid}.bin`;
+      vfs.setProviderFile(name, { provider: { size: 8, tryRead: () => null,
+        fill: async () => { fills.push(tid); },
+      } });
+      const h = vfs.createFile(name, 0x80000000, 3);
+      const pending = vfs.readFile(h, new Uint8Array(8), 8, tid + 1).pending;
+      vfs.getIoState(tid + 1).pendingRead = pending;
+    }
+    const backend = workerMode ? makeBackend([[{ yield: 12 }], [{ yield: 12 }]]) : null;
+    const tm = makeManager(backend, { getVfs: () => vfs });
+    if (workerMode) {
+      tm.createThread(0x401500, 0, 0, 0);
+      tm.createThread(0x401600, 0, 0, 0);
+      await tm.runWorkerSlices(50000);
+      assert(backend.links.every(link => link.exports.includes('clear_yield')));
+    } else {
+      for (const tid of [1, 2]) tm.threads.set(tid, { tid, state: 'active', waitPolls: 0,
+        instance: { exports: { get_yield_reason: () => 12 } } });
+      tm.runSlice(2000);
+      await Promise.all([...tm.threads.values()].map(thread => thread.ioFill));
+      assert([...tm.threads.values()].every(thread => thread.ioFillDone));
+    }
+    assert.deepStrictEqual(fills.sort(), [1, 2]);
+    assert.strictEqual(vfs.getPendingRead(2), null);
+    assert.strictEqual(vfs.getPendingRead(3), null);
+    const [handle, thread] = tm.threads.entries().next().value;
+    tm._markThreadExited(handle, thread, 0, 'io-test');
+    assert(!vfs._threadIo.has(thread.tid + 1));
+    check(true, `${workerMode ? 'Worker' : 'cooperative'} scheduler fills each thread's own request and retires exit state`);
+  }
+
   // --- the backend is what decides the mode, and it says so ------------------
   {
     const tm = makeManager(makeBackend([]));
@@ -153,8 +290,10 @@ function makeManager(backend, extraOpts) {
       backend.specs[1].hwndBase === tm.workerHwndBase(2),
       'each real Worker gets the same in-app hwnd partition as the cooperative backend',
       `${s.hwndBase.toString(16)}, ${backend.specs[1].hwndBase.toString(16)}`);
-    check(s.stackSize === 0x20000 && backend.specs[1].stackSize === 0x10000,
-      'the requested stack size is honoured, with the Win32 default when zero',
+    // A nonzero dwStackSize is a commit size inside the EXE's reserve (1MB
+    // when the header gives none), as Windows sizes it.
+    check(s.stackSize === 0x100000 && backend.specs[1].stackSize === 0x100000,
+      'thread stacks get the Windows reserve, whether or not a commit size is given',
       `${s.stackSize}, ${backend.specs[1].stackSize}`);
     check(s.dllCount === 3 && s.vlanIp === 0x0A4D0001 && s.tlsNextIndex === 2,
       'process-wide state a new instance cannot infer is passed in');
@@ -422,6 +561,52 @@ function makeManager(backend, extraOpts) {
       && external.join(',') === '3,5',
     'a target WndProc keeps its SendMessage frame across event/message/net/modal/DLL yields',
     `actions=${actions.join(',')} external=${external.join(',')}`);
+  }
+
+  // Worker boots are slow and runWorkerSlices spawns whenever the pending
+  // list is non-empty, so a second spawn pass can start while the first is
+  // still booting. It must not walk the list again and start a thread twice.
+  {
+    const backend = makeBackend([]);
+    const slowSpawn = backend.spawnThread.bind(backend);
+    backend.spawnThread = async spec => {
+      for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
+      return slowSpawn(spec);
+    };
+    const tm = makeManager(backend);
+    tm.createThread(0x401500, 0, 0, 0);
+    const first = tm._spawnPendingWorkers();
+    await new Promise(resolve => setImmediate(resolve));
+    tm.createThread(0x401600, 0, 0, 0);
+    tm.createThread(0x401700, 0, 0, 0);
+    const second = tm.runWorkerSlices(1000);
+    const third = tm._spawnPendingWorkers();
+    await Promise.all([first, second, third]);
+    const tids = backend.specs.map(spec => spec.tid);
+    check(tids.length === 3 && new Set(tids).size === 3 && tm._pendingThreads.length === 0
+      && tm.threads.size === 3,
+    'overlapping spawn passes start each pending thread exactly once',
+    `tids=${tids.join(',')} pending=${tm._pendingThreads.length} threads=${tm.threads.size}`);
+  }
+
+  // ExitThread marks the record during the slice. The slice result must still
+  // retire that Worker, or its stack range stays registered with the host and
+  // the next thread on the same tid and freed stack reports a STACK OVERLAP
+  // (Collapse! Crunch, Threads on).
+  {
+    const backend = makeBackend([[{}]]);
+    const tm = makeManager(backend);
+    tm.createThread(0x401500, 0, 0, 0);
+    await tm._spawnPendingWorkers();
+    const [handle, thread] = [...tm.threads.entries()][0];
+    thread.link.slice = async () => {
+      tm._markThreadExited(handle, thread, 0, 'ExitThread');
+      return { eip: 0x401000, yield: 0, ms: 1 };
+    };
+    await tm.runWorkerSlices(1000);
+    check(backend.dropped.includes(thread.link.slot),
+      'a worker that called ExitThread during its slice is retired',
+      `dropped=${backend.dropped.join(',')}`);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

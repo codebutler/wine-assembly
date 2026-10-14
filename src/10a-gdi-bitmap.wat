@@ -768,7 +768,7 @@
       (then
         (memory.copy (load.field.memarg GdiBitmap bits (local.get $record))
           (local.get $buffer) (local.get $copied))
-        (drop (call $host_gdi_surface_upload (load.field.memarg GdiBitmap self_handle (local.get $record))
+        (drop (call $gdi_write_surface_upload (load.field.memarg GdiBitmap self_handle (local.get $record))
           (i32.const 0) (i32.const 0) (load.field.memarg GdiBitmap width (local.get $record))
           (load.field.memarg GdiBitmap height (local.get $record)))))
       (else (memory.copy (local.get $buffer)
@@ -856,8 +856,391 @@
         (i32.sub (local.get $height) (i32.const 5)) (local.get $color))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $icons)))
-    (drop (call $host_gdi_surface_upload (local.get $handle) (i32.const 0)
+    (drop (call $gdi_write_surface_upload (local.get $handle) (i32.const 0)
       (i32.const 0) (local.get $width) (local.get $height)))
+    (local.get $handle))
+
+  ;; USER's predefined bitmaps: LoadBitmap(NULL, OBM_*). They belong to USER,
+  ;; not to the caller, so no resource table has them — the artwork is drawn
+  ;; here, at the sizes the system metrics already report (18x18 caption
+  ;; buttons, 16x16 scroll arrows, 13x13 menu marks). Authorware's runtime
+  ;; (Civilization II's Civilopedia) measures OBM_CLOSE at startup and stops
+  ;; with "Internal Error: main2_w, 150" when it gets NULL.
+  ;;
+  ;; A raised 3D button face over [x, x+w) x [0, h).
+  (func $obm_button (param $bits i32) (param $stride i32)
+        (param $x i32) (param $w i32) (param $h i32) (param $pressed i32)
+    (local $r i32)
+    (local.set $r (i32.add (local.get $x) (local.get $w)))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (local.get $x) (i32.const 0) (local.get $r) (local.get $h) (i32.const 0x00C0C0C0))
+    (if (local.get $pressed)
+      (then
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (local.get $x) (i32.const 0) (local.get $r) (i32.const 1) (i32.const 0x00808080))
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (local.get $x) (i32.const 0) (i32.add (local.get $x) (i32.const 1)) (local.get $h)
+          (i32.const 0x00808080))
+        (return)))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (local.get $x) (i32.const 0) (i32.sub (local.get $r) (i32.const 1)) (i32.const 1)
+      (i32.const 0x00FFFFFF))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (local.get $x) (i32.const 0) (i32.add (local.get $x) (i32.const 1))
+      (i32.sub (local.get $h) (i32.const 1)) (i32.const 0x00FFFFFF))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.add (local.get $x) (i32.const 1)) (i32.sub (local.get $h) (i32.const 2))
+      (i32.sub (local.get $r) (i32.const 1)) (i32.sub (local.get $h) (i32.const 1))
+      (i32.const 0x00808080))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.sub (local.get $r) (i32.const 2)) (i32.const 1)
+      (i32.sub (local.get $r) (i32.const 1)) (i32.sub (local.get $h) (i32.const 1))
+      (i32.const 0x00808080))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (local.get $x) (i32.sub (local.get $h) (i32.const 1)) (local.get $r) (local.get $h)
+      (i32.const 0))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.sub (local.get $r) (i32.const 1)) (i32.const 0) (local.get $r) (local.get $h)
+      (i32.const 0)))
+
+  ;; A solid triangle of $rows rows (widest row 2*rows-1). $dir 0 points up and
+  ;; 1 down, apex column $a and first row $b; 2 points right and 3 left, first
+  ;; column $a and apex row $b.
+  (func $obm_triangle (param $bits i32) (param $stride i32)
+        (param $a i32) (param $b i32) (param $rows i32) (param $dir i32) (param $color i32)
+    (local $i i32) (local $half i32)
+    (block $done (loop $each
+      (br_if $done (i32.ge_s (local.get $i) (local.get $rows)))
+      ;; Half-width of this row/column: growing for up/left, shrinking for
+      ;; down/right.
+      (local.set $half (select
+        (i32.sub (i32.sub (local.get $rows) (i32.const 1)) (local.get $i))
+        (local.get $i)
+        (i32.or (i32.eq (local.get $dir) (i32.const 1)) (i32.eq (local.get $dir) (i32.const 2)))))
+      (if (i32.lt_u (local.get $dir) (i32.const 2))
+        (then (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.sub (local.get $a) (local.get $half)) (i32.add (local.get $b) (local.get $i))
+          (i32.add (i32.add (local.get $a) (local.get $half)) (i32.const 1))
+          (i32.add (i32.add (local.get $b) (local.get $i)) (i32.const 1))
+          (local.get $color)))
+        (else (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.add (local.get $a) (local.get $i)) (i32.sub (local.get $b) (local.get $half))
+          (i32.add (i32.add (local.get $a) (local.get $i)) (i32.const 1))
+          (i32.add (i32.add (local.get $b) (local.get $half)) (i32.const 1))
+          (local.get $color))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $each))))
+
+  ;; The Windows 3.x system-menu box: a bar with a black outline and a grey
+  ;; drop shadow, $inset pixels in from each side of an 18-pixel cell at $x.
+  (func $obm_menu_bar (param $bits i32) (param $stride i32) (param $x i32) (param $inset i32)
+    (local $l i32) (local $r i32)
+    (local.set $l (i32.add (local.get $x) (local.get $inset)))
+    (local.set $r (i32.sub (i32.add (local.get $x) (i32.const 17)) (local.get $inset)))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.add (local.get $l) (i32.const 1)) (i32.const 8)
+      (i32.add (local.get $r) (i32.const 1)) (i32.const 12) (i32.const 0x00808080))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (local.get $l) (i32.const 7) (local.get $r) (i32.const 11) (i32.const 0))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.add (local.get $l) (i32.const 1)) (i32.const 8)
+      (i32.sub (local.get $r) (i32.const 1)) (i32.const 10) (i32.const 0x00FFFFFF)))
+
+  ;; One 13x13 cell of OBM_CHECKBOXES at ($x0,$y0). $shape 0 check box,
+  ;; 1 radio button, 2 three-state box; $state bit 0 checked, bit 1 pushed
+  ;; (grey interior). The box and tick are $paint_check_box_state's, so a
+  ;; control drawn from this sheet matches one USER paints itself.
+  (func $obm_check_cell (param $bits i32) (param $stride i32)
+        (param $x0 i32) (param $y0 i32) (param $shape i32) (param $state i32)
+    (local $x i32) (local $y i32) (local $d i32) (local $c i32) (local $i i32)
+    (local $face i32) (local $mark i32)
+    (local.set $face (select (i32.const 0x00C0C0C0) (i32.const 0x00FFFFFF)
+      (i32.ne (i32.and (local.get $state) (i32.const 2)) (i32.const 0))))
+    (local.set $mark (select (i32.const 0x00808080) (i32.const 0)
+      (i32.eq (local.get $shape) (i32.const 2))))
+    (if (i32.eq (local.get $shape) (i32.const 1))
+      (then
+        ;; A 12-pixel disc about (5.5,5.5): face inside, a two-pixel rim that
+        ;; is dark on the upper left and light on the lower right, and an
+        ;; eight-pixel dot when checked. d is the squared distance doubled.
+        (local.set $y (i32.const 0))
+        (block $rows (loop $row
+          (br_if $rows (i32.ge_s (local.get $y) (i32.const 12)))
+          (local.set $x (i32.const 0))
+          (block $cols (loop $col
+            (br_if $cols (i32.ge_s (local.get $x) (i32.const 12)))
+            (local.set $d (i32.add
+              (i32.mul (i32.sub (i32.shl (local.get $x) (i32.const 1)) (i32.const 11))
+                       (i32.sub (i32.shl (local.get $x) (i32.const 1)) (i32.const 11)))
+              (i32.mul (i32.sub (i32.shl (local.get $y) (i32.const 1)) (i32.const 11))
+                       (i32.sub (i32.shl (local.get $y) (i32.const 1)) (i32.const 11)))))
+            (local.set $c (i32.const -1))
+            (if (i32.le_s (local.get $d) (i32.const 146))
+              (then
+                (local.set $c (local.get $face))
+                (if (i32.gt_s (local.get $d) (i32.const 64))
+                  (then
+                    (local.set $c
+                      (if (result i32) (i32.lt_s (i32.add (local.get $x) (local.get $y)) (i32.const 11))
+                        (then (select (i32.const 0x00808080) (i32.const 0)
+                          (i32.gt_s (local.get $d) (i32.const 100))))
+                        (else (select (i32.const 0x00FFFFFF) (i32.const 0x00C0C0C0)
+                          (i32.gt_s (local.get $d) (i32.const 100))))))))
+                (if (i32.and (i32.le_s (local.get $d) (i32.const 16))
+                             (i32.ne (i32.and (local.get $state) (i32.const 1)) (i32.const 0)))
+                  (then (local.set $c (i32.const 0))))))
+            (if (i32.ge_s (local.get $c) (i32.const 0))
+              (then (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+                (i32.add (local.get $x0) (local.get $x)) (i32.add (local.get $y0) (local.get $y))
+                (i32.add (local.get $x0) (i32.add (local.get $x) (i32.const 1)))
+                (i32.add (local.get $y0) (i32.add (local.get $y) (i32.const 1)))
+                (local.get $c))))
+            (local.set $x (i32.add (local.get $x) (i32.const 1)))
+            (br $col)))
+          (local.set $y (i32.add (local.get $y) (i32.const 1)))
+          (br $row)))
+        (return)))
+    ;; EDGE_SUNKEN: grey/white outer, black/light-grey inner, then the face.
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (local.get $x0) (local.get $y0)
+      (i32.add (local.get $x0) (i32.const 13)) (i32.add (local.get $y0) (i32.const 13))
+      (i32.const 0x00FFFFFF))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (local.get $x0) (local.get $y0)
+      (i32.add (local.get $x0) (i32.const 12)) (i32.add (local.get $y0) (i32.const 12))
+      (i32.const 0x00808080))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.add (local.get $x0) (i32.const 1)) (i32.add (local.get $y0) (i32.const 1))
+      (i32.add (local.get $x0) (i32.const 12)) (i32.add (local.get $y0) (i32.const 12))
+      (i32.const 0x00C0C0C0))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.add (local.get $x0) (i32.const 1)) (i32.add (local.get $y0) (i32.const 1))
+      (i32.add (local.get $x0) (i32.const 11)) (i32.add (local.get $y0) (i32.const 11))
+      (i32.const 0))
+    (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+      (i32.add (local.get $x0) (i32.const 2)) (i32.add (local.get $y0) (i32.const 2))
+      (i32.add (local.get $x0) (i32.const 11)) (i32.add (local.get $y0) (i32.const 11))
+      (local.get $face))
+    (if (i32.eqz (i32.and (local.get $state) (i32.const 1))) (then (return)))
+    ;; Six 2px strokes: down-right to the elbow, then up-right.
+    (block $done (loop $tick
+      (br_if $done (i32.ge_s (local.get $i) (i32.const 6)))
+      (local.set $y (select (i32.add (local.get $i) (i32.const 4))
+                            (i32.sub (i32.const 10) (local.get $i))
+                            (i32.lt_s (local.get $i) (i32.const 3))))
+      (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+        (i32.add (local.get $x0) (i32.add (local.get $i) (i32.const 3)))
+        (i32.add (local.get $y0) (local.get $y))
+        (i32.add (local.get $x0) (i32.add (local.get $i) (i32.const 4)))
+        (i32.add (local.get $y0) (i32.add (local.get $y) (i32.const 2)))
+        (local.get $mark))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $tick))))
+
+  (func $obm_is_system (param $id i32) (result i32)
+    (i32.and (i32.ge_u (local.get $id) (i32.const 32734))
+             (i32.le_u (local.get $id) (i32.const 32767))))
+
+  (func $gdi_bitmap_create_system (export "gdi_bitmap_create_system") (param $id i32) (result i32)
+    (local $w i32) (local $h i32) (local $stride i32) (local $handle i32)
+    (local $bits i32) (local $kind i32) (local $dir i32) (local $style i32)
+    (local $off i32) (local $x i32) (local $y i32) (local $d i32)
+    ;; kind: 1 scroll arrow (dir, style 0 normal / 1 pressed / 2 inactive),
+    ;; 2 caption button (dir 0 reduce / 1 zoom / 2 restore, style pressed),
+    ;; 3 OBM_CLOSE, 4 menu arrow, 5 combo arrow, 6 check, 7 size grip.
+    (if (i32.and (i32.ge_u (local.get $id) (i32.const 32750))
+                 (i32.le_u (local.get $id) (i32.const 32753)))
+      (then (local.set $kind (i32.const 1))
+            (local.set $dir (i32.sub (i32.const 32753) (local.get $id)))))
+    (if (i32.and (i32.ge_u (local.get $id) (i32.const 32740))
+                 (i32.le_u (local.get $id) (i32.const 32743)))
+      (then (local.set $kind (i32.const 1)) (local.set $style (i32.const 1))
+            (local.set $dir (i32.sub (i32.const 32743) (local.get $id)))))
+    (if (i32.and (i32.ge_u (local.get $id) (i32.const 32734))
+                 (i32.le_u (local.get $id) (i32.const 32737)))
+      (then (local.set $kind (i32.const 1)) (local.set $style (i32.const 2))
+            (local.set $dir (i32.sub (i32.const 32737) (local.get $id)))))
+    (if (i32.and (i32.ge_u (local.get $id) (i32.const 32747))
+                 (i32.le_u (local.get $id) (i32.const 32749)))
+      (then (local.set $kind (i32.const 2))
+            (local.set $dir (i32.sub (i32.const 32749) (local.get $id)))))
+    (if (i32.and (i32.ge_u (local.get $id) (i32.const 32744))
+                 (i32.le_u (local.get $id) (i32.const 32746)))
+      (then (local.set $kind (i32.const 2)) (local.set $style (i32.const 1))
+            (local.set $dir (i32.sub (i32.const 32746) (local.get $id)))))
+    (if (i32.eq (local.get $id) (i32.const 32754)) (then (local.set $kind (i32.const 3))))
+    (if (i32.eq (local.get $id) (i32.const 32739)) (then (local.set $kind (i32.const 4))))
+    (if (i32.eq (local.get $id) (i32.const 32738)) (then (local.set $kind (i32.const 5))))
+    (if (i32.eq (local.get $id) (i32.const 32760)) (then (local.set $kind (i32.const 6))))
+    (if (i32.or (i32.eq (local.get $id) (i32.const 32766)) (i32.eq (local.get $id) (i32.const 32761)))
+      (then (local.set $kind (i32.const 7))))
+    ;; OBM_CHECKBOXES: Delphi's VCL loads it at startup only to size its check
+    ;; boxes (width/4 x height/3), so it must exist even if nothing blits it.
+    (if (i32.eq (local.get $id) (i32.const 32759)) (then (local.set $kind (i32.const 8))))
+    ;; OBM_BTNCORNERS and the OBM_OLD_* set have no artwork
+    ;; here yet: stop and name the id rather than hand back a NULL the app
+    ;; will read as "USER has no such bitmap".
+    (if (i32.eqz (local.get $kind))
+      (then
+        (call $host_log_i32 (i32.const 0xCA0B0B00))
+        (call $host_log_i32 (local.get $id))
+        (unreachable)))
+    (local.set $w (i32.const 16)) (local.set $h (i32.const 16))
+    (if (i32.eq (local.get $kind) (i32.const 2))
+      (then (local.set $w (i32.const 18)) (local.set $h (i32.const 18))))
+    (if (i32.eq (local.get $kind) (i32.const 3))
+      (then (local.set $w (i32.const 36)) (local.set $h (i32.const 18))))
+    (if (i32.or (i32.eq (local.get $kind) (i32.const 4)) (i32.eq (local.get $kind) (i32.const 6)))
+      (then (local.set $w (i32.const 13)) (local.set $h (i32.const 13))))
+    (if (i32.eq (local.get $kind) (i32.const 8))
+      (then (local.set $w (i32.const 52)) (local.set $h (i32.const 39))))
+    (local.set $stride (i32.shl (local.get $w) (i32.const 2)))
+    (memory.fill (global.get $GDI_BITMAP_PLAN) (i32.const 0) (i32.const 48))
+    (i32.store (global.get $GDI_BITMAP_PLAN) (local.get $w))
+    (i32.store offset=4 (global.get $GDI_BITMAP_PLAN) (local.get $h))
+    (i32.store offset=8 (global.get $GDI_BITMAP_PLAN) (i32.const 32))
+    (i32.store offset=12 (global.get $GDI_BITMAP_PLAN) (i32.const 2)) ;; top-down
+    (i32.store offset=16 (global.get $GDI_BITMAP_PLAN) (local.get $stride))
+    (i32.store offset=32 (global.get $GDI_BITMAP_PLAN)
+      (i32.mul (local.get $stride) (local.get $h)))
+    (local.set $handle (call $gdi_bitmap_create_owned
+      (global.get $GDI_BITMAP_PLAN) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0)))
+    (if (i32.eqz (local.get $handle)) (then (return (i32.const 0))))
+    (local.set $bits (load.field.memarg GdiBitmap bits
+      (call $gdi_object_record (local.get $handle))))
+
+    (if (i32.eq (local.get $kind) (i32.const 1))
+      (then
+        (call $obm_button (local.get $bits) (local.get $stride) (i32.const 0)
+          (local.get $w) (local.get $h) (i32.eq (local.get $style) (i32.const 1)))
+        (local.set $off (i32.eq (local.get $style) (i32.const 1)))
+        ;; Up/down: apex column 7, rows 6..9; right/left: columns 6..9 about
+        ;; row 7. An inactive arrow is grey with a white etch one pixel off.
+        (local.set $x (select (i32.const 7) (i32.const 6) (i32.lt_u (local.get $dir) (i32.const 2))))
+        (local.set $y (select (i32.const 6) (i32.const 7) (i32.lt_u (local.get $dir) (i32.const 2))))
+        ;; OBM ids run up, down, right, left; $obm_triangle wants 0 up, 1 down,
+        ;; 2 right, 3 left — the same order.
+        (if (i32.eq (local.get $style) (i32.const 2))
+          (then (call $obm_triangle (local.get $bits) (local.get $stride)
+            (i32.add (local.get $x) (i32.const 1)) (i32.add (local.get $y) (i32.const 1))
+            (i32.const 4) (local.get $dir) (i32.const 0x00FFFFFF))))
+        (call $obm_triangle (local.get $bits) (local.get $stride)
+          (i32.add (local.get $x) (local.get $off)) (i32.add (local.get $y) (local.get $off))
+          (i32.const 4) (local.get $dir)
+          (select (i32.const 0x00808080) (i32.const 0) (i32.eq (local.get $style) (i32.const 2))))))
+
+    (if (i32.eq (local.get $kind) (i32.const 2))
+      (then
+        (call $obm_button (local.get $bits) (local.get $stride) (i32.const 0)
+          (local.get $w) (local.get $h) (local.get $style))
+        (local.set $off (local.get $style))
+        ;; Windows 3.x caption buttons: reduce is a down triangle, zoom an up
+        ;; one, restore both stacked.
+        (if (i32.ne (local.get $dir) (i32.const 0))
+          (then (call $obm_triangle (local.get $bits) (local.get $stride)
+            (i32.add (i32.const 8) (local.get $off))
+            (i32.add (select (i32.const 6) (i32.const 3) (i32.eq (local.get $dir) (i32.const 1)))
+                     (local.get $off))
+            (i32.const 4) (i32.const 0) (i32.const 0))))
+        (if (i32.ne (local.get $dir) (i32.const 1))
+          (then (call $obm_triangle (local.get $bits) (local.get $stride)
+            (i32.add (i32.const 8) (local.get $off))
+            (i32.add (select (i32.const 7) (i32.const 9) (i32.eqz (local.get $dir)))
+                     (local.get $off))
+            (i32.const 4) (i32.const 1) (i32.const 0))))))
+
+    (if (i32.eq (local.get $kind) (i32.const 3))
+      (then
+        ;; Two cells: the application's system-menu box, then the MDI
+        ;; document's shorter one.
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 0x00C0C0C0))
+        (call $obm_menu_bar (local.get $bits) (local.get $stride) (i32.const 0) (i32.const 2))
+        (call $obm_menu_bar (local.get $bits) (local.get $stride) (i32.const 18) (i32.const 4))))
+
+    (if (i32.eq (local.get $kind) (i32.const 4))
+      (then
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 0x00FFFFFF))
+        (call $obm_triangle (local.get $bits) (local.get $stride)
+          (i32.const 5) (i32.const 6) (i32.const 4) (i32.const 2) (i32.const 0))))
+
+    (if (i32.eq (local.get $kind) (i32.const 5))
+      (then
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 0x00C0C0C0))
+        (call $obm_triangle (local.get $bits) (local.get $stride)
+          (i32.const 7) (i32.const 6) (i32.const 4) (i32.const 1) (i32.const 0))))
+
+    (if (i32.eq (local.get $kind) (i32.const 6))
+      (then
+        ;; A three-pixel-thick tick: down-right from (3,6) to (5,8), then up
+        ;; to (9,4).
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 0x00FFFFFF))
+        (local.set $x (i32.const 3))
+        (block $tick_done (loop $tick
+          (br_if $tick_done (i32.gt_s (local.get $x) (i32.const 9)))
+          (local.set $y (select
+            (i32.add (i32.const 3) (local.get $x))
+            (i32.sub (i32.const 13) (local.get $x))
+            (i32.le_s (local.get $x) (i32.const 5))))
+          (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+            (local.get $x) (local.get $y) (i32.add (local.get $x) (i32.const 1))
+            (i32.add (local.get $y) (i32.const 3)) (i32.const 0))
+          (local.set $x (i32.add (local.get $x) (i32.const 1)))
+          (br $tick)))))
+
+    (if (i32.eq (local.get $kind) (i32.const 7))
+      (then
+        ;; Size grip: three pairs of grey diagonals with a white highlight,
+        ;; filling the bottom-right triangle.
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 0x00C0C0C0))
+        (local.set $y (i32.const 0))
+        (block $rows_done (loop $rows
+          (br_if $rows_done (i32.ge_s (local.get $y) (local.get $h)))
+          (local.set $x (i32.const 0))
+          (block $cols_done (loop $cols
+            (br_if $cols_done (i32.ge_s (local.get $x) (local.get $w)))
+            (local.set $d (i32.add (local.get $x) (local.get $y)))
+            (if (i32.ge_s (local.get $d) (i32.const 18))
+              (then
+                (local.set $d (i32.and (i32.sub (local.get $d) (i32.const 18)) (i32.const 3)))
+                (if (i32.lt_u (local.get $d) (i32.const 3))
+                  (then (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+                    (local.get $x) (local.get $y)
+                    (i32.add (local.get $x) (i32.const 1)) (i32.add (local.get $y) (i32.const 1))
+                    (select (i32.const 0x00FFFFFF) (i32.const 0x00808080)
+                      (i32.eqz (local.get $d))))))))
+            (local.set $x (i32.add (local.get $x) (i32.const 1)))
+            (br $cols)))
+          (local.set $y (i32.add (local.get $y) (i32.const 1)))
+          (br $rows)))))
+
+    (if (i32.eq (local.get $kind) (i32.const 8))
+      (then
+        ;; Rows: check box, radio button, three-state box. Columns: plain,
+        ;; checked, pushed, pushed and checked.
+        (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 0x00C0C0C0))
+        (local.set $y (i32.const 0))
+        (block $sheet_rows (loop $sheet_row
+          (br_if $sheet_rows (i32.ge_s (local.get $y) (i32.const 3)))
+          (local.set $x (i32.const 0))
+          (block $sheet_cols (loop $sheet_col
+            (br_if $sheet_cols (i32.ge_s (local.get $x) (i32.const 4)))
+            (call $obm_check_cell (local.get $bits) (local.get $stride)
+              (i32.mul (local.get $x) (i32.const 13)) (i32.mul (local.get $y) (i32.const 13))
+              (local.get $y) (local.get $x))
+            (local.set $x (i32.add (local.get $x) (i32.const 1)))
+            (br $sheet_col)))
+          (local.set $y (i32.add (local.get $y) (i32.const 1)))
+          (br $sheet_row)))))
+
+    (drop (call $gdi_write_surface_upload (local.get $handle) (i32.const 0)
+      (i32.const 0) (local.get $w) (local.get $h)))
     (local.get $handle))
 
   (func $gdi_bitmap_create_dibitmap (param $hdc i32) (param $info i32) (param $pixels i32)
@@ -888,6 +1271,126 @@
         (i32.ne (local.get $pixels) (i32.const 0)))
       (i32.const 0) (local.get $usage)
       (call $gdi_dc_selected_palette (local.get $hdc))))
+
+  ;; A BITMAPINFO is read in place through one translated pointer, header
+  ;; and color table alike, so it has to be linear in WASM memory. A guest heap
+  ;; block that straddles two sparse pages need not be: adjacent guest pages
+  ;; can be backed by blocks that are nowhere near each other. SimCity 2000's
+  ;; power-plant picker builds a 1064-byte BITMAPINFO at 0x7ee3aff8, where
+  ;; biHeight is the first dword of the next page. CreateDIBSection read the
+  ;; height from unrelated memory and returned NULL (no coal picture), or, when
+  ;; only the color table crossed, built the picture with a garbage palette.
+  ;; Return the direct pointer when the whole span is affine, and otherwise a
+  ;; copy gathered page by page.
+  ;; Bytes of BITMAPINFO the header at $ga describes: header, color table and
+  ;; any BI_BITFIELDS masks, clamped to the scratch block. A caller that passes
+  ;; a bare BITMAPINFOHEADER is counted as if its color table were present,
+  ;; which over-reads a few bytes of guest memory and never under-copies.
+  ;; One field of the structure, from the gathered copy when there is one.
+  (func $gdi_bitmap_info_u32 (param $ga i32) (param $wa i32) (param $off i32) (result i32)
+    (if (local.get $wa)
+      (then (return (i32.load (i32.add (local.get $wa) (local.get $off))))))
+    (call $gl32 (i32.add (local.get $ga) (local.get $off))))
+  (func $gdi_bitmap_info_u16 (param $ga i32) (param $wa i32) (param $off i32) (result i32)
+    (if (local.get $wa)
+      (then (return (i32.load16_u (i32.add (local.get $wa) (local.get $off))))))
+    (call $gl16 (i32.add (local.get $ga) (local.get $off))))
+
+  (func $gdi_bitmap_info_size (param $ga i32) (result i32)
+    (call $gdi_bitmap_info_size_at (local.get $ga) (i32.const 0)))
+
+  (func $gdi_bitmap_info_size_at (param $ga i32) (param $wa i32) (result i32)
+    (local $size i32) (local $header i32) (local $bpp i32) (local $colors i32)
+    (if (i32.eqz (local.get $ga)) (then (return (i32.const 0))))
+    (local.set $header (call $gdi_bitmap_info_u32 (local.get $ga) (local.get $wa) (i32.const 0)))
+    (if (i32.eq (local.get $header) (i32.const 12))
+      (then
+        (local.set $bpp (call $gdi_bitmap_info_u16 (local.get $ga) (local.get $wa) (i32.const 10)))
+        (local.set $size (i32.add (i32.const 12)
+          (select (i32.mul (i32.shl (i32.const 1) (local.get $bpp)) (i32.const 3))
+            (i32.const 0) (i32.le_u (local.get $bpp) (i32.const 8))))))
+      (else
+        (local.set $bpp (call $gdi_bitmap_info_u16 (local.get $ga) (local.get $wa) (i32.const 14)))
+        (local.set $colors (call $gdi_bitmap_info_u32 (local.get $ga) (local.get $wa) (i32.const 32)))
+        (if (i32.and (i32.eqz (local.get $colors))
+              (i32.le_u (local.get $bpp) (i32.const 8)))
+          (then (local.set $colors (i32.shl (i32.const 1) (local.get $bpp)))))
+        (if (i32.gt_u (local.get $colors) (i32.const 256))
+          (then (local.set $colors (i32.const 256))))
+        (local.set $size (i32.add (local.get $header)
+          (i32.shl (local.get $colors) (i32.const 2))))
+        ;; BI_BITFIELDS masks follow a plain 40-byte header.
+        (if (i32.and (i32.eq (local.get $header) (i32.const 40))
+              (i32.eq (call $gdi_bitmap_info_u32 (local.get $ga) (local.get $wa) (i32.const 16))
+            (i32.const 3)))
+          (then (local.set $size (i32.add (local.get $size) (i32.const 12)))))))
+    (if (i32.gt_u (local.get $size) (global.get $GDI_BITMAP_INFO_SCRATCH_SIZE))
+      (then (local.set $size (global.get $GDI_BITMAP_INFO_SCRATCH_SIZE))))
+    (local.get $size))
+
+  (func $gdi_bitmap_info_wa (param $ga i32) (result i32)
+    (local $size i32) (local $wa i32) (local $scratch i32) (local $i i32)
+    (if (i32.eqz (local.get $ga)) (then (return (i32.const 0))))
+    (local.set $size (call $gdi_bitmap_info_size (local.get $ga)))
+    (local.set $wa (call $g2w_affine_span (local.get $ga) (local.get $size)))
+    (if (i32.ne (local.get $wa) (global.get $NULL_SENTINEL))
+      (then (return (local.get $wa))))
+    (local.set $scratch (global.get $GDI_BITMAP_INFO_SCRATCH))
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $size)))
+      (i32.store8 (i32.add (local.get $scratch) (local.get $i))
+        (call $gl8 (i32.add (local.get $ga) (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (local.get $scratch))
+
+  ;; GetDIBits is told how big the structure is by what it writes, not by what
+  ;; arrives: a format query comes in as a bare 40-byte header and leaves
+  ;; describing a 256-entry color table. Cover a full table, so the call cannot
+  ;; write past the span we checked (or gathered) and lose the tail into the
+  ;; page the caller's buffer straddles into.
+  (func $gdi_bitmap_info_wa_out (param $ga i32) (result i32)
+    (local $size i32) (local $header i32) (local $wa i32) (local $scratch i32) (local $i i32)
+    (if (i32.eqz (local.get $ga)) (then (return (i32.const 0))))
+    (local.set $header (call $gl32 (local.get $ga)))
+    (local.set $size (i32.add
+      (select (i32.const 12) (local.get $header) (i32.eq (local.get $header) (i32.const 12)))
+      (select (i32.const 768) (i32.const 1036)      ;; 256 RGBTRIPLEs / RGBQUADs + masks
+        (i32.eq (local.get $header) (i32.const 12)))))
+    (if (i32.gt_u (local.get $size) (global.get $GDI_BITMAP_INFO_SCRATCH_SIZE))
+      (then (local.set $size (global.get $GDI_BITMAP_INFO_SCRATCH_SIZE))))
+    (if (i32.lt_u (local.get $size) (call $gdi_bitmap_info_size (local.get $ga)))
+      (then (local.set $size (call $gdi_bitmap_info_size (local.get $ga)))))
+    (local.set $wa (call $g2w_affine_span (local.get $ga) (local.get $size)))
+    (if (i32.ne (local.get $wa) (global.get $NULL_SENTINEL))
+      (then (return (local.get $wa))))
+    (local.set $scratch (global.get $GDI_BITMAP_INFO_SCRATCH))
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $size)))
+      (i32.store8 (i32.add (local.get $scratch) (local.get $i))
+        (call $gl8 (i32.add (local.get $ga) (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (local.get $scratch))
+
+  ;; GetDIBits fills in the caller's BITMAPINFO, so a gathered copy has to go
+  ;; back byte by byte. A $wa that is not the scratch block is the caller's own
+  ;; memory and was written in place.
+  (func $gdi_bitmap_info_writeback (param $ga i32) (param $wa i32)
+    (local $size i32) (local $i i32)
+    (if (i32.ne (local.get $wa) (global.get $GDI_BITMAP_INFO_SCRATCH)) (then (return)))
+    ;; Size the copy-back from the header the call filled in, not from the one
+    ;; the caller passed: a GetDIBits format query arrives with a bare 40-byte
+    ;; header and leaves describing a bitmap with a 256-entry color table.
+    (local.set $size (call $gdi_bitmap_info_size_at (local.get $ga) (local.get $wa)))
+    (if (i32.lt_u (local.get $size) (call $gdi_bitmap_info_size (local.get $ga)))
+      (then (local.set $size (call $gdi_bitmap_info_size (local.get $ga)))))
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $size)))
+      (call $gs8 (i32.add (local.get $ga) (local.get $i))
+        (i32.load8_u (i32.add (local.get $wa) (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy))))
 
   (func $gdi_bitmap_create_dib_section (param $hdc i32) (param $info i32)
         (param $usage i32) (result i32)
@@ -1416,6 +1919,8 @@
     (local $resource_name i32) (local $data i32) (local $size i32)
     (if (i32.eq (local.get $instance) (i32.const -1))
       (then (return (call $gdi_bitmap_create_common_toolbar (local.get $name)))))
+    (if (i32.and (i32.eqz (local.get $instance)) (call $obm_is_system (local.get $name)))
+      (then (return (call $gdi_bitmap_create_system (local.get $name)))))
     (local.set $resource_name
       (call $gdi_bitmap_resource_name (local.get $name) (local.get $wide)))
     (if (i32.eqz (local.get $resource_name)) (then (return (i32.const 0))))

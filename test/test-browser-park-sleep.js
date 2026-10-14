@@ -132,6 +132,11 @@ assert.strictEqual(WineAssembly.GUEST_TICK_POLL_STRIDE, 4,
   assert.strictEqual(pendingTimers().length, 1, 'a positive delay schedules a timeout');
   assert.strictEqual(pendingTimers()[0].ms, 12, 'the requested delay is honoured');
   runTimer();
+  // The timer only posts the slice: running it from inside the timer callback
+  // would nest the next park's timer and let the browser clamp it to 4ms.
+  assert.strictEqual(ran, 1, 'the timeout does not run the slice inline');
+  assert.strictEqual(wine._pendingStep, step, 'the timeout posts the slice on the port');
+  wine._stepListenPort.onmessage();
   assert.strictEqual(ran, 2, 'the timeout runs the slice');
 
   // Nothing may sleep past the cap: a wake source we forgot degrades to 20Hz
@@ -150,11 +155,38 @@ assert.strictEqual(WineAssembly.GUEST_TICK_POLL_STRIDE, 4,
   // A stopped host cancels its sleep rather than leaving a timer holding the
   // 512MB shared memory alive.
   wine._scheduleStep(step, 40);
+  let resetWait = 0;
+  wine._gameWait = { reset() { resetWait++; } };
   wine.stop({ repaint: false });
+  assert.strictEqual(resetWait, 1, 'stop() releases pending download decisions');
   assert.strictEqual(pendingTimers().length, 0, 'stop() cancels a pending parked sleep');
 }
 
 // ------------------------------------------------------------ sleep deadline
+
+// The Worker main thread shares the same input/resume wake path, while both
+// its own WM_TIMER and a helper's wait deadline bound its sleep.
+{
+  const wine = new WineAssembly();
+  wine.running = true;
+  wine._schedArms = new Set(['p']);
+  wine.threadManager = {
+    hasActiveThreads: () => true,
+    freeRunParkBound: () => 17,
+  };
+  wine._workerParkMain(40, nowMs);
+  assert.strictEqual(wine._workerMsgParkUntil, nowMs + 17);
+  wine._workerParkMain(7, nowMs);
+  assert.strictEqual(wine._workerMsgParkUntil, nowMs + 7,
+    'an earlier main-thread timer takes precedence over a helper wait');
+  let ran = 0;
+  wine._scheduleStep(() => ran++, 17);
+  wine.threadManager.onRunnable();
+  assert.strictEqual(pendingTimers().length, 0,
+    'creating or resuming a helper cancels the Worker main park');
+  wine._stepListenPort.onmessage();
+  assert.strictEqual(ran, 1);
+}
 
 function parkedHost(options = {}) {
   const wine = new WineAssembly();

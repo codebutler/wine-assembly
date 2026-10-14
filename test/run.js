@@ -2,27 +2,43 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { createHostImports } = require('../lib/host-imports');
+const frameIntervals = require('../lib/frame-intervals');
 const { loadDlls, callDllMain, detectRequiredDlls, shouldReportNtForDlls, loadWin16Dlls } = require('../lib/dll-loader');
 const { inputEventHwnd } = require('../lib/host-window');
 const { SYSTEM_DATA_FILES, STOCK_ICON_FILES, resolveDllGraph, mountLoadedDllFiles, mountSystemDataFiles,
-  stageAndLoadPe, setExeName, setExeDrive, setExtraCmdline,
-  setEnvironmentVariable, handleLoadLibraryYield, handleComDllYield } = require('../lib/process-boot');
+  stageAndLoadPe, applyVirtualAllocTop, setExeName, setExeDrive, setExtraCmdline,
+  setEnvironmentVariable, handleLoadLibraryYield, serviceLoadLibraryYieldSync,
+  handleComDllYield, findVfsDllBytes } = require('../lib/process-boot');
 const {
   applyExeCompatibilityPatches: applyProfilePatches,
   applyLaunchPreferences: applyProfileLaunchPrefs,
   onThreadExit: profileThreadExit,
 } = require('../lib/app-profiles');
 const {
-  processSharedCtx, adoptThreadPrimitives, makeWorkerApiLogger,
+  processSharedCtx, adoptThreadPrimitives, makeWorkerApiLogger, workerApiShouldLog,
   createInheritedWasmGlobals, recordInheritedWasmGlobal,
 } = require('../lib/worker-imports');
 const { seedExeImage, win16FileCandidates, residentWin16Module } = require('../lib/vfs-seed');
 const { expandIncludePatterns, guestPathInTree } = require('../lib/vfs-host-files');
-const { saveVfsToHost } = require('../lib/vfs-export');
+const { saveVfsToHost, mergeVfsTreeBack } = require('../lib/vfs-export');
+
+// A --spawn-processes child has ended: its C:\ and registry replace what it
+// was started with (see spawnVfsChild).
+function mergeChildState(vfs, storage, before, outDir, regOut) {
+  const { written, deleted } = mergeVfsTreeBack(vfs, before, outDir);
+  let keys = 0;
+  if (fs.existsSync(regOut)) {
+    storage.clearStore();
+    keys = storage.importStore(JSON.parse(fs.readFileSync(regOut, 'utf8')));
+  }
+  console.log(`[spawn] child state merged: ${written} file(s) written, ${deleted} deleted, ${keys} registry/INI key(s)`);
+}
 const {
   decodeMfcCString,
   g2w: translateGuest,
   readSyncObjectName,
+  walkStackFrame,
+  formatFrames,
 } = require('../lib/mem-utils');
 const { formatCall: fmtApiCall, formatRet: fmtApiRet, formatOutParams: fmtApiOutParams, walkFrames } = require('../lib/api-format');
 const { fontMounts, BUNDLED_BITMAP_FONTS } = require('../lib/font-substitutions');
@@ -31,12 +47,13 @@ const { CliVideoRecorder } = require('../lib/cli-recorder');
 const { renderTinySynthNotes } = require('../lib/tinysynth-offline');
 const { createBatchClock } = require('../lib/batch-clock');
 const { createGuestClockSource } = require('../lib/guest-clock');
+const { createStartupClock } = require('../lib/startup-clock');
 const { parseShellLaunchCommand, resolveShellLaunchPath } = require('../host.js');
 // Fixed memory-map addresses, from the map declared in src/00-regions.wat.
 const RegionMap = require('../lib/region-map.generated.js');
 let PNG;
 try { ({ PNG } = require('pngjs')); } catch (_) {}
-let createCanvas, Win98Renderer;
+let createCanvas, Win98Renderer, rendererLoadError = null;
 try {
   // A pure-JS raster surface, not a native canvas -- see lib/raster-canvas.js.
   // No font registration: WAT measures and rasterizes all text from its own
@@ -44,7 +61,7 @@ try {
   // dead (0 calls for notepad, calc and mspaint).
   createCanvas = require('../lib/canvas-compat').createCanvas;
   Win98Renderer = require('../lib/renderer').Win98Renderer;
-} catch (_) {}
+} catch (e) { rendererLoadError = e; }
 
 const ROOT = path.join(__dirname, '..');
 const SRC_DIR = path.join(ROOT, 'src');
@@ -96,6 +113,32 @@ async function decodeMountedImage(hostPath) {
 }
 // Parse args (need these before autoBuild)
 const args = process.argv.slice(2);
+// WINE_RUN_EXTRA_ARGS='--lazy-ranges=5 ...': appended to every run.js command
+// line, so an existing gameplay test that spawns run.js becomes, unedited, the
+// same route under an extra flag (the lazy-loading audit runs each one this
+// way). Whitespace-separated; a flag given twice resolves as getArg reads it.
+if (process.env.WINE_RUN_EXTRA_ARGS) {
+  const extra = process.env.WINE_RUN_EXTRA_ARGS.split(/\s+/).filter(Boolean);
+  args.push(...extra);
+  process.argv.push(...extra);
+  console.error(`[run] WINE_RUN_EXTRA_ARGS: ${extra.join(' ')}`);
+}
+// --tee=PATH: also write everything this process prints (stdout and stderr)
+// to PATH. With WINE_RUN_EXTRA_ARGS it keeps the log of a run a test spawned
+// and only parsed, e.g. for tools/io-range-census.js over its --trace-fs.
+{
+  const tee = args.find(value => value.startsWith('--tee='));
+  if (tee) {
+    const fd = fs.openSync(tee.slice('--tee='.length), 'w');
+    for (const stream of [process.stdout, process.stderr]) {
+      const write = stream.write.bind(stream);
+      stream.write = (chunk, encoding, callback) => {
+        try { fs.writeSync(fd, typeof chunk === 'string' ? chunk : Buffer.from(chunk)); } catch (_) {}
+        return write(chunk, encoding, callback);
+      };
+    }
+  }
+}
 const getArg = (name, def) => {
   const prefix = `--${name}=`;
   const arg = args.find(value => value.startsWith(prefix));
@@ -126,6 +169,17 @@ const NO_RENDERER = hasFlag('no-renderer'); // --no-renderer: skip CLI canvas/re
 // Keep capability opt-in separate: the implementation is not a full SM profile.
 const D3D9_RENDERER = getArg('d3d9-renderer', null);
 const D3D9_PROGRAMMABLE = hasFlag('d3d9-programmable');
+// --gl-renderer=software: draw OpenGL in WAT (src/09a8g-gl-raster.wat) into a
+// DirectDraw surface. Needs no --headless-gl and no native deps, so it is the
+// only way a GL app gets a context on a box without a display; --png captures
+// the surface like any DX primary. The browser twin is ?gl-renderer=software.
+const GL_RENDERER = getArg('gl-renderer', null);
+const GLIDE_RENDERER = getArg('glide-renderer', 'webgl');
+if (!['software', 'webgl'].includes(GLIDE_RENDERER))
+  throw new Error('--glide-renderer must be software or webgl');
+if (GL_RENDERER !== null && GL_RENDERER !== 'software' && GL_RENDERER !== 'webgl') {
+  throw new Error('--gl-renderer must be software or webgl');
+}
 // --d3d-worker: rasterize D3DIM (DX2-7) draws on a render worker_thread over
 // the shared memory, the CLI twin of the browser's render Worker. The guest's
 // main instance can Atomics.wait here, so no --threads is needed.
@@ -199,6 +253,11 @@ const MAX_SECONDS = parseFloat(getArg('max-seconds', '0')) || 0;
 // (i32.shl (memory.size) 16): correct up to 3GB because every comparison it
 // feeds is unsigned, wrapping to 0 at exactly 4GB. 2048 is the last value that
 // is safe without auditing that arithmetic again.
+// An app whose registry entry sets `bigMemory: true` gets 2048 by default, the
+// first size the browser's ladder (host.js) tries for it; --memory-mb wins.
+// Before this the CLI ignored the flag, and Pirates! (2004) ran out of guest
+// heap loading its assets on the CLI while the page did not.
+const MEMORY_MB_EXPLICIT = getArg('memory-mb', null) !== null;
 const MEMORY_PAGES = (() => {
   const mb = parseInt(getArg('memory-mb', '512'), 10);
   if (!(mb >= 512 && mb <= 2048)) { console.error(`--memory-mb must be 512..2048, got ${mb}`); process.exit(2); }
@@ -234,6 +293,13 @@ const TRACE_API = !!TRACE_API_RAW;
 const TRACE_API_FILTER = (TRACE_API_RAW && TRACE_API_RAW.includes('='))
   ? new Set(TRACE_API_RAW.split('=')[1].split(',').map(s => s.trim()).filter(Boolean))
   : null;
+// --trace-api-paused (with --quiet-api): install the --trace-api logging but keep
+// the WAT API log OFF until a control command {"action":"trace-api","on":true}
+// turns it on. Any --trace-api switches every Win32 call to three host calls
+// (log, log_i32, log_api_exit), which slowed Black & White 2 about 4x and moved
+// a route's timing out from under its inputs; paused, the run is full speed up
+// to the moment worth tracing. {"on":false} pauses it again.
+const TRACE_API_PAUSED = hasFlag('trace-api-paused');
 const TRACE_API_DEDUP = hasFlag('trace-api-dedup'); // --trace-api-dedup: collapse N consecutive identical lines into "(xN)"
 const TRACE_API_COUNTS = hasFlag('trace-api-counts'); // --trace-api-counts: print histogram of API call names at end
 const TRACE_MOUSE_STATE = hasFlag('trace-mouse-state'); // --trace-mouse-state: log renderer mouse state changes seen by host imports
@@ -254,15 +320,29 @@ const TRACE_STACK_FILTER = (() => {
   }
   return filter;
 })();
+// --trace-stack-scan: for code built without frame pointers, where the EBP
+// chain is garbage (NFS II prints frames=[0x0003ffff]), list the stack dwords
+// that are return addresses instead: code pointers preceded by a call
+// instruction (mem-utils walkStackFrame). A stale return address left in a
+// dead slot matches too, so trust the innermost few and confirm with --count.
+const TRACE_STACK_SCAN = hasFlag('trace-stack-scan');
+function traceStackLine(getEbp, esp, dv, g2w, imageBase, buffer, depth) {
+  if (!TRACE_STACK_SCAN) return `frames=[${walkFrames(getEbp, dv, g2w, depth).map(hex).join(' <- ')}]`;
+  const frames = walkStackFrame(buffer, esp >>> 0, imageBase >>> 0,
+    { depth: depth * 16, codeLo: imageBase >>> 0, codeHi: 0x80000000 });
+  return formatFrames(frames, depth) || 'frame=[]';
+}
 const QUIET_API = hasFlag('quiet-api');               // --quiet-api: suppress [API] one-line log spam
 const API_COUNTS_TOP = parseInt(getArg('api-counts-top', '40'));
 const ESP_DELTA = hasFlag('esp-delta');   // --esp-delta: log ESP before/after each API call (for stdcall pop audit)
 const TRACE_ESP = getArg('trace-esp', null); // --trace-esp=LO-HI: per-block (eip, esp) + Δ from prev block (hex; HI optional)
 const TRACE_EIP_RANGE = getArg('trace-eip-range', null); // --trace-eip-range=LO-HI: log every block-entry EIP inside [LO,HI] (module+0xVA OK)
+const TRACE_EIP_FROM = parseInt(getArg('trace-eip-from', '0'), 10) || 0; // --trace-eip-from=BATCH: arm --trace-eip-range at that batch instead of 0 (trace one late window without paying for the whole boot)
 const TRACE_EIP_DETAIL = hasFlag('trace-eip-detail'); // --trace-eip-detail: include regs/flags/memory with --trace-eip-range
 const TRACE_EIP_STREAM = hasFlag('trace-eip-stream'); // --trace-eip-stream: write EIP lines immediately instead of buffering to the next batch boundary
 const TRACE_EIP_DUMP = getArg('trace-eip-dump', null); // --trace-eip-dump=0xADDR:LEN[,..]: compact dump on each detailed EIP hit
-const experiments = require('./runner-experiments').createRunnerExperiments({ hasFlag, getArg });
+const experiments = require('./runner-experiments').createRunnerExperiments({ hasFlag, getArg,
+  appPolicy: () => APP_ENTRY });
 const TRACE_GDI = hasFlag('trace-gdi');   // --trace-gdi: log GDI calls (CreateBitmap, BitBlt, etc.)
 const GDI_STATS = hasFlag('gdi-stats');   // --gdi-stats: print software-raster span/pixel totals at exit
 const LATENCY_STATS = hasFlag('latency-stats'); // --latency-stats: measure injected input -> next surface blit
@@ -273,6 +353,38 @@ const LATENCY_STATS = hasFlag('latency-stats'); // --latency-stats: measure inje
 // under a much larger, much flatter one. Pass the batch gameplay starts at.
 const FRAME_STATS_ARG = getArg('frame-stats', null);
 const FRAME_STATS = FRAME_STATS_ARG !== null || hasFlag('frame-stats');
+// --frame-stats-out=FILE: also write the raw interval series as JSON.
+const FRAME_STATS_OUT = getArg('frame-stats-out', null);
+// --present-distinct[=FROM_BATCH]: per DirectDraw present, hash the presented
+// surface and report presents vs presents that changed the picture. The
+// question it answers is whether PRESENT/s is a frame rate for this app.
+const PRESENT_DISTINCT_ARG = getArg('present-distinct', null);
+const PRESENT_DISTINCT = {
+  on: PRESENT_DISTINCT_ARG !== null || hasFlag('present-distinct'),
+  from: Math.max(0, parseInt(PRESENT_DISTINCT_ARG || '0', 10) || 0),
+  presents: 0, counted: 0, changed: 0, unreadable: 0,
+  last: null, unique: new Set(), slots: new Map(),
+  // Guest ms at the first and last counted present, so the report can state
+  // a RATE per guest second -- the only unit a present cap is written in. A
+  // count per batch is not one: a batch is a budget of blocks, and the guest
+  // time it stands for is --tick-ms-per-batch (or the wall clock under
+  // --real-ticks) plus whatever Sleep/pacing charged on top.
+  // Per counted present: its guest ms and whether it changed the picture
+  // (null for an unhashed GPU present). The second half of the span, by guest
+  // time, is reported on its own as the steady state -- the first half holds
+  // whatever loading screen or fade the app started in.
+  firstMs: null, lastMs: null, times: [], changedTimes: [],
+  // GPU presents (D3D Present, SwapBuffers) are counted but not hashed: their
+  // pixels live in a backend surface, not in a DirectDraw DIB.
+  gpu: 0,
+  // A changed hash says only that SOMETHING moved. A game that writes its 3D
+  // view and then its HUD as two presents changes the hash twice per frame,
+  // so "every present is distinct" would still double-count. Per slot, keep
+  // the previous picture and histogram the bounding box of what each present
+  // changed: one recurring near-full box is one present per frame; a big box
+  // alternating with a small one is a split frame.
+  prevBytes: new Map(), rects: new Map(), seq: [],
+};
 // Present and composite after every batch, the way the browser does. Off by
 // default: nobody looks at a headless canvas between captures, and it is work a
 // real player never pays, charged to every benchmark. Measured 2026-09-19 on
@@ -306,8 +418,97 @@ const TRACE_CLIP = hasFlag('trace-clip'); // --trace-clip: log _excludeChildrenC
 const TRACE_COMPOSITE = hasFlag('trace-composite'); // --trace-composite: one line per repaint: which path composited, and what each window contributed
 const TRACE_DX = hasFlag('trace-dx');   // --trace-dx: log DirectX COM methods with decoded rects/surface metadata
 const DX_SURFACES = hasFlag('dx-surfaces'); // --dx-surfaces: print the DX_OBJECTS surface manifest at exit
+// --dump-dx-surfaces=DIR: at exit, write every live DX surface as DIR/slotN-WxH-FMT.png, decoded by its
+// real pixel format (565/555/1555/4444/8888) through the same WAT decoder both D3DIM backends sample with.
+const DUMP_DX_SURFACES = getArg('dump-dx-surfaces', null);
+const GL_CENSUS = hasFlag('gl-census'); // --gl-census: at exit, which GL entry points this run actually issued, and whether the WAT mirror stayed trusted
+// --trace-gl[=Name1,Name2]: one line per GL command as the backend receives it,
+// arguments as hex with a float reading beside any word that looks like one
+// (GL passes GLfloat and GLenum through the same stack slots), and for a
+// packed draw its vertex count and first vertex. Honours --trace-from/-to.
+const TRACE_GL_RAW = args.find(a => a === '--trace-gl' || a.startsWith('--trace-gl='));
+const TRACE_GL_VERTS = hasFlag('trace-gl-verts'); // with --trace-gl: print every vertex of each packed draw
+if (TRACE_GL_RAW) {
+  const GLCompatTrace = require('../lib/gl-compat');
+  const only = TRACE_GL_RAW.includes('=')
+    ? new Set(TRACE_GL_RAW.slice(TRACE_GL_RAW.indexOf('=') + 1).split(',').filter(Boolean)) : null;
+  const names = GLCompatTrace.OP_NAMES || GLCompatTrace.CALLS;
+  // Entry points whose arguments are all GLdouble, and how many.
+  const GL_DOUBLE_ARGS = { gluLookAt: 9, gluPerspective: 4, gluOrtho2D: 4, glOrtho: 6,
+    glFrustum: 6, glDepthRange: 2, glClearDepth: 1, glTranslated: 3, glScaled: 3, glRotated: 4 };
+  const word = (dv, off) => {
+    const u = dv.getUint32(off, true) >>> 0;
+    const f = dv.getFloat32(off, true);
+    const a = Math.abs(f);
+    const floaty = u > 0xFFFF && Number.isFinite(f) && a >= 1e-4 && a <= 1e6;
+    return floaty ? `0x${u.toString(16)}~${+f.toPrecision(5)}` : `0x${u.toString(16)}`;
+  };
+  GLCompatTrace.hooks.trace = (slot, opcode, aux, capture) => {
+    if (!traceWindowOpen()) return;
+    const name = names[slot] || `op${opcode}`;
+    if (only && !only.has(name)) return;
+    const parts = [];
+    const doubles = GL_DOUBLE_ARGS[name] || 0;
+    if (capture && capture.buffer && doubles && capture.stackBytes >= 4 + doubles * 8) {
+      // Every argument is a GLdouble: print them as numbers, all of them.
+      // Split into words and capped at ten, gluLookAt lost its up vector.
+      const dv = new DataView(capture.buffer, capture.stackOffset, capture.stackBytes);
+      for (let i = 0; i < doubles; i++) parts.push(`${+dv.getFloat64(4 + i * 8, true).toPrecision(6)}`);
+    } else if (capture && capture.buffer && capture.stackBytes >= 8) {
+      const dv = new DataView(capture.buffer, capture.stackOffset, capture.stackBytes);
+      for (let off = 4; off + 4 <= capture.stackBytes && parts.length < 10; off += 4) parts.push(word(dv, off));
+    }
+    let tail = '';
+    if (capture && capture.pointerOffset && capture.pointerLength) {
+      tail = ` ptr=${capture.pointerLength}B`;
+      if (capture.pointerLength % 76 === 0) {
+        const v = new Float32Array(capture.buffer, capture.pointerOffset, 19);
+        tail += ` verts=${capture.pointerLength / 76} v0=(${Array.from(v.slice(0, 3), x => +x.toPrecision(4))})`
+          + ` rgba=(${Array.from(v.slice(3, 7), x => +x.toPrecision(3))})`;
+        if (TRACE_GL_VERTS) {
+          // --trace-gl-verts: every vertex of the packed draw, object-space
+          // x,y,z and unit-0 u,v, for finding the one triangle that is wrong.
+          const all = new Float32Array(capture.buffer, capture.pointerOffset, capture.pointerLength / 4);
+          const rows = [];
+          for (let i = 0; i + 19 <= all.length; i += 19) {
+            rows.push(`  [gl]   v${i / 19} xyz=(${Array.from(all.slice(i, i + 3), x => +x.toPrecision(6))}) w=${+all[i + 14].toPrecision(4)}`
+              + ` uv=(${+all[i + 7].toPrecision(4)},${+all[i + 8].toPrecision(4)})`
+              + (all[i + 16] !== 1 ? ` q=${+all[i + 16].toPrecision(4)}` : ''));
+          }
+          tail += '\n' + rows.join('\n');
+        }
+      } else if (capture.pointerLength <= 64 && capture.pointerLength % 4 === 0) {
+        // A small array argument (glFogfv, glLightfv, glLoadMatrixf): its
+        // values, since the guest pointer is gone by the time anyone asks.
+        const dv = new DataView(capture.buffer, capture.pointerOffset, capture.pointerLength);
+        const vals = [];
+        for (let off = 0; off < capture.pointerLength; off += 4) vals.push(+dv.getFloat32(off, true).toPrecision(5));
+        tail += ` [${vals.join(', ')}]`;
+      }
+    }
+    console.log(`[gl] ${traceGateBatch >= 0 ? `b${traceGateBatch} ` : ''}${name}(${parts.join(', ')}) aux=0x${(aux >>> 0).toString(16)}${tail}`);
+  };
+}
 const TRACE_DX_RAW = hasFlag('trace-dx-raw'); // --trace-dx-raw: on each Execute, walk+hexdump the full instruction stream
 const TRACE_FS = hasFlag('trace-fs');     // --trace-fs: log filesystem CreateFile hits/misses
+// --lazy-ranges[=MS]: mount a registry entry's lazy files (`loadMode: 'lazy'`
+// or `'background'`, and legacy `httpRange` not marked `loadMode: 'required'`)
+// the way the page does -- provider-backed, async-only, MS of latency per
+// chunk read -- so
+// a headless run parks on cache misses exactly like a browser on HTTP ranges.
+// Its `preloadRanges` are fetched and pinned before the guest starts, as in
+// host.js; --no-preload-ranges skips them (the control arm that shows why a
+// file needs them). Without the flag those files are plain eager mounts.
+const LAZY_RANGES = hasFlag('lazy-ranges') || argHas('lazy-ranges');
+const LAZY_RANGES_MS = Math.max(0, Number(getArg('lazy-ranges', '0')) || 0);
+// --lazy-cache=legacy: the streamed-file cache shape before 1MB chunks and
+// sequential prefetch (256KB x 64 chunks, read-ahead on every miss, no
+// background prefetch) -- the control arm for measuring them. Default: the
+// page's shape (lib/byte-provider.js defaults).
+const LAZY_CACHE_OPTS = getArg('lazy-cache', '') === 'legacy'
+  ? { chunkSize: 256 * 1024, maxChunks: 64, readAhead: 1, prefetch: 0, sequentialReadAhead: false }
+  : undefined;
+const NO_PRELOAD_RANGES = hasFlag('no-preload-ranges');
 const TRACE_INI = hasFlag('trace-ini');   // --trace-ini: log GetPrivateProfileString resolutions
 const TRACE_REG = hasFlag('trace-reg');   // --trace-reg: log registry RegOpen/Query/Create/Set/Enum/Close
 const TRACE_SEH = hasFlag('trace-seh');   // --trace-seh: log SEH chain operations
@@ -337,16 +538,59 @@ const TRACE_WIN16_DDE = (getArg('trace-win16', '') || '').split(',').includes('d
 // left in it -- Visual Basic says "Division by zero" from a status read, which
 // can be an arbitrary distance from the divide that set ZE.
 const TRACE_FPU = hasFlag('trace-fpu');
+// --trace-code-writes: every guest write that retired decoded code -- address,
+// width, writer EIP, blocks dropped -- and every block retired by an
+// overlapping publish, as `retired entry <- publishing entry` pairs. The first
+// 40 of each print as they happen; the exit summary ranks them. Reach for it
+// when block decodes are high: a pair that recurs thousands of times is two
+// entries re-decoding each other with no guest write (Heroes III's fold bug),
+// and pair it with tools/code-drift.js to tell real SMC from that.
+// --trace-code-writes=all also counts the writes the shared code map let
+// through that retired NOTHING (false invalidations: a data store beside
+// code), ranked by page and writer EIP. Slow: one host call per such write.
+const TRACE_CODE_WRITES = hasFlag('trace-code-writes') || getArg('trace-code-writes', null) !== null;
+const TRACE_CODE_WRITES_ALL = getArg('trace-code-writes', null) === 'all';
 const TRACE_NET = hasFlag('trace-net');   // --trace-net: log every vln/1 frame on the virtual LAN wire
 // --vlan-ip=10.0.0.2: this process's room address (host of the room keeps
 // 10.0.0.1, which a guest can reach by typing "10.1"). --vlan-wire joins the
 // segment offered by the parent process
 // over child IPC, which is how two emulators share one room switch.
 const VLAN_IP = getArg('vlan-ip', null);
+// Per-app Nagle-style pacing of small virtual-LAN TCP sends (lib/apps.js
+// `vlanNagleMs`); --vlan-nagle-ms=N overrides it, 0 turns it off.
+const VLAN_NAGLE_ARG = getArg('vlan-nagle-ms', null);
 const VLAN_WIRE = hasFlag('vlan-wire');
+// --pipe-std=WHICH:END:LPORT:RIP:RPORT,... -- set by a parent run.js that
+// started this process for a guest CreateProcess with redirected std handles
+// (src/09d7-pipes.wat): each entry becomes a pipe end, connected over the
+// vlan wire to the parent, installed as std handle WHICH before the entry
+// point runs. Not meant to be typed by hand.
+const PIPE_STD = getArg('pipe-std', null);
+// --pipe-child-args="--trace-api=ReadFile --trace-from=N": extra flags for a
+// child started by process_spawn, space separated -- the only way to trace
+// the child's side. Keep them bounded: the child's output is relayed here.
+const PIPE_CHILD_ARGS = (getArg('pipe-child-args', '') || '').split(' ').filter(Boolean);
+// --spawn-processes (or `spawnProcesses: true` on the app in lib/apps.js):
+// every guest CreateProcess of an executable in the VFS starts a real child
+// emulator, not only one with redirected std handles. The child gets a
+// snapshot of this machine's C:\ and registry, and what it leaves behind is
+// merged back before the parent's wait on it returns -- so an installer that
+// runs msiexec.exe and waits for it sees what msiexec installed. Off by
+// default: without it a CreateProcess still reports success with no child,
+// which installer extraction tests rely on.
+const SPAWN_PROCESSES_FLAG = hasFlag('spawn-processes');
+// --spawned-child: this process is such a child (set by the parent, not by
+// hand): report the guest's exit code to the parent over IPC.
+const SPAWNED_CHILD = hasFlag('spawned-child');
 // A blocking socket call parks the guest; if it never wakes, stop instead of
 // spinning forever. Each wait is one macrotask, so this is a real bound.
 const VLAN_MAX_WAITS = parseInt(getArg('vlan-max-waits', '20000'), 10);
+// --vlan-pump-every=N: how often (in batches) a seat that is NOT blocked on
+// the wire still lets its transport deliver. 64 by default. A game that
+// streams every frame needs it shorter: at ~21 batches/s, 64 batches is ~3 s
+// of one-way latency, and Quake III shows "Connection Interrupted" once 64 of
+// its commands are unacknowledged (test-quake3-vlan-gameplay uses 8).
+const VLAN_PUMP_EVERY = Math.max(1, parseInt(getArg('vlan-pump-every', '64'), 10) || 64);
 // Released by { t: 'go' } from the parent process; `B:wait-go` in --input holds
 // every later scheduled event until one arrives. The IPC channel is the one the
 // vlan wire already uses, and ProcessWire ignores anything that is not a frame,
@@ -367,7 +611,8 @@ const REAL_TICKS = hasFlag('real-ticks'); // --real-ticks: GetTickCount from the
 // reproducible, but the calendar one is deliberately real, so a guest that
 // seeds itself from the time of day makes an otherwise identical A/B pair
 // diverge. Pin it and the two arms see the same calendar, which is what an A/B
-// needs; leave it off and nothing changes.
+// needs. Left off, the calendar is still pinned, to a fixed default date (see
+// CALENDAR_ORIGIN_MS); --real-calendar is the way back to today's date.
 //
 // The pin sets where the calendar STARTS, not that it stops: from there it
 // advances by guest time (batchTicks(), guest milliseconds since the run
@@ -393,7 +638,8 @@ if (CONTROL_FROZEN_START && REAL_TICKS) {
 // before any input lands, while --real-ticks gives a 16-bit app that runs
 // 5000 batches in a third of a second about three timer ticks in total, so
 // nothing ever moves. Turn it down to drive a timer-paced game headlessly.
-const TICK_MS_PER_BATCH = Math.max(0, parseFloat(getArg('tick-ms-per-batch', '200')) || 0);
+// TICK_MS_PER_BATCH itself is defined after APP_ENTRY: an app can register its
+// own default (`cliTickMsPerBatch`).
 const CLOCK_ORIGIN = Date.now();
 // --dx-lock-pause-ms=N: charge N milliseconds of GUEST time to every Lock of a
 // PRIMARY DirectDraw surface and to every Flip. Off (0) by default.
@@ -446,6 +692,47 @@ const VBLANK = {
 // real hardware does, instead of returning immediately. Off by default — see
 // $dx_flip_vsync in src/01-header.wat.
 const FLIP_VSYNC = hasFlag('flip-vsync');
+// --present-cap=N: pace explicit frame ends (Flip, full-surface blits to the
+// primary, D3D Present, SwapBuffers) to at most N per GUEST second -- the
+// browser's per-app presentCap, here on the batch clock. Off by default so a
+// headless run's pacing stays the app's own. See $present_pace.
+const PRESENT_CAP = Math.max(0, parseInt(getArg('present-cap', '0'), 10) || 0);
+// --present-pace=smooth|deadline: how $present_pace spends the cap. smooth
+// (the default) sleeps one per-frame delay that moves at most 1.5ms a frame;
+// deadline sleeps each early frame to a deadline one period on. An app's
+// registry `presentPace` overrides the default; the flag wins.
+const PRESENT_PACE = (() => {
+  const v = getArg('present-pace', null);
+  if (v === null) return null;
+  if (v !== 'smooth' && v !== 'deadline') throw new Error(`--present-pace must be smooth or deadline, got ${v}`);
+  return v;
+})();
+// --real-ticks + --present-cap: the pacer's main-thread Sleep is measured and
+// waited out on the wall clock, so a capped real-ticks run paces in real time.
+// Scoped to capped runs: an uncapped --real-ticks run (the two-process vlan
+// tests, the Win16 gameplay tests) keeps sleeps on the batch clock, because a
+// wall-clock thread Sleep there leaves the main thread spinning on a live
+// thread and trips the stuck detector (test-blobby-host-probe).
+const REAL_TICK_SLEEPS = REAL_TICKS && PRESENT_CAP > 0;
+// --present-frames[=FROM_BATCH]: is a present cap safe for this app? Counts
+// detected frame ends against pump-bounded frames (and the app's
+// perf.logicalFrame counter when lib/apps.js declares one) from FROM_BATCH to
+// exit, per guest thread, and flags more than one frame end per game frame.
+// See lib/present-frame-audit.js.
+const PRESENT_FRAMES_ARG = getArg('present-frames', null);
+const PRESENT_FRAMES = hasFlag('present-frames') || PRESENT_FRAMES_ARG !== null;
+const PRESENT_FRAMES_FROM = Math.max(0, parseInt(PRESENT_FRAMES_ARG || '0', 10) || 0);
+// --present-at=logical|pump: for an app whose registry entry names its game
+// step (perf.logicalFrame), what a --present-cap paces. `logical` (default)
+// paces once per call of the step, via the decoder's marker
+// ($th_logical_frame, src/09a8); `pump` keeps the pump-bounded rule and only
+// counts steps -- the A/B arm. Apps without a step are unaffected.
+const PRESENT_AT = (() => {
+  const v = getArg('present-at', null);
+  if (v === null) return 'logical';
+  if (v !== 'logical' && v !== 'pump') throw new Error(`--present-at must be logical or pump, got ${v}`);
+  return v;
+})();
 // --- spin parking --------------------------------------------------------
 // Eight of the games in docs/frame-pacing-census.md busy-wait on the
 // millisecond clock and four more on an empty PeekMessage. Both detectors are
@@ -458,6 +745,10 @@ const FLIP_VSYNC = hasFlag('flip-vsync');
 // waiting for on its first read. Spin numbers need
 // `--tick-ms-per-batch=1 --batch-size=100000`.
 const NO_SPIN_PARK = hasFlag('no-spin-park');
+// A cooperative guest THREAD caught spinning on the clock is slept to the
+// park's deadline (lib/thread-manager.js, postYield 14). This is the A/B arm
+// that puts back "give up one turn, then re-slice it".
+const NO_CLOCK_PARK_SLEEP = hasFlag('no-clock-park-sleep');
 const SPIN_PARK_K = parseInt(getArg('spin-park-k', ''), 10);
 const SPIN_PARK = { clockWaits: 0, peekWaits: 0, guestMsAdded: 0 };
 // --trace-sched[=N]: one compact line whenever what the threads are doing
@@ -467,6 +758,16 @@ const SPIN_PARK = { clockWaits: 0, peekWaits: 0, guestMsAdded: 0 };
 // `--trace-sched=500` silently does nothing.
 const TRACE_SCHED = hasFlag('trace-sched') || getArg('trace-sched', null) !== null;
 const TRACE_SCHED_EVERY = parseInt(getArg('trace-sched', '5000'), 10) || 5000;
+// --spin-work-max=N: a clock read only counts toward a park when at most N
+// blocks retired since the previous read at that site (0 = no work check).
+const SPIN_WORK_MAX = parseInt(getArg('spin-work-max', ''), 10);
+// --spin-regs-check=MASK: which callee-saved registers the clock detector
+// requires unchanged between reads (bit0 EBX, bit1 EBP, bit2 ESI, bit3 EDI;
+// default 15). 0 drops the per-object false-positive guard (the A/B arm).
+const SPIN_REGS_CHECK = parseInt(getArg('spin-regs-check', ''), 10);
+// --virtual-alloc-top=0xADDR: start of the top-down VirtualAlloc arena (an
+// app's virtualAllocTop; see lib/process-boot.js applyVirtualAllocTop).
+const VIRTUAL_ALLOC_TOP_ARG = getArg('virtual-alloc-top', null);
 const TRACE_HOST = getArg('trace-host', null); // --trace-host=fn1,fn2: wrap arbitrary host fns to log args+return
 // --host-census[=N]: count every host import, print a histogram every N calls
 // straight to stdout. For batches that never return, where buffered logs never
@@ -481,6 +782,23 @@ const ASYNC_MM_TIMER_AFTER = Math.max(0,
   parseInt(getArg('async-mm-timer-after', '0'), 10) || 0);
 const TRACE_YIELD = hasFlag('trace-yield');   // --trace-yield: log yield_reason transitions per thread
 const TRACE_BATCH_TIMING = hasFlag('trace-batch-timing'); // --trace-batch-timing: log run/repaint wall time per batch
+// --trace-from=N / --trace-to=N: confine every trace category to a window of
+// batches. A route that only misbehaves at batch 70,000 cannot be traced
+// otherwise -- the flags themselves are affordable, but writing their output
+// for the 70,000 batches of boot that precede the question is not, and on an
+// API-heavy app that write is the whole wall clock (see --quiet-api).
+const TRACE_FROM = parseInt(getArg('trace-from', '-1'), 10);
+const TRACE_TO = parseInt(getArg('trace-to', '-1'), 10);
+const TRACE_WINDOWED = TRACE_FROM >= 0 || TRACE_TO >= 0;
+// -1 means "not inside the batch loop", so setup and the exit summary are
+// never windowed -- only per-batch output is.
+let traceGateBatch = -1;
+function traceWindowOpen() {
+  if (!TRACE_WINDOWED || traceGateBatch < 0) return true;
+  if (TRACE_FROM >= 0 && traceGateBatch < TRACE_FROM) return false;
+  if (TRACE_TO >= 0 && traceGateBatch > TRACE_TO) return false;
+  return true;
+}
 // --decode-stats[=FROM_BATCH]: per-batch distribution of block decodes and of
 // the guest slice's wall time, printed at exit.
 //
@@ -511,6 +829,20 @@ const TRACE_BATCH_TIMING = hasFlag('trace-batch-timing'); // --trace-batch-timin
 const BATCH_STATS_ARG = getArg('batch-stats', null);
 const BATCH_STATS = BATCH_STATS_ARG !== null || hasFlag('batch-stats');
 const BATCH_STATS_FROM = Math.max(0, parseInt(BATCH_STATS_ARG, 10) || 0);
+// --paint-audit: after every batch, recompute the shared paint/NC work counts
+// (PAINT_WORK_COUNTS) by walking the flag tables and stop on the first
+// disagreement. The same check always runs once at exit.
+const PAINT_AUDIT = hasFlag('paint-audit');
+let paintAuditFailures = 0;
+function paintAuditCheck(ex, where) {
+  if (!ex || !ex.paint_work_audit) return true;
+  const bad = ex.paint_work_audit() | 0;
+  if (!bad) return true;
+  paintAuditFailures++;
+  const counts = [0, 1, 2, 3, 4].map(k => ex.paint_work_count(k)).join(',');
+  console.log(`[paint-audit] MISMATCH at ${where}: mask=0x${bad.toString(16)} counts(paint,nc0..nc3)=${counts}`);
+  return false;
+}
 // --slice-split=B1[,B2,...]: cut the run into phases at those batch numbers and
 // report each phase's total guest-slice wall time, printed at exit.
 //
@@ -546,7 +878,7 @@ const TRACE_CALLSTACK_DEPTH = TRACE_CALLSTACK_RAW && TRACE_CALLSTACK_RAW.include
 // whatever corrupted the pointer.
 const FAULT_NULL_RAW = args.find(a => a === '--fault-null' || a.startsWith('--fault-null='));
 const FAULT_NULL = !FAULT_NULL_RAW ? 0
-  : ({ stop: 2, raise: 3 }[FAULT_NULL_RAW.split('=')[1]] || 1);
+  : ({ stop: 2, raise: 3, page0: 4, reserved: 5 }[FAULT_NULL_RAW.split('=')[1]] || 1);
 // Offline census mode requires the separately built instrumented artifact from
 // tools/build-page-translation-stats.js. The canonical WASM has no counter
 // branch in $g2w, so profiling cannot perturb ordinary production runs.
@@ -559,6 +891,13 @@ const TRACE_AT_MEM = getArg('trace-at-mem', null); // --trace-at-mem=REG+OFF:LEN
 const TRACE_AT_START_BATCH = parseInt(getArg('trace-at-start-batch', '0'), 10) || 0; // delay --trace-at logging until batch N
 const TRACE_AT_LIMIT = parseInt(getArg('trace-at-limit', '0'), 10) || 0; // stop logging after N --trace-at hits (0 = unlimited)
 const BREAK_API = getArg('break-api', null); // --break-api=Name[,Name,...]: break on API call
+// --trace-api-mem=Name:ARG:LEN[,...]: at each entry of API Name, hexdump LEN
+// bytes at the guest pointer in stdcall argument ARG (0-based). For buffers
+// built on the stack just before the call (colour tables, rects, structs).
+const TRACE_API_MEM = (getArg('trace-api-mem', '') || '').split(',').filter(Boolean).map(spec => {
+  const [name, arg, len] = spec.split(':');
+  return { name, arg: parseInt(arg, 10) || 0, len: Math.min(parseInt(len, 10) || 64, 4096) };
+});
 const WATCH_SPEC = getArg('watch', null);    // --watch=0xADDR: break on memory change (dword)
 const WATCH_BYTE = getArg('watch-byte', null);   // --watch-byte=0xADDR: byte-granularity watch
 const WATCH_WORD = getArg('watch-word', null);   // --watch-word=0xADDR: 16-bit watch
@@ -596,6 +935,15 @@ const HOT_BLOCK_DUMP = getArg('hot-block-dump', null);
 // --hist-json=FILE: the histogram window as the JSON tools/hot-loop-census.js
 // reads (the browser probe's shape), so a headless run feeds the same census.
 const HIST_JSON = getArg('hist-json', null);
+// --hist-json-blocks=N: how many blocks --hist-json keeps (default 400, 0 =
+// every block the window saw). tools/call-form-weighted.js wants all of them:
+// the tail is where a polymorphic call site's many small targets live.
+const HIST_JSON_BLOCKS = parseInt(getArg('hist-json-blocks', '400'), 10) || 0;
+// --edge-hist: also record every (previous block, this block) transfer in the
+// histogram window ($edge_hist_record, 04-cache.wat) and write them to
+// --hist-json as `edges`. That is what says how many distinct targets an
+// indirect call / jmp / ret site actually reached (tools/call-form-weighted.js).
+const EDGE_HIST = hasFlag('edge-hist');
 // --handler-hist-pairs=N: rows in the "top pairs" list (default 12). Raise it when summing
 // an idiom family (every cmp->jcc pair) across apps; the top 12 stops mid-family.
 const HANDLER_HIST_PAIRS = parseInt(getArg('handler-hist-pairs', '12'));
@@ -626,6 +974,7 @@ const DUMP_BACKCANVAS = hasFlag('dump-backcanvas'); // --dump-backcanvas: save b
 const DUMP_VFS = hasFlag('dump-vfs');     // --dump-vfs: list all VFS files at end
 const SAVE_VFS = getArg('save-vfs', null); // --save-vfs=DIR: extract VFS files to directory
 const SAVE_VFS_SUFFIX = getArg('save-vfs-suffix', null); // --save-vfs-suffix=.gid: restrict extraction
+const SAVE_VFS_PREFIX = getArg('save-vfs-prefix', null); // --save-vfs-prefix='c:\\program files\\x': only that guest tree
 // --capture-launch=DIR: snapshot the VFS when ShellExecute names a VFS-backed
 // executable, before an installer bootstrap can delete its temporary child.
 // At exit DIR contains the snapshot plus launch.json for a second CLI stage.
@@ -776,7 +1125,15 @@ const MEDIA_EXE = getArg('media-exe', null);
 // discovers at runtime -- every Winamp visualizer past the one in the registry
 // -- returns a junk handle unless it was seeded here first.
 const DLL_SEED = getArgs('dll-seed');
-const STUCK_AFTER = parseInt(getArg('stuck-after', '10'));  // --stuck-after=N: stuck detection after N same-EIP batches
+// --stuck-after=N: end the run as STUCK once the main thread has sat at one EIP
+// (no API call, no register change) for more than N batches; default 10.
+// --stuck-after=0 disables the detector outright -- the spelling a long route
+// wants, instead of the --stuck-after=100000000 workaround older docs use.
+const STUCK_AFTER = parseInt(getArg('stuck-after', '10'), 10);
+if (!Number.isInteger(STUCK_AFTER) || STUCK_AFTER < 0) {
+  console.error(`error: --stuck-after expects a non-negative integer (0 disables), got ${JSON.stringify(getArg('stuck-after', ''))}`);
+  process.exit(2);
+}
 const WINVER = getArg('winver', null); // --winver=nt4|win2k|win98 or hex like 0x05650004
 // --env=NAME=VALUE (repeatable): set a compatibility variable in this guest
 // process only. The value may itself contain '='; an empty value is retained.
@@ -800,6 +1157,92 @@ const APP_ENTRY = (() => {
     Object.keys(APPS).sort().join(' '));
   process.exit(1);
 })();
+// An explicit --fault-null wins; otherwise an app registered with
+// `nullPageFaults: true` takes Win98's NULL-guard-page rule (mode 4), the
+// same as the browser does.
+// `reservedPageFaults: true` takes Windows' reserved-page rule (mode 5):
+// a read of a MEM_RESERVE page that was never committed is offered to the
+// guest's exception filters synchronously (Serious Sam's stream buffers).
+const FAULT_NULL_MODE = FAULT_NULL || (APP_ENTRY && APP_ENTRY.reservedPageFaults === true ? 5
+  : APP_ENTRY && APP_ENTRY.nullPageFaults === true ? 4 : 0);
+// The batch clock (see --tick-ms-per-batch above). An app registered with
+// `cliTickMsPerBatch` gets that default; the flag still wins. A batch is a
+// fixed block budget, so for a CPU-bound renderer 200 ms/batch reads as a
+// machine that takes minutes per frame. The Plus! 98 D3DRM savers react to
+// that as they would on such a machine: every scene's display timer has run
+// out by the first Flip, so the switcher rebuilds the D3DRM device after each
+// frame and a capture finds a freshly cleared target (scr_scifi: 6 devices,
+// 5 Flips in 120000 batches at 200 or 20 ms/batch; 3 devices, 2120 Flips at 2).
+// The browser runs on the real clock and never reads this.
+const TICK_MS_PER_BATCH = Math.max(0, parseFloat(getArg('tick-ms-per-batch',
+  String(APP_ENTRY && Number.isFinite(APP_ENTRY.cliTickMsPerBatch)
+    ? APP_ENTRY.cliTickMsPerBatch : 200))) || 0);
+// An app's registry `wallClock` date pins the calendar origin like
+// --wall-clock-ms does; the flag wins. With neither, the CLI pins it to
+// DEFAULT_CALENDAR_MS, so two runs of one command see the same calendar: a
+// guest that seeds from the time of day (Deus Ex diverged per wall-clock
+// second) is otherwise a different run every second. --real-calendar hands the
+// guest today's date instead, and --real-ticks, which is real time by design,
+// keeps the real calendar too. The browser never pins.
+const DEFAULT_CALENDAR_MS = Date.parse('1999-06-01T12:00:00Z');
+const REAL_CALENDAR = hasFlag('real-calendar');
+const CALENDAR_ORIGIN_MS = WALL_CLOCK_MS ||
+  (APP_ENTRY && APP_ENTRY.wallClock ? Date.parse(APP_ENTRY.wallClock) : 0) ||
+  (REAL_CALENDAR || REAL_TICKS ? 0 : DEFAULT_CALENDAR_MS);
+// The guest's local time is this process's Date local time, so a pinned
+// calendar still read 05:00 on a PDT laptop and 12:00 on a UTC box. Pin the
+// zone too: UTC by default, which also agrees with GetTimeZoneInformation's
+// zero bias. --tz=NAME picks an IANA zone; --real-timezone (or --real-calendar
+// / --real-ticks) keeps the host's. Node re-reads TZ on assignment, and guest
+// thread workers share this process's zone.
+const TZ_ARG = getArg('tz', '');
+if (TZ_ARG) process.env.TZ = TZ_ARG;
+else if (!(hasFlag('real-timezone') || REAL_CALENDAR || REAL_TICKS)) process.env.TZ = 'UTC';
+// lib/apps.js `startupClock` (lib/startup-clock.js): the guest clock runs
+// `factor` times real speed until the app's startup ends, for a game whose
+// timer thread races its own initialisation (Comanche Gold). --startup-clock=
+// FACTOR[:MAX_MS] sets or overrides it; --no-startup-clock is the A/B arm.
+const STARTUP_CLOCK_CFG = (() => {
+  if (hasFlag('no-startup-clock')) return null;
+  const arg = getArg('startup-clock', '');
+  const base = (APP_ENTRY && APP_ENTRY.startupClock) || {};
+  if (!arg) return APP_ENTRY && APP_ENTRY.startupClock ? base : null;
+  const [factor, maxMs] = String(arg).split(':').map(Number);
+  return { ...base, factor, ...(maxMs > 0 ? { maxMs } : {}) };
+})();
+// 1 = smooth pacing (also the WAT default), 0 = deadline. Always pushed, to
+// the main instance and every guest-thread instance.
+const PRESENT_PACE_MODE = (PRESENT_PACE || (APP_ENTRY && APP_ENTRY.presentPace) || 'smooth') === 'deadline' ? 0 : 1;
+// The app's game step (lib/apps.js perf.logicalFrame), handed to every
+// instance's decoder when a cap or --present-frames wants it: a marker op on
+// that one block counts each step, and paces it when the cap is on and
+// --present-at is `logical`. Not armed otherwise, so an ordinary run decodes
+// exactly as before.
+// A Win16 app names its step as { seg, off }: an NE segment number of its own
+// module and an offset. The linear address only exists once the loader has
+// placed that segment, so `address` is filled in after load
+// (resolveLogicalFrame); a linear NE address in lib/apps.js would pin our
+// arena layout.
+const LOGICAL_FRAME = (() => {
+  const m = APP_ENTRY && APP_ENTRY.perf && APP_ENTRY.perf.logicalFrame;
+  if (!m) return null;
+  const segOff = m.address && typeof m.address === 'object';
+  if (!segOff && !(Number(m.address) > 0)) return null;
+  if (!PRESENT_CAP && !PRESENT_FRAMES) return null;
+  return {
+    address: segOff ? 0 : Number(m.address) >>> 0,
+    segOff: segOff ? m.address : null,
+    label: m.label || 'logical',
+    pace: PRESENT_CAP > 0 && PRESENT_AT === 'logical' ? 1 : 0,
+  };
+})();
+// Linear address of a { seg, off } step in the loaded Win16 task, or 0 when it
+// cannot be placed (not Win16, or the segment is not loaded).
+function resolveWin16SegOff(exports, so) {
+  if (!so || !exports.win16_seg_base || !(exports.is_win16 && exports.is_win16())) return 0;
+  const base = exports.win16_seg_base(Number(so.seg) | 0) >>> 0;
+  return base ? (base + (Number(so.off) & 0xFFFF)) >>> 0 : 0;
+}
 // Match the browser: an app registry opt-in is launch behavior, not a UI-only
 // hint. Keep explicit CLI flags as the A/B override, with `--no-…` strongest.
 const COPY_SUPEROPS = resolveCopySuperops(
@@ -818,7 +1261,14 @@ const EXE_PATH = getArg('exe', ZIP_LAUNCH ? ZIP_LAUNCH.exePath
   : ISO_LAUNCH ? ISO_LAUNCH.exePath
   : (APP_ENTRY ? appAsset(APP_ENTRY.exe) : 'test/binaries/notepad.exe'));
 const EXE_GUEST_PATH = (() => {
-  const requested = getArg('exe-guest-path', null);
+  // An --iso-exe launch IS a guest path on the disc: an installer that copies
+  // "from its own directory" (Myth's VISE Setup: GetModuleFileName) must see
+  // D:\Setup.exe, not the host temp copy reported as C:\Setup.exe.
+  // A registry app's exeGuestPath is the same thing for an installed tree
+  // (lib/apps.js), and the browser honours it too.
+  const requested = getArg('exe-guest-path', null) || (ISO_LAUNCH
+    ? path.win32.join(ISO_LAUNCH.guestDir, path.basename(ISO_LAUNCH.exePath))
+    : (APP_ENTRY && !getArg('exe', null) && APP_ENTRY.exeGuestPath) || null);
   if (!requested) return null;
   const rooted = /^[a-z]:[\\/]/i.test(requested) ? requested : `c:\\${requested}`;
   const normalized = path.win32.normalize(rooted.replace(/\//g, '\\'));
@@ -827,8 +1277,23 @@ const EXE_GUEST_PATH = (() => {
   }
   return normalized;
 })();
-const EXE_PROCESS_NAME = EXE_GUEST_PATH
-  ? EXE_GUEST_PATH.replace(/^[a-z]:\\/i, '') : path.basename(EXE_PATH);
+// A DLL shipped in the exe's own host directory lives beside the exe in the
+// guest too, and GetModuleFileName(hModule) must say so: Unreal's Core derives
+// the game's base directory from its own module path and reads UT2004.ini
+// beside itself, so C:\core.dll (the old basename fallback) threw at startup
+// while the INI sat in C:\System. Same rule as the page's app-local modules.
+const besideExeGuestPath = (hostPath, name) => {
+  if (!EXE_GUEST_PATH) return null;
+  if (path.resolve(path.dirname(hostPath)) !== path.resolve(path.dirname(EXE_PATH))) return null;
+  return path.win32.join(path.win32.dirname(EXE_GUEST_PATH), name);
+};
+// A --media-exe launch (tools/run-media.js) is a guest path too, and reports
+// its directory the way host.js does for imported media: NFS II's InstallShield
+// finds _SETUP.DLL beside D:\SETUP\ENGLISH\SETUP.EXE, not in D:\.
+const EXE_PROCESS_GUEST_PATH = EXE_GUEST_PATH ||
+  (MEDIA_EXE && /^[a-z]:\\/i.test(MEDIA_EXE) ? MEDIA_EXE : null);
+const EXE_PROCESS_NAME = EXE_PROCESS_GUEST_PATH
+  ? EXE_PROCESS_GUEST_PATH.replace(/^[a-z]:\\/i, '') : path.basename(EXE_PATH);
 // Windows file names are case-insensitive and the guest asks for whatever case
 // its source code used (MCM: LoadLibraryA("lang.dll") for LANG.DLL). A plain
 // existsSync(path.join(dir, name)) only agrees with that on macOS, so a DLL
@@ -867,14 +1332,9 @@ const getAssetFiles = entry => {
     throw new Error(`${ASSET_ENTRY_ID || APP_ID || 'app'}: invalid local media manifest`);
   }
   const manifestDir = path.dirname(entry.localFileManifest);
-  for (const file of manifest.files) {
-    if (!file || !file.url) continue;
-    files.push({
-      ...file,
-      url: path.join(manifestDir, file.url),
-    });
-  }
-  return files;
+  const local = manifest.files.filter(file => file && file.url)
+    .map(file => ({ ...file, url: path.join(manifestDir, file.url) }));
+  return require('../lib/app-files').mergeLocalManifestFiles(files, local);
 };
 const WASM_PATH = getArg('wasm', ENV_WASM || path.join(ROOT, 'build', 'wine-assembly.wasm')); // --wasm=FILE (or $WINE_ASSEMBLY_WASM): isolated prebuilt used with --no-build
 // Was a SPECIFIC artifact asked for, as opposed to falling back on the canonical
@@ -942,6 +1402,11 @@ const INPUT_SPEC = getArg('input', null); // --input=batch:msg:wParam[:lParam],.
 const SEED_WINDOW = getArg('seed-window', null); // --seed-window=TITLE[|TITLE...]: add foreign top-level windows for shell tests
 const EXTRA_ARGS = getArg('args', (APP_ENTRY && APP_ENTRY.args) || null); // --args="-quick -fullscreen": extra cmdline args appended after exe name
 const AUDIO_OUT = getArg('audio-out', null); // --audio-out=file.pcm: write raw PCM to file
+// --audio-out-max=N: stop writing --audio-out after N bytes (the byte count
+// keeps running). The headless clock is batch-driven, so a fast app can render
+// thousands of guest seconds of PCM in a few wall seconds: Tile World wrote
+// 663 MB in 2 s of coop, and a 15 s sweep run filled the disk before its PNG.
+const AUDIO_OUT_MAX = parseInt(getArg('audio-out-max', '0'), 10) || 0;
 const AUDIO_EXIT_BYTES = parseInt(getArg('audio-exit-bytes', '0'), 10) || 0; // --audio-exit-bytes=N: stop once captured PCM reaches N bytes
 const THREAD_SLICES = parseInt(getArg('thread-slices', '4')); // --thread-slices=N: worker slices per main batch (default 4; raise for compute-heavy audio decode)
 const WORKER_THREADS = hasFlag('threads'); // --threads: run each guest thread in a real OS thread (node worker_threads) instead of the cooperative scheduler
@@ -950,7 +1415,7 @@ if (WORKER_THREADS && FORCE_COOPERATIVE_THREADS) {
   console.error('error: --threads and --no-threads are mutually exclusive');
   process.exit(2);
 }
-const THREAD_BATCH_SIZE_ARG = parseInt(getArg('thread-batch-size', '0'), 10) || 0; // --thread-batch-size=N: steps per worker-thread slice with --threads (default: BATCH_SIZE * --thread-slices, min 20000)
+const THREAD_BATCH_SIZE_ARG = parseInt(getArg('thread-batch-size', '0'), 10) || 0; // --thread-batch-size=N: steps per worker-thread slice with --threads (default: BATCH_SIZE, min 1000 -- the browser's main:worker parity)
 const CS_STEAL_AFTER = parseInt(getArg('cs-steal-after', '0'), 10) || 0; // --cs-steal-after=N: fruitless EnterCriticalSection rounds before taking the section by force (0 = WAT default; huge = never, to tell "waiting forever" from "took it")
 const THREADS_SERIAL = hasFlag('threads-serial'); // --threads-serial: with --threads, never run two guest threads at once (splits "race" from "wrong per-thread state")
 const ESP_AUDIT = hasFlag('esp-audit'); // --esp-audit: with --threads, check every handler's stdcall epilogue (4*(nargs+1)) on the thread that actually ran it
@@ -1107,7 +1572,11 @@ const traceAtDumps = TRACE_AT_DUMP ? TRACE_AT_DUMP.split(',').map(s => {
 // two forms this flag can only ever print the pointer, never the string or
 // struct it names: `*esp+4:s` is "the filename this call was given".
 const traceAtMem = TRACE_AT_MEM ? TRACE_AT_MEM.split(',').map(s => {
-  const [expr, l] = s.split(':');
+  // The length follows the LAST colon: a Win16 far expression has its own
+  // (es:esi-2:64 is es:esi-2 for 64 bytes).
+  const cut = s.lastIndexOf(':');
+  const [expr, l] = cut > 0 && /^(\d+|s)$/i.test(s.slice(cut + 1).trim())
+    ? [s.slice(0, cut), s.slice(cut + 1)] : [s, ''];
   const str = /^s$/i.test((l || '').trim());
   return { expr: (expr || '').trim(), len: str ? 0 : (parseInt(l) || 4), str };
 }).filter(d => d.expr) : [];
@@ -1269,26 +1738,8 @@ async function main() {
   // plugin sitting in the VFS was "not found" for CoCreateInstance and present
   // for LoadLibrary.
   const findRuntimeDllBytes = (fileName, fullName) => {
-    if (ctx.vfs) {
-      // Resolve the name the way the guest filesystem does first, as the
-      // browser's _findDllBytes does: a bare LoadLibraryA("lang.dll") is
-      // relative to the current directory, and VFS keys are case-folded. The
-      // host-path scan below is case-sensitive on Linux, so without this MCM's
-      // LANG.DLL was found on macOS only.
-      let resolved = '';
-      try { resolved = ctx.vfs._resolvePath(fullName); } catch (_) {}
-      const own = resolved && ctx.vfs.files.get(resolved);
-      if (own && own.data) return own.data;
-      for (const p of [
-        String(fullName).toLowerCase(),
-        'c:\\' + fileName,
-        'c:\\plugins\\' + fileName,
-        'c:\\windows\\system\\' + fileName,
-      ]) {
-        const entry = ctx.vfs.files.get(p);
-        if (entry && entry.data) return entry.data;
-      }
-    }
+    const fromVfs = findVfsDllBytes(ctx.vfs, fileName, fullName);
+    if (fromVfs) return fromVfs;
     for (const dir of [
       path.join(__dirname, 'binaries/dlls'),
       path.dirname(EXE_PATH),
@@ -1316,12 +1767,24 @@ async function main() {
     logs.length = 0;
   };
   let stopped = false;
+  let hostExitRequested = false;
   // Batches actually executed. Not the same as MAX_BATCHES once --max-seconds
   // or an early exit ends the loop, and it is the throughput number a
   // fixed-duration benchmark is asking for.
   let batchesRun = 0;
   let netWaits = 0;   // consecutive net_wait yields, reset by any progress
+  let netWaitSince = 0;   // wall-clock ms of the first of them
   let apiCount = 0;
+  // Set with h.log below. When on, the main instance counts its own Win32
+  // calls ($api_calls) and h.log sees only non-API log lines, so the total
+  // is the sum -- the same number the per-call log used to produce.
+  let apiLogOff = false;
+  // The WAT counter ($api_calls) runs only while the log is off. apiWatSeen is
+  // the part of it already folded into apiCount when --trace-api-paused
+  // switched the log on, so toggling never counts a call twice.
+  let apiWatSeen = 0;
+  const apiTotal = () => (apiLogOff && instance && instance.exports.get_api_calls)
+    ? apiCount + ((instance.exports.get_api_calls() >>> 0) - apiWatSeen) : apiCount;
   const apiCounts = TRACE_API_COUNTS ? new Map() : null;
   let lastApiName = null;  // track last API name for return value correlation
   let lastApiEntry = null; // typed metadata for last API (for return formatting)
@@ -1331,6 +1794,12 @@ async function main() {
   let pendingComApiId = -1; // COM api_id from 0xC0DE0000 marker emitted just BEFORE the '<ord>' name log
   let pendingWin16 = null;  // words following the 0xCA16A9F1 Win16 dispatch marker
   let pendingFpu = null;    // words following the 0xCAF00001 --trace-fpu marker
+  let pendingCodeWrite = null; // words following the 0xCAC0DE01 --trace-code-writes marker
+  let pendingCodeRetire = null; // words following the 0xCAC0DE02 retire marker
+  let pendingCodeMiss = null; // words following the 0xCAC0DE03 false-invalidation marker
+  const codeWriteStats = { events: 0, dropped: 0, byEip: new Map(), byPage: new Map(),
+    retires: {}, overlapPairs: new Map(), overlapLogged: 0,
+    misses: 0, missByEip: new Map(), missByPage: new Map() };
   let pendingSyncBail = null; // words following the 0xCADE5000 abandoned-wndproc marker
   let dedupLast = null;    // {line, count} for --trace-api-dedup
   const flushDedup = () => {
@@ -1354,10 +1823,12 @@ async function main() {
   //   B:keypress:CODE       — call renderer.handleKeyPress(CODE)
   //   B:ime-start / ime-update:TEXT / ime-commit:TEXT — composition bridge
   //   B:keydown:VK          — call renderer.handleKeyDown(VK)
-  //   B:di-keydown:VK       — set DirectInput/GetAsyncKeyState key-down state without WM_KEYDOWN
+  //   B:hit-counts[:LABEL]  — print every --count total at this batch; two bracket a fixed window
+  //   B:di-keydown:VK      — set DirectInput/GetAsyncKeyState key-down state without WM_KEYDOWN
   //   B:di-keyup:VK         — clear DirectInput/GetAsyncKeyState key-down state without WM_KEYUP
-  //   B:di-mousedown[:BTN]   — press DirectInput mouse button 1 or 2 without moving the cursor
-  //   B:di-mouseup[:BTN]     — release DirectInput mouse button 1 or 2 without moving the cursor
+  //   B:di-mousedown[:BTN]   — press DirectInput mouse button 1, 2 or 3 (middle) without moving the cursor
+  //   B:di-mouseup[:BTN]     — release DirectInput mouse button 1, 2 or 3 without moving the cursor
+  //   B:di-wheel:DELTA       — DirectInput wheel motion (lZ), WHEEL_DELTA units: 120 per notch away, -120 toward
   //   B:click:X:Y           — handleMouseDown+Up at canvas (X,Y)
   //   B:mousedown:X:Y       — handleMouseDown at canvas (X,Y)
   //   B:mouseup:X:Y         — handleMouseUp at canvas (X,Y)
@@ -1479,6 +1950,9 @@ async function main() {
         // B:dump-mem:0xADDR[:LEN] — hexdump guest memory at that batch.
         scheduledInput.push({ batch, action: 'dump-mem',
           arg: parts[2], arg2: parts[3] });
+      } else if (kind === 'heap-walk') {
+        // B:heap-walk:0xPTR — why GlobalLock/GlobalFree accept or refuse PTR.
+        scheduledInput.push({ batch, action: 'heap-walk', arg: parts[2] });
       } else if (kind === 'tick-ms') {
         // B:tick-ms:N — from this batch on, one batch is worth N ms of guest
         // time (--tick-ms-per-batch, changed mid-run). For a run whose boot
@@ -1597,6 +2071,11 @@ async function main() {
         scheduledInput.push({ batch, action: 'dlg-dump', label: parts[2] || '' });
       } else if (kind === 'dump-children') {
         scheduledInput.push({ batch, action: 'dump-children', hwnd: parseInt(parts[2]), label: parts[3] || '' });
+      } else if (kind === 'hit-counts') {
+        // B:hit-counts[:label] — print every --count total at this batch.
+        // Two of them bracket a fixed batch window, so a rate read from the
+        // difference does not depend on when a control client asked.
+        scheduledInput.push({ batch, action: 'hit-counts', label: parts[2] || '' });
       } else if (kind === 'dump-windows') {
         scheduledInput.push({ batch, action: 'dump-windows', label: parts[2] || '' });
       } else if (kind === 'dump-msgq') {
@@ -1767,10 +2246,14 @@ async function main() {
         scheduledInput.push({ batch, action: kind, code: parseInt(parts[2]) });
       } else if (kind === 'di-mousedown' || kind === 'di-mouseup') {
         const button = parts[2] === undefined ? 1 : parseInt(parts[2]);
-        if (button !== 1 && button !== 2) {
-          throw new Error(`${kind} button must be 1 or 2`);
+        if (button !== 1 && button !== 2 && button !== 3) {
+          throw new Error(`${kind} button must be 1, 2 or 3`);
         }
         scheduledInput.push({ batch, action: kind, button });
+      } else if (kind === 'di-wheel') {
+        const delta = parseInt(parts[2]);
+        if (!Number.isFinite(delta) || !delta) throw new Error('di-wheel needs a nonzero DELTA (120 per notch)');
+        scheduledInput.push({ batch, action: kind, delta });
       } else if (kind === 'ime-start') {
         scheduledInput.push({ batch, action: 'ime-start' });
       } else if (kind === 'ime-update' || kind === 'ime-commit') {
@@ -2033,8 +2516,16 @@ async function main() {
     const [screenW, screenH] = screenArg ? screenArg.split('=')[1].split('x').map(Number) : [640, 480];
     const canvas = createCanvas(screenW, screenH);
     renderer = new Win98Renderer(canvas);
+    // This canvas is presented lazily (only when a png or repaint asks), so
+    // input must refresh the presentation transform itself before mapping.
+    renderer.lazyPresentation = true;
     if (TRACE_COMPOSITE) renderer.traceComposite = true;
     if (TRACE_INPUT) renderer.onInputTrace = (what) => console.log(`[input-route] ${what}`);
+  } else if (!NO_RENDERER) {
+    // Without this a stale node_modules (no pngjs) ran for half an hour with
+    // no screen: every png refused, pointer input dropped, nothing said why.
+    console.error(`[renderer] unavailable, so no screen, captures or pointer input: ${
+      rendererLoadError ? rendererLoadError.message.split('\n')[0] : 'createCanvas/Win98Renderer missing'}`);
   }
   let videoRecorder = null;
   let videoEvery = 1;
@@ -2077,7 +2568,7 @@ async function main() {
       wa = g2w(thisGuest);
       slot = dv.getUint32(wa + 4, true);
     } catch (_) { return null; }
-    if (slot >= 8192) return null; // $DX_MAX in src/09a8-handlers-directx.wat
+    if (slot >= 16384) return null; // $DX_MAX in src/09a8-handlers-directx.wat
     const entry = RegionMap.BASE.DX_OBJECTS + slot * 32;
     const type = dv.getUint32(entry, true);
     if (!type) return null;
@@ -2151,12 +2642,22 @@ async function main() {
         const flags = dv.getUint32(wa + 4, true);
         const h2 = dv.getUint32(wa + 8, true);
         const w2 = dv.getUint32(wa + 12, true);
+        // DDSURFACEDESC(2): +20 dwBackBufferCount, +24 dwMipMapCount union,
+        // +72 ddpfPixelFormat (+4 flags, +12 bit count, +16..+28 R/G/B/A
+        // masks), +104 ddsCaps.
         const caps = dv.getUint32(wa + 104, true);
-        const backbuf = dv.getUint32(wa + 24, true);
+        const backbuf = dv.getUint32(wa + 20, true);
         const cc = [];
-        if (caps & 0x200) cc.push('PRIMARY'); if (caps & 0x4) cc.push('BACKBUF'); if (caps & 0x800) cc.push('OFFSCREEN');
-        if (caps & 0x8) cc.push('FLIP'); if (caps & 0x40) cc.push('COMPLEX');
-        return `[${desc()} DDSD{sz=${sz} fl=${hex(flags)} ${w2}x${h2} caps=${cc.join('|')||hex(caps)} back=${backbuf}} pp=${hex(a[2])}]`;
+        for (const [bit, label] of [[0x200, 'PRIMARY'], [0x4, 'BACKBUF'], [0x8, 'COMPLEX'], [0x10, 'FLIP'],
+          [0x40, 'OFFSCREENPLAIN'], [0x800, 'SYSMEM'], [0x1000, 'TEXTURE'], [0x2000, '3DDEVICE'],
+          [0x4000, 'VIDMEM'], [0x20000, 'ZBUFFER'], [0x400000, 'MIPMAP']]) if (caps & bit) cc.push(label);
+        let extra = '';
+        if (flags & 0x20000) extra += ` mips=${dv.getUint32(wa + 24, true)}`;
+        if (flags & 0x1000) {
+          const pf = i => dv.getUint32(wa + 72 + i, true);
+          extra += ` pf{fl=${hex(pf(4))} ${pf(12)}bpp R=${hex(pf(16))} G=${hex(pf(20))} B=${hex(pf(24))} A=${hex(pf(28))}}`;
+        }
+        return `[${desc()} DDSD{sz=${sz} fl=${hex(flags)} ${w2}x${h2} caps=${cc.join('|')||hex(caps)} back=${backbuf}${extra}} pp=${hex(a[2])}]`;
       } catch (_) { return `[${desc()} pDDSD=${hex(a[1])}]`; }
     }
     if (name === 'IDirectDrawSurface_Blt') {
@@ -2204,7 +2705,17 @@ async function main() {
   const apiByName = new Map(apiTable.map(e => [e.name, e]));
   const ctx = {
     getMemory: () => ctx._memory ? ctx._memory.buffer : null,
-    d3d9Backend: D3D9_RENDERER || 'webgl',
+    // Without --headless-gl the WebGL backend has no context, CreateDevice fails
+    // with "D3D9 requires a GPU window", and most D3D8/9 games take their own
+    // no-3D path -- GeneRally's CLI gate depends on exactly that. An app with no
+    // such path (UT2003's listen server retries, spawning a 1 MB-allocating
+    // thread each time, until "Unable to allocate thread TLS vector") sets
+    // `d3d9WithoutGpu: 'software'` in lib/apps.js to get the software backend
+    // when no GPU is available. An explicit --d3d9-renderer always wins.
+    d3d9Backend: D3D9_RENDERER
+      || (!HEADLESS_GL && APP_ENTRY?.d3d9WithoutGpu === 'software' ? 'software' : 'webgl'),
+    glBackend: GL_RENDERER || 'webgl',
+    glideBackend: GLIDE_RENDERER,
     d3d9Programmable: D3D9_PROGRAMMABLE || APP_ENTRY?.d3d9Programmable === true,
     createD3DRenderWorker: () => {
       const {Worker} = require('worker_threads');
@@ -2220,7 +2731,13 @@ async function main() {
     // their documented no-3D-hardware path and a large amount of existing headless
     // behaviour is pinned to that; turning it on silently would change what many
     // runs mean. See lib/headless-gl.js.
-    createCanvas: HEADLESS_GL ? createCanvas : null,
+    createCanvas: HEADLESS_GL || GLIDE_RENDERER === 'software' ? createCanvas : null,
+    // Glide always gets one. Without it grSstWinOpen returned 0 under the
+    // default --glide-renderer=webgl, the games ignore that, and their first
+    // grBufferClear/guGammaCorrectionRGB then trapped on a closed context
+    // (NFS III, Diablo II). The bridge itself drops to software when the
+    // canvas has no WebGL, exactly as a GPU-less browser does.
+    glideCreateCanvas: createCanvas || null,
     processId: 1000,
     apiTable,
     log: VERBOSE ? console.log.bind(console) : null,
@@ -2230,6 +2747,14 @@ async function main() {
     verbose: VERBOSE,
     _debugReadFile: TRACE_API,
     _debugFindFile: TRACE_API,
+    // Appended to every traced ReadFile (--trace-fs): the batch and the MAIN
+    // thread's synchronous-message depth. A read made while that depth is
+    // nonzero -- by main itself, or by a worker the cooperative scheduler runs
+    // inline from a nested wait -- cannot park on a lazy byte range, because
+    // the recursive $wnd_send_message frame cannot return to the host to await
+    // the fetch. That is what decides which ranges a lazy mount must preload.
+    ioTraceTag: () => `b=${traceGateBatch} mainDepth=${
+      instance.exports.get_sync_msg_depth ? instance.exports.get_sync_msg_depth() | 0 : 0}`,
     onExit: (code) => { stopped = true; },
     trace: traceCategories,
     traceHost: traceHostNames,
@@ -2238,11 +2763,12 @@ async function main() {
     // separates "waiting for time to pass" from "doing work" in a slow run.
     guestNowMs: () => CLOCK_ORIGIN + (Date.now() - CLOCK_ORIGIN) * TIME_SCALE,
     // The calendar clock, pinned only when --wall-clock-ms= asked for it.
-    wallNowMs: WALL_CLOCK_MS ? () => WALL_CLOCK_MS : undefined,
+    wallNowMs: CALENDAR_ORIGIN_MS ? () => CALENDAR_ORIGIN_MS : undefined,
     // The room segment, when this process was launched into one. Without it
     // the guest's sockets still work; the room is just this process alone.
     vlanWire: VLAN_WIRE ? new (require('../lib/vlan-wire').ProcessWire)(process) : null,
     audioStatsStride: AUDIO_STATS ? AUDIO_STATS_STRIDE : 0,
+    isEventHandle: handle => !!(threadManager && threadManager.isEventHandle(handle)),
     signalSyncHandle: handle => threadManager
       ? threadManager.setEvent(handle >>> 0) : 0,
     resetSyncHandle: handle => threadManager
@@ -2251,6 +2777,8 @@ async function main() {
     _audioOutFd: AUDIO_OUT ? fs.openSync(AUDIO_OUT, 'w') : undefined,
     _audioOutPath: AUDIO_OUT || null,
     _audioOutWav: AUDIO_OUT ? AUDIO_OUT.toLowerCase().endsWith('.wav') : false,
+    // One counter for the whole process: guest threads write the same file.
+    _audioOutCount: AUDIO_OUT ? { max: AUDIO_OUT_MAX, bytes: 0 } : undefined,
     sharedAudio: {},  // shared waveOut state across threads
     audioTap: () => (videoRecorder && videoRecorder.active ? videoRecorder : null),
     registerAudioTapPump: fn => { if (typeof fn === 'function') audioTapPumps.add(fn); },
@@ -2303,7 +2831,10 @@ async function main() {
     },
   };
   const base = createHostImports(ctx);
-  closeD3DRender = () => ctx.closeD3DRender();
+  closeD3DRender = () => {
+    ctx.closeGlide();
+    return ctx.closeD3DRender();
+  };
   if (ctx.vfs) {
     ctx.vfs.dirs.add('c:\\windows');
     ctx.vfs.dirs.add('c:\\windows\\system');
@@ -2435,7 +2966,7 @@ async function main() {
     warmup: Number(getArg('gameplay-warmup', '100')),
     iterations: Number(getArg('gameplay-iterations', '600')),
     enabled: Number(getArg('gameplay-candidate', '1')),
-    apiCount: () => apiCount,
+    apiCount: () => apiTotal(),
     walking: hasFlag('gameplay-walking'), renderer,
     profile: getArg('gameplay-profile', null),
   }) : null;
@@ -2468,8 +2999,12 @@ async function main() {
   // which matters, because a repaint of a live 640x480 surface costs ~6ms and
   // repainting often enough to resolve a frame is slower than the run budget.
   const frameStats = {
-    present: { iv: [], lastBatch: -1, lastAt: 0n },
-    flush: { iv: [], lastBatch: -1, lastAt: 0n },
+    present: { iv: [], t: [], lastBatch: -1, lastAt: 0n },
+    // dx_trace kind 30: one per $present_pace call, i.e. one per frame the
+    // cap governs -- the series to read when an app presents twice a frame.
+    paced: { iv: [], t: [], lastBatch: -1, lastAt: 0n },
+    pacedGuest: [],
+    flush: { iv: [], t: [], lastBatch: -1, lastAt: 0n },
   };
   // One entry per executed batch, for --decode-stats.
   const decodeStatsDecodes = [];
@@ -2488,6 +3023,7 @@ async function main() {
       series.lastAt = at;
       return at;
     }
+    series.t.push(Number(at) / 1e6);
     if (series.lastBatch >= 0) {
       series.iv.push({
         batches: tickStateRef.batch - series.lastBatch,
@@ -2513,6 +3049,68 @@ async function main() {
         });
         latency.pending = null;
       }
+    };
+  }
+  // --present-distinct: is a present a FRAME? Hash the presented DirectDraw
+  // surface on every present and count how many differ from the one before.
+  // PRESENT/s alone cannot say: StarCraft presents ~100/s while its game steps
+  // 18/s, and the browser's distinct-displayed-frame count is capped by the
+  // display refresh, so a 434/s menu and a 60/s one read alike there.
+  if (PRESENT_DISTINCT.on) {
+    const prevHook = ctx.onGuestFrame;
+    ctx.onGuestFrame = (frame) => {
+      if (prevHook) prevHook(frame);
+      if (!frame || (frame.kind !== 'directdraw' && frame.kind !== 'gpu')) return;
+      const pd = PRESENT_DISTINCT;
+      pd.presents++;
+      if (tickStateRef.batch < pd.from) return;
+      pd.counted++;
+      const nowMs = ctx.guestPeekMs ? Number(ctx.guestPeekMs()) : null;
+      if (pd.firstMs === null) pd.firstMs = nowMs;
+      pd.lastMs = nowMs;
+      pd.times.push(nowMs);
+      if (frame.kind === 'gpu') { pd.gpu++; pd.changedTimes.push(null); return; }
+      const dv = new DataView(ctx.getMemory());
+      const entry = RegionMap.BASE.DX_OBJECTS + (frame.slot >>> 0) * 32;
+      const h = dv.getUint16(entry + 14, true);
+      const pitch = dv.getUint16(entry + 18, true);
+      const dib = dv.getUint32(entry + 20, true);
+      if (!h || !pitch || !dib) { pd.unreadable++; return; }
+      const words = new Uint32Array(ctx.getMemory(), dib & ~3, (pitch * h) >>> 2);
+      let hash = 0x811c9dc5;
+      for (let i = 0; i < words.length; i++) hash = Math.imul(hash ^ words[i], 16777619);
+      hash >>>= 0;
+      const key = `${frame.slot >>> 0}:${hash}`;
+      const bytes = new Uint8Array(ctx.getMemory(), dib, pitch * h);
+      const prev = pd.prevBytes.get(frame.slot >>> 0);
+      if (prev && prev.length === bytes.length) {
+        let x0 = pitch, x1 = -1, y0 = h, y1 = -1;
+        for (let y = 0; y < h; y++) {
+          const row = y * pitch;
+          let first = -1, last = -1;
+          for (let x = 0; x < pitch; x++) {
+            if (bytes[row + x] !== prev[row + x]) { if (first < 0) first = x; last = x; }
+          }
+          if (first < 0) continue;
+          if (y < y0) y0 = y;
+          y1 = y;
+          if (first < x0) x0 = first;
+          if (last > x1) x1 = last;
+        }
+        // Byte columns, not pixels: bpp varies by slot and the question is
+        // which part of the surface moved, not its exact width.
+        const rect = y1 < 0 ? 'none' : `bytes x${x0}-${x1} rows ${y0}-${y1}`;
+        pd.rects.set(rect, (pd.rects.get(rect) || 0) + 1);
+        if (pd.seq.length < 24) pd.seq.push(rect);
+        prev.set(bytes);
+      } else {
+        pd.prevBytes.set(frame.slot >>> 0, bytes.slice());
+      }
+      if (pd.last !== key) pd.changed++;
+      pd.changedTimes.push(pd.last !== key);
+      pd.last = key;
+      pd.unique.add(key);
+      pd.slots.set(frame.slot >>> 0, (pd.slots.get(frame.slot >>> 0) || 0) + 1);
     };
   }
   // The guest tells us when a DirectDraw frame is finished; nothing else can.
@@ -2566,6 +3164,14 @@ async function main() {
       if (gameplayBench) gameplayBench.present(kind, ...a);
       if (kind === 2 || kind === 5 || kind === 6) dxPresent.dirty = true;
       if (FRAME_STATS && (kind === 5 || kind === 6)) recordFrame(frameStats.present);
+      if (FRAME_STATS && kind === 30) {
+        recordFrame(frameStats.paced);
+        // a[1] is the guest ms the pacer decided at. Headless, a main-thread
+        // Sleep with no other guest thread moves the guest clock instead of
+        // waiting (tickState.pausedMs), so the wall series above holds only
+        // the work between frames; this is the cadence the guest saw.
+        if (tickStateRef.batch >= FRAME_STATS_FROM) frameStats.pacedGuest.push(a[1] >>> 0);
+      }
       // --dx-lock-pause-ms: presentation back-pressure, charged at kind 5.
       //
       // Kind 5 is $dx_present, and it is the ONE event every presentation path
@@ -2594,6 +3200,10 @@ async function main() {
           }
         }
       }
+      // Outside a --trace-from/--trace-to window, skip the logging tracer
+      // entirely rather than only suppressing its output: its formatters scan
+      // 64KB of DIB per Lock/Unlock/Present, which is the expensive half.
+      if (!traceWindowOpen()) return;
       return rawDxTrace(kind, ...a);
     };
   }
@@ -2682,17 +3292,17 @@ async function main() {
   // initial === maximum so the buffer is never detached, so one decode per
   // distinct pointer is enough.
   const apiNameCache = new Map();
-  // Experimental A/B: retain API totals but avoid decoding names no consumer
-  // needs. Explicit diagnostics always keep the original logging path.
-  const fastQuietApi = hasFlag('quiet-api-fast') && QUIET_API &&
-    !TRACE_API && !TRACE_API_COUNTS && !TRACE_CRITICAL &&
-    !TRACE_INPUT_DISPATCH && !ESP_DELTA && !breakApis.length;
+  // --quiet-api with no consumer of the per-call API log: every instance is
+  // told to skip the log / log_i32 / log_api_exit host calls outright
+  // (09b-dispatch $api_log_on) -- three host calls per Win32 API, 88M each in
+  // one Heroes III run. The count survives in WAT ($api_calls, apiTotal()).
+  // The list is every reader of an API name or exit below, plus --esp-audit,
+  // which wraps a worker's log. --quiet-api-fast is now an alias of this.
+  apiLogOff = QUIET_API &&
+    (!TRACE_API || TRACE_API_PAUSED) && !TRACE_API_COUNTS && !TRACE_CRITICAL &&
+    !TRACE_INPUT_DISPATCH && !ESP_DELTA && !ESP_AUDIT && !breakApis.length &&
+    !TRACE_API_MEM.length;
   h.log = (ptr, len) => {
-    if (fastQuietApi) {
-      apiCount++;
-      pendingComApiId = -1;
-      return;
-    }
     let t = apiNameCache.get(ptr);
     if (t === undefined) {
       const b = new Uint8Array(memory.buffer, ptr, Math.min(len, 256));
@@ -2723,7 +3333,7 @@ async function main() {
         const esp = e.get_esp() >>> 0;
         const imageBase = e.get_image_base() >>> 0;
         const dv = new DataView(memory.buffer);
-        const g2w = addr => RegionMap.g2w(addr, imageBase);
+        const g2w = addr => translateGuest(addr, imageBase, memory.buffer);
         const cs = dv.getUint32(g2w((esp + 4) >>> 0), true) >>> 0;
         const state = () => ({
           lock: dv.getInt32(g2w((cs + 4) >>> 0), true),
@@ -2746,7 +3356,7 @@ async function main() {
         const esp = e.get_esp();
         const imageBase = e.get_image_base();
         const dv = new DataView(memory.buffer);
-        const g2w = addr => RegionMap.g2w(addr, imageBase);
+        const g2w = addr => translateGuest(addr, imageBase, memory.buffer);
         const msgPtr = dv.getUint32(g2w(esp + 4), true);
         const msgHwnd = dv.getUint32(g2w(msgPtr), true);
         const msgMsg = dv.getUint32(g2w(msgPtr + 4), true);
@@ -2760,6 +3370,27 @@ async function main() {
       } catch (_) {}
     }
 
+    for (const spec of TRACE_API_MEM) {
+      if (t !== spec.name) continue;
+      try {
+        const e = instance.exports;
+        const imageBase = e.get_image_base() >>> 0;
+        const dv = new DataView(memory.buffer);
+        const g2w = addr => translateGuest(addr, imageBase, memory.buffer);
+        const ptr = dv.getUint32(g2w((e.get_esp() + 4 + spec.arg * 4) >>> 0), true) >>> 0;
+        logs.push(`[api-mem] ${t} arg${spec.arg}=${hex(ptr)} len=${spec.len}`);
+        for (let off = 0; ptr && off < spec.len; off += 16) {
+          const row = [];
+          for (let i = off; i < Math.min(off + 16, spec.len); i++) {
+            row.push(dv.getUint8(g2w((ptr + i) >>> 0)).toString(16).padStart(2, '0'));
+          }
+          logs.push(`  ${hex((ptr + off) >>> 0)}: ${row.join(' ')}`);
+        }
+      } catch (err) {
+        logs.push(`[api-mem] ${t} unreadable: ${err.message}`);
+      }
+    }
+
     // Check API breakpoints
     if (breakApis.length && breakApis.some(name => t.includes(name))) {
       apiBreakHit = t;
@@ -2770,7 +3401,7 @@ async function main() {
         const esp = e.get_esp();
         const imageBase = e.get_image_base();
         const dv = new DataView(memory.buffer);
-        const g2w = addr => RegionMap.g2w(addr, imageBase);
+        const g2w = addr => translateGuest(addr, imageBase, memory.buffer);
         const ret = dv.getUint32(g2w(esp), true);
         const stackVals = [];
         for (let i = 0; i < 8; i++) {
@@ -2811,7 +3442,7 @@ async function main() {
       const esp = e.get_esp();
       const imageBase = e.get_image_base();
       const dv = new DataView(memory.buffer);
-      const g2w = addr => RegionMap.g2w(addr, imageBase);
+      const g2w = addr => translateGuest(addr, imageBase, memory.buffer);
       const fmtCtx = { dv, g2w, memory: memory.buffer, readStr, hex };
 
       const entry = apiByName.get(t);
@@ -2916,9 +3547,8 @@ async function main() {
       // --trace-stack: walk EBP chain on matched calls
       if (TRACE_STACK && (!TRACE_STACK_FILTER || TRACE_STACK_FILTER.has(t))) {
         const depth = TRACE_STACK_FILTER ? TRACE_STACK_FILTER.get(t) : TRACE_STACK_DEFAULT_DEPTH;
-        const chain = walkFrames(() => e.get_ebp(), dv, g2w, depth);
         flushDedup();
-        logs.push(`  frames=[${chain.map(hex).join(' <- ')}]`);
+        logs.push('  ' + traceStackLine(() => e.get_ebp(), esp, dv, g2w, imageBase, memory.buffer, depth));
       }
 
       // Legacy struct dumps only fire when API isn't typed (formatter already covers them)
@@ -3033,6 +3663,54 @@ async function main() {
       logs.push(`[sync] ABANDONED wndproc hwnd=${hex(hwnd)} msg=${hex(msg)} ` +
         `wParam=${hex(wParam)} lParam=${hex(lParam)} at ${hex(eip)} ` +
         `after 64 rounds (yield_reason=${yr})`);
+      return;
+    }
+    if ((val >>> 0) === 0xCAC0DE02) { pendingCodeRetire = []; return; }
+    if (pendingCodeRetire) {
+      pendingCodeRetire.push(val >>> 0);
+      if (pendingCodeRetire.length < 4) return;
+      const [entry, extent, eip, byWrite] = pendingCodeRetire;
+      pendingCodeRetire = null;
+      const kind = byWrite ? 'write' : 'overlap';
+      codeWriteStats.retires[kind] = (codeWriteStats.retires[kind] || 0) + 1;
+      if (!byWrite) {
+        const key = `${hex(entry)} <- ${hex(eip)}`;
+        codeWriteStats.overlapPairs.set(key, (codeWriteStats.overlapPairs.get(key) || 0) + 1);
+        if (++codeWriteStats.overlapLogged <= 40) {
+          logs.push(`[code-retire] ${hex(entry)} (+${extent}) retired by overlapping publish at ${hex(eip)}`);
+        }
+      }
+      return;
+    }
+    if ((val >>> 0) === 0xCAC0DE01) { pendingCodeWrite = []; return; }
+    if (pendingCodeWrite) {
+      pendingCodeWrite.push(val >>> 0);
+      if (pendingCodeWrite.length < 4) return;
+      const [ga, len, eip, dropped] = pendingCodeWrite;
+      pendingCodeWrite = null;
+      codeWriteStats.events++;
+      codeWriteStats.dropped += dropped;
+      const bump = (m, k) => {
+        const e = m.get(k) || { n: 0, dropped: 0 };
+        e.n++; e.dropped += dropped; m.set(k, e);
+      };
+      bump(codeWriteStats.byEip, eip);
+      bump(codeWriteStats.byPage, ga & ~0xFFF);
+      if (codeWriteStats.events <= 40) {
+        logs.push(`[code-write] ${hex(ga)} len=${len} by ${hex(eip)} dropped ${dropped} block(s)`);
+      }
+      return;
+    }
+    if ((val >>> 0) === 0xCAC0DE03) { pendingCodeMiss = []; return; }
+    if (pendingCodeMiss) {
+      pendingCodeMiss.push(val >>> 0);
+      if (pendingCodeMiss.length < 3) return;
+      const [ga, , eip] = pendingCodeMiss;
+      pendingCodeMiss = null;
+      codeWriteStats.misses++;
+      const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+      bump(codeWriteStats.missByEip, eip);
+      bump(codeWriteStats.missByPage, ga & ~0xFFF);
       return;
     }
     if ((val >>> 0) === 0xCAF00001) { pendingFpu = { words: [] }; return; }
@@ -3248,7 +3926,7 @@ async function main() {
       if (TRACE_API && lastApiEntry) {
         const dv = new DataView(memory.buffer);
         const imageBase = instance.exports.get_image_base();
-        const fmtCtx = { dv, g2w: addr => RegionMap.g2w(addr, imageBase), memory: memory.buffer, readStr, hex };
+        const fmtCtx = { dv, g2w: addr => translateGuest(addr, imageBase, memory.buffer), memory: memory.buffer, readStr, hex };
         const eax = instance.exports.get_eax();
         const typedRet = fmtApiRet(lastApiEntry, eax, fmtCtx);
         const outInfo = lastApiArgs ? fmtApiOutParams(lastApiEntry, lastApiArgs, fmtCtx) : '';
@@ -3272,7 +3950,22 @@ async function main() {
   }
 
   // --- Override exit to also log ---
-  h.exit = code => { logs.push('[Exit] code=' + code); stopped = true; };
+  h.exit = code => {
+    hostExitRequested = true;
+    logs.push('[Exit] code=' + code); stopped = true;
+    // A child process_spawn started: its parent's GetExitCodeProcess and
+    // WaitForSingleObject need the guest's own exit code, not this
+    // process's.
+    if (PIPE_STD && process.send) process.send({ t: 'child-exit', code: code >>> 0 });
+    // A --spawn-processes child has no wire to keep: once its exit code is
+    // on its way, drop the IPC channel, which otherwise keeps this process
+    // alive after its shutdown work and the parent waiting on it forever.
+    else if (SPAWNED_CHILD && process.send) {
+      process.send({ t: 'child-exit', code: code >>> 0 }, () => {
+        try { process.disconnect(); } catch (_) {}
+      });
+    }
+  };
 
   // --- Override shell_about to log; the WAT side ($handle_ShellAboutA →
   // $create_about_dialog → $host_register_dialog_frame) drives all
@@ -3324,6 +4017,213 @@ async function main() {
     };
     logs.push(`[capture-launch] snapshotted ${guestExe} (${capturedLaunch.vfs.files.size} files)`);
     return result;
+  };
+
+  // CreateProcess with redirected std handles (src/09d7-pipes.wat): start
+  // the child as another run.js over the same app manifest and build, at its
+  // own room address, with its std handles wired back here over the vlan
+  // wire. This process becomes the hub of that wire. 0 = "cannot", and the
+  // guest falls back to its old CreateProcess path.
+  const pipeChildren = [];
+  const pipeChildByPid = new Map();
+  // op 0: exit code (259 STILL_ACTIVE while running); op 1: terminate.
+  const processCtl = (op, pid, arg) => {
+    const rec = pipeChildByPid.get(pid & 0xFFFF);
+    if (!rec) return -1;
+    if (op === 0) return rec.exitCode >>> 0;
+    if (op === 1) {
+      if (rec.exitCode === 259) {
+        rec.exitCode = arg >>> 0;
+        rec.child.kill();
+      }
+      return 1;
+    }
+    return -1;
+  };
+  h.process_ctl = processCtl;
+  ctx.processCtl = processCtl;
+  const nextChildPid = () => (0x4000 + (pipeChildren.length + 1) * 4) & 0xFFFF;
+  ctx.hasLiveChildren = () => {
+    for (const rec of pipeChildByPid.values()) if (rec.exitCode === 259) return true;
+    return false;
+  };
+  const relayChild = (child, tag) => {
+    for (const stream of [child.stdout, child.stderr]) {
+      let pending = '';
+      stream.on('data', chunk => {
+        pending += chunk;
+        const lines = pending.split('\n');
+        pending = lines.pop();
+        for (const line of lines) console.log(`${tag} ${line}`);
+      });
+    }
+  };
+  // An ordinary CreateProcess (no redirected std handles) under
+  // --spawn-processes: the executable is looked up in this guest's own C:\
+  // -- an installer's child is usually a file it has just extracted, never
+  // something beside the host EXE -- and the child runs on a snapshot of
+  // that C:\ and of the registry. When the child process ends, the files and
+  // registry it left are merged back here, and only then does its exit code
+  // stop reading STILL_ACTIVE, so a parent's WaitForSingleObject +
+  // GetExitCodeProcess sees the child's work done.
+  const spawnVfsChild = (cmd, dirArg) => {
+    const vfs = ctx.vfs;
+    if (!vfs || !(SPAWN_PROCESSES_FLAG || (APP_ENTRY && APP_ENTRY.spawnProcesses))) return 0;
+    const parsed = parseShellLaunchCommand(cmd, '', 'open');
+    const name = parsed.file.trim();
+    if (!name) return 0;
+    const cwd = dirArg || (vfs.getCurrentDirectory ? vfs.getCurrentDirectory() : 'c:\\');
+    const exeDir = EXE_GUEST_PATH ? path.win32.dirname(EXE_GUEST_PATH) : 'c:\\';
+    const names = /\.[a-z0-9]+$/i.test(path.win32.basename(name)) ? [name] : [name + '.exe', name];
+    // lpApplicationName resolves against the current directory only, and a
+    // bare command line searches the application directory, the current
+    // directory, SYSTEM and WINDOWS; the WAT side has folded the two into one
+    // string, so try the current directory first and then the search path.
+    const dirs = /^[a-z]:|^\\/i.test(name) ? [''] : name.includes('\\') ? [cwd]
+      : [cwd, exeDir, 'c:\\windows\\system', 'c:\\windows'];
+    let guestExe = null;
+    for (const d of dirs) {
+      for (const n of names) {
+        const norm = vfs._resolvePath(d ? path.win32.join(d, n) : n);
+        if (vfs.files.has(norm)) { guestExe = norm; break; }
+      }
+      if (guestExe) break;
+    }
+    if (!guestExe) {
+      console.log(`[spawn] CreateProcess "${cmd}": ${name} is not in the VFS`);
+      return 0;
+    }
+    const os = require('os');
+    const storage = require('../lib/storage');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-child-'));
+    const inDir = path.join(tmp, 'in');
+    const outDir = path.join(tmp, 'out');
+    const regIn = path.join(tmp, 'reg-in.json');
+    const regOut = path.join(tmp, 'reg-out.json');
+    const written = saveVfsToHost(vfs, inDir);
+    const before = new Map(written.map(row => [String(row.guestPath).toLowerCase(), row.outputPath]));
+    const exeRow = written.find(row => String(row.guestPath).toLowerCase() === guestExe);
+    if (!exeRow) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      console.log(`[spawn] CreateProcess "${cmd}": ${guestExe} could not be exported`);
+      return 0;
+    }
+    fs.writeFileSync(regIn, JSON.stringify(storage.exportStore()));
+    // An app-local DLL loads as a real PE only when seeded (the app's `dlls`
+    // or --dll-seed); the child has no app entry, so hand it the parent's.
+    // Rollcage's setup relaunches its own exe as the front end, which then
+    // imports QMIXER.DLL from beside it and crashed on the unresolved import.
+    const childDllSeeds = [...((ASSET_ENTRY && ASSET_ENTRY.dlls) || []), ...DLL_SEED]
+      .map(appAsset).filter(p => fs.existsSync(p));
+    const args = [
+      `--exe=${exeRow.outputPath}`, `--vfs-tree=${inDir}`, `--exe-guest-path=${guestExe}`,
+      `--cwd=${cwd}`, `--args=${parsed.params.trim()}`,
+      '--no-build', `--wasm=${WASM_PATH}`, '--quiet-api', '--quiet-blocks',
+      '--stuck-after=0', '--max-batches=1000000000', `--max-seconds=${MAX_SECONDS || 600}`,
+      '--spawned-child', '--spawn-processes',
+      `--save-vfs=${outDir}`, `--reg-import=${regIn}`, `--reg-export=${regOut}`,
+      ...(childDllSeeds.length ? [`--dll-seed=${childDllSeeds.join(',')}`] : []),
+      ...PIPE_CHILD_ARGS,
+      // and on down the tree: instmsi's msiexec is a grandchild.
+      ...(PIPE_CHILD_ARGS.length ? [`--pipe-child-args=${PIPE_CHILD_ARGS.join(' ')}`] : []),
+    ];
+    const { fork } = require('child_process');
+    const child = fork(__filename, args, { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const pid = nextChildPid();
+    relayChild(child, `[child ${pid.toString(16)} ${path.win32.basename(guestExe)}]`);
+    pipeChildren.push(child);
+    const rec = { child, exitCode: 259 };
+    pipeChildByPid.set(pid, rec);
+    let guestCode = null;
+    child.on('message', msg => { if (msg && msg.t === 'child-exit') guestCode = msg.code >>> 0; });
+    child.on('exit', code => {
+      try {
+        mergeChildState(vfs, storage, before, outDir, regOut);
+      } catch (e) {
+        console.log(`[spawn] merging ${path.win32.basename(guestExe)}'s files back failed: ${e.message}`);
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      if (rec.exitCode === 259) rec.exitCode = (guestCode != null ? guestCode : (code == null ? 1 : code)) >>> 0;
+    });
+    if (pipeChildren.length === 1) process.on('exit', () => { for (const c of pipeChildren) c.kill(); });
+    console.log(`[spawn] CreateProcess "${cmd}" -> ${guestExe} (pid ${pid.toString(16)}, cwd ${cwd})`);
+    return pid;
+  };
+  h.process_spawn = (cmdWa, dirWa, childIp, specWa, count) => {
+    const cmd = cmdWa ? readStr(cmdWa) : '';
+    if (!cmd) return 0;
+    if (!count) return spawnVfsChild(cmd, dirWa ? readStr(dirWa) : '');
+    if (!EXE_PATH) return 0;
+    const { ParentHub } = require('../lib/vlan-wire');
+    if (ctx.vlanWire && !(ctx.vlanWire instanceof ParentHub)) {
+      console.log(`[pipe] CreateProcess "${cmd}": this process is itself on a room wire; nested children are not supported`);
+      return 0;
+    }
+    const parsed = parseShellLaunchCommand(cmd, '', 'open');
+    const want = path.basename(parsed.file.trim().replace(/\\/g, '/')).toLowerCase();
+    const wantExe = /\.[a-z0-9]+$/.test(want) ? want : want + '.exe';
+    const dir = path.dirname(canonicalPath(EXE_PATH));
+    const hostExe = fs.readdirSync(dir).find(n => n.toLowerCase() === wantExe);
+    if (!hostExe) {
+      console.log(`[pipe] CreateProcess "${cmd}": no ${wantExe} beside ${EXE_PATH}`);
+      return 0;
+    }
+    const mem = new DataView(ctx.getMemory());
+    const parentIp = instance.exports.get_vlan_local_ip
+      ? (instance.exports.get_vlan_local_ip() >>> 0) : 0x0A000001;
+    const spec = [];
+    for (let i = 0; i < count; i++) {
+      const at = specWa + i * 16;
+      spec.push([mem.getInt32(at, true), mem.getInt32(at + 4, true),
+        mem.getInt32(at + 8, true), parentIp | 0, mem.getInt32(at + 12, true)].join(':'));
+    }
+    const ip = childIp >>> 0;
+    const ipText = [ip >>> 24, (ip >>> 16) & 255, (ip >>> 8) & 255, ip & 255].join('.');
+    const args = [
+      ...(APP_ID ? [`--app=${APP_ID}`] : []),
+      `--exe=${path.join(dir, hostExe)}`, `--args=${parsed.params.trim()}`,
+      '--no-build', `--wasm=${WASM_PATH}`, '--quiet-api', '--quiet-blocks',
+      '--vlan-wire', `--vlan-ip=${ipText}`, `--pipe-std=${spec.join(',')}`,
+      '--stuck-after=0', '--vlan-max-waits=1000000000', '--max-batches=1000000000',
+      `--max-seconds=${MAX_SECONDS || 600}`,
+      // The child's side of a wire question is half the answer.
+      // (never --verbose: its per-batch output, relayed here, is unbounded)
+      ...(TRACE_NET ? ['--trace-net'] : []),
+      ...PIPE_CHILD_ARGS,
+    ];
+    const { fork } = require('child_process');
+    const child = fork(__filename, args, { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const tag = `[child ${ipText} ${hostExe}]`;
+    for (const stream of [child.stdout, child.stderr]) {
+      let pending = '';
+      stream.on('data', chunk => {
+        pending += chunk;
+        const lines = pending.split('\n');
+        pending = lines.pop();
+        for (const line of lines) console.log(`${tag} ${line}`);
+      });
+    }
+    if (!ctx.vlanWire) {
+      ctx.vlanWire = new ParentHub();
+      if (TRACE_NET) {
+        const { describeFrame } = require('../lib/vlan-wire');
+        ctx.vlanWire.onDeliver = bytes => console.log(`[net] .. arrived ${describeFrame(bytes)}`);
+      }
+    }
+    ctx.vlanWire.addChild(child, ip);
+    pipeChildren.push(child);
+    const pid = (0x4000 + pipeChildren.length * 4) & 0xFFFF;
+    const rec = { child, exitCode: 259 };
+    pipeChildByPid.set(pid, rec);
+    child.on('message', msg => {
+      if (msg && msg.t === 'child-exit' && rec.exitCode === 259) rec.exitCode = msg.code >>> 0;
+    });
+    // An emulator that ends without a guest ExitProcess (a crash, a
+    // --max-seconds stop) still ends the child process: report it as exited.
+    child.on('exit', code => { if (rec.exitCode === 259) rec.exitCode = (code == null ? 1 : code) >>> 0; });
+    if (pipeChildren.length === 1) process.on('exit', () => { for (const c of pipeChildren) c.kill(); });
+    console.log(`[pipe] CreateProcess "${cmd}" -> ${hostExe} at ${ipText}, std ${spec.join(' ')}`);
+    return pid;
   };
 
   // --- Override set_dlg_item_text to log ---
@@ -3453,6 +4353,18 @@ async function main() {
     batchClock.getTicks = () => gameplayBench.active ? gameplayBench.now : ticks();
     batchClock.batchTicks = () => gameplayBench.active ? gameplayBench.now : peek();
   }
+  // Startup dilation wraps the batch clock's two readers, as the bench does,
+  // so guest calls, worker threads, sleeps, audio and vblank all see one clock.
+  // The raw batch reading is kept for ending it at the right raw instant.
+  const startupClock = createStartupClock(STARTUP_CLOCK_CFG);
+  ctx.startupClock = startupClock;
+  if (startupClock.active && !REAL_TICKS) {
+    const ticks = batchClock.getTicks, peek = batchClock.batchTicks;
+    const dilate = raw => (Math.floor(startupClock.map(raw)) | 0) & 0x7FFFFFFF;
+    batchClock.getTicks = () => dilate(ticks());
+    batchClock.batchTicks = () => dilate(peek());
+    ctx.startupClockRawNow = peek;
+  }
   // Published for the --dx-lock-pause-ms hook installed above, which runs long
   // before this line but only ever fires during the batch loop, long after it.
   DX_LOCK_PAUSE.clock = batchClock;
@@ -3476,7 +4388,22 @@ async function main() {
     realTicks: REAL_TICKS,
     timeScale: TIME_SCALE,
     clockOrigin: CLOCK_ORIGIN,
+    mapElapsed: startupClock.active && REAL_TICKS ? raw => startupClock.map(raw) : null,
   });
+  if (startupClock.active && REAL_TICKS) {
+    ctx.startupClockRawNow = () => (Date.now() - CLOCK_ORIGIN) * TIME_SCALE;
+  }
+  if (startupClock.active) {
+    console.log(`[startup-clock] factor=${startupClock.config.factor} ` +
+      `maxMs=${startupClock.config.maxMs} endOn=${startupClock.config.endOn}`);
+    ctx.startupClockEvent = (name) => {
+      if (!startupClock.active || name !== startupClock.config.endOn) return;
+      const raw = ctx.startupClockRawNow();
+      startupClock.end(raw, name);
+      console.log(`[startup-clock] ended by ${name} at raw ${Math.round(raw)} ms = ` +
+        `guest ${Math.round(startupClock.map(raw))} ms`);
+    };
+  }
   h.get_ticks = guestClock.ticks;
   // Every OTHER import table in this process is built from `ctx` — one per
   // guest thread, in makeWorkerImports — and createHostImports derives its
@@ -3487,12 +4414,29 @@ async function main() {
   // (T2) after ~156 batches, which moved every later VirtualAlloc base and
   // made the written save file differ byte-for-byte between runs.
   ctx.guestNowMs = () => h.get_ticks();
+  // The same clock read WITHOUT spending a per-call step: for the harness's
+  // own bookkeeping (--present-distinct rates, png guest-ms), which must not
+  // move the time the guest itself sees.
+  ctx.guestPeekMs = () => guestClock.publish();
   // A queued DirectInput edge carries the moment it was queued, and the guest
   // reads that against its own clock -- so the renderer has to stamp it with
   // the clock chosen right above, not with the wall clock. Otherwise a run
   // driven by a fixed --input script is only reproducible when the box is
   // idle: the age the guest sees is real time spent between batches.
   if (renderer) renderer._guestNowMs = h.get_ticks;
+  // The input queue's button-release hold (renderer-input.js takeInput) is
+  // also time on the guest's clock, read without spending a step, so polling
+  // the queue cannot move the time the guest sees.
+  if (renderer) renderer._inputNowMs = () => ctx.guestPeekMs();
+  // The hold itself is off here, as 37ff2f8df meant it to be ("CLI --input
+  // timing is unchanged"): an --input script already says when a button goes
+  // down and up. With it on, a click's release waited for an empty poll the
+  // parked guest only makes in the next batch -- by then beside that batch's
+  // scripted press, which GetMessage (hardware before posted) hands out ahead
+  // of the release's own posted follow-ups. Paint's tool buttons PostMessage
+  // their clicks to the toolbox, so the toolbox's release landed after the
+  // canvas press and took its capture. Floor 0 alone was not enough.
+  if (renderer) renderer._buttonHoldFloorMs = -1;
   // --wall-clock-ms pins the calendar's ORIGIN; the calendar then advances
   // with GUEST time. Freezing it outright was deterministic but not a clock:
   // GetSystemTime returned one instant for the whole run, so anything that
@@ -3501,7 +4445,7 @@ async function main() {
   // far the guest got. batchTicks() is guest milliseconds since the run
   // started, so the calendar moves at the rate the guest believes time moves
   // and two runs of one --input script still see the identical calendar.
-  if (WALL_CLOCK_MS) ctx.wallNowMs = () => WALL_CLOCK_MS + batchClock.batchTicks();
+  if (CALENDAR_ORIGIN_MS) ctx.wallNowMs = () => CALENDAR_ORIGIN_MS + batchClock.batchTicks();
 
   // --- Override input for test injection ---
   let lastInputEvent = null;
@@ -3531,10 +4475,17 @@ async function main() {
     return packed;
   };
   // Default hwnd routing: keyboard messages (WM_KEYDOWN..WM_SYSCHAR, 0x100-0x108)
-  // need to land in the edit child (0x10002) since we don't track focus from
-  // outside WAT. Anything else (menu commands, mouse, etc.) returns 0 so the
-  // WAT side defaults to main_hwnd.
-  h.check_input_hwnd = () => inputEventHwnd(lastInputEvent, instance && instance.exports,
+  // land on the focus window. Anything else (menu commands, mouse, etc.)
+  // returns 0 so the WAT side defaults to main_hwnd.
+  //
+  // The focus is the POLLING guest's own $focus_hwnd, passed in by the import,
+  // exactly as host.js resolves it. Reading the main instance's focus here for
+  // every thread hid a browser-only bug: a helper thread with no focus that
+  // won the input FIFO (Moorhuhn's WinSock thread, whenever the main thread
+  // sat in a present-cap sleep) was told the key was the main window's and
+  // routed it, while the browser told it 0 and it kept the key.
+  h.check_input_hwnd = (focusHwnd) => inputEventHwnd(lastInputEvent,
+    { get_focus_hwnd: () => focusHwnd | 0 },
     (why) => logs.push(`[check_input_hwnd] ${why}`));
   h.check_input_lparam = () => (lastInputEvent ? (lastInputEvent.lParam || 0) : 0);
   h.check_input_wparam = () => (lastInputEvent ? (lastInputEvent.wParam || 0) : 0);
@@ -3624,7 +4575,9 @@ async function main() {
   }
 
   // Create shared memory externally (WASM module imports it)
-  const memory = new WebAssembly.Memory({ initial: MEMORY_PAGES, maximum: MEMORY_PAGES, shared: true });
+  const memoryPages = !MEMORY_MB_EXPLICIT && APP_ENTRY && APP_ENTRY.bigMemory === true
+    ? 2048 * 16 : MEMORY_PAGES;
+  const memory = new WebAssembly.Memory({ initial: memoryPages, maximum: memoryPages, shared: true });
   ctx._memory = memory;
   h.memory = memory;
 
@@ -3638,6 +4591,8 @@ async function main() {
   h.duplicate_current_thread = (tid) => threadManager.duplicateCurrentThread(tid);
   h.suspend_thread = (handle) => threadManager.suspendThread(handle);
   h.resume_thread = (handle) => threadManager.resumeThread(handle);
+  h.thread_apc_target = (handle, tid) => threadManager.threadApcTarget(handle, tid);
+  h.thread_alert = (tid) => threadManager.alertThread(tid);
   h.get_thread_priority = (handle, tid) => threadManager.getThreadPriority(handle, tid);
   h.set_thread_priority = (handle, priority, tid) => threadManager.setThreadPriority(handle, priority, tid);
   h.get_thread_locale = (tid) => threadManager.getThreadLocale(tid);
@@ -3648,7 +4603,7 @@ async function main() {
   h.exit_thread = (exitCode) => threadManager.exitThread(exitCode);
   h.get_exit_code_thread = (handle) => threadManager.getExitCodeThread(handle);
   h.terminate_thread = (handle, exitCode) => threadManager.terminateThread(handle, exitCode);
-  const win32ThreadId = () => ((ctx.threadId | 0) + 1) | 0;
+  const win32ThreadId = () => threadManager.currentWin32ThreadId();
   h.create_event = (manualReset, initialState, nameWa, wide) => {
     const name = readSyncObjectName(memory, nameWa, wide);
     return (wide & 2)
@@ -3663,6 +4618,7 @@ async function main() {
     ? threadManager.releaseMutex((handle >>> 0) & 0x7fffffff, win32ThreadId())
     : threadManager.setEvent(handle);
   h.reset_event = (handle) => threadManager.resetEvent(handle);
+  h.close_event = handle => threadManager.closeEvent(handle);
   // A wait reached from inside a synchronous SendMessage cannot yield: the
   // recursive interpreter frame in $wnd_send_message would be abandoned. Give
   // the signalling worker a bounded inline turn instead, exactly as host.js
@@ -3704,7 +4660,10 @@ async function main() {
       try { resolved = ctx.vfs._resolvePath(name); } catch (_) {}
       const tryPaths = [resolved, name.toLowerCase(), 'c:\\' + fileName, 'c:\\plugins\\' + fileName];
       for (const p of tryPaths) {
-        if (p && ctx.vfs.files.has(p)) return 1;
+        const entry = p && ctx.vfs.files.get(p);
+        // A DirectX system-file stub stands for a module we dispatch
+        // statically (lib/process-boot.js); it is not a PE to map.
+        if (entry && !entry.staticModule) return 1;
       }
     }
     // Same search, and the same bytes, the load itself will use.
@@ -3834,6 +4793,23 @@ async function main() {
 
   const instance = await WebAssembly.instantiate(wasmModule, imports);
   ctx.exports = instance.exports;
+  // Quiet runs silence the per-call API log from the first instruction, DLL
+  // initialization included. Applied only after DllMain ran, the early calls
+  // were logged (and so counted twice, by h.log and by $api_calls) and a
+  // --trace-api-paused run printed them before it was switched on.
+  if (apiLogOff && instance.exports.set_api_log) instance.exports.set_api_log(0);
+  // An app whose game loop runs on a worker thread opts into the worker-heavy
+  // page-index split (lib/apps.js `workerHeavyCodeCache`), before anything is
+  // decoded and before any thread instance is created. --worker-heavy-code-cache
+  // forces it for any exe, --no-worker-heavy-code-cache turns the app's off.
+  {
+    const wantHeavy = hasFlag('worker-heavy-code-cache')
+      || (!hasFlag('no-worker-heavy-code-cache') && APP_ENTRY && APP_ENTRY.workerHeavyCodeCache === true);
+    if (wantHeavy && instance.exports.set_page_index_layout) {
+      instance.exports.set_page_index_layout(1);
+      console.log('[cache] worker-heavy page-index layout: main 256 slots, workers 32');
+    }
+  }
   if (D3D_WORKER) {
     const {Worker} = require('worker_threads');
     const {Encoder} = require('../lib/d3d-command-stream');
@@ -3939,6 +4915,41 @@ async function main() {
       console.log(`[count] slot ${i} armed at ${hex(addr)}`);
     }
   };
+  // --present-frames: snapshot the frame-end counters at FROM_BATCH, report at
+  // exit. The app's perf.logicalFrame steps are counted by the decoder's
+  // marker in every instance (LOGICAL_FRAME), summed over threads. This used
+  // to arm a --count slot, which switches on $dbg_any and so ran the audit
+  // with block chaining and the micro-op tier off.
+  const presentAudit = require('../lib/present-frame-audit');
+  const presentLogical = PRESENT_FRAMES && LOGICAL_FRAME ? LOGICAL_FRAME : null;
+  let presentFramesFrom = null;
+  const presentFramesSnapshot = () => {
+    const insts = [{ name: 'main', exports: instance.exports }];
+    if (threadManager && threadManager.threads) {
+      for (const [, t] of threadManager.threads) {
+        if (t.instance) insts.push({ name: `T${t.tid}`, exports: t.instance.exports });
+      }
+    }
+    const logical = presentLogical
+      ? insts.reduce((n, { exports: ex }) => n +
+        (ex.get_logical_frame_count ? ex.get_logical_frame_count() >>> 0 : 0), 0)
+      : null;
+    // The batch clock read directly: a guest-clock read from the host would
+    // count toward the clock-spin detector.
+    return presentAudit.snapshot(insts, batchClock.batchTicks(), logical);
+  };
+  const presentFramesTick = (batch) => {
+    if (batch === PRESENT_FRAMES_FROM) presentFramesFrom = presentFramesSnapshot();
+  };
+  var reportPresentFrames = () => {
+    if (!PRESENT_FRAMES || !instance.exports.get_present_frame_ends) return;
+    const r = presentAudit.audit(presentFramesFrom, presentFramesSnapshot(),
+      { cap: PRESENT_CAP, logicalLabel: presentLogical && presentLogical.label,
+        mode: presentLogical && PRESENT_CAP ? PRESENT_AT : null });
+    console.log(`[present-frames] from batch ${presentFramesFrom ? PRESENT_FRAMES_FROM : 0}`
+      + (PRESENT_CAP ? `, cap ${PRESENT_CAP}/s` : ', uncapped'));
+    for (const line of r.lines) console.log(line);
+  };
   for (const sig of ['SIGTERM', 'SIGINT']) {
     process.on(sig, () => {
       if (signalExitStarted) return;
@@ -3955,7 +4966,16 @@ async function main() {
     });
   }
   if (instance.exports.set_process_id) instance.exports.set_process_id(ctx.processId);
+  if (instance.exports.set_desktop_color_depth) instance.exports.set_desktop_color_depth(APP_ENTRY?.desktopColorDepth === 8 ? 8 : 32);
   if (NO_MMX && instance.exports.set_cpu_mmx) instance.exports.set_cpu_mmx(0);
+  // timeSetEvent callbacks on a winmm timer guest thread (the Windows model)
+  // instead of the main thread's message pump. Shared memory, so set once.
+  // On by default, as in the browser; `--no-mm-timer-thread` or an app's
+  // `mmTimerThread: false` keeps the old main-thread delivery.
+  if (!hasFlag('no-mm-timer-thread') && (hasFlag('mm-timer-thread') || APP_ENTRY?.mmTimerThread !== false) &&
+      instance.exports.set_mm_timer_thread_mode) {
+    instance.exports.set_mm_timer_thread_mode(1);
+  }
   if ((hasFlag('sse') || APP_ENTRY?.cpuSSE === true) && instance.exports.set_cpu_sse) {
     instance.exports.set_cpu_sse(1);
   }
@@ -3967,6 +4987,28 @@ async function main() {
     }
     instance.exports.set_vlan_local_ip(octets.reduce((a, o) => ((a << 8) | o) >>> 0, 0) | 0);
     if (TRACE_NET) console.log(`[net] room address ${VLAN_IP}`);
+  }
+  {
+    const nagle = VLAN_NAGLE_ARG !== null ? (parseInt(VLAN_NAGLE_ARG, 10) || 0)
+      : (Number.isFinite(APP_ENTRY?.vlanNagleMs) ? APP_ENTRY.vlanNagleMs : 0);
+    if (nagle > 0 && instance.exports.set_vlan_nagle_ms) instance.exports.set_vlan_nagle_ms(nagle | 0);
+  }
+  if (PIPE_STD && instance.exports.pipe_attach_std) {
+    const byPort = new Map();
+    for (const entry of PIPE_STD.split(',').filter(Boolean)) {
+      const [which, end, lport, rip, rport] = entry.split(':').map(v => parseInt(v, 10));
+      let h = byPort.get(lport);
+      if (h) instance.exports.pipe_set_std(which | 0, h | 0);
+      else {
+        h = instance.exports.pipe_attach_std(which | 0, end | 0, lport | 0, rip | 0, rport | 0) >>> 0;
+        if (!h) { console.error(`--pipe-std: could not open ${entry}`); process.exit(2); }
+        byPort.set(lport, h);
+      }
+      console.log(`[pipe] std ${which} = 0x${h.toString(16)} (${end ? 'write' : 'read'} end, port ${lport})`);
+    }
+    // The parent queues this child's frames until now: its std handles exist
+    // to receive them.
+    if (process.send) process.send({ t: 'child-ready' });
   }
   // A frame that reaches this process but that no guest ever peeks is
   // indistinguishable, in the send/peek trace alone, from one that was never
@@ -4010,6 +5052,7 @@ async function main() {
       hostCensus: HOST_CENSUS,
       exports: workerExportsProxy,
       _debugReadFile: TRACE_API,
+      ioTraceTag: ctx.ioTraceTag,
       sharedGdi: base.gdi,  // the live GDI table, not the copy in ctx
       g2w: (addr) => translateGuest(addr, instance.exports.get_image_base(), memory.buffer),
     });
@@ -4027,6 +5070,11 @@ async function main() {
     wh.check_input_lparam = h.check_input_lparam;
     wh.check_input_wparam = h.check_input_wparam;
     wh.check_input_hwnd = h.check_input_hwnd;
+    // Child processes belong to the process, not to the thread that started
+    // them: Windows Installer runs its custom-action EXEs (msiexec /D, /Y)
+    // from its engine thread, and waits on them from there.
+    wh.process_spawn = (...a) => h.process_spawn(...a);
+    wh.process_ctl = (...a) => h.process_ctl(...a);
     for (const name of profileHostNames) wrapProfileHost(wh, name);
     // Worker API tracing. The decode and the "the return belongs to the call
     // just logged" latch are shared; what stays here is the CLI's own policy —
@@ -4051,7 +5099,7 @@ async function main() {
       const e = workerExports();
       if (!e || !e.get_esp || !e.get_image_base) return null;
       const imageBase = e.get_image_base();
-      const g2w = addr => RegionMap.g2w(addr, imageBase);
+      const g2w = addr => translateGuest(addr, imageBase, memory.buffer);
       return {
         esp: e.get_esp(),
         ctx: { dv: new DataView(memory.buffer), g2w, memory: memory.buffer, readStr, hex },
@@ -4084,8 +5132,8 @@ async function main() {
           const depth = TRACE_STACK_FILTER
             ? TRACE_STACK_FILTER.get(name) : TRACE_STACK_DEFAULT_DEPTH;
           const e = workerExports();
-          const chain = walkFrames(() => e.get_ebp(), f.ctx.dv, f.ctx.g2w, depth);
-          header += `\n  frames=[${chain.map(hex).join(' <- ')}]`;
+          header += '\n  ' + traceStackLine(() => e.get_ebp(), f.esp, f.ctx.dv, f.ctx.g2w,
+            e.get_image_base(), f.ctx.memory, depth);
         }
         return header;
       },
@@ -4098,13 +5146,22 @@ async function main() {
       onCall: (name) => {
         if (apiCounts) apiCounts.set(name, (apiCounts.get(name) || 0) + 1);
       },
-      shouldLog: (name) => TRACE_API && !QUIET_API &&
-        (!TRACE_API_FILTER || TRACE_API_FILTER.has(name)),
+      resolveComName: (id) => {
+        const entry = apiTable[id];
+        return entry && entry.id === id ? entry.name : null;
+      },
+      shouldLog: (name) => workerApiShouldLog(
+        { traceApi: TRACE_API, quietApi: QUIET_API, filter: TRACE_API_FILTER }, name),
       formatValue: hex,
       emit: (line) => logs.push(line),
     });
     wh.log = workerApiLog.log;
     wh.log_i32 = workerApiLog.log_i32;
+    // The API logger drops every value no visible call owns, which is all of
+    // a thread's --uop-census records; tools/uop-census.js --thread=N reads these.
+    if (experiments.uopCensus) {
+      wh.log_i32 = (val) => { logs.push(`[i32 T${tid}] ${hex(val)}`); workerApiLog.log_i32(val); };
+    }
     if (TRACE_MOUSE_STATE) {
       const workerGetMousePosition = wh.get_mouse_position;
       const workerGetMouseButtons = wh.get_mouse_buttons;
@@ -4133,7 +5190,7 @@ async function main() {
             + ` ESI=${hex(e.get_esi())} EDI=${hex(e.get_edi())}`;
           if (traceEipDumps.length) {
             const imageBase = e.get_image_base();
-            const g2w = addr => RegionMap.g2w(addr, imageBase);
+            const g2w = addr => translateGuest(addr, imageBase, memory.buffer);
             const dv = new DataView(memory.buffer);
             for (const d of traceEipDumps) {
               const bytes = [];
@@ -4166,12 +5223,34 @@ async function main() {
   // mode quietly wrong for a whole phase with every test still green.
   let guestThreadHost = null;
   // Computed here, not at parse time: the debug flags above rewrite BATCH_SIZE.
-  const THREAD_BATCH_SIZE = THREAD_BATCH_SIZE_ARG || Math.max(BATCH_SIZE * THREAD_SLICES, 20000);
+  //
+  // A worker slice is the same size as a main slice, floored at 1000 like
+  // host.js's own step count, because that is the shape the browser runs:
+  // host.js hands its main step count straight to runWorkerSlices. This used
+  // to be max(BATCH_SIZE * THREAD_SLICES, 20000), which let every worker
+  // retire ~27x the blocks main did per batch. That is a race no real machine
+  // runs and the page never does: hype_glide_demo's loader thread (MSVCRT
+  // thread 0xb98b10) reached its sprite-row table at 0x757200 while main was
+  // still filling the 64K colour table beside it at 0x466b4f, followed a NULL
+  // row, and _XcptFilter turned the fault into ExitProcess -- the only crash
+  // in the 271-app dual-mode sweep (docs/crash-sweep-dual-mode-20261006.md).
+  const THREAD_BATCH_SIZE = THREAD_BATCH_SIZE_ARG || Math.max(BATCH_SIZE, 1000);
   if (WORKER_THREADS) {
+    // Real parallelism: LOCK-prefixed instructions must be atomic across the
+    // worker_threads (07-decoder.wat $try_emit_locked, handler 499).
+    if (instance.exports.set_lock_atomic_mode) instance.exports.set_lock_atomic_mode(1);
     const { GuestThreadHost } = require('../lib/guest-thread-host');
     const sigs = JSON.parse(fs.readFileSync(
       path.join(ROOT, 'lib', 'host-import-sigs.generated.json'), 'utf8')).sigs;
     guestThreadHost = new GuestThreadHost({
+      findDll: findRuntimeDllBytes,
+      onDllMapped: record => {
+        require('../lib/process-boot').registerMappedDll(ctx, instance.exports, memory.buffer, record, console.log);
+      },
+      onDllRetired: row => {
+        if (ctx.dllResources && ctx.dllResources[row.loadAddr] &&
+            ctx.dllResources[row.loadAddr].generation === row.generation) delete ctx.dllResources[row.loadAddr];
+      },
       memory,
       module: wasmModule,
       sigs,
@@ -4186,7 +5265,8 @@ async function main() {
       // flag, however, must see worker-thread output just as cooperative mode
       // does. This includes log_i32-only loop/Win16/FPU traces.
       forwardGuestLogs: VERBOSE || TRACE_API || TRACE_API_COUNTS ||
-        experiments.traceLoopmatch || TRACE_WIN16 || TRACE_WIN16_DDE || TRACE_FPU,
+        experiments.traceLoopmatch || experiments.uopCensus ||
+        TRACE_WIN16 || TRACE_WIN16_DDE || TRACE_FPU,
       // The audit runs inside each worker, against its own instance: this
       // process's get_esp() belongs to the main thread and cannot see a
       // worker's stack at all. Arities come from the same table
@@ -4248,6 +5328,10 @@ async function main() {
       }
       return true;
     }
+    if (r.yield === 5) {
+      await guestThreadHost.serviceDllYield(link);
+      return true;
+    }
     const nameExport = r.yield === 3 ? 'get_com_dll_name' : 'get_loadlib_name';
     const nameWA = (await link.callExport(nameExport)) >>> 0;
     let dllName = '';
@@ -4271,7 +5355,15 @@ async function main() {
   const inheritWasm = (setter, ...args) =>
     recordInheritedWasmGlobal(inheritedWasmGlobals, setter, args);
   experiments.recordInherited(inheritWasm, { copySuperops: COPY_SUPEROPS, verbose: VERBOSE });
+  // A guest thread's API log feeds only --trace-api/--trace-api-counts, which
+  // keep it on (apiLogOff), so a quiet run silences it on every instance.
+  if (apiLogOff) inheritWasm('set_api_log', 0);
   if (FLIP_VSYNC) inheritWasm('set_flip_vsync', 1);
+  if (PRESENT_CAP) inheritWasm('set_present_cap', PRESENT_CAP);
+  inheritWasm('set_present_pace_mode', PRESENT_PACE_MODE);
+  // A { seg, off } step is a Win16 task's, and a Win16 task has no guest
+  // threads; it is resolved on the main instance after load instead.
+  if (LOGICAL_FRAME && !LOGICAL_FRAME.segOff) inheritWasm('set_logical_frame', LOGICAL_FRAME.address, LOGICAL_FRAME.pace);
   // Guest threads run their own module instance over the shared memory, so the
   // spin state is per-thread by construction — but the THRESHOLD is a setting
   // and has to be propagated like every other one.
@@ -4289,9 +5381,17 @@ async function main() {
     traceCallstackDepth: TRACE_CALLSTACK_DEPTH,
     traceEipRange: (traceEipOn && traceEipArmed) ? { lo: traceEipLo, hi: traceEipHi } : null,
     countAddrs: countAddrs,
-    faultUnmapped: FAULT_NULL,
+    faultUnmapped: FAULT_NULL_MODE,
     inheritedWasmGlobals,
-    now: () => batchClock.batchTicks(),
+    // Deadlines (Sleep, timed waits) must be kept on the clock the guest
+    // reads. Under a capped --real-ticks run (REAL_TICK_SLEEPS) that is the wall clock: on the batch clock a
+    // main-thread Sleep(16) ends at the next batch, however little wall time
+    // that is -- measured on dx_tunnel at --present-cap=60, every paced
+    // Sleep lasted ~3ms and the capped app ran at 66.8 frames/s.
+    now: REAL_TICK_SLEEPS ? () => guestClock.ticks() : () => batchClock.batchTicks(),
+    sleepNow: REAL_TICK_SLEEPS ? () => guestClock.ticks()
+      : () => Math.max(batchClock.batchTicks(), batchClock.state.lastTick),
+    clockParkSleep: !NO_CLOCK_PARK_SLEEP,
     // For a spawned thread's io_wait park (yield 12). CLI providers usually
     // read synchronously, so this mostly matters to tests that mount an
     // async provider to mimic the browser's File-backed ISO reads.
@@ -4311,6 +5411,9 @@ async function main() {
       path.basename(EXE_PATH), info, instance.exports, memory.buffer,
       { log: (m) => console.log(m) }),
   });
+  // Waits on a child process's handle (src/09d7-pipes.wat) ask the host
+  // that started it.
+  threadManager.processCtl = (op, pid, arg) => (ctx.processCtl ? ctx.processCtl(op, pid, arg) : -1);
   ctx.closeSyncHandle = handle => threadManager.closeSyncHandle(handle);
 
   const mem = new Uint8Array(memory.buffer);
@@ -4325,9 +5428,13 @@ async function main() {
   }
 
   const { entry } = stageAndLoadPe(instance.exports, memory.buffer, exeBytes, console.log);
+  applyVirtualAllocTop(instance.exports, VIRTUAL_ALLOC_TOP_ARG !== null
+    ? Number(VIRTUAL_ALLOC_TOP_ARG) : (APP_ENTRY && APP_ENTRY.virtualAllocTop));
   if (CS_STEAL_AFTER && instance.exports.set_cs_steal_after) {
     instance.exports.set_cs_steal_after(CS_STEAL_AFTER);
   }
+  if (Number.isFinite(SPIN_WORK_MAX)) inheritWasm('set_spin_work_max', SPIN_WORK_MAX);
+  if (Number.isFinite(SPIN_REGS_CHECK)) inheritWasm('set_spin_regs_check', SPIN_REGS_CHECK);
   applyExeCompatibilityPatches(path.basename(EXE_PATH), instance.exports, memory.buffer);
   // Screen-size-driven defaults from the same table (lib/app-profiles.js
   // LAUNCH_PREFS) — the CLI's screen is whatever --screen= asked for, so a
@@ -4431,6 +5538,20 @@ async function main() {
       exeBytes,
       seeds: [...((ASSET_ENTRY && ASSET_ENTRY.dlls) || []), ...DLL_SEED],
       detectRequiredDlls,
+      onMissing: (name, spec, { seed } = {}) => {
+        // One the app declares (`dlls`, --dll-seed) is not optional: running
+        // on without it only moves the failure into a built-in stub.
+        // A setup failure, so a nonzero exit (no guest thread exists yet).
+        if (seed) {
+          console.error(`run.js: declared DLL not found: ${spec} (test/binaries is ` +
+            `gitignored: link it into a fresh worktree)`);
+          process.exit(1);
+        }
+        console.warn(`[dll] ${name} is loaded as a real PE ` +
+          `but is not on disk (${spec}); its imports fall to WAT stubs and an ordinal ` +
+          `import from it crashes as "<ord>". test/binaries/dlls is gitignored: copy it ` +
+          `into a fresh worktree.`);
+      },
       loadSpec: (spec) => {
         // Registry seeds arrive as repo-relative paths; the graph walk's own
         // discoveries arrive as bare DLL names.
@@ -4442,7 +5563,7 @@ async function main() {
         return (p && fs.existsSync(p)) ? {
           name,
           bytes: fs.readFileSync(p),
-          path: capturedGuestPath(p) || undefined,
+          path: capturedGuestPath(p) || besideExeGuestPath(p, name) || undefined,
         } : null;
       },
     });
@@ -4456,9 +5577,44 @@ async function main() {
     moduleBases['exe'] = { loadAddr: exeLoad, origBase: exeOrig };
     moduleBases[exeBase] = { loadAddr: exeLoad, origBase: exeOrig };
   }
+  // The page loads a registered app's files before it loads any DLL
+  // (lib/browser-shell.js loadFiles, then the DLL graph), so a DllMain that
+  // enumerates its own data already sees them -- UBER.DLL's DllMain scans
+  // C:\Modules for Myth's network modules. Mount the same manifest here first;
+  // the full mount below re-adds each path idempotently.
+  if (ctx.vfs && ASSET_ENTRY) {
+    for (const item of getAssetFiles(ASSET_ENTRY)) {
+      const url = typeof item === 'string' ? item : (item && item.url);
+      if (!url) continue;
+      const hostPath = appAsset(url);
+      let size;
+      try { size = fs.statSync(hostPath).size; } catch (_) { continue; }
+      const guests = typeof item === 'object' && Array.isArray(item.vfsPaths) ? item.vfsPaths
+        : [typeof item === 'object' && item.vfsPath ? item.vfsPath : url.replace(/^.*[\\/]/, '')];
+      for (const raw of guests) {
+        let vfsPath = String(raw).toLowerCase().replace(/\//g, '\\');
+        if (!/^[a-z]:/.test(vfsPath)) vfsPath = 'c:\\' + vfsPath.replace(/^\\+/, '');
+        if (ctx.vfs.files.has(vfsPath)) continue;
+        ctx.vfs.ensureParentDirs(vfsPath);
+        ctx.vfs.setLazyFile(vfsPath.slice(0, vfsPath.lastIndexOf('\\') + 1) + String(raw).replace(/^.*[\\/]/, ''), { attrs: 0x20, size,
+          load: () => new Uint8Array(fs.readFileSync(hostPath)) });
+      }
+    }
+  }
+  // A LoadLibraryA from inside a DllMain (UBER.DLL loading Myth's
+  // modules\TCPIP.DLL) is serviced in place: callDllMain cannot await. So is
+  // one from inside a nested synchronous send ($wnd_send_message asks through
+  // the service_load_library import), which cannot return to this loop either.
+  const onLoadLibraryYield = ex => serviceLoadLibraryYieldSync({
+    exports: ex, memoryBuffer: memory.buffer, resourceHost: ctx, log: console.log,
+    findDllSync: findRuntimeDllBytes, onLoadLibraryYield,
+  });
+  ctx.serviceLoadLibrary = () => onLoadLibraryYield(instance.exports);
+  threadManager._serviceDllYield = onLoadLibraryYield;
   if (dlls.length > 0) {
     mountLoadedDllFiles(ctx.vfs, dlls);
     const dllResults = loadDlls(instance.exports, memory.buffer, exeBytes, dlls, console.log, {
+      onLoadLibraryYield,
       exeName: path.basename(EXE_PATH),
       extraArgs: EXTRA_ARGS || '',
       registerDllResources: (dllConfigs, results) => {
@@ -4477,13 +5633,15 @@ async function main() {
       },
     });
     if (dllResults) {
-      threadManager.setLoadedDlls(dllResults, callDllMain);
+      threadManager.setLoadedDlls(dllResults, (ex, base, entry, log, options) =>
+        callDllMain(ex, base, entry, log, { ...options, onLoadLibraryYield }));
       for (const r of dllResults) {
         const key = r.name.toLowerCase().replace(/\.[^.]+$/, '');
         moduleBases[key] = { loadAddr: r.loadAddr, origBase: r.origBase };
       }
     }
     stopped = false;
+    hostExitRequested = false;
   }
 
   // Resolve any module-relative address specs now that all module bases are known.
@@ -4497,7 +5655,7 @@ async function main() {
       let vfsPath = String(rawPath).toLowerCase().replace(/\//g, '\\');
       if (!/^[a-z]:/.test(vfsPath)) vfsPath = 'c:\\' + vfsPath.replace(/^\\+/, '');
       ctx.vfs.ensureParentDirs(vfsPath);
-      return ctx.vfs.setLazyFile(vfsPath, {
+      return ctx.vfs.setLazyFile(vfsPath.slice(0, vfsPath.lastIndexOf('\\') + 1) + String(rawPath).replace(/^.*[\\/]/, ''), {
         attrs: 0x20,
         size,
         load: () => new Uint8Array(fs.readFileSync(hostPath)),
@@ -4542,8 +5700,49 @@ async function main() {
     // gives them. An entry is a repo-relative URL (-> c:\basename), or
     // {url, vfsPath}, or {url, vfsPaths} when one file needs several aliases.
     if (ASSET_ENTRY) {
-      const assetFiles = getAssetFiles(ASSET_ENTRY);
+      // The page's download policy (lib/app-files.js), decided on the same
+      // files and sizes. Its lazy entries mount provider-backed under
+      // --lazy-ranges -- the audit of what the browser streams -- and stay
+      // ordinary eager mounts otherwise.
+      const policy = require('../lib/app-files').normalizeLazyFiles(ASSET_ENTRY, getAssetFiles(ASSET_ENTRY), {
+        isWin16: !!(instance.exports.is_win16 && instance.exports.is_win16()),
+        // Only the sizes the page has too (an entry's own `size`): a stat()
+        // size here made the CLI decide differently from the browser and
+        // hid AoE II's black screen (EULA.RTF unsized -> streamed in the page).
+      });
+      const assetFiles = policy.files;
+      const ps = policy.summary;
+      console.log(`[files] policy ${ps.policy}: ${ps.eagerFiles} eager (${ps.eagerBytes} bytes), ` +
+        `${ps.lazyFiles} on demand (${ps.lazyBytes} bytes)${LAZY_RANGES ? '' : ' -- mounted eager without --lazy-ranges'}`);
       const missing = [];
+      let lazyManifestStats = null;
+      // Every streamed file, both branches below: one exit line with the
+      // numbers the chunk-size/prefetch work is judged on -- parks (guest
+      // reads that missed and waited), parks per second of wall clock,
+      // bytes fetched, background prefetches and over-fetch (fetched bytes
+      // no read touched).
+      const lazyAll = { files: 0, bytes: 0, caches: [], t0: Date.now() };
+      const noteLazy = (cache, size) => {
+        if (!lazyAll.files) {
+          process.on('exit', () => {
+            let fetches = 0, bytes = 0, parks = 0, prefetches = 0, over = 0, touched = 0;
+            for (const c of lazyAll.caches) {
+              const st = c.stats;
+              fetches += st.fetches; bytes += st.bytesFetched; parks += st.misses;
+              prefetches += st.prefetches || 0; over += c.overFetchBytes || 0;
+              if (st.fetches) touched++;
+            }
+            const secs = Math.max(0.001, (Date.now() - lazyAll.t0) / 1000);
+            console.log(`[lazy] all streamed files: ${touched} of ${lazyAll.files} touched, ` +
+              `fetched ${fetches} chunks / ${bytes} of ${lazyAll.bytes} bytes, ` +
+              `parks ${parks} (${(parks / secs).toFixed(1)}/s over ${secs.toFixed(1)}s), ` +
+              `prefetches ${prefetches}, over-fetch ${over} bytes`);
+          });
+        }
+        lazyAll.files++;
+        lazyAll.bytes += size;
+        lazyAll.caches.push(cache);
+      };
       for (const item of assetFiles) {
         const url = typeof item === 'string' ? item : (item && item.url);
         if (!url) continue;
@@ -4552,15 +5751,99 @@ async function main() {
         try {
           size = fs.statSync(hostPath).size;
         } catch (_) {
-          missing.push(url);
+          // {optional: true} mirrors host.js loadFiles: absent is allowed.
+          if (typeof item === 'object' && item.optional) {
+            console.log(`[app] optional file not present: ${url}`);
+          } else {
+            missing.push(url);
+          }
           continue;
         }
         const paths = (typeof item === 'object' && Array.isArray(item.vfsPaths))
           ? item.vfsPaths
           : [(typeof item === 'object' && item.vfsPath) || url.replace(/^.*[\\\/]/, '')];
+        // Same rule as host.js loadFiles: a sized manifest entry (loadMode
+        // lazy/background) is a range mount with the default cache shape (1MB
+        // chunks, read-ahead/prefetch only while sequential); a legacy
+        // httpRange entry is one unless loadMode says required.
+        const sizedLazy = typeof item === 'object' && item &&
+          (item.loadMode === 'lazy' || item.loadMode === 'background');
+        if (LAZY_RANGES && sizedLazy) {
+          const bp = require('../lib/byte-provider');
+          const cache = bp.cached(new bp.NodeFileProvider(hostPath, { sync: false, latencyMs: LAZY_RANGES_MS }),
+            LAZY_CACHE_OPTS);
+          for (const p of paths) {
+            let vfsPath = String(p).toLowerCase().replace(/\//g, '\\');
+            if (!/^[a-z]:/.test(vfsPath)) vfsPath = 'c:\\' + vfsPath.replace(/^\\+/, '');
+            ctx.vfs.ensureParentDirs(vfsPath);
+            ctx.vfs.setProviderFile(vfsPath.slice(0, vfsPath.lastIndexOf('\\') + 1) + String(p).replace(/^.*[\\/]/, ''), { provider: cache });
+          }
+          // Thousands of these in one tree: one summary line, not one per file.
+          if (!lazyManifestStats) {
+            lazyManifestStats = { files: 0, bytes: 0, caches: [] };
+            process.on('exit', () => {
+              let fetches = 0, bytes = 0, touched = 0;
+              for (const c of lazyManifestStats.caches) {
+                const st = c.stats;
+                fetches += st.fetches; bytes += st.bytesFetched;
+                if (st.fetches) touched++;
+              }
+              console.log(`[lazy] loadMode files: ${touched} of ${lazyManifestStats.files} touched, ` +
+                `fetched ${fetches} chunks / ${bytes} of ${lazyManifestStats.bytes} bytes`);
+            });
+          }
+          lazyManifestStats.files++;
+          lazyManifestStats.bytes += size;
+          lazyManifestStats.caches.push(cache);
+          noteLazy(cache, size);
+          continue;
+        }
+        if (LAZY_RANGES && typeof item === 'object' && item.httpRange && item.loadMode !== 'required') {
+          const bp = require('../lib/byte-provider');
+          const cache = bp.cached(new bp.NodeFileProvider(hostPath, { sync: false, latencyMs: LAZY_RANGES_MS }),
+            LAZY_CACHE_OPTS);
+          let preloaded = 'no preload ranges';
+          if (item.preloadRanges && !NO_PRELOAD_RANGES) {
+            const r = await cache.preload(bp.preloadRangesFor(item.preloadRanges, cache.size));
+            preloaded = `preloaded ${r.chunks} chunks (${r.bytes} bytes)`;
+          } else if (item.preloadRanges) {
+            preloaded = 'preload ranges SKIPPED (--no-preload-ranges)';
+          }
+          for (const p of paths) {
+            let vfsPath = String(p).toLowerCase().replace(/\//g, '\\');
+            if (!/^[a-z]:/.test(vfsPath)) vfsPath = 'c:\\' + vfsPath.replace(/^\\+/, '');
+            ctx.vfs.ensureParentDirs(vfsPath);
+            ctx.vfs.setProviderFile(vfsPath.slice(0, vfsPath.lastIndexOf('\\') + 1) + String(p).replace(/^.*[\\/]/, ''), { provider: cache });
+          }
+          noteLazy(cache, size);
+          // Per-file lines only where they say something a total cannot (a
+          // preload range list), or under --verbose: the default policy
+          // streams thousands of files.
+          if (item.preloadRanges || VERBOSE) {
+            console.log(`[lazy] ${url}: ${size} bytes provider-backed, ${LAZY_RANGES_MS}ms/chunk, ${preloaded}`);
+            process.on('exit', () => {
+              const st = cache.stats;
+              console.log(`[lazy] ${url}: fetched ${st.fetches} chunks / ${st.bytesFetched} bytes ` +
+                `(pinned ${st.pinnedChunks} / ${st.pinnedBytes}), hits ${st.hits}, misses ${st.misses}`);
+            });
+          }
+          continue;
+        }
         const decodedImage = (typeof item === 'object' && item.decodeImage)
           ? await decodeMountedImage(hostPath)
           : null;
+        if (typeof item === 'object' && item.iniSet) {
+          // Registry INI edits (lib/app-files.js applyIniSet), as the page does.
+          const edited = require('../lib/app-files').applyIniSet(
+            new Uint8Array(fs.readFileSync(hostPath)), item.iniSet);
+          for (const p of paths) {
+            let vfsPath = String(p).toLowerCase().replace(/\//g, '\\');
+            if (!/^[a-z]:/.test(vfsPath)) vfsPath = 'c:\\' + vfsPath.replace(/^\\+/, '');
+            ctx.vfs.ensureParentDirs(vfsPath);
+            ctx.vfs.files.set(vfsPath, { data: edited.slice(), attrs: 0x20 });
+          }
+          continue;
+        }
         for (const p of paths) {
           const entry = addFile(p, hostPath, size);
           entry.decodedImage = decodedImage;
@@ -4651,19 +5934,35 @@ async function main() {
     } else if (ASSET_ENTRY && ASSET_ENTRY.cdAudio) {
       // A registered app's CD is mounted by the page (lib/browser-shell.js)
       // at its own letter and label; do the same so --app sees the same drive.
-      const { mountCue } = require('../lib/cdrom');
+      const { mountCue, parseCue } = require('../lib/cdrom');
       const config = ASSET_ENTRY.cdAudio;
       const absoluteCue = appAsset(config.cue);
       const directory = path.dirname(absoluteCue);
       const resolveTrack = name => path.resolve(directory, ...String(name).split('/'));
-      const result = mountCue(ctx.vfs, fs.readFileSync(absoluteCue, 'utf8'), {
-        drive: config.drive || 'D',
-        volumeLabel: config.volumeLabel,
-        trackSize: name => fs.statSync(resolveTrack(name)).size,
-        loadTrack: name => fs.promises.readFile(resolveTrack(name)),
-      });
-      console.log(`[cue] mounted ${config.cue} -> ${result.root} ` +
-        `tracks=${result.firstTrack}-${result.lastTrack} (${result.audioTracks.length} audio, lazy)`);
+      const cueText = fs.readFileSync(absoluteCue, 'utf8');
+      const parsedCue = parseCue(cueText);
+      if (parsedCue.tracks.some(track => !track.isAudio)) {
+        // A mixed-mode disc: its data track is the CD the game reads movies
+        // and data from (Civ2 MGE's D:\civ2\video), so mount it as the ISO it
+        // is -- lazily, through the same plan --media-mount and the page's
+        // media import use -- under the disc's own volume label.
+        const { openParts } = require('../lib/media-cli');
+        const { analyzeCueBundle } = require('../lib/media-import');
+        const parts = openParts([absoluteCue, ...parsedCue.files.map(file => resolveTrack(file.name))]);
+        const plan = await analyzeCueBundle(parts, { drive: config.drive || 'D' });
+        const mounted = await plan.mount(ctx.vfs);
+        console.log(`[cue] mounted ${config.cue} -> ${mounted.root} label="${plan.volumeLabel}" ` +
+          `(${plan.entryCount} data entries, ${mounted.disc.audioTracks.length} audio tracks, lazy)`);
+      } else {
+        const result = mountCue(ctx.vfs, cueText, {
+          drive: config.drive || 'D',
+          volumeLabel: config.volumeLabel,
+          trackSize: name => fs.statSync(resolveTrack(name)).size,
+          loadTrack: name => fs.promises.readFile(resolveTrack(name)),
+        });
+        console.log(`[cue] mounted ${config.cue} -> ${result.root} ` +
+          `tracks=${result.firstTrack}-${result.lastTrack} (${result.audioTracks.length} audio, lazy)`);
+      }
     }
 
     if (MEDIA_MOUNTS.length) {
@@ -5147,11 +6446,13 @@ async function main() {
   }
   // Arm --fault-null. Same deal: the WAT check sits in the $g2w miss path, so
   // an off-run never reaches it.
-  if (FAULT_NULL && instance.exports.set_fault_unmapped) {
-    instance.exports.set_fault_unmapped(FAULT_NULL);
-    console.log(`[fault] --fault-null armed (mode=${FAULT_NULL}: `
-      + `${FAULT_NULL === 2 ? 'log and trap'
-          : FAULT_NULL === 3 ? 'log and raise a guest access violation'
+  if (FAULT_NULL_MODE && instance.exports.set_fault_unmapped) {
+    instance.exports.set_fault_unmapped(FAULT_NULL_MODE);
+    console.log(`[fault] ${FAULT_NULL ? '--fault-null' : 'app page-fault option'} armed (mode=${FAULT_NULL_MODE}: `
+      + `${FAULT_NULL_MODE === 2 ? 'log and trap'
+          : FAULT_NULL_MODE === 3 ? 'log and raise a guest access violation'
+          : FAULT_NULL_MODE === 4 ? 'raise an access violation for the 4KB NULL guard page only'
+          : FAULT_NULL_MODE === 5 ? 'reserved-uncommitted pages offered to the guest filters synchronously; other misses stay quiet'
           : 'log and continue'})`);
   }
   // Exclude PE/DLL load from the offline translation-path census.
@@ -5162,16 +6463,52 @@ async function main() {
   if (TRACE_WIN16 && instance.exports.set_win16_trace) {
     instance.exports.set_win16_trace(1);
   }
-  experiments.applyMain(instance, { copySuperops: COPY_SUPEROPS });
+  experiments.applyMain(instance, { copySuperops: COPY_SUPEROPS, ctx });
+  if (apiLogOff && instance.exports.set_api_log) instance.exports.set_api_log(0);
   if (FLIP_VSYNC && instance.exports.set_flip_vsync) {
     instance.exports.set_flip_vsync(1);
+  }
+  if (PRESENT_CAP && instance.exports.set_present_cap) {
+    instance.exports.set_present_cap(PRESENT_CAP);
+  }
+  if (instance.exports.set_present_pace_mode) {
+    instance.exports.set_present_pace_mode(PRESENT_PACE_MODE);
+  }
+  // --trace-win16 prints where the loader placed each task segment, so a
+  // linear EIP or return address from the trace can be written as the
+  // { seg, off } that lib/apps.js and other durable notes need.
+  if (TRACE_WIN16 && instance.exports.is_win16 && instance.exports.is_win16()
+      && instance.exports.win16_seg_count && instance.exports.win16_seg_base) {
+    const n = instance.exports.win16_seg_count();
+    for (let seg = 1; seg <= n; seg++) {
+      const base = instance.exports.win16_seg_base(seg) >>> 0;
+      const limit = instance.exports.win16_seg_limit ? instance.exports.win16_seg_limit(seg) >>> 0 : 0;
+      console.log(`[win16] task seg ${seg} base=0x${base.toString(16)} limit=0x${limit.toString(16)}`);
+    }
+  }
+  if (LOGICAL_FRAME && LOGICAL_FRAME.segOff) {
+    LOGICAL_FRAME.address = resolveWin16SegOff(instance.exports, LOGICAL_FRAME.segOff);
+    if (!LOGICAL_FRAME.address) {
+      console.log(`[present] ${LOGICAL_FRAME.label} step ${JSON.stringify(LOGICAL_FRAME.segOff)} `
+        + 'is not a loaded Win16 segment; not marked');
+    }
+  }
+  if (LOGICAL_FRAME && LOGICAL_FRAME.address && instance.exports.set_logical_frame) {
+    instance.exports.set_logical_frame(LOGICAL_FRAME.address, LOGICAL_FRAME.pace);
+    console.log(`[present] ${LOGICAL_FRAME.label} step 0x${LOGICAL_FRAME.address.toString(16)} marked`
+      + (LOGICAL_FRAME.pace ? `, cap ${PRESENT_CAP}/s paces once per step` : ', counted only'));
   }
   if (instance.exports.set_spin_park_k) {
     if (NO_SPIN_PARK) instance.exports.set_spin_park_k(0);
     else if (Number.isFinite(SPIN_PARK_K)) instance.exports.set_spin_park_k(SPIN_PARK_K);
   }
+  if (instance.exports.set_spin_work_max && Number.isFinite(SPIN_WORK_MAX)) instance.exports.set_spin_work_max(SPIN_WORK_MAX);
+  if (instance.exports.set_spin_regs_check && Number.isFinite(SPIN_REGS_CHECK)) instance.exports.set_spin_regs_check(SPIN_REGS_CHECK);
   if (TRACE_FPU && instance.exports.set_fpu_trace) {
     instance.exports.set_fpu_trace(1);
+  }
+  if (TRACE_CODE_WRITES && instance.exports.set_code_write_trace) {
+    instance.exports.set_code_write_trace(TRACE_CODE_WRITES_ALL ? 2 : 1);
   }
   const dumpCallstack = (label, e) => {
     if (!TRACE_CALLSTACK || !e || !e.get_callstack_depth) return;
@@ -5209,6 +6546,7 @@ async function main() {
         // on block entries only, so a store inside a loop body never hits it.
         console.log('  ' + regs());
         console.log('  callers: ' + ebpChain());
+        if (hasFlag('watch-stack')) dumpStack('watch', 32);
         hit = true;
       }
       watchPrevVal = newVal;
@@ -5354,19 +6692,79 @@ async function main() {
     if (ex.get_yield_reason() === 16) {
       const token = ex.get_d3d_render_token() | 0;
       if (!mainRenderWait || mainRenderWait.token !== token) {
-        const wait = {token,done:false}; mainRenderWait = wait;
+        const wait = {token,done:false,polls:0,since:tickState.batch|0}; mainRenderWait = wait;
         wait.promise = Promise.resolve().then(() => ctx.waitD3DRender(token))
           .catch(error => console.error('[render]',error))
           .then(() => { wait.done = true; });
       }
-      if (!mainRenderWait.done) return true;
+      if (!mainRenderWait.done) {
+        // A request the bridge already calls done should release main within
+        // a few event-loop turns. Morrowind once sat on one for 150k+ batches
+        // until its yield was cleared by hand; say so the first time it
+        // happens rather than letting it read as a slow scene.
+        const record = ctx.d3d9Bridge && ctx.d3d9Bridge.requests.get(token);
+        if (++mainRenderWait.polls === 1000 && record && record.done)
+          console.log(`[render] main parked on completed request ${token} for 1000 checks ` +
+            `(since batch ${mainRenderWait.since}); the wait never observed it`);
+        return true;
+      }
       mainRenderWait = null; ex.clear_yield();
     }
     if (threadManager._renderSendTargets.has(ex)) return true;
     if (ex.get_yield_reason() === 10 && (threadManager.backend === 'worker' ||
         !threadManager.resolveCooperativeThreadSend(ex))) return true;
+    // Sleep(n) on the main thread. checkMainYield records the deadline after
+    // the batch that slept; host.js parks the main instance until it passes,
+    // and so must this loop, or Sleep(1001) lasts one batch of guest time.
+    // Moorhuhn 3 calibrates RDTSC across exactly that Sleep, and a TSC rate
+    // measured 5x low trips its speed-hack watchdog into ExitProcess.
+    // With no other guest thread to hand the idle batches to, skip them: move
+    // the clock to the deadline itself, so Sleep(1001) reads as 1001ms rather
+    // than rounding up to the next 200ms batch (a 240MHz TSC, still tripping
+    // the watchdog).
+    // Under --real-ticks the guest clock is the wall clock and pausedMs does
+    // not move it; the batch loop waits the remainder out in wall time
+    // instead (see mainSleepWallWait).
+    // A Sleep main made earlier in this batch (between thread slices) has not
+    // been through checkMainYield yet; record its deadline now.
+    threadManager.noteMainSleep();
+    if (!REAL_TICK_SLEEPS && threadManager.isMainSleeping() && !threadManager.hasLiveThreads()) {
+      tickState.pausedMs += threadManager.mainSleepRemaining();
+    }
+    if (threadManager.isMainSleeping()) return true;
     if (!threadManager.isMainThreadSuspended()) return false;
     return !(ex.is_mm_timer_callback_active && (ex.is_mm_timer_callback_active() | 0));
+  };
+
+  // A main thread parked on a software D3D request (yield 16) used to cost a
+  // whole batch per check: mainExecutionSuspended() said "parked", run() was
+  // skipped, and the loop counted the batch -- tickState.batch advances the
+  // guest clock by TICK_MS_PER_BATCH while the render worker is still
+  // rasterizing. UT2003/UT2004 read as "stuck forever in the first
+  // DrawIndexedPrimitive" this way: 1500 batches spent ~1490 of them parked,
+  // one per event-loop turn, and a --max-batches budget ran out with the
+  // guest 30 draws in. The browser has no such unit (host.js just yields to
+  // the event loop), so wait here, in wall time, for the one request the
+  // guest is actually blocked on. --no-render-park-wait restores the old
+  // batch-per-check behaviour for an A/B.
+  const RENDER_PARK_WAIT = !hasFlag('no-render-park-wait');
+  // skippedBatches: batches whose run() was skipped because main was still
+  // parked on a render request -- the number the fix drives to zero, and
+  // what test/test-d3d-render-park-batches.js reads through ctx.
+  const renderParkStats = ctx.renderParkStats = { waits: 0, wallMs: 0, skippedBatches: 0 };
+  const awaitMainRenderPark = async () => {
+    if (!RENDER_PARK_WAIT) return;
+    const ex = instance.exports;
+    if (ex.get_yield_reason() !== 16) return;
+    mainExecutionSuspended();
+    const wait = mainRenderWait;
+    if (!wait || wait.done) return;
+    const started = Date.now();
+    while (!wait.done && !stopped) {
+      await Promise.race([wait.promise, new Promise(r => setTimeout(r, 100))]);
+      if (deadlineMs && Date.now() > deadlineMs) break;
+    }
+    renderParkStats.waits++; renderParkStats.wallMs += Date.now() - started;
   };
 
   let lastSchedSig = null;
@@ -5379,6 +6777,7 @@ async function main() {
   let handlerHistExports = null;
   let handlerHistArmed = false;
   let handlerHistDone = false;
+  let handlerHistUopAtArm = null;
   const selectHandlerHistWindow = () => {
     if (handlerHistThreadIndex >= HANDLER_HIST_THREADS.length) {
       handlerHistDone = true;
@@ -5405,7 +6804,13 @@ async function main() {
     handlerHistExports = findHandlerHistExports();
     if (!handlerHistExports || !handlerHistExports.reset_handler_hist ||
         !handlerHistExports.set_handler_hist_enabled) return;
+    if (EDGE_HIST && handlerHistExports.set_edge_hist) handlerHistExports.set_edge_hist(1);
     handlerHistExports.reset_handler_hist();
+    // The uop tier's block counter at the window's start: blocks run INSIDE
+    // uop programs never reach the hot-block histogram, so the tier's share of
+    // the window is (uop blocks) / (uop blocks + threaded block entries).
+    handlerHistUopAtArm = handlerHistExports.uop_stats
+      ? { blocks: handlerHistExports.uop_stats(5) >>> 0, enters: handlerHistExports.uop_stats(4) >>> 0 } : null;
     handlerHistExports.set_handler_hist_enabled(1);
     handlerHistArmed = true;
     console.log(`[handler-hist] armed T${handlerHistThread} at batch ${batch}`);
@@ -5420,7 +6825,8 @@ async function main() {
     // counter array or the total drops every time a fusion lands.
     const slots = e.get_handler_hist_slots ? (e.get_handler_hist_slots() | 0) : count;
     const base = (e.get_handler_hist_base() >>> 2) >>> 0;
-    const pairBase = e.get_handler_pair_hist_base
+    // --edge-hist borrows the pair matrix's memory, so there are no pairs.
+    const pairBase = e.get_handler_pair_hist_base && !EDGE_HIST
       ? ((e.get_handler_pair_hist_base() >>> 2) >>> 0) : 0;
     const handlers = [];
     let total = 0;
@@ -5518,13 +6924,44 @@ async function main() {
           const ext = (m.loadAddr >>> 0) === exeLoad ? '.exe' : '.dll';
           mods[name + ext] = [m.loadAddr >>> 0, m.origBase >>> 0];
         }
+        let uop = null;
+        if (handlerHistUopAtArm && e.uop_stats) {
+          uop = { blocks: ((e.uop_stats(5) >>> 0) - handlerHistUopAtArm.blocks) >>> 0,
+            enters: ((e.uop_stats(4) >>> 0) - handlerHistUopAtArm.enters) >>> 0 };
+        }
+        let edges;
+        if (EDGE_HIST && e.get_edge_hist_base) {
+          const eb = (e.get_edge_hist_base() >>> 2) >>> 0;
+          const en = e.get_edge_hist_count() | 0;
+          edges = [];
+          for (let i = 0; i < en; i++) {
+            const n = u32[eb + i * 4 + 2] >>> 0;
+            if (n) edges.push([(u32[eb + i * 4] >>> 0).toString(16), (u32[eb + i * 4 + 1] >>> 0).toString(16), n]);
+          }
+          edges.sort((a, b) => b[2] - a[2]);
+          console.log(`  edges: ${edges.length} distinct, ${e.get_edge_hist_collisions() >>> 0} dropped (table full)`);
+          // $win32_dispatch records (caller block -> thunk) edges; name each
+          // thunk from its record so the window says which API a site called.
+          if (e.thunk_word) {
+            const thunks = {};
+            for (const [, to] of edges) {
+              if (thunks[to]) continue;
+              const a = parseInt(to, 16) >>> 0;
+              const w0 = e.thunk_word(a, 0) >>> 0, id = e.thunk_word(a, 1) | 0;
+              if (w0 === 0xFFFFFFFF && id === -1) continue;
+              thunks[to] = (w0 >>> 16) === 0xCACA ? `cont:${w0.toString(16)}`
+                : (apiTable[id] && apiTable[id].name) || `api#${id}`;
+            }
+            edges.thunks = thunks;
+          }
+        }
         fs.writeFileSync(jsonPath, JSON.stringify({
           source: 'run.js', thread: handlerHistThread,
           window: { start: handlerHistWindowStart, stop: batch },
           ops: total, handlers: handlers.slice(0, 30).map(r => [r.id, r.hits]),
           blockHits: blockTotal, distinct: blocks.length,
-          blocks: blocks.slice(0, 400).map(r => [r.addr.toString(16), r.hits]),
-          mods,
+          blocks: (HIST_JSON_BLOCKS ? blocks.slice(0, HIST_JSON_BLOCKS) : blocks).map(r => [r.addr.toString(16), r.hits]),
+          mods, ...(uop ? { uop } : {}), ...(edges ? { edges, edgeDrops: e.get_edge_hist_collisions() >>> 0, ...(edges.thunks ? { thunks: edges.thunks } : {}) } : {}),
         }));
         console.log(`  wrote histogram JSON to ${jsonPath}`);
       }
@@ -5704,6 +7141,20 @@ async function main() {
       };
     }
     if (cmd.action === 'snapshot') return controlSnapshot();
+    if (cmd.action === 'trace-api') {
+      if (!TRACE_API || !TRACE_API_PAUSED) throw new Error('trace-api needs --trace-api[=NAMES] --trace-api-paused');
+      const on = cmd.on !== false;
+      const watNow = instance.exports.get_api_calls ? instance.exports.get_api_calls() >>> 0 : 0;
+      if (on && apiLogOff) { apiCount += watNow - apiWatSeen; apiWatSeen = watNow; }
+      if (!on && !apiLogOff) apiWatSeen = watNow;
+      apiLogOff = !on;
+      const setLog = exports => { if (exports && exports.set_api_log) exports.set_api_log(on ? 1 : 0); };
+      setLog(instance.exports);
+      if (threadManager) for (const [, t] of threadManager.threads) setLog(t.instance && t.instance.exports);
+      inheritWasm('set_api_log', on ? 1 : 0);
+      logs.push(`[trace-api] ${on ? 'on' : 'paused'} at batch ${tickState.batch | 0}`);
+      return { traceApi: on, batch: tickState.batch | 0 };
+    }
     if (cmd.action === 'eval') return controlEval(cmd.code || '');
     if (cmd.action === 'png') return controlPng(String(cmd.path || ''));
     if (cmd.action === 'input-message') {
@@ -5755,9 +7206,14 @@ async function main() {
       }
       controlRunCredits += n;
       wakeControlLoop();
-      return new Promise((resolve, reject) => {
+      const stepping = new Promise((resolve, reject) => {
         controlStepWaiter = { remaining: n, total: n, resolve, reject };
       });
+      // Batches done so far: lib/control-server.js keeps waiting while this
+      // moves, so a long step on a slow guest is not reported failed at 30 s.
+      const waiter = controlStepWaiter;
+      stepping.progress = () => waiter.total - waiter.remaining;
+      return stepping;
     }
     if (cmd.action === 'record') {
       const mode = cmd.mode || 'status';
@@ -5897,9 +7353,17 @@ async function main() {
       console.log(`[cpu-prof] batches ${this.startedAt}..${batch} -> ${CPU_PROF_WINDOW.file}`);
     },
   } : null;
+  if (TRACE_WINDOWED) {
+    const passthrough = console.log;
+    console.log = (...args) => { if (traceWindowOpen()) passthrough(...args); };
+    console.log(`[trace-window] tracing batches`
+      + ` ${TRACE_FROM >= 0 ? TRACE_FROM : 0}..${TRACE_TO >= 0 ? TRACE_TO : 'end'}`);
+  }
   const executionStartedAt = performance.now();
   for (let batch = 0; batch < MAX_BATCHES && !stopped; batch++) {
+    traceGateBatch = batch;
     if (deadlineMs && Date.now() >= deadlineMs) {
+      traceGateBatch = -1; // why the run stopped is not per-batch trace output
       console.log(`[max-seconds] stopping after ${MAX_SECONDS}s at batch ${batch}`);
       break;
     }
@@ -5966,6 +7430,12 @@ async function main() {
     // server's socket callbacks fire and settled replies flush. Without this
     // the loop is synchronous end to end — the same mechanism that keeps
     // SIGTERM queued forever (see the timeout -s KILL note in CLAUDE.md).
+    // --lazy-ranges: a spawned thread parked on a lazy read waits for a fill
+    // that only an event-loop turn can deliver (the page gets one every step).
+    if (LAZY_RANGES && threadManager && threadManager.hasIoFillInFlight &&
+        threadManager.hasIoFillInFlight()) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
     if (control) {
       finishPreviousControlBatch();
       await new Promise(resolve => setImmediate(resolve));
@@ -6176,6 +7646,21 @@ async function main() {
         logs.push(`[input] dump-mem at batch ${batch}`);
         flushLogs();
         hexdump(at, len);
+      } else if (ev.action === 'heap-walk') {
+        // Replays the exact-boundary walk GlobalLock does from the arena base,
+        // and names the header it stopped at when it refuses the pointer.
+        const we = instance.exports;
+        const ptr = parseInt(ev.arg, 16) >>> 0;
+        const hex = v => '0x' + (v >>> 0).toString(16);
+        const r = we.heap_walk_break(ptr, 0) >>> 0;
+        const verdict = r === 0 ? 'live Global handle'
+          : r === 1 ? 'misaligned (not a heap payload)'
+          : r === 2 ? 'no heap arena covers it'
+          : r === 3 ? 'block boundary, but GLOBAL_LIVE is clear'
+          : `walk stopped at header ${hex(r)}`;
+        logs.push(`[input] heap-walk ${hex(ptr)} at batch ${batch}: ${verdict}` +
+          (r > 3 || r === 3 ? ` (arena ${hex(we.heap_walk_break(ptr, 1))}..${hex(we.heap_walk_break(ptr, 2))})` : ''));
+        if (r > 3) { flushLogs(); hexdump(Math.max(0, r - 32), 96); }
       } else if (ev.action === 'tick-ms') {
         batchClock.setTickMsPerBatch(ev.ms);
         logs.push(`[input] tick-ms ${batchClock.getTickMsPerBatch()} at batch ${batch} (guest ${batchClock.batchTicks()}ms)`);
@@ -7500,6 +8985,11 @@ async function main() {
             ` wp=0x${f(2).toString(16)} lp=0x${f(3).toString(16)}`);
         }
         logs.push(`[input] dump-msgq${label}: depth=${depth} ${rows.join(' | ')} at batch ${batch}`);
+      } else if (ev.action === 'hit-counts') {
+        const label = ev.label ? ':' + ev.label : '';
+        const get = instance.exports.get_count;
+        const vals = get ? countAddrs.map((a, i) => `0x${(a >>> 0).toString(16)}=${get(i) >>> 0}`) : [];
+        logs.push(`[input] hit-counts${label}: ${vals.join(' ') || '(no --count)'} at batch ${batch}`);
       } else if (ev.action === 'dump-windows' && renderer) {
         const label = ev.label ? ':' + ev.label : '';
         const we = instance.exports;
@@ -8159,9 +9649,15 @@ async function main() {
         // changes just as they do for renderer.handleKeyDown/handleKeyUp.
         if (renderer._signalDirectInputDevice) renderer._signalDirectInputDevice(1);
         logs.push(`[input] ${ev.action} vk=${ev.code} at batch ${batch}`);
+      } else if (ev.action === 'di-wheel' && renderer) {
+        if (renderer._queueDirectInputMouseWheel) {
+          renderer._queueDirectInputMouseWheel(renderer._pointerInputMemory || renderer.wasmMemory, ev.delta);
+        }
+        if (renderer._signalDirectInputDevice) renderer._signalDirectInputDevice(2);
+        logs.push(`[input] di-wheel ${ev.delta} at batch ${batch}`);
       } else if ((ev.action === 'di-mousedown' || ev.action === 'di-mouseup') && renderer) {
-        const mask = ev.button === 2 ? 0x0002 : 0x0001;
-        const vk = ev.button === 2 ? 0x02 : 0x01;
+        const mask = ev.button === 2 ? 0x0002 : ev.button === 3 ? 0x0010 : 0x0001;
+        const vk = ev.button === 2 ? 0x02 : ev.button === 3 ? 0x04 : 0x01;
         const down = ev.action === 'di-mousedown';
         const wasDown = !!((renderer._mouseButtonsMask || 0) & mask);
         renderer._mouseButtonsMask = down
@@ -8216,7 +9712,7 @@ async function main() {
         // application runs a help macro, including one bound to a routine the
         // help file registered from its own DLL.
         const we = instance.exports;
-        if (!we.test_invoke_WinHelpA || !we.guest_alloc) {
+        if (!we.test_call_WinHelpA || !we.guest_alloc) {
           logs.push(`[input] help-macro: build has no WinHelp entry at batch ${batch}`);
         } else {
           const writeAnsi = text => {
@@ -8226,7 +9722,7 @@ async function main() {
             new Uint8Array(memory.buffer, g2w(ga) + buf.length, 1)[0] = 0;
             return ga;
           };
-          const status = we.test_invoke_WinHelpA(0x8888,
+          const status = we.test_call_WinHelpA(0x8888,
             writeAnsi(ev.filename), 0x0102, writeAnsi(ev.macro));
           logs.push(`[input] help-macro ${ev.filename} ${JSON.stringify(ev.macro)}` +
             ` -> accepted=${status}` +
@@ -8332,7 +9828,12 @@ async function main() {
           if (typeof renderer.repaint === 'function') renderer.repaint();
           const buf = canvasToPng(renderer.canvas);
           fs.writeFileSync(ev.path, buf);
-          logs.push(`[input] png ${ev.path} (${buf.length} bytes) at batch ${batch}`);
+          // guest-ms: a batch is not a time, and anything that charges guest
+          // time outside the batch schedule (a Sleep, --present-cap pacing)
+          // moves it -- so two arms compared "at batch N" can be seconds of
+          // game time apart. Match captures on this instead.
+          logs.push(`[input] png ${ev.path} (${buf.length} bytes) at batch ${batch}`
+            + (ctx.guestPeekMs ? ` guest-ms=${Number(ctx.guestPeekMs())}` : ''));
           if (DUMP_BACKCANVAS) {
             for (const [hwndStr, win] of Object.entries(renderer.windows)) {
               if (!win) continue;
@@ -8605,6 +10106,12 @@ async function main() {
       } else if (ev.action === 'wheel' && renderer && renderer.handleWheel) {
         renderer.handleWheel(ev.x, ev.y, ev.delta);
         logs.push(`[input] wheel ${ev.x},${ev.y} delta=${ev.delta} at batch ${batch}`);
+      } else if (typeof ev.msg !== 'number') {
+        // A pointer action that needs the renderer, with none to take it (no
+        // offscreen canvas: a missing pngjs did this on a boat). Say so instead
+        // of reading ev.msg below, which threw out of the main loop and left
+        // the run idle with its control channel unanswered.
+        logs.push(`[input] ${ev.action} dropped at batch ${batch}: no renderer`);
       } else if (renderer) {
         renderer.inputQueue.push({ type: 'key', hwnd: 0, msg: ev.msg, wParam: ev.wParam, lParam: ev.lParam });
         logs.push(`[input] injected msg=0x${ev.msg.toString(16)} wParam=0x${ev.wParam.toString(16)} at batch ${batch}`);
@@ -8660,13 +10167,14 @@ async function main() {
     }
     // --trace-eip-range: arm only when resolution succeeded (skip at batch=0 if
     // module-relative range hasn't resolved yet — late LoadLibrary path re-arms).
-    if (traceEipOn && traceEipArmed && batch === 0 && instance.exports.set_trace_eip_range) {
+    if (traceEipOn && traceEipArmed && batch === TRACE_EIP_FROM && instance.exports.set_trace_eip_range) {
       instance.exports.set_trace_eip_range(1, traceEipLo, traceEipHi);
     }
     // Hit counters: arm any slot whose address is known and not armed yet. A
     // module-relative slot stays unresolved until its DLL loads, so this cannot
     // be a batch-0-only job.
     if (batch === 0) armCounts();
+    if (PRESENT_FRAMES) presentFramesTick(batch);
     // Breakpoint check (EIP before run)
     if (breakAddrs.length && breakAddrs.includes(eipBefore)) {
       if (breakThreadFilter !== null && breakThreadFilter !== 0) {
@@ -8728,7 +10236,30 @@ async function main() {
       ? instance.exports.get_cache_stores() >>> 0 : 0;
     const sliceT0 = DECODE_STATS ? process.hrtime.bigint() : 0n;
     try {
+      if (REAL_TICK_SLEEPS && threadManager.isMainSleeping() && !threadManager.hasLiveThreads()) {
+        // --real-ticks --present-cap: a main-thread Sleep lasts real time. Without this the
+        // loop spins through empty batches until the wall clock catches up,
+        // which is the same thing at 100% CPU plus a STUCK verdict.
+        const ms = Math.max(0, Math.ceil(threadManager.mainSleepRemaining()));
+        if (ms > 0) await new Promise(r => setTimeout(r, ms));
+      }
+      await awaitMainRenderPark();
+      // A main thread parked in GetMessage is otherwise resumed only by the
+      // checkMainYield() after run(), so the input this batch just injected
+      // was taken at the batch's END and everything it led to ran in the next
+      // batch -- beside that batch's own scripted events. A click's posted
+      // follow-ups then lost to the next press (hardware before posted):
+      // Paint's tool buttons PostMessage the click to the toolbox, whose
+      // release arrived after the canvas press and stole its capture. Resume
+      // here, after injection, so a batch's input runs in that batch. Flush
+      // first: the [input] markers are buffered, and output the guest prints
+      // directly (--trace-host) while handling that input must follow them.
+      flushLogs();
+      if (instance.exports.get_yield_reason && instance.exports.get_yield_reason() === 7) {
+        threadManager.checkMainYield();
+      }
       if (!mainExecutionSuspended()) instance.exports.run(BATCH_SIZE);
+      else if (instance.exports.get_yield_reason() === 16) renderParkStats.skippedBatches++;
     } catch (e) {
       flushLogs();
       console.log(`\n*** CRASH at batch ${batch}: ${e.message}`);
@@ -8772,6 +10303,8 @@ async function main() {
         console.log(`[CORRUPT-POST] batch=${batch} COM slot2 vtable=${hex(vtbl)} EIP=${hex(instance.exports.get_eip())}`);
       }
     }
+
+    if (PAINT_AUDIT && !paintAuditCheck(instance.exports, `batch ${batch}`)) break;
 
     if (BATCH_STATS && batch >= BATCH_STATS_FROM && instance.exports.get_last_run_blocks) {
       batchStatsBlocks.push(instance.exports.get_last_run_blocks() | 0);
@@ -8882,6 +10415,15 @@ async function main() {
               try { return dv.getUint32(g2w(inner), true) >>> 0; } catch (_) { return null; }
             };
             const parseAddrExprBase = (s) => {
+              // Win16 far form, e.g. es:esi-2 (a VB p-code pointer): the
+              // selector's base from the loader's table plus the offset.
+              const far = s.match(/^(cs|ds|es|ss):(.+)$/i);
+              if (far && e.win16_seg_base) {
+                const sel = e[`get_sreg_${far[1].toLowerCase()}`]?.();
+                const off = parseAddrExprBase(far[2].trim());
+                if (sel === undefined || off === null) return null;
+                return (e.win16_seg_base(sel >>> 3) + (off & 0xffff)) >>> 0;
+              }
               const m = s.match(/^(e(?:ax|bx|cx|dx|sp|bp|si|di|ip))\s*([+-])?\s*(0x[0-9a-fA-F]+|\d+)?$/i);
               if (m) {
                 const base = regValue(m[1]);
@@ -8968,7 +10510,7 @@ async function main() {
     // frame restored and EIP on the thunk, so filling the chunk and clearing
     // the yield re-enters the same call, which then takes the cache hit.
     if (instance.exports.get_yield_reason() === 12) {
-      const pending = ctx.vfs && ctx.vfs.pendingRead;
+      const pending = ctx.vfs && ctx.vfs.getPendingRead(1);
       if (TRACE_YIELD) {
         console.log(`[yield] T0 reason=12 (io_wait) ` +
           (pending ? `path=${pending.path} off=${pending.offset} len=${pending.length}` : 'no pending record'));
@@ -8977,7 +10519,8 @@ async function main() {
         // Fail loudly rather than spinning: a provider that cannot deliver is
         // a mount bug, and a silent retry loop would look like a hang.
         await ctx.vfs.fillPendingRead(pending);
-        ctx.vfs.pendingRead = null;
+        // The VFS owns identity-guarded completion. A worker may have installed
+        // a newer pending request while the main guest awaited this fill.
       }
       instance.exports.clear_yield();
     }
@@ -9060,11 +10603,18 @@ async function main() {
       // task parked on a continuation slot is a different shape: it is bounded
       // by its own wall-clock timeout and can legitimately spend hundreds of
       // thousands of turns inside it, so counting those trips the cap on a
-      // wait that is working exactly as designed.
-      if (!(instance.exports.win16_pump_parked && instance.exports.win16_pump_parked())) {
-        netWaits++;
+      // wait that is working exactly as designed. A TPM_RETURNCMD popup menu
+      // parks the same way for as long as it stays open.
+      if (!(instance.exports.win16_pump_parked && instance.exports.win16_pump_parked()) &&
+          !(instance.exports.menu_track_parked && instance.exports.menu_track_parked())) {
+        if (netWaits++ === 0) netWaitSince = Date.now();
       }
-      if (netWaits > VLAN_MAX_WAITS) {
+      // On the wall clock a guest's own timed wait (a synchronous DirectPlay
+      // EnumSessions holds for up to 5 s) does end, and a fast box makes
+      // 20000 attempts well inside it; so there the cap also needs 30 s with
+      // no progress. On the batch clock no guest deadline passes while it
+      // waits, and the count alone is what ends a stalled wire.
+      if (netWaits > VLAN_MAX_WAITS && (!REAL_TICKS || Date.now() - netWaitSince > 30000)) {
         console.log(`[net] no progress after ${VLAN_MAX_WAITS} blocking waits; stopping`);
         stopped = true;
         break;
@@ -9087,7 +10637,7 @@ async function main() {
       // request only after its own run had ended. A WSAAsyncSelect server
       // would starve the same way, which is the host-side half of the problem
       // $vsock_pump's call in GetMessageA solves on the guest side.
-      if (ctx.vlanWire && (batch & 0x3F) === 0) {
+      if (ctx.vlanWire && batch % VLAN_PUMP_EVERY === 0) {
         await new Promise(resolve => setImmediate(resolve));
         if (instance.exports.vlan_pump) instance.exports.vlan_pump();
       }
@@ -9120,7 +10670,7 @@ async function main() {
             else if (traceAtAddr) instance.exports.set_bp(traceAtAddr);
           }
           armCounts();
-          if (traceEipOn && traceEipArmed && instance.exports.set_trace_eip_range) {
+          if (traceEipOn && traceEipArmed && batch >= TRACE_EIP_FROM && instance.exports.set_trace_eip_range) {
             instance.exports.set_trace_eip_range(1, traceEipLo, traceEipHi);
           }
         },
@@ -9280,9 +10830,16 @@ async function main() {
     if (ctx.vlanWire && (batch & 63) === 0) {
       await new Promise(resolve => setImmediate(resolve));
     }
+    // The same for a --spawn-processes child: its end (and the merge of what
+    // it left behind) arrives as a child-process event, so a parent parked in
+    // WaitForSingleObject on it would otherwise spin until its own run ended.
+    else if ((batch & 63) === 0 && ctx.hasLiveChildren && ctx.hasLiveChildren()) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
     if (AUDIO_EXIT_BYTES > 0 && ctx._audioOutFd !== undefined) {
-      let audioBytes = 0;
-      try { audioBytes = fs.fstatSync(ctx._audioOutFd).size; } catch (_) {}
+      // The running count, not the file size: --audio-out-max may cap the file.
+      let audioBytes = ctx._audioOutCount ? ctx._audioOutCount.bytes : 0;
+      if (!audioBytes) try { audioBytes = fs.fstatSync(ctx._audioOutFd).size; } catch (_) {}
       if (audioBytes >= AUDIO_EXIT_BYTES) {
         console.log(`[audio] captured ${audioBytes} bytes; stopping at --audio-exit-bytes=${AUDIO_EXIT_BYTES}`);
         stopped = true;
@@ -9328,7 +10885,16 @@ if (VERBOSE) {
       console.log(`[${batch}] ${regs()}`);
     } else {
       const ex = instance.exports;
-      const regFp = ((ex.get_eax() ^ ex.get_ecx() ^ ex.get_edx() ^ ex.get_ebx() ^ ex.get_esi() ^ ex.get_edi() ^ ex.get_ebp() ^ ex.get_esp()) | 0);
+      // Order-dependent on purpose. A plain XOR of the registers cancels any
+      // two that hold the same value: SimGolf's vector-constructor loop ends
+      // every batch at 0x4935a4 with EAX == ESI == the element pointer, so a
+      // 56,640-element array walking forward read as an unchanged CPU and was
+      // reported STUCK while it was making steady progress.
+      let regFp = 0;
+      for (const v of [ex.get_eax(), ex.get_ecx(), ex.get_edx(), ex.get_ebx(),
+                       ex.get_esi(), ex.get_edi(), ex.get_ebp(), ex.get_esp()]) {
+        regFp = (Math.imul(regFp, 0x01000193) ^ (v | 0)) | 0;
+      }
       // A 16-bit task makes none of the calls `apiCount` counts -- that is the
       // 32-bit dispatch path, which is why every Win16 run reports "0 API
       // calls" -- so its only evidence of life was EIP and the registers, and
@@ -9353,14 +10919,17 @@ if (VERBOSE) {
           }
         }
       }
-      // EIP 0 is a guest that called through a NULL pointer, and the next
-      // thing worth knowing is always which pointer. The stuck detector prints
+      // Without a host exit, EIP 0 means a guest called through a NULL pointer.
+      // ExitProcess also clears EIP after calling h.exit; that sentinel is
+      // not a NULL call, regardless of the guest exit code. Other stop reasons
+      // do not suppress this diagnostic.
+      // The next thing worth knowing is which pointer. The stuck detector prints
       // that chain, but it is disabled for --control/--control-stdin sessions
       // (they idle by design between agent commands), so a driven run used to
       // reach the end with nothing but a zero in a status sample. Report it
       // once, here, whatever the mode, and do not end the run: the harness may
       // still want screenshots of whatever is left on screen.
-      if (eip === 0 && !eipZeroReported) {
+      if (eip === 0 && !hostExitRequested && !eipZeroReported) {
         eipZeroReported = true;
         console.log(`[eip-zero] guest called through NULL at batch ${batch}`);
         if (instance.exports.get_dbg_prev_eip) {
@@ -9381,7 +10950,8 @@ if (VERBOSE) {
         } catch (_) {}
         dumpStack();
       }
-      if (injectedInputThisBatch || eip !== prevEip || apiCount !== prevApiCount
+      const apiNow = apiTotal();
+      if (injectedInputThisBatch || eip !== prevEip || apiNow !== prevApiCount
           || regFp !== prevRegFp || win16Calls !== prevWin16Calls
           || workerFp !== prevWorkerFp || workerStepsTotal !== prevWorkerSteps) {
         prevWorkerFp = workerFp;
@@ -9389,7 +10959,7 @@ if (VERBOSE) {
         prevWin16Calls = win16Calls;
         if (!QUIET_BLOCKS && eip !== prevEip) console.log(`[${batch}] ${regs()}`);
         prevEip = eip;
-        prevApiCount = apiCount;
+        prevApiCount = apiNow;
         prevRegFp = regFp;
         stuckCount = 0;
       } else if (ex.get_yield_reason() === 16 && ctx.d3d9Bridge &&
@@ -9408,13 +10978,17 @@ if (VERBOSE) {
         // until the next scheduled click/capture. Do not let that idle time
         // accumulate and instantly trip after the last event is consumed.
         stuckCount = 0;
+      } else if (REAL_TICK_SLEEPS && threadManager.isMainSleeping()) {
+        // --real-ticks: a main thread inside a finite Sleep() has an unchanged
+        // EIP by definition while the wall clock runs the wait out.
+        stuckCount = 0;
       } else if (control) {
         // A controlled session idles by design between agent commands; the
         // stuck detector would end it the moment the message pump goes quiet.
         stuckCount = 0;
       } else {
         stuckCount++;
-        if (stuckCount > STUCK_AFTER) {
+        if (STUCK_AFTER > 0 && stuckCount > STUCK_AFTER) {
           console.log(`STUCK at EIP=${hex(eip)} after ${stuckCount} batches`);
           if (instance.exports.get_dbg_prev_eip) console.log(`  dbg_prev_eip=${hex(instance.exports.get_dbg_prev_eip())}`);
           // A NULL indirect-call target is usually a missing COM vtable slot.
@@ -9444,6 +11018,7 @@ if (VERBOSE) {
       }
     }
   }
+  traceGateBatch = -1; // back outside the loop: the exit summary is never windowed
   const executionElapsedSeconds = Math.max(0, (performance.now() - executionStartedAt) / 1000);
   // A window whose stop is --max-batches (or past a crash/stop) is never
   // closed inside the loop; report it as ending at run end, not silently.
@@ -9513,9 +11088,33 @@ if (VERBOSE) {
         }
       }
       console.log('cache: full clears', parts.join('  '));
+      // The rest of this report is the MAIN instance's counters. A game whose
+      // loop runs on a worker (Hype) does its decoding there, so the same
+      // counters are printed per thread: decodes, live-block evictions, page
+      // compiles and code-write invalidations, which together say whether a
+      // worker re-decodes because it overflows, aliases, or writes its code.
+      if (threadManager && instance.exports.get_cache_stores) {
+        for (const [, t] of threadManager.threads) {
+          const x = t.instance && t.instance.exports;
+          if (!x || !x.get_cache_stores) continue;
+          console.log(`cache[T${t.tid}]: block decodes ${x.get_cache_stores()}`
+            + ` evicted-live ${x.get_cache_evicts()}`
+            + (x.get_page_compiles ? ` | pages compiled ${x.get_page_compiles()}` : '')
+            + (x.get_page_index_evicts ? ` index-arena-full ${x.get_page_index_evicts()}` : '')
+            + (x.get_cache_invals ? ` | invalidations ${x.get_cache_invals()} dropped ${x.get_cache_inval_hits()}`
+              + ` last ${hex(x.get_cache_inval_page())}` : ''));
+        }
+      }
       if (instance.exports.get_cache_stores) {
         console.log('cache: block decodes', instance.exports.get_cache_stores(),
           'of which evicted a live block', instance.exports.get_cache_evicts());
+        // Page evictions by cause: the index arena running out (capacity) vs
+        // two pages sharing a direct-mapped PAGE_DIR slot (aliasing).
+        if (instance.exports.get_page_index_evicts) {
+          const cap = instance.exports.get_page_index_evicts();
+          console.log('cache: page evictions by cause: index arena full', cap,
+            '| directory slot collision', instance.exports.get_cache_evicts() - cap);
+        }
       }
       if (instance.exports.get_page_fast) {
         const hits = instance.exports.get_page_hits();
@@ -9558,6 +11157,32 @@ if (VERBOSE) {
         console.log('cache: page invalidations', instance.exports.get_cache_invals(),
           'that dropped a block', instance.exports.get_cache_inval_hits(),
           'last', hex(instance.exports.get_cache_inval_page()));
+        if (TRACE_CODE_WRITES) {
+          const top = (m, label) => {
+            const rows = [...m].sort((a, b) => b[1].dropped - a[1].dropped).slice(0, 20);
+            console.log(`  code writes by ${label} (${m.size} distinct):`);
+            for (const [k, e] of rows) {
+              console.log(`    ${hex(k)}  writes ${e.n}  blocks dropped ${e.dropped}`);
+            }
+          };
+          console.log(`[code-write] ${codeWriteStats.events} retiring writes on the main ` +
+            `instance, ${codeWriteStats.dropped} blocks dropped`);
+          top(codeWriteStats.byEip, 'writer EIP');
+          top(codeWriteStats.byPage, 'target page');
+          const r = codeWriteStats.retires;
+          console.log(`[code-retire] blocks retired: by guest write ${r.write || 0}, ` +
+            `by an overlapping publish ${r.overlap || 0}`);
+          const pairs = [...codeWriteStats.overlapPairs].sort((a, b) => b[1] - a[1]);
+          console.log(`  overlap retirements, retired entry <- publishing EIP (${pairs.length} distinct):`);
+          for (const [k, n] of pairs.slice(0, 25)) console.log(`    ${k}  x${n}`);
+          if (TRACE_CODE_WRITES_ALL) {
+            console.log(`[code-miss] ${codeWriteStats.misses} writes reached the range walk and retired nothing`);
+            for (const [m, label] of [[codeWriteStats.missByEip, 'writer EIP'], [codeWriteStats.missByPage, 'target page']]) {
+              console.log(`  by ${label} (${m.size} distinct):`);
+              for (const [k, n] of [...m].sort((a, b) => b[1] - a[1]).slice(0, 20)) console.log(`    ${hex(k)}  x${n}`);
+            }
+          }
+        }
         // Section 5's own scoreboard. A retire is one block taken out by a
         // write to a byte it covers; a range drop is a write too wide to walk,
         // where the whole page went instead. The ratio is the thesis: per-offset
@@ -9664,6 +11289,9 @@ if (VERBOSE) {
   }
 
   experiments.report(instance, threadManager, VERBOSE);
+  // A report may have called an export that logs (--uop-census's exit dump);
+  // nothing drains the buffer after the batch loop otherwise.
+  flushLogs();
 
   if (DUMP_VIRTUAL_MAPS) {
     const dv = new DataView(memory.buffer);
@@ -9747,8 +11375,21 @@ if (VERBOSE) {
       `${video.width}x${video.height} at ${video.fps}fps (${video.duration.toFixed(2)}s)`);
   }
 
-  console.log(`\nStats: ${apiCount} API calls, ${batchesRun} batches`
+  console.log(`\nStats: ${apiTotal()} API calls, ${batchesRun} batches`
     + ` in ${executionElapsedSeconds.toFixed(3)}s (${(batchesRun / Math.max(executionElapsedSeconds,0.001)).toFixed(0)} batches/s)`);
+  if (renderParkStats.waits || renderParkStats.skippedBatches)
+    console.log(`render park: main waited on ${renderParkStats.waits} software D3D requests `
+      + `(${renderParkStats.wallMs}ms wall), ${renderParkStats.skippedBatches} batches skipped while parked`);
+  if (PRESENT_CAP && instance.exports.get_present_paced_count) {
+    console.log(`present pacing (main instance): cap ${PRESENT_CAP}/s ${PRESENT_PACE_MODE ? 'smooth' : 'deadline'}, `
+      + `${instance.exports.get_present_paced_count()} frames slept `
+      + `${instance.exports.get_present_paced_ms()} guest ms`
+      + (LOGICAL_FRAME && instance.exports.get_logical_frame_count
+        ? `, at=${LOGICAL_FRAME.pace ? 'logical' : 'pump'}: ${instance.exports.get_logical_frame_count()} `
+          + `${LOGICAL_FRAME.label} steps, ${instance.exports.get_logical_frame_paced()} paced at the step`
+        : ''));
+  }
+  reportPresentFrames();
   reportMmx();
   reportGuestPageStats();
 
@@ -9830,7 +11471,10 @@ if (VERBOSE) {
         if (!te || !te.get_clock_spin_parks) continue;
         const c = te.get_clock_spin_parks() >>> 0;
         const p = te.get_peek_spin_parks() >>> 0;
-        if (c || p) perThread.push(`T${t.tid} clock=${c} peek=${p}`);
+        // slept = clock parks the cooperative scheduler turned into a sleep
+        // to the park's deadline (lib/thread-manager.js, postYield 14).
+        if (c || p) perThread.push(`T${t.tid} clock=${c} peek=${p}`
+          + (t.clockParkSleeps ? ` slept=${t.clockParkSleeps}` : ''));
         clockTrips += c;
         peekTrips += p;
       }
@@ -9849,6 +11493,46 @@ if (VERBOSE) {
   // the process tears down shared memory. Normal frames still flush at their
   // semantic barriers, so this adds no crossing to the run loop.
   base.flushGLCommands(instance.exports);
+
+  if (PRESENT_DISTINCT.on) {
+    const pd = PRESENT_DISTINCT;
+    const hashedCount = pd.counted - pd.gpu;
+    const share = hashedCount ? (100 * pd.changed / hashedCount).toFixed(1) : '0.0';
+    console.log(`\n[present-distinct] from batch ${pd.from}: ${pd.counted} presents`
+      + ` (${pd.presents} total), ${pd.changed} changed the picture (${share}%),`
+      + ` ${pd.unique.size} unique frames, ${pd.unreadable} unreadable`
+      + (pd.gpu ? `, ${pd.gpu} gpu (not hashed)` : '')
+      + `; by slot ${[...pd.slots].map(([s, n]) => `${s}:${n}`).join(' ')}`);
+    if (pd.rects.size) {
+      const top = [...pd.rects].sort((a, b) => b[1] - a[1]).slice(0, 8);
+      console.log(`[present-distinct] region changed per present (vs the previous present of that slot),`
+        + ` ${pd.rects.size} distinct boxes:`);
+      for (const [rect, n] of top) console.log(`[present-distinct]   ${String(n).padStart(6)}  ${rect}`);
+      console.log(`[present-distinct] first ${pd.seq.length} in order: ${pd.seq.join(' | ')}`);
+    }
+    // Rates between the first and last counted present, in GUEST seconds.
+    const spanMs = pd.firstMs !== null ? pd.lastMs - pd.firstMs : 0;
+    if (spanMs > 0 && pd.counted > 1) {
+      const gs = spanMs / 1000;
+      const hashed = pd.counted - pd.gpu;
+      console.log(`[present-distinct] over ${gs.toFixed(2)} guest-s:`
+        + ` ${((pd.counted - 1) / gs).toFixed(1)} presents/guest-s`
+        + (hashed > 0 ? `, ${(pd.changed / gs).toFixed(1)} changed/guest-s` : ''));
+      const midMs = pd.firstMs + spanMs / 2;
+      let n2 = 0, c2 = 0, h2 = 0;
+      for (let i = 0; i < pd.times.length; i++) {
+        if (pd.times[i] < midMs) continue;
+        n2++;
+        if (pd.changedTimes[i] !== null) { h2++; if (pd.changedTimes[i]) c2++; }
+      }
+      const gs2 = (pd.lastMs - midMs) / 1000;
+      if (gs2 > 0) {
+        console.log(`[present-distinct] second half (${gs2.toFixed(2)} guest-s):`
+          + ` ${(n2 / gs2).toFixed(1)} presents/guest-s`
+          + (h2 > 0 ? `, ${(c2 / gs2).toFixed(1)} changed/guest-s (${(100 * c2 / h2).toFixed(1)}%)` : ''));
+      }
+    }
+  }
 
   if (DX_LOCK_PAUSE.ms > 0) {
     console.log(`\n[dx-lock-pause] ${DX_LOCK_PAUSE.ms}ms per present:`
@@ -9913,6 +11597,10 @@ if (VERBOSE) {
       console.log(`      interval batches p50 ${med}, p90 ${q('batches', 0.9)}, p99 ${q('batches', 0.99)}, max ${q('batches', 1)}`
         + `   long (>=1.75x median) ${long} of ${f.length} (${(100 * long / f.length).toFixed(1)}%)`);
       console.log(`      interval ms      p50 ${q('ms', 0.5).toFixed(1)}, p90 ${q('ms', 0.9).toFixed(1)}, p99 ${q('ms', 0.99).toFixed(1)}   (wall clock — load-sensitive, never diff across runs)`);
+      // Evenness in wall ms: spread, frame-to-frame change and the census
+      // against a 60 Hz grid (lib/frame-intervals.js). Only meaningful with
+      // --real-ticks, where the guest clock and this one are the same clock.
+      console.log(frameIntervals.format(frameIntervals.summarize(series.t), '      wall '));
       if (note) console.log(`      ${note}`);
       if (med <= 1) {
         console.log('      NOT RESOLVED: the interval is at or under one batch, so this series is'
@@ -9929,8 +11617,31 @@ if (VERBOSE) {
       + ' straight onto the primary instead of flipping a back buffer trips it several times'
       + ' per frame. Compare the count against --trace-api IDirectDrawSurface_Blt/Flip before'
       + ' reading it as a frame rate');
+    if (PRESENT_CAP) {
+      report('paced frame   ($present_pace) ', frameStats.paced,
+        'one per frame end the cap governs, stamped when the pacer ran (before its sleep)');
+      console.log(frameIntervals.format(frameIntervals.summarize(frameStats.pacedGuest),
+        '      guest ms '));
+    }
     report('host flush    (surface upload)', frameStats.flush,
       `what the browser HUD counts as fps; in the CLI it is gated by the repaint loop (--repaint-every=${REPAINT_EVERY}), so treat it as the harness's cadence unless it agrees with the present count above`);
+    // The raw series behind the percentiles above, for evidence that has to
+    // carry samples rather than a summary. Interval `batches` is the
+    // load-immune guest measure; `ms` and `t` are wall clock.
+    if (FRAME_STATS_OUT) {
+      const raw = s => ({ t: s.t, intervals: s.iv });
+      fs.writeFileSync(FRAME_STATS_OUT, JSON.stringify({
+        from: FRAME_STATS_FROM, batchSize: BATCH_SIZE, tickMsPerBatch: TICK_MS_PER_BATCH,
+        present: raw(frameStats.present), flush: raw(frameStats.flush),
+        ...(PRESENT_CAP ? { paced: raw(frameStats.paced) } : {}),
+      }));
+      console.log(`  raw series written to ${FRAME_STATS_OUT}`);
+    }
+  }
+
+  if (paintAuditCheck(instance.exports, 'exit') && PAINT_AUDIT) {
+    const ex = instance.exports;
+    console.log(`[paint-audit] ok: counts(paint,nc0..nc3)=${[0, 1, 2, 3, 4].map(k => ex.paint_work_count(k)).join(',')}`);
   }
 
   if (BATCH_STATS) {
@@ -10139,6 +11850,7 @@ if (VERBOSE) {
   if (SAVE_VFS && ctx.vfs) {
     saveVfsToHost(ctx.vfs, SAVE_VFS, {
       suffix: SAVE_VFS_SUFFIX,
+      prefix: SAVE_VFS_PREFIX,
       skipPaths: ['c:\\app.exe'],
       log: line => console.log(line),
     });
@@ -10232,7 +11944,7 @@ if (VERBOSE) {
     const mem = new Uint8Array(memory.buffer);
     const dv = new DataView(memory.buffer);
     const DX_BASE = RegionMap.BASE.DX_OBJECTS;
-    const DX_SLOTS = 8192; // matches $DX_MAX in src/09a8-handlers-directx.wat
+    const DX_SLOTS = 16384; // matches $DX_MAX in src/09a8-handlers-directx.wat
     const DX_SURF_PAL = RegionMap.BASE.DX_SURF_PAL; // per-surface palette data addr
     let paletteWa = 0;
     for (let slot = 0; slot < DX_SLOTS; slot++) {
@@ -10265,7 +11977,7 @@ if (VERBOSE) {
       // must be decoded with that one, not with whichever palette happened to
       // be allocated first.
       const ownPal = dv.getUint32(DX_SURF_PAL + slot * 4, true);
-      surfaces.push({ slot, flags, w, h, bpp, pitch, dib, firstNonZero, checksum,
+      surfaces.push({ slot, entry, flags, w, h, bpp, pitch, dib, firstNonZero, checksum,
         paletteWa: ownPal || paletteWa });
     }
     return { mem, surfaces };
@@ -10297,6 +12009,14 @@ if (VERBOSE) {
         }
         data[di] = r; data[di + 1] = g; data[di + 2] = b; data[di + 3] = 255;
       }
+    }
+    // The display gamma ramp, as the browser presenter applies it
+    // (_presentDxSurfaceToMainWindow), so a capture matches the page.
+    const { gammaLut, applyGamma } = require('../lib/dib');
+    const gamma = DX_RAW_INDEX ? null : gammaLut(instance.exports, memory.buffer);
+    if (gamma) {
+      applyGamma(gamma, new Uint32Array(data.buffer, data.byteOffset, surface.w * surface.h),
+        0, surface.w * surface.h);
     }
     return data;
   };
@@ -10430,6 +12150,8 @@ if (VERBOSE) {
 
   if (DX_SURFACES) {
     const { mem, surfaces } = getDxSurfaceManifest();
+    // $dx_surf_fmt_get's codes (src/09a8-handlers-directx.wat).
+    const DX_SURFACE_FORMATS = ['default', '565', 'x555', 'a1555', 'a4444', 'a8888', 'x888'];
     // Every 8bpp upload resolves its colours through the single primary-palette
     // global, not through the per-surface palette printed below. When those two
     // disagree the picture is drawn with somebody else's palette, so print both.
@@ -10439,17 +12161,131 @@ if (VERBOSE) {
       ` primaryPal=0x${globalPal.toString(16)}`);
     for (const s of surfaces) {
       const score = dxSurfaceContentScore(s, mem);
-      console.log(`  slot=${s.slot} ${s.w}x${s.h} bpp=${s.bpp} pitch=${s.pitch}` +
+      // The pixel layout, not just the depth: a 16bpp surface is 565, 555 or
+      // 1555/4444, and decoding one as another shifts every hue.
+      const fmt = instance.exports.d3dim_gpu_surface_fmt
+        ? DX_SURFACE_FORMATS[instance.exports.d3dim_gpu_surface_fmt(s.entry) | 0] || '?' : '?';
+      console.log(`  slot=${s.slot} ${s.w}x${s.h} bpp=${s.bpp} fmt=${fmt} pitch=${s.pitch}` +
         ` flags=0x${s.flags.toString(16)} dib=0x${s.dib.toString(16)}` +
         ` pal=0x${s.paletteWa.toString(16)} colors=${score.colors} nonZero=${score.nonZero}/${score.total}`);
+    }
+  }
+
+  if (DUMP_DX_SURFACES) {
+    const { surfaces } = getDxSurfaceManifest();
+    const decode = instance.exports.d3dim_gpu_decode_texture;
+    const fmtOf = instance.exports.d3dim_gpu_surface_fmt;
+    const names = ['default', '565', 'x555', 'a1555', 'a4444', 'a8888', 'x888'];
+    fs.mkdirSync(DUMP_DX_SURFACES, { recursive: true });
+    let written = 0;
+    for (const s of surfaces) {
+      const wa = decode ? decode(s.entry, 0) >>> 0 : 0;
+      if (!wa) continue;
+      // Re-read the buffer: the decoder's scratch allocation may have grown memory.
+      const rgba = new Uint8Array(memory.buffer).slice(wa, wa + s.w * s.h * 4);
+      const fmt = names[fmtOf(s.entry) | 0] || 'fmt' + (fmtOf(s.entry) | 0);
+      writeRgbaPng(path.join(DUMP_DX_SURFACES, `slot${s.slot}-${s.w}x${s.h}-${fmt}.png`), s.w, s.h, rgba);
+      written++;
+    }
+    console.log(`[dump-dx-surfaces] wrote ${written} surface(s) to ${DUMP_DX_SURFACES}`);
+  }
+
+  if (GL_CENSUS) {
+    // Which GL entry points did this app really use? The counters are
+    // load-immune, so this is readable on a busy box where no timing is.
+    const GLCompat = require('../lib/gl-compat');
+    const stats = GLCompat.stats;
+    const ops = stats.ops;
+    const names = GLCompat.OP_NAMES || GLCompat.CALLS;
+    const seen = [];
+    for (let i = 0; i < ops.length; i++) {
+      if (ops[i]) seen.push([names[i] || `op${i}`, ops[i], i]);
+    }
+    seen.sort((a, b) => b[1] - a[1]);
+    const total = seen.reduce((n, entry) => n + entry[1], 0);
+    console.log(`[gl-census] ${seen.length} distinct GL entry point(s), ${total} call(s)`);
+    for (const [name, count, index] of seen) {
+      console.log(`  ${String(count).padStart(10)}  ${name} (#${index})`);
+    }
+    // Geometry does NOT show up as glBegin/glVertex in the list above once the
+    // encoder packs a span: it arrives as one packed-draw record carrying many
+    // vertices. Print the executor's own counters beside the histogram so a
+    // run that draws plenty can never read as a run that draws nothing.
+    console.log(`[gl-census] packed spans enqueued=${stats.enqueued} draws=${stats.draws}` +
+      ` vertices=${stats.drawVertices} presents=${stats.presents}` +
+      ` frontFlushes=${stats.frontFlushes}`);
+    // The families src/09a8f-gl-matrix.wat cannot mirror yet. A zero here is
+    // what licenses a consumer to trust the WAT state for THIS app; it is not
+    // a general claim, which is exactly why it is printed per run.
+    // This list is EMPTY for the first time: gluPerspective/gluLookAt/
+    // gluOrtho2D, then glPushAttrib/glPopAttrib, all grew mirrors. It is kept
+    // rather than deleted because it is the shape the next gap gets reported
+    // in, and because an empty list and a missing check print differently
+    // below.
+    //
+    // With nothing in it the latch beside it is the only reading that can
+    // move, and it still can: the mirror caps the attribute stack at GL's
+    // required minimum of 16 and latches on a deeper push, because a dropped
+    // push leaves every later pop restoring the wrong nesting level.
+    const UNMIRRORED = [];
+    const used = UNMIRRORED.filter(name => {
+      const index = GLCompat.CALL_INDEX[name];
+      return index !== undefined && ops[index];
+    });
+    // The WAT mirror's own verdict, which is the one that counts: the JS list
+    // above says what was called, this says whether the mirror noticed. They
+    // are printed together because a disagreement is itself the finding.
+    const latched = instance.exports.gl_mtx_untrusted
+      ? instance.exports.gl_mtx_untrusted() | 0 : -1;
+    const latchedName = latched > 0 ? (GLCompat.CALLS[latched] || `op${latched}`) : '';
+    console.log(`[gl-census] unmirrored families used: ${used.length ? used.join(', ') : 'none'}` +
+      `; WAT untrusted latch: ${latched < 0 ? 'export missing'
+        : latched === 0 ? 'clear' : `${latchedName} (#${latched})`}`);
+    // The WAT software rasterizer (src/09a8g-gl-raster.wat): what it drew and
+    // what it had to drop for want of near-plane clipping, so a black frame
+    // reads as "never asked", "asked and dropped" or "drew" at a glance.
+    const sw = instance.exports;
+    if (sw.gl_sw_enabled && sw.gl_sw_enabled()) {
+      // With --d3d-worker the draws were rasterized, and counted, there.
+      const wk = ctx.d3dCommands && ctx.d3dCommands.snapshot ? ctx.d3dCommands.snapshot() : {};
+      console.log(`[gl-census] software raster: triangles=${((sw.gl_sw_triangles() >>> 0) + (wk.glTriangles || 0))}` +
+        ` dropped-at-eye-plane=${(sw.gl_sw_clipped() >>> 0) + (wk.glClipped || 0)}` +
+        ` culled=${(sw.gl_sw_culled() >>> 0) + (wk.glCulled || 0)}` +
+        (wk.glQueued ? ` worker-draws=${wk.glQueued} worker-tex-uploads=${wk.glTexQueued || 0}` : '') +
+        ` presents=${sw.gl_sw_presents() >>> 0} tex-uploads=${sw.gl_sw_tex_uploads() >>> 0}` +
+        ` tex-unsupported=${sw.gl_sw_tex_unsupported() >>> 0} target-slot=${sw.gl_sw_slot() | 0}` +
+        (() => {
+          // The target's size beside the drawable the host reported: a
+          // mismatch is a frame drawn into the wrong-sized buffer.
+          const e = sw.gl_sw_entry ? sw.gl_sw_entry() >>> 0 : 0;
+          const u16 = new Uint16Array(memory.buffer);
+          const t = e ? ` target=${u16[(e + 12) >>> 1]}x${u16[(e + 14) >>> 1]}` : '';
+          const d = sw.gl_sw_drawable ? sw.gl_sw_drawable() >>> 0 : 0;
+          return t + ` drawable=${d ? `${d >>> 16}x${d & 0xFFFF}` : 'unreported'}`;
+        })() +
+        (sw.gl_sw_bitmap && sw.gl_sw_bitmap() ? ` bitmap=0x${(sw.gl_sw_bitmap() >>> 0).toString(16)}` : ''));
     }
   }
 
   if (PNG_OUT && renderer) {
     const { mem, surfaces } = getDxSurfaceManifest();
     const wantSlot = DX_SLOT === null ? null : (parseInt(DX_SLOT, 10) | 0);
-    const surface = PNG_CANVAS ? null
-      : (wantSlot === null ? chooseDxPresentationSurface(surfaces, mem)
+    // Software GL drawing into a PFD_DRAW_TO_BITMAP DIB leaves only helper
+    // surfaces (depth, descriptors) in the DX table and no front buffer; the
+    // app shows that DIB through GDI, so the window canvas is the picture.
+    const ex = instance.exports;
+    const glBitmapOnly = ex.gl_sw_enabled && ex.gl_sw_enabled() && ex.gl_sw_front
+      && !ex.gl_sw_front() && ex.gl_sw_entry && ex.gl_sw_entry();
+    // A software GL front buffer IS the picture, black or not. Left to the
+    // content chooser, a black front loses to the 16bpp depth buffer, whose
+    // clear to 0xFFFF reads as "content" -- ptct's intro came out as a flat
+    // depth-buffer capture that way.
+    const glFrontSlot = (ex.gl_sw_enabled && ex.gl_sw_enabled() && ex.gl_sw_front
+      && ex.gl_sw_front()) ? (ex.gl_sw_slot() | 0) : null;
+    const glFront = glFrontSlot === null ? null
+      : (surfaces.find(s => s.slot === glFrontSlot) || null);
+    const surface = (PNG_CANVAS || (glBitmapOnly && wantSlot === null)) ? null
+      : (wantSlot === null ? (glFront || chooseDxPresentationSurface(surfaces, mem))
         : (surfaces.find(s => s.slot === wantSlot) || null));
     if (wantSlot !== null && !surface) {
       console.log(`[dx-slot] no live surface in slot ${wantSlot} — falling back to the screen canvas`);
@@ -10508,7 +12344,7 @@ if (VERBOSE) {
     const mem = new Uint8Array(memory.buffer);
     const dv = new DataView(memory.buffer);
     const DX_BASE = RegionMap.BASE.DX_OBJECTS;
-    const DX_SLOTS = 8192; // matches $DX_MAX in src/09a8-handlers-directx.wat
+    const DX_SLOTS = 16384; // matches $DX_MAX in src/09a8-handlers-directx.wat
     const manifest = [];
     // Read the primary palette WASM addr by scanning palette-type entries in
     // the live DX table. Palette slots have type=3 and store their palette

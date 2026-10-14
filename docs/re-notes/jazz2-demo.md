@@ -355,3 +355,89 @@ reports `105 passed, 0 failed`; the normal build and WAT structural check also
 pass. These results remove the reported logo stripe without disabling MMX.
 The later NONCLIENTMETRICS correction and Worker browser acceptance close the
 separate direct-level gameplay gap described above.
+
+## 2026-10-10: the menu route to a real level, control A/B, frame counter
+
+**Correction.** The 2026-10-01 route's batch-17370 "gameplay" frames on the
+current build are the attract-mode **DEMO** playback (Darn Ratz with a
+"DEMO" banner) and the story pages. That route never confirms Medium. The
+title shows the main menu by batch 9000 with *Quit* highlighted.
+With `--app=jazz2_demo --no-threads --batch-size=10000 --tick-ms-per-batch=10
+--repaint-every=10 --wall-clock-ms=1790673326000 --png-canvas`:
+
+- Escapes at 1800/2800/5500/7500, as before.
+- Up x5 at 9000, 9050, ..., 9200 (each held 20 batches) to New Game.
+- Enter at 9250 (Choose Game Type), 9570 (Single Player), 9890 (Jazz),
+  10210 (Select Difficulty) and **10530 (Medium)**. Each is held 20 batches.
+- The real level is up by ~17550: score 0, 3 lives, hearts, blaster infinite,
+  and no DEMO banner.
+
+**Control, by A/B.** Run the same command with and without Right
+(18000-18600) and Right+Space (19000-20000). Captures match byte for byte
+until the input. With the keys, Jazz runs to the pipe and his shot knocks the
+turtle out of its shell; without them, Jazz idles at the start.
+
+**Frame counter.** One frame is one `Blt` (returns to `0x496a75`), one `Flip`
+of the primary (returns to `0x495e6c`) and one `Unlock` (`0x494c17`). Over
+19.94 guest-s there are 431 (A) and 437 (B), which present-distinct (slot 5)
+counts identically: **21.9 frames per guest-second**. The same schedule at a
+5 ms tick gives 438 over 19.98 guest-s, so the rate is the game's.
+Evidence: `scratch/runs/20261010T0600Z-jazz2_demo-control-frames`.
+
+## 2026-10-10: LAN join, and why the client stalls
+
+Test: `test/test-jazz2-vlan-gameplay.js`. Seat 10.0.0.1 runs `-SERVER
+Share1.j2l` and seat 10.0.0.2 runs `-CONNECT 10.0.0.1`. The join runs over
+TCP port 10052; game traffic is UDP. `JAZZ2_VLAN_GUEST_EXTRA` /
+`_HOST_EXTRA` add run.js flags to one seat.
+
+**Socket layer** (`jazz2.exe`, base 0x400000). Every socket object starts
+with the magic `SOCK` (0x4b434f53). The guard mutex is `[0x4fea4c]`.
+
+| VA | role |
+|---|---|
+| `0x49ac83` | TCP FD_READ handler: one `recv` into the tail chunk's free space. Chunks are 0x2000 bytes (`[+4]` used, data at `+0xc`); `[sock+0x44]` is the bytes held. |
+| `0x49a260` | stream read(sock, buf, n): copies up to n bytes across chunks and consumes exactly that. Correct. |
+| `0x49a010` | send wrapper: spins on WSAEWOULDBLOCK. It never queues, so it cannot merge two records. |
+| `0x49a700` | pops one UDP datagram block (`+0x14` length, `+0x18` checksum, `+0x1a` data). Its four callers are the UDP parsers, so a client "looping in 0x49a700" is just idle on UDP. |
+| `0x499eb0` | close |
+| `0x49aae0` | returns `&sock[0x40]`, so `[+4]` is the bytes held |
+
+**The client's TCP record reader, `0x4844b0`, is the stall.** Records are
+`[len][type][...]`.
+- Per call it reads `ceil(held/128)` times, 0x80 bytes at a time, into
+  `0x5a3cbc`. The count of bytes held is at `0x5a3dbc`.
+- It parses buffered records **only after a read that returned > 0**.
+- After each record, `0x484000` dispatches on `type - 0xd`. The loop then
+  stops parsing while the state word `[0x5da750]` is non-zero. That word is 9
+  for the whole connect phase, and 6 after the level-info record
+  (`0x4842fe`).
+
+So in the connect phase each arrival parses at most one record. If the
+server's 36-byte level record and its 2-byte record (type 0x13) arrive in one
+read, the 0x13 record stays buffered. Every later read returns 0, so it is
+never parsed. The server is waiting for the client's 2-byte reply and sends
+only UDP, so the join deadlocks.
+
+Observed (unpaced, failing):
+- The client buffer starts `02 13`, with 2 bytes held and `[0x5da750]` = 9.
+- The server sent `len=36` then `len=2` as two `send()`s, then only UDP.
+
+In passing runs the client replies with its own 2-byte TCP record.
+
+**Why real Windows works.** Win98 TCP runs Nagle with delayed ACK. The second
+small segment is held until the first is ACKed, up to ~200 ms. The client
+therefore reads the two records in separate frames. Our wire sent both at
+once, so the game's latent one-record-per-read assumption showed.
+
+**Fix in place.** Per-app send pacing, `38c329897`: `lib/apps.js`
+`vlanNagleMs: 200`, off for every other app. Pacing all apps regressed LF2 and
+SimCity 2000 Net.
+- Paced on main `b1eb6ac07`, boat `bx_y5uygkrc`: **6/6 joins**.
+- Unpaced on the same boat: 1/2. Stock before the fix: 1/5.
+- The earlier session's paced 3/4 had one failure attributed to a single
+  38-byte `send()`. That was not reproduced here: in every traced run the
+  server made two `send()`s.
+
+Evidence: `scratch/runs/20261010T2000Z-jazz2-client-parse-stall` and
+`scratch/runs/20261010T1640Z-jazz2-join-timing`.

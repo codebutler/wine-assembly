@@ -117,7 +117,7 @@ function readBitmapObject(wat, handle, wide = false) {
     const palette = wat.test_call_CreatePalette(logical) >>> 0;
     const dc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert(palette && dc);
-    assert.strictEqual(wat.test_call_SelectPalette(dc, palette) >>> 0, 0x3001F);
+    assert.strictEqual(wat.test_call_SelectPalette(dc, palette, 0) >>> 0, 0x3001F);
     wat.guest_write32(bmi + 40, 0x00000001); // WORD palette indexes [1, 0]
     const palBitmap = wat.test_call_CreateDIBitmap(dc, bmi, 4, pixelsGa, bmi, 1) >>> 0;
     assert(palBitmap, 'DIB_PAL_COLORS should resolve through the source DC palette');
@@ -217,7 +217,7 @@ function readBitmapObject(wat, handle, wide = false) {
     rw.guest_write32(bmi + 4, 2);
     rw.guest_write32(bmi + 8, -2);
     rw.guest_write32(bmi + 12, 1 | (32 << 16));
-    const dstBitmap = rw.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const dstBitmap = rw.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const dstDc = rw.test_call_CreateCompatibleDC(0) >>> 0;
     assert(dstBitmap && dstDc);
     assert.strictEqual(rw.test_call_SelectObject(dstDc, dstBitmap) >>> 0, 0x30007);
@@ -260,7 +260,7 @@ function readBitmapObject(wat, handle, wide = false) {
     rw.guest_write32(bmi + 4, 2);
     rw.guest_write32(bmi + 8, -2);
     rw.guest_write32(bmi + 12, 1 | (32 << 16));
-    const dstBitmap = rw.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const dstBitmap = rw.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const dstDc = rw.test_call_CreateCompatibleDC(0) >>> 0;
     assert(dstBitmap && dstDc);
     assert.strictEqual(rw.test_call_SelectObject(dstDc, dstBitmap) >>> 0, 0x30007);

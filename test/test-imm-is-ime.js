@@ -7,6 +7,15 @@ const apiTable = require('../src/api_table.json');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
+  ${['ImmGetDescriptionA', 'ImmGetDescriptionW'].map(name => `
+  (func (export "test_lookup_${name}") (result i32)
+    (local $name i32)
+    (local.set $name (call $heap_alloc (i32.const ${name.length + 1})))
+    ${[...name, '\0'].map((c, i) => `(i32.store8 offset=${i} (call $g2w (local.get $name)) (i32.const ${c.charCodeAt(0)}))`).join('\n')}
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+    (call $handle_GetProcAddress (global.get $image_base) (local.get $name)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   (func (export "test_get_proc_imm_is_ime") (param $stack i32) (result i32)
     (local $name i32)
     (local.set $name (call $heap_alloc (i32.const 9)))
@@ -44,6 +53,12 @@ const extraWat = `
 
   const { exports: wat } = await bootRenderHarness({ extraWat });
   const stack = 0x074ff000;
+
+  for (const name of ['ImmGetDescriptionA', 'ImmGetDescriptionW']) {
+    assert.strictEqual(apiTable.find(entry => entry.name === name)?.nargs, 3);
+    assert.notStrictEqual(wat['test_lookup_' + name]() >>> 0, 0,
+      name + ' resolves to a callable thunk for dynamic IMM32 callers');
+  }
 
   assert.notStrictEqual(wat.test_get_proc_imm_is_ime(stack) >>> 0, 0,
     'GetProcAddress(ImmIsIME) returns a callable thunk');

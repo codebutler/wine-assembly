@@ -14,6 +14,7 @@ const {
   THREAD_PRIMITIVE_IMPORTS,
   adoptThreadPrimitives,
   makeWorkerApiLogger,
+  workerApiShouldLog,
 } = require('../lib/worker-imports');
 
 let failures = 0;
@@ -56,6 +57,28 @@ check('the thread-scoped half does not', () => {
   for (const key of ['instance', 'exports', 'threadId', 'getMemory']) {
     assert.ok(!(key in worker), `${key} is per-thread and must not be copied`);
   }
+});
+
+check('worker calendar APIs use the moving process calendar', () => {
+  const { createHostImports } = require('../lib/host-imports');
+  const memory = new ArrayBuffer(65536);
+  let now = Date.UTC(1999, 5, 1, 12, 34, 56, 789);
+  const mainCtx = { getMemory: () => memory, wallNowMs: () => now };
+  const workerCtx = { ...processSharedCtx(mainCtx), getMemory: () => memory };
+  const main = createHostImports(mainCtx).host;
+  const worker = createHostImports(workerCtx).host;
+  const bytes = new Uint8Array(memory);
+  for (const advance of [0, 1234, 86400000]) {
+    now += advance;
+    for (const [kind, size] of [[0, 16], [1, 16], [2, 8], [3, 4]]) {
+      assert.strictEqual(main.wall_clock(256, kind), 1);
+      assert.strictEqual(worker.wall_clock(512, kind), 1);
+      assert.deepStrictEqual([...bytes.subarray(512, 512 + size)],
+        [...bytes.subarray(256, 256 + size)], `calendar kind ${kind}, advance ${advance}`);
+    }
+  }
+  main.wall_clock(256, 0);
+  assert.strictEqual(new DataView(memory).getUint16(256, true), 1999);
 });
 
 check('a key the host does not have stays absent', () => {
@@ -146,6 +169,42 @@ check('the logger clamps a name to 256 bytes', () => {
   });
   logger.log(0x100, 600);
   assert.strictEqual(lines[0].length, '[API T1] '.length + 256);
+});
+
+check('a COM method on a worker is logged under its real name, not <ord>', () => {
+  const mem = new WebAssembly.Memory({ initial: 1 });
+  new Uint8Array(mem.buffer).set([0x3c, 0x6f, 0x72, 0x64, 0x3e, 0], 0x200); // "<ord>"
+  const lines = [];
+  const seen = [];
+  const logger = makeWorkerApiLogger({
+    getBuffer: () => mem.buffer,
+    threadId: 1,
+    resolveComName: (id) => (id === 1234 ? 'IDirectSoundBuffer_Lock' : null),
+    onCall: (name) => seen.push(name),
+    shouldLog: (name) => name === 'IDirectSoundBuffer_Lock',
+    emit: (line) => lines.push(line),
+  });
+  logger.log_i32(0xC0DE0000 | 1234); // the dispatch marker is not a return value
+  logger.log(0x200, 5);
+  logger.log_i32(0);
+  assert.deepStrictEqual(seen, ['IDirectSoundBuffer_Lock']);
+  assert.deepStrictEqual(lines, ['[API T1] IDirectSoundBuffer_Lock', '  => 0x0']);
+  // A marker resolves only the very next '<ord>'.
+  logger.log(0x200, 5);
+  assert.deepStrictEqual(seen, ['IDirectSoundBuffer_Lock', '<ord>']);
+});
+
+check('worker trace policy: a named filter logs under --quiet-api, a bare trace does not', () => {
+  const filter = new Set(['IDirectSoundBuffer_Lock']);
+  // --trace-api=NAMES --quiet-api: the named calls are what was asked for.
+  assert.strictEqual(workerApiShouldLog({ traceApi: true, quietApi: true, filter }, 'IDirectSoundBuffer_Lock'), true);
+  assert.strictEqual(workerApiShouldLog({ traceApi: true, quietApi: true, filter }, 'Sleep'), false);
+  assert.strictEqual(workerApiShouldLog({ traceApi: true, quietApi: false, filter }, 'IDirectSoundBuffer_Lock'), true);
+  // Bare --trace-api: everything, unless --quiet-api asks for silence.
+  assert.strictEqual(workerApiShouldLog({ traceApi: true, quietApi: false, filter: null }, 'Sleep'), true);
+  assert.strictEqual(workerApiShouldLog({ traceApi: true, quietApi: true, filter: null }, 'Sleep'), false);
+  // No --trace-api at all: workers never log.
+  assert.strictEqual(workerApiShouldLog({ traceApi: false, quietApi: false, filter }, 'IDirectSoundBuffer_Lock'), false);
 });
 
 console.log(failures === 0 ? '\nAll worker-imports checks passed' : `\n${failures} failed`);

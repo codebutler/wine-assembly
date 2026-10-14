@@ -194,6 +194,15 @@ async function runDos(o) {
     // page uses. `true` for the defaults, or an options object -- see
     // tools/toyvm/region-live.js.
     regionJit = null,
+    // `--uop`: the micro-op tier (tools/toyvm/uop-live.js). OFF by default.
+    // Profiles a window of this run, builds µop programs at its hottest
+    // blocks and runs them on the E1 engine from then on. `true` for the
+    // defaults, or an options object.
+    uop = null,
+    // `--uop-only`: the µop-only arm (tools/toyvm/uop-only.js). Every
+    // instruction runs in a micro-op program on the E1 engine; L1 runs one
+    // instruction at a time where the µop set has no form. OFF by default.
+    uopOnly = null,
     // `--tree-fold`: the decode-time expression-tree fold
     // (tools/toyvm/tree-fold.js). OFF by default. `true` for the defaults, or
     // an options object. Like the region JIT it installs into the running
@@ -256,6 +265,12 @@ async function runDos(o) {
     // schedule in dos-loop.js `step`, and the way to reproduce a wav recorded
     // before it. See docs/toyvm-irq-schedule.md.
     irqSchedule = true,
+    // Answer the INT 21h get-time and INT 33h reset calls inside wasm
+    // (emit.js $intfast). `--no-int-fast` is the A/B partner.
+    intFast = true,
+    // Resolve unlinked direct edges through the jump table (emit.js GO).
+    // `--no-edge-lookup` is the A/B partner.
+    edgeLookup = true,
     // The DOS command tail, verbatim. Several demos in this corpus name their
     // own silent-mode switch on the screen they refuse to start from.
     guestArgs = '',
@@ -350,7 +365,12 @@ async function runDos(o) {
     // Stamped with the dispatch count so a port write can be lined up with
     // the rendered audio (--pit-clock runs 10.0M dispatches per guest second
     // at the default dispatchesPerTick).
-    ioTrace: traceIo === null ? null : (line) => log(`  [io] @${(machine.audioNow() / 1e6).toFixed(4)}M ${line}`),
+    // `near` is the guest's cs:ip as the VM last published it -- the start of
+    // the block doing the I/O, not the IN/OUT itself -- which is enough to
+    // find the driver: a port sequence that matches no card can then be read
+    // in the code that wrote it instead of guessed at from the values.
+    ioTrace: traceIo === null ? null : (line) => log(`  [io] @${(machine.audioNow() / 1e6).toFixed(4)}M ${line}`
+      + `  near ${(vm.get('cs') & 0xFFFF).toString(16)}:${(vm.get('gip') >>> 0).toString(16)}`),
     ioPorts: traceIo && traceIo.length ? new Set(traceIo) : null,
     // A DOS program's data sits next to it, and that directory is the whole of
     // the filesystem it gets.
@@ -387,6 +407,9 @@ async function runDos(o) {
     hist: wantHist,
     ipHist: blockHits || foldHot > 0,
     lazyFlags, fuseCond, regions: jitRegions,
+    // The separate-module region JIT imports the interpreter's table, globals
+    // and functions from this instance, so it has to be built exporting them.
+    exportAll: !!(regionJit && regionJit.sep),
   });
   // The decoder's CPU level and the module's FLAGS shape have to move together:
   // a build that decodes 386 encodings but reports an 8086 FLAGS register fails
@@ -475,7 +498,12 @@ async function runDos(o) {
   }
 
   const t0 = process.hrtime.bigint();
+  // The whole run's CPU (user + system): what an arm costs with its handbacks,
+  // builds and host work included, on a meter the box's load cannot move.
+  // (Null where the host has no cpuUsage: the browser bundle's process shim.)
+  const runCpu0 = typeof process.cpuUsage === 'function' ? process.cpuUsage() : null;
   let guestNs = 0n;
+  let uopBuildNs = 0n;
   let guestCpuUs = 0;
   let v86Was = 0;
   let shotN = 0;
@@ -537,7 +565,7 @@ async function runDos(o) {
     treeFold: folder,
     traceDeadFlags: traceDeadFlags ? ((s) => log(s)) : null,
     mouse, irqEvery, dispatchesPerTick, tickScale, stuckLimit, pitClock,
-    stuckWork, latticeClock, irqSchedule,
+    stuckWork, latticeClock, irqSchedule, intFast, edgeLookup,
     // A watch reports through the census, so asking for one turns it on.
     smcCensus: smcCensus || watch.length > 0, watch,
     // The same count, not recomputed while the page it counts has not changed.
@@ -700,6 +728,13 @@ async function runDos(o) {
         // sample map: its window is a stretch of THIS run rather than a
         // fraction of a finished one.
         if (jit) jit.sample({ left, dispatched });
+        if (uopLive) {
+          // Outside guestNs, so a slow optimizer never shows up in ns/dispatch:
+          // counted here instead, where a harness can see it.
+          const u0 = process.hrtime.bigint();
+          uopLive.sample({ left, dispatched });
+          uopBuildNs += process.hrtime.bigint() - u0;
+        }
         // `--slice-log=FILE`: the cumulative dispatch count at every handback,
         // one per line. A frame hash says two runs ended somewhere different;
         // this says WHERE THE CUT MOVED, which is the only way to tell "the
@@ -740,20 +775,35 @@ async function runDos(o) {
       // `lazyFlags`/`fuseCond` change what a handler MEANS. Rebuilding on the
       // defaults happened to agree with a default run and would have swapped
       // `--no-lazy` or `--handler-hist` onto a different machine mid-flight.
-      build: { hist: wantHist, ipHist: blockHits, lazyFlags, fuseCond },
+      build: { hist: wantHist, ipHist: blockHits, lazyFlags, fuseCond,
+        exportAll: !!(regionJit && regionJit.sep) },
       portIn: (p, w) => machine.portIn(p, w),
       portOut: (p, v, w) => machine.portOut(p, v, w),
       // In-process and blocking, which is the right choice HERE: a headless run
       // has nothing else to do with the seconds the audit and the compile take,
       // and the run loop is already paused between two slices. The page uses a
       // worker instead (region-live.js `workerBackend`).
-      backend: require('./region-prepare').inlineBackend(),
+      // `worker: true` is the page's arrangement headless: a worker thread
+      // prepares while the guest keeps running (see the run loop below).
+      backend: regionJit && regionJit.worker
+        ? require('./region-prepare').nodeWorkerBackend()
+        : require('./region-prepare').inlineBackend(),
       log,
       // The same allocator the tree fold takes its ordinals from.
       extras,
       ...(regionJit === true ? {} : regionJit),
     })
     : null;
+  // The µop tier installs into the session's code cache and step(), so it is
+  // built after the session too. Its E1 module is compiled here, before the
+  // first slice; nothing it does later generates wasm.
+  const uopInitT0 = process.hrtime.bigint();
+  const uopLive = uop
+    ? await new (require('./uop-live').UopLive)({ session, vm, log, ...(uop === true ? {} : uop) }).init()
+    : uopOnly
+      ? await new (require('./uop-only').UopOnly)({ session, vm, log, ...(uopOnly === true ? {} : uopOnly) }).init()
+      : null;
+  const uopInitNs = process.hrtime.bigint() - uopInitT0;
   let sliceT0 = 0n;
   let sliceCpu0 = null;
 
@@ -769,13 +819,23 @@ async function runDos(o) {
   let ranOutOfTime = false;
   let steps = 0;
 
-  while (session.dispatched < budget && !session.done) {
+  // The budget is a date on the schedule, so the run ends at the same guest
+  // instant whatever handed back on the way there (dos-loop.js `endAt`).
+  session.endAt = budget;
+  while ((session.dispatched < budget || session.owesEnd(budget)) && !session.done) {
     session.step();
     // Between slices, never inside one: installing swaps the wasm instance.
     // Headless, the pipeline is simply awaited -- a one-second pause between
     // two slices costs a batch run nothing, and the page (which cannot afford
     // it) hands the same pipeline to a worker instead.
-    if (jit) { jit.pump(); if (jit.pending) await jit.pending; }
+    // With `worker: true` the guest does NOT wait: one trip through the event
+    // loop per slice lets the worker's answer in, and the install runs there,
+    // which is still between two slices. (A worker backend passed WITHOUT it is
+    // awaited like the inline one -- same answer, deterministic install point.)
+    if (jit) {
+      jit.pump();
+      if (jit.pending) await (regionJit.worker ? new Promise(setImmediate) : jit.pending);
+    }
     // Same seam, same reason: `pump` builds a module and moves the guest onto
     // it, which cannot happen while a slice is in wasm.
     if (folder) { folder.tick(session.dispatched); if (folder.needsInstall()) await folder.pump(); }
@@ -797,6 +857,13 @@ async function runDos(o) {
     // gets round to it, and a press that is up again by the next poll never
     // happened. Release is the same event backwards -- a button the guest
     // never sees go up leaves its button-down handler running.
+    //
+    // A fixed count of handbacks is not "long enough" for every program:
+    // AQUAPHOB.EXE's setup screen polls fn 03 once every ~330 handbacks, so a
+    // 200-handback press usually fell between two polls and its START DEMO
+    // button never saw a click. So the button stays down until the guest has
+    // read it at least twice as well -- with a ceiling, for a program that
+    // reads the buttons some other way and would otherwise never see it go up.
     for (const c of clicks) {
       if (c.done) continue;
       if (session.dispatched < c.at * budget) continue;
@@ -806,8 +873,10 @@ async function runDos(o) {
         machine.mouse.buttons = 1;
         machine.mouse.pressed[0]++;
         c.held = 0;
+        c.reads = machine.mouse.reads;
         log(`click at ${c.x},${c.y}`);
-      } else if (++c.held > 200) {
+      } else if (++c.held > 200
+          && (machine.mouse.reads - c.reads >= 2 || c.held > 100000)) {
         machine.mouse.buttons = 0;
         machine.mouse.released[0]++;
         c.done = true;
@@ -834,11 +903,13 @@ async function runDos(o) {
     }
   }
   const {
-    dispatched, handbacks, ints, irqs, smcBreaks, smcPatched, smcFastRepairs, repairWhy, traps, icebps, stuckAt, blockedOn32, badSelector,
+    dispatched, handbacks, ints, intsFast, irqs, smcBreaks, smcPatched, smcFastRepairs, repairWhy, traps, icebps, stuckAt, blockedOn32, badSelector, protectedTransferStop, exitKinds, earlySites,
     compiles, compiledWords, arenaResets, unimplemented, regions, jtab, smcSites, retiredPatches,
     deadFlagsDropped, tracedBlocks, spinBlocks, specOps, treeFolds, rep, volatile,
   } = session.stats();
 
+  // A worker that is still preparing when the run ends answers nobody.
+  if (jit && jit.backend.stop) jit.backend.stop();
   if (bestPng) keepBest();
   const surface = screenSurface(machine);
   if (sliceLog) fs.writeFileSync(sliceLogFile, sliceLog.join('\n') + '\n');
@@ -873,23 +944,31 @@ async function runDos(o) {
         isa.IPHIST_BASE, isa.IPHIST_SIZE >> 2)) : null,
     histTop: hist, histPairs,
     secs: Number(process.hrtime.bigint() - t0) / 1e9,
+    cpuSecs: runCpu0 ? (({ user, system }) => (user + system) / 1e6)(process.cpuUsage(runCpu0)) : null,
+    // Inside `secs`: the µop engine's one-per-process compile (paid even when
+    // nothing installs). A harness comparing runs subtracts it.
+    uopInitSecs: Number(uopInitNs) / 1e9,
+    // Also inside `secs` and outside `guestSecs`: profiling, region discovery,
+    // the optimizer and install, summed over the run.
+    uopBuildSecs: Number(uopBuildNs) / 1e9,
     guestSecs: Number(guestNs) / 1e9,
     // Not `guestSecs`, which is wall time spent inside wasm. This is time as
     // the GUEST saw it -- the unit the machine's real-time cadences are quoted
     // in, and the one a budget should be expressed in. See DosSession.
     guestSeconds: session.guestSeconds(dispatched),
     guestCpuSecs: guestCpuUs / 1e6,
-    dispatched, handbacks, ints, irqs, compiles, compiledWords, arenaResets, deadFlagsDropped,
+    dispatched, handbacks, ints, intsFast, irqs, compiles, compiledWords, arenaResets, deadFlagsDropped,
     tracedBlocks, spinBlocks, specOps, treeFolds, rep, volatile,
     // Everything the tree fold did, or null when it was off. Kept whole rather
     // than flattened so a harness can read the decline histogram without
     // parsing the printed line.
     tree: folder ? folder.stats() : null,
     smcBreaks, smcPatched, smcFastRepairs, repairWhy, traps, icebps, smcSites, retiredPatches,
-    stuckAt, blockedOn32, badSelector, ranOutOfTime,
+    stuckAt, blockedOn32, badSelector, protectedTransferStop, ranOutOfTime, exitKinds, earlySites,
     entryHist, unimplemented, ipSamples, ipSampleLog, regions,
     // What the live region JIT did, or null when it was never asked for.
     jit: jit ? jit.stats() : null,
+    uop: uopLive ? uopLive.report() : null,
     // A program that never put the adapter in a graphics mode has no frame to
     // count, and reading A000 anyway is how ACME-SUX.EXE and AKM_DOB.EXE came
     // back with ~61,700 "pixels" each while sitting in text mode the whole run.
@@ -1086,9 +1165,39 @@ async function main() {
       sampleAfter: count(arg('region-jit-after'), 6e6),
       profileFor: count(arg('region-jit-window'), 6e6),
       regions: Number(arg('region-jit-regions', 1)),
+      // `--region-jit-sep`: compile only the regions and write them into the
+      // running table (region-sep.js). `--region-jit-worker`: prepare on a
+      // worker thread without stopping the guest.
+      sep: flag('region-jit-sep'),
+      worker: flag('region-jit-worker'),
+      // `--region-jit-continuous`: keep profiling and add regions as the
+      // program's hot loop moves (region-live.js `continuous`).
+      continuous: flag('region-jit-continuous'),
+      minShare: Number(arg('region-jit-min-share', 0)),
       gateAt: Number(arg('region-jit-gate', 1)),
       gateIters: count(arg('region-jit-gate-iters'), 4000),
       log: flag('region-jit-verbose') ? console.log : (() => {}),
+    } : null,
+    // `--uop` runs the hottest blocks of a profile window as µop programs
+    // (tools/toyvm/uop-live.js). OFF by default.
+    uop: flag('uop') ? {
+      sampleAfter: count(arg('uop-after'), 2e6),
+      profileFor: count(arg('uop-window'), 2e6),
+      top: Number(arg('uop-top', 4)),
+      chain: flag('uop-chain'),
+      log: flag('uop-verbose') ? console.log : (() => {}),
+    } : null,
+    uopOnly: flag('uop-only') ? {
+      passes: arg('uop-only-passes', 'allRP'),
+      linePasses: arg('uop-only-line-passes', null),
+      shape: arg('uop-only-shape', 'loop'),
+      // `--uop-only-stay=0` hands back after every exit and fallback, as the
+      // arm first did: the A/B for the drive loop.
+      stay: arg('uop-only-stay', '1') !== '0',
+      // `--uop-only-io=0` leaves `in` to the L1 fallback.
+      io: arg('uop-only-io', '1') !== '0',
+      // `--uop-only-max-line=N`: the longest straight line built (uop-only.js build).
+      maxLine: Number(arg('uop-only-max-line', '32')),
     } : null,
     // `--tree-fold` folds a block's straight-line arithmetic into one generated
     // handler (tools/toyvm/tree-fold.js). OFF by default. `--tree-fold-min=N`
@@ -1317,6 +1426,8 @@ async function main() {
     // absolute dispatch count. Both arms of a comparison, or neither.
     latticeClock: flag('lattice-clock'),
     irqSchedule: !flag('no-irq-schedule'),
+    intFast: !flag('no-int-fast'),
+    edgeLookup: !flag('no-edge-lookup'),
     // --stop-on-text='Runtime error 200' -- end the run the instant the guest
     // prints this, so --dump and --disasm photograph the failure instead of
     // whatever reused its memory afterwards. See Machine.conWatch.
@@ -1364,11 +1475,8 @@ async function main() {
   // whole question.
   const saveFiles = arg('save-files');
   if (saveFiles) {
-    fs.mkdirSync(saveFiles, { recursive: true });
-    for (const [name, rec] of r.machine.tempFiles) {
-      const out = path.join(saveFiles, path.basename(name));
-      fs.writeFileSync(out, Buffer.from(rec.data.subarray(0, rec.len)));
-      console.log(`  saved ${out} (${rec.len} bytes)`);
+    for (const file of require('./save-files').saveFiles(saveFiles, r.machine.tempFiles)) {
+      console.log(`  saved ${file.path} (${file.size} bytes)`);
     }
   }
 
@@ -1398,6 +1506,9 @@ async function main() {
   if (r.badSelector) {
     console.log(`bad CS selector at ${r.badSelector} -- names no GDT descriptor`);
   }
+  if (r.protectedTransferStop) {
+    console.log(`protected transfer stopped: ${JSON.stringify(r.protectedTransferStop)} -- exception delivery not implemented`);
+  }
   // Only when the guest actually switched. Which descriptor table is live, and
   // what CS resolved through, is the first question about any of these -- and
   // "cs:ip=9bf0:1" alone cannot distinguish a selector from a paragraph.
@@ -1411,7 +1522,31 @@ async function main() {
       + `${ex.get_vm86() ? ' -- virtual-8086' : ''}`);
   }
 
-  console.log(`\n${path.basename(exe)}  variant=${r.variant}  ${r.secs.toFixed(2)}s`);
+  console.log(`\n${path.basename(exe)}  variant=${r.variant}  ${r.secs.toFixed(2)}s`
+    + (r.uopInitSecs ? ` (uop engine init ${(1000 * r.uopInitSecs).toFixed(0)}ms,`
+      + ` build ${(1000 * r.uopBuildSecs).toFixed(0)}ms)` : ''));
+  if (r.uop && r.uop.fallbacks) {
+    const u = r.uop;
+    console.log(`  uop-only: ${u.passes}/${u.shape} ${(100 * u.uopShare).toFixed(1)}% of steps in µop programs`
+      + `  programs=${u.builds} (loop ${u.shapes.loop}, line ${u.shapes.line}) entries=${u.entries} chains=${u.chains}`
+      + `  fallback sites=${u.fbSites} entries=${u.fbEntries} steps=${u.fbSteps}`
+      + `  invalidated=${u.invalidated} flushes=${u.flushes} arenaResets=${u.arenaResets}`
+      + `  stays=${u.stays}/${u.calls} calls (back: ${Object.entries(u.why || {}).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(', ')})${u.ioCuts ? `  IO CUTS=${u.ioCuts}` : ''}`
+      + (u.fbExitWhy && u.fbExitWhy.length ? `\n  uop-only: fallback handbacks ${u.fbExitWhy.map(([k, v]) => `${k}:${v}`).join(' ')}` : '')
+      + `  build ${(1000 * u.buildSecs).toFixed(0)}ms arena ${(u.arenaBytes / 1024).toFixed(0)}KB`);
+    console.log(`  fallback: ${u.fallbacks.slice(0, 10).map((f) => `${f.why} ${f.entries}e/${f.sites}s/${f.steps}st`).join(' | ')}`);
+  } else if (r.uop) {
+    const u = r.uop;
+    console.log(`  uop: ${u.phase} ${u.outcome} (windows=${u.windows} samples=${u.samples}`
+      + ` best=${(100 * u.bestShare).toFixed(1)}%)  ${u.installs} head(s) [${u.heads.map((h) => `${h.head} e=${h.entries} s=${h.steps} b=${h.bails}`
+      + (h.shape ? ` shape=${h.shape.insns}i/${h.shape.per.toFixed(2)}u/${h.shape.bail}x` : '')
+      + ` {${h.bailAt.join(" | ")}}`).join(', ')}]`
+      + `  entries=${u.entries} steps=${u.steps} (${(100 * u.steps / Math.max(1, r.dispatched)).toFixed(1)}% of dispatches)`
+      + `  bails=${u.bails} rebuilds=${u.rebuilds} gaveUp=${u.gaveUp}`
+      + (u.declined.length ? `  declined: ${u.declined.join('; ')}` : '')
+      + (u.demoted.length ? `  demoted: ${u.demoted.join('; ')}` : ''));
+    if (u.exitsAt && u.exitsAt.length) console.log(`  uop chains=${u.chains}  exits: ${u.exitsAt.join(' | ')}`);
+  }
   // The live JIT's verdict, in one line: where it got to, what it installed and
   // what each stage cost. A run with `--region-jit` that says `declined` did
   // not silently fall back -- it looked, and the reason is the whole finding.
@@ -1422,6 +1557,7 @@ async function main() {
       + (j.declined ? ` -- ${j.declined}` : '')
       + (j.gate ? `  gate ${j.gate.toFixed(2)}x, share ${j.share.toFixed(1)}%` : '')
       + (j.installs ? `  ${j.installs} install(s), ${j.drops} drop(s)` : '')
+      + (j.windows ? `  ${j.windows} window(s), ${j.skipped} unchanged` : '')
       + (j.ms.prepare !== undefined
         // Every field defaulted: a run that DECLINED has `prepare` and only
         // some of the stages under it, and reading `pick` off that threw --
@@ -1457,7 +1593,15 @@ async function main() {
       }
     }
   }
+  // Why the guest left wasm, by kind: `int VV:AH`, `smc1`, `smc2 plan|walk|
+  // flush`, `early`, `cut`, `date`, `budget`, `trap`. The `irq SRC` rows are
+  // not handbacks -- they are vectors the host pushed in at one -- and are
+  // listed after them. One line, machine-readable, so a sweep can grep it.
+  if (flag('handback-kinds') && r.exitKinds) {
+    console.log(`  handback kinds: ${JSON.stringify(r.exitKinds)}`);
+  }
   console.log(`  ${r.handbacks} handbacks, ${r.ints} interrupts`
+    + `${r.intsFast ? ` (+${r.intsFast} answered in wasm)` : ''}`
     // Every vector the host raises, not just the timer: single-step traps and
     // stepped-over ICEBPs go through the same path and are broken out below.
     + `${r.irqs ? ` (+${r.irqs} vectors raised by the host)` : ''}, ${r.compiles} traces `

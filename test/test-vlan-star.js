@@ -59,6 +59,14 @@ class PairLink extends Wire {
     this.other.closed = true;
     if (typeof this.other.onClosed === 'function') this.other.onClosed('channel-closed');
   }
+  // The other kind of leaving: no goodbye, the connection just gives up
+  // under the far end, as a dead Wi-Fi or a phone asleep does.
+  drop() {
+    if (this.closed) return;
+    this.closed = true;
+    this.other.closed = true;
+    if (typeof this.other.onClosed === 'function') this.other.onClosed('failed');
+  }
 }
 function linkPair() {
   const a = new PairLink();
@@ -154,6 +162,16 @@ function drain(wire) {
   return out;
 }
 const payloadOf = f => Buffer.from(f.subarray(28)).toString('latin1');
+function vlnFrame(type, src, sport, dst, dport) {
+  const f = new Uint8Array(28);
+  const dv = new DataView(f.buffer);
+  dv.setUint32(0, 0x314E4C56, true);
+  dv.setUint32(4, type, true);
+  dv.setUint32(8, ip(src), true); dv.setUint32(12, sport, true);
+  dv.setUint32(16, ip(dst), true); dv.setUint32(20, dport, true);
+  return f;
+}
+const field = (f, at) => new DataView(f.buffer, f.byteOffset, f.byteLength).getUint32(at, true);
 
 // ---- the frame is the address -------------------------------------------
 
@@ -222,6 +240,21 @@ async function main() {
     assert.strictEqual(alex.wire.send(dgram('10.0.0.1', '10.0.0.9', 'nobody')), true);
   });
 
+  await check('a connect to a seat nobody holds is refused at once, not left to time out', () => {
+    // Member to an empty seat: the owner answers on the member's own link.
+    kim.wire.send(vlnFrame(1, '10.0.0.3', 49152, '10.0.0.9', 8035));
+    const [rst] = drain(kim.wire);
+    assert.ok(rst, 'no answer to the SYN');
+    assert.deepStrictEqual([field(rst, 4), field(rst, 8), field(rst, 12), field(rst, 16), field(rst, 20)],
+      [5, ip('10.0.0.9'), 8035, ip('10.0.0.3'), 49152]);
+    // The owner's own guest to an empty seat: answered on its own inbox.
+    alex.wire.send(vlnFrame(1, '10.0.0.1', 49153, '10.0.0.9', 8035));
+    assert.deepStrictEqual(drain(alex.wire).map(f => field(f, 4)), [5]);
+    // Anything but a SYN to nobody still goes nowhere.
+    kim.wire.send(dgram('10.0.0.3', '10.0.0.9', 'nobody'));
+    assert.strictEqual(drain(kim.wire).length + drain(alex.wire).length, 0);
+  });
+
   await check('a frame back to the owner reaches the owner\'s guest', () => {
     kim.wire.send(dgram('10.0.0.3', '10.0.0.1', 'to alex'));
     assert.deepStrictEqual(drain(alex.wire).map(payloadOf), ['to alex']);
@@ -257,6 +290,15 @@ async function main() {
   await check('someone about to launch sees that room offered, with its label', async () => {
     const offered = await hostedRooms({ rtc: fakeRtc(dir, 'u9', 'lee') });
     assert.deepStrictEqual(offered.map(p => [p.name, p.hosting.label]), [['alex', 'noname demo1 1/4']]);
+    // The list names who looked, so a room link naming that account can be
+    // told apart from a room that is not open.
+    assert.strictEqual(offered.userId, 'u9');
+  });
+
+  await check('the owner looking never sees its own room, and is told who it is', async () => {
+    const own = await hostedRooms({ rtc: fakeRtc(dir, 'u1', 'alex'), includeIdle: true });
+    assert.ok(!own.some(p => p.userId === 'u1'), 'own room listed');
+    assert.strictEqual(own.userId, 'u1');
   });
 
   await check('a game that stops answering stops being offered', async () => {
@@ -272,19 +314,40 @@ async function main() {
   await check('a member leaving drops only their link, and frees their seat', async () => {
     sam.wire.link.close();
     await until(() => alex.memberCount === 1, 'the owner to drop sam');
-    assert.ok(alex.events.some(e => e.type === 'left' && e.name === 'sam'));
+    assert.ok(alex.events.some(e => e.type === 'left' && e.name === 'sam' && e.quit === true),
+      'a closed channel is a goodbye');
     await sam.close();
+    // The owner's guest is told that address is gone, so its connections
+    // to sam reset instead of waiting forever.
+    const gone = drain(alex.wire);
+    assert.deepStrictEqual(gone.map(f => [field(f, 4), field(f, 8)]), [[7, ip('10.0.0.2')]]);
     kim.wire.send(dgram('10.0.0.3', '10.0.0.1', 'still here'));
     assert.deepStrictEqual(drain(alex.wire).map(payloadOf), ['still here']);
+    assert.strictEqual(drain(kim.wire).length, 0, 'kim heard of a seat it never talked to');
     const lee = await open(dir, 'u4', 'lee');
     assert.strictEqual(lee.address, '10.0.0.2', 'the freed seat was not reused');
     await lee.close();
   });
 
+  await check('a member whose connection gives up is reported as lost, not as leaving', async () => {
+    const pat = await open(dir, 'u5', 'pat');
+    await until(() => alex.memberCount === 2, 'the owner to admit pat');
+    pat.wire.link.drop();
+    await until(() => alex.memberCount === 1, 'the owner to drop pat');
+    const left = alex.events.filter(e => e.type === 'left' && e.name === 'pat');
+    assert.deepStrictEqual(left.map(e => e.quit), [false]);
+    drain(alex.wire);
+    await pat.close();
+  });
+
   await check('the owner leaving ends the room for every member', async () => {
     await alex.close();
     await until(() => kim.events.some(e => e.type === 'closed'), 'kim to hear the room closed');
-    assert.match(kim.events.find(e => e.type === 'closed').message, /alex closed the room/);
+    const closed = kim.events.find(e => e.type === 'closed');
+    assert.match(closed.message, /alex closed the room/);
+    assert.strictEqual(closed.quit, true);
+    // Every other seat was reached through alex, so all of them are gone.
+    assert.deepStrictEqual(drain(kim.wire).map(f => [field(f, 4), field(f, 8)]), [[7, 0xFFFFFFFF]]);
     await kim.close();
   });
 
@@ -323,6 +386,34 @@ async function main() {
     await r.close();
   });
 
+  await check('a room link to an owner that never answers fails, and hosts nothing', async () => {
+    const d = new Directory();
+    d.records.set('u0', { userId: 'u0', name: 'ghost', role: 'owner', address: '10.0.0.1', updatedAt: 1 });
+    await assert.rejects(
+      open(d, 'u7', 'zoe', { connectTimeoutMs: 30, preferOwner: 'u0', mustJoin: true }),
+      e => e.joinFailed && /ghost did not answer/.test(e.message) && e.owner.userId === 'u0');
+    assert.ok(!d.records.has('u7'), 'a failed join left a presence record behind');
+  });
+
+  await check('a room link to a room that is gone fails without trying anyone else', async () => {
+    const d = new Directory();
+    const a = await open(d, 'u1', 'ana');
+    await assert.rejects(
+      open(d, 'u7', 'zoe', { preferOwner: 'u9', mustJoin: true }),
+      e => e.joinFailed && /not open any more/.test(e.message));
+    assert.strictEqual(a.wire.memberCount, 0, 'joined a room nobody asked for');
+    await a.close();
+  });
+
+  await check('a room link to a live owner joins it', async () => {
+    const d = new Directory();
+    const a = await open(d, 'u1', 'ana');
+    const b = await open(d, 'u2', 'ben', { preferOwner: 'u1', mustJoin: true });
+    assert.strictEqual(b.role, 'member');
+    assert.strictEqual(b.owner.userId, 'u1');
+    await b.close(); await a.close();
+  });
+
   await check('the Join card\'s pick wins over the automatic choice', () => {
     const peers = [
       { userId: 'a', role: 'owner', address: '10.0.0.1', hosting: { label: 'x' }, updatedAt: 9 },
@@ -332,6 +423,37 @@ async function main() {
     assert.strictEqual(chooseOwner(peers).userId, 'a', 'a serving owner should beat a fresher idle one');
     assert.strictEqual(chooseOwner(peers, 'b').userId, 'b');
     assert.strictEqual(chooseOwner([peers[2]]), null);
+  });
+
+  await check('a serving probe follows the game, not the wire', () => {
+    // Hearts, TetriNET and Liquid War say nothing on the wire while they wait
+    // for players, so the probe asks the emulator (the page's gameServing).
+    const wire = new Wire();
+    const seen = [];
+    const probe = new star.HostProbe(wire, { protocol: 'serving', listen: 31457, labelText: 'TetriNET' },
+      h => seen.push(h));
+    assert.ok(!wire.intercept, 'a serving probe must not take the wire');
+    probe.ask();
+    assert.deepStrictEqual(seen, [], 'no answer yet (serving unset) is not a change');
+    let now = false, asked = null;
+    probe.serving = spec => { asked = spec; return now; };
+    probe.ask();
+    assert.deepStrictEqual(seen, []);
+    assert.strictEqual(asked.listen, 31457, 'the spec reaches the question');
+    now = true;
+    probe.ask(); probe.ask();
+    assert.deepStrictEqual(seen, [{ label: 'TetriNET' }], 'hosting once, labelled');
+    now = null;
+    probe.ask();
+    assert.strictEqual(seen.length, 1, 'an unknown answer keeps the last verdict');
+    probe.serving = () => { throw new Error('instance gone'); };
+    probe.ask();
+    assert.strictEqual(seen.length, 1, 'a throwing question reads as unknown');
+    now = false;
+    probe.serving = () => now;
+    probe.ask();
+    assert.deepStrictEqual(seen, [{ label: 'TetriNET' }, null], 'stopped serving drops the room');
+    probe.stop();
   });
 
   console.log(failures ? `test-vlan-star: ${failures} FAILED` : 'test-vlan-star: all checks passed');

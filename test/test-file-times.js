@@ -52,6 +52,9 @@ function readSystemTime(at) {
     BigInt(dv.getUint32(0x640, true));
   assert.strictEqual(actualFileTime, expectedFileTime,
     'FILETIME must retain the high-word carry for the full wall-clock epoch');
+  assert.strictEqual(clockHost.wall_clock(0x660, 3), 1);
+  assert.strictEqual(dv.getInt32(0x660, true), local.getTimezoneOffset(),
+    'kind 3 is the Win32 Bias of the zone the local SYSTEMTIME was read in');
 
   const h = ctx.vfs.createFile('C:\\archive.bin', 0x40000100, 2);
   assert(h, 'writable archive fixture opens');
@@ -165,8 +168,8 @@ function readSystemTime(at) {
   let result = wat.test_set_file_time(0x77, cGuest, 0, wGuest);
   assert.strictEqual(Number(result & 0xFFFFFFFFn), 1, 'SetFileTime returns TRUE');
   assert.strictEqual(Number(result >> 32n), 0, 'successful SetFileTime clears LastError');
-  assert.deepStrictEqual(calls.shift(), [0x77, 1, 0x13000, 0, 0x14000],
-    'SetFileTime forwards nullable translated pointers');
+  assert.deepStrictEqual(calls.shift(), [0x77, 1, cGuest, 0, wGuest],
+    'SetFileTime preserves nullable guest pointers');
   assert.strictEqual(wat.get_esp() >>> 0, 0x00300014, 'SetFileTime pops four arguments');
 
   result = wat.test_get_file_time(0x88, 0, 0, 0);

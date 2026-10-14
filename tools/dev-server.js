@@ -16,6 +16,9 @@
 //   node tools/dev-server.js                 # http://127.0.0.1:8080
 //   node tools/dev-server.js --port=9000
 //   node tools/dev-server.js --host=0.0.0.0  # other devices on your LAN
+//   node tools/dev-server.js --require-login
+//       # answer 401 until the browser signs in at /api/auth/login, the way
+//       # Berrry does, so the signed-out paths can be driven locally
 //   node tools/dev-server.js --host=0.0.0.0 --cert=lan.pem --key=lan-key.pem
 //       # the same over https: the virtual LAN lobby needs a secure context
 //       # (crypto.subtle), which a plain-http LAN address is not. Make the pair
@@ -25,11 +28,15 @@
 // talks to it does not change between local development and deployment:
 //
 //   GET    /api/auth/user            who am I (dev: always someone)
+//   GET    /api/auth/login?return=URL   sign in (only with --require-login)
 //   GET    /api/data/:key            read one of my own records
 //   PUT    /api/data/:key            write it; ?visibility=public to publish
 //   DELETE /api/data/:key            remove it
 //   GET    /api/public-data/users/:key   who has published under this key
 //   GET    /api/public-data/:userId/:key read someone else's published record
+//   POST   /api/nomcp/register/{challenge,solve}, /api/nomcp/auth/sign-in
+//                                     agent bots (see handleNomcp); their
+//                                     Bearer brry_rw_ token works on /api/data
 //
 // A published record is world-readable, exactly as on the real backend. That
 // is a property to design around rather than fight: room invitations carry a
@@ -74,20 +81,40 @@ const MIME = {
 // Storage
 // ---------------------------------------------------------------------------
 
-// users: userId -> { id, name, data: Map(key -> { value, visibility, updatedAt }) }
+// users: cookie -> { id, name, data: Map(key -> { value, visibility, updatedAt }) }
+//
+// Berrry's user ids are integers, and a browser's cookie is not its id, so
+// here too: the cookie finds the user and the user has a number. Code that
+// compares an id from a URL (always a string) with one from the API (a
+// number) then fails here the way it would on Berrry.
 class Store {
   constructor() {
     this.users = new Map();
+    this.byId = new Map();
+    this.nextId = 1;
     this.writes = 0;
+    // The nomcp agent-registration stand-in (docs/design-agent-connect.md):
+    // challenge id -> { nonce, expires }, ed25519 pubkey hex -> user key, and
+    // brry_rw_ session token -> user key. A bot is an ordinary user here whose
+    // key into `users` is "bot:<pubkey>" instead of a browser cookie.
+    this.challenges = new Map();
+    this.bots = new Map();
+    this.apiKeys = new Map();
   }
 
-  user(id) {
-    let u = this.users.get(id);
+  user(cookie) {
+    let u = this.users.get(cookie);
     if (!u) {
-      u = { id, name: `dev-${id.slice(0, 6)}`, data: new Map() };
-      this.users.set(id, u);
+      u = { id: this.nextId++, name: `dev-${cookie.slice(0, 6)}`, data: new Map() };
+      this.users.set(cookie, u);
+      this.byId.set(u.id, u);
     }
     return u;
+  }
+
+  // A user by the numeric id the API hands out, as a public read names it.
+  userById(id) {
+    return this.byId.get(Number(id)) || null;
   }
 
   put(userId, key, value, visibility) {
@@ -100,6 +127,12 @@ class Store {
   get(userId, key) {
     const u = this.users.get(userId);
     return u ? (u.data.get(key) || null) : null;
+  }
+
+  getPublic(id, key) {
+    const u = this.userById(id);
+    const rec = u ? u.data.get(key) : null;
+    return rec && rec.visibility === 'public' ? rec : null;
   }
 
   del(userId, key) {
@@ -115,10 +148,11 @@ class Store {
     for (const u of this.users.values()) {
       const rec = u.data.get(key);
       if (rec && rec.visibility === 'public') {
-        out.push({ userId: u.id, name: u.name, updatedAt: rec.updatedAt });
+        // Berrry's row: it also lists the value, and freshest first.
+        out.push({ userId: u.id, email: `${u.name}@dev.local`, updatedAt: rec.updatedAt, value: rec.value });
       }
     }
-    return out;
+    return out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
   }
 }
 
@@ -190,6 +224,7 @@ function parseCookies(header) {
 // tell each other apart. The cookie is that identity and nothing more: it
 // grants no rights, because in this server nothing is protected.
 const USER_COOKIE = 'wa_dev_user';
+const LOGIN_COOKIE = 'wa_dev_login';
 
 function identify(req, res) {
   const existing = parseCookies(req.headers.cookie)[USER_COOKIE];
@@ -326,46 +361,197 @@ function serveStatic(req, res, urlPath, agentInject) {
 
 const MAX_RECORD_BYTES = 256 * 1024;
 
-async function handleApi(req, res, url, store) {
-  const seg = url.pathname.split('/').filter(Boolean);   // ['api', ...]
-  const userId = identify(req, res);
+// Berrry's nomcp self-serve agent registration (berrry-server src/nomcp.js),
+// in memory, so the skill's bridge can register, sign in and write its sealed
+// answer against this server with no Berrry account and no network. Same
+// routes, bodies and signature strings; the one deliberate difference is the
+// captcha, whose answer here is always "dev".
+//
+//   POST /api/nomcp/register/challenge  -> { challenge_id, nonce, puzzle }
+//   POST /api/nomcp/register/solve      { challenge_id, answer, public_key, signature, username }
+//                                       signature = ed25519 over "register:{nonce}", hex
+//   POST /api/nomcp/auth/sign-in        { public_key, signature, timestamp }
+//                                       signature = ed25519 over "login:{timestamp}", hex
+//
+// The brry_rw_ token either returns is then accepted as a Bearer token on
+// /api/data -- the change berrry itself needs (design section 4, change 1).
+function ed25519Verify(publicKeyHex, message, signatureHex) {
+  try {
+    const key = crypto.createPublicKey({
+      key: Buffer.from('302a300506032b6570032100' + publicKeyHex, 'hex'), format: 'der', type: 'spki',
+    });
+    return crypto.verify(null, Buffer.from(message), key, Buffer.from(signatureHex, 'hex'));
+  } catch (_) {
+    return false;
+  }
+}
 
-  // GET /api/auth/user
+function issueBotToken(store, pub) {
+  const token = 'brry_rw_' + crypto.randomBytes(16).toString('hex');
+  store.apiKeys.set(token, { userKey: `bot:${pub}`, expires: Date.now() + 24 * 3600e3 });
+  return { token, expires_at: new Date(Date.now() + 24 * 3600e3).toISOString() };
+}
+
+async function handleNomcp(req, res, seg, store) {
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+  const route = seg.slice(2).join('/');
+  let body = {};
+  try { body = JSON.parse((await readBody(req, 16 * 1024)) || '{}'); } catch (_) {
+    return sendJson(res, 400, { error: 'validation_error', message: 'body must be JSON' });
+  }
+  if (route === 'register/challenge') {
+    const id = crypto.randomBytes(8).toString('hex');
+    const nonce = crypto.randomBytes(16).toString('hex');
+    store.challenges.set(id, { nonce, expires: Date.now() + 600e3 });
+    return sendJson(res, 200, {
+      challenge_id: id, nonce,
+      puzzle: { type: 'dev', prompt: 'Local dev-server stand-in for the Berrry captcha: answer "dev".' },
+      expires_at: new Date(Date.now() + 600e3).toISOString(),
+    });
+  }
+  if (route === 'register/solve') {
+    const { challenge_id, answer, public_key, signature, username } = body;
+    const challenge = store.challenges.get(challenge_id);
+    if (!challenge || challenge.expires < Date.now()) {
+      return sendJson(res, 400, { error: 'invalid_challenge', message: 'Challenge not found, already solved, or expired' });
+    }
+    if (String(answer).trim().toLowerCase() !== 'dev') {
+      return sendJson(res, 400, { error: 'wrong_answer', message: 'Incorrect answer. Request a new challenge and try again.' });
+    }
+    const pub = String(public_key || '').toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(pub)) {
+      return sendJson(res, 400, { error: 'validation_error', message: 'public_key must be 64 hex characters (Ed25519 public key)' });
+    }
+    if (!/^[a-z][a-z0-9_]{0,26}bot$/i.test(String(username || ''))) {
+      return sendJson(res, 400, { error: 'validation_error', message: 'Invalid username. Must be 4-30 chars, start with letter, end with "bot".' });
+    }
+    if (!ed25519Verify(pub, `register:${challenge.nonce}`, String(signature || ''))) {
+      return sendJson(res, 401, { error: 'invalid_signature', message: 'Ed25519 signature verification failed. Sign the string "register:{nonce}" with your private key.' });
+    }
+    if (store.bots.has(pub)) {
+      return sendJson(res, 409, { error: 'already_registered', message: 'This public key is already registered. Use POST /auth/sign-in to get a session token.' });
+    }
+    const name = String(username).toLowerCase();
+    for (const u of store.users.values()) {
+      if (u.name === name) return sendJson(res, 409, { error: 'conflict', message: `Username "${name}" is already taken` });
+    }
+    store.challenges.delete(challenge_id);
+    store.bots.set(pub, `bot:${pub}`);
+    store.user(`bot:${pub}`).name = name;
+    return sendJson(res, 201, Object.assign({ status: 'registered', public_key: pub, username: name },
+      issueBotToken(store, pub)));
+  }
+  if (route === 'auth/sign-in') {
+    const pub = String(body.public_key || '').toLowerCase();
+    const ts = parseInt(body.timestamp, 10);
+    if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > 300e3) {
+      return sendJson(res, 401, { error: 'invalid_timestamp', message: 'Timestamp must be within 5 minutes of server time. Use Date.now() (milliseconds).' });
+    }
+    if (!ed25519Verify(pub, `login:${body.timestamp}`, String(body.signature || ''))) {
+      return sendJson(res, 401, { error: 'invalid_signature', message: 'Signature verification failed. Sign the string "login:{timestamp}" with your Ed25519 private key.' });
+    }
+    if (!store.bots.has(pub)) {
+      return sendJson(res, 404, { error: 'not_registered', message: 'No agent registered with this public key. Use POST /register/solve to register first.' });
+    }
+    return sendJson(res, 200, Object.assign({ status: 'signed_in', public_key: pub,
+      username: store.user(`bot:${pub}`).name }, issueBotToken(store, pub)));
+  }
+  return sendJson(res, 404, { error: 'no such route' });
+}
+
+async function handleApi(req, res, url, store, opts) {
+  const seg = url.pathname.split('/').filter(Boolean);   // ['api', ...]
+  if (seg[1] === 'nomcp') return handleNomcp(req, res, seg, store);
+  // A bot's Bearer brry_rw_ token names its user; no cookie is set or read.
+  const auth = String(req.headers.authorization || '');
+  let botKey = null;
+  if (auth.startsWith('Bearer brry_')) {
+    const rec = store.apiKeys.get(auth.slice(7));
+    if (!rec || rec.expires < Date.now()) return sendJson(res, 401, { error: 'Invalid or expired token' });
+    botKey = rec.userKey;
+  }
+  const userId = botKey || identify(req, res);
+
+  // --require-login: a stand-in for Berrry's sign-in. The login page is one
+  // button, and signing in sets a cookie and returns to `return` (a path on
+  // this origin; anything else goes to /). Public records stay readable
+  // signed out, as they are on the real backend; everything that needs an
+  // account answers 401 until then.
+  if (seg[1] === 'auth' && seg[2] === 'login' && seg.length === 3) {
+    let target = '/';
+    try {
+      const u = new URL(url.searchParams.get('return') || '/', `http://${req.headers.host}`);
+      if (u.host === req.headers.host) target = u.pathname + u.search + u.hash;
+    } catch (_) {}
+    if (req.method === 'POST') {
+      // As Berrry does: back to `return` with ?token=, which the page
+      // request below turns into the cookie and a redirect without it.
+      res.writeHead(303, {
+        Location: `${target}${target.includes('?') ? '&' : '?'}token=dev`,
+        'Cache-Control': 'no-store',
+      });
+      return res.end();
+    }
+    const html = '<!doctype html><title>Dev sign-in</title>'
+      + `<form method="post" action="/api/auth/login?return=${encodeURIComponent(target)}">`
+      + '<p>Local stand-in for the Berrry sign-in page.</p>'
+      + '<button id="dev-sign-in" type="submit">Sign in</button></form>';
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(html);
+  }
+  const signedIn = !!botKey || !(opts && opts.requireLogin)
+    || parseCookies(req.headers.cookie)[LOGIN_COOKIE] === '1';
+  // POST /api/auth/logout -- as Berrry: 401 when nobody is signed in, and
+  // signing out drops the session cookie.
+  if (seg[1] === 'auth' && seg[2] === 'logout' && seg.length === 3) {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+    if (!signedIn) return sendJson(res, 401, { error: 'not signed in' });
+    res.setHeader('Set-Cookie', `${LOGIN_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`);
+    return sendJson(res, 200, { success: true });
+  }
+  if (!signedIn && seg[1] !== 'public-data') return sendJson(res, 401, { error: 'not signed in' });
+
+  // GET /api/auth/user -- Berrry's shape: a numeric id and three names.
   if (seg[1] === 'auth' && seg[2] === 'user' && seg.length === 3) {
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
     const u = store.user(userId);
-    return sendJson(res, 200, { id: u.id, name: u.name, dev: true });
+    return sendJson(res, 200, {
+      id: u.id, email: `${u.name}@dev.local`, username: u.name, display_name: u.name, dev: true,
+    });
   }
 
   // /api/public-data/users/:key  and  /api/public-data/:userId/:key
+  //
+  // As on Berrry (src/backend-api/public-data-controllers.js): the list is a
+  // bare array of { userId, email, updatedAt, value }, freshest first, and a
+  // single read answers with the stored value itself, no envelope.
   if (seg[1] === 'public-data') {
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
     if (seg[2] === 'users' && seg.length === 4) {
-      return sendJson(res, 200, { key: seg[3], users: store.publishers(seg[3]) });
+      return sendJson(res, 200, store.publishers(seg[3]));
     }
     if (seg.length === 4) {
-      const rec = store.get(seg[2], seg[3]);
-      if (!rec || rec.visibility !== 'public') {
-        return sendJson(res, 404, { error: 'not found' });
-      }
-      return sendJson(res, 200, {
-        key: seg[3], userId: seg[2], value: rec.value, updatedAt: rec.updatedAt,
-      });
+      const rec = store.getPublic(seg[2], seg[3]);
+      if (!rec) return sendJson(res, 404, { error: 'Public data not found' });
+      return sendJson(res, 200, rec.value);
     }
     return sendJson(res, 404, { error: 'not found' });
   }
 
-  // /api/data/:key
+  // /api/data/:key -- as on Berrry (src/backend-api/controllers.js): GET
+  // answers the value itself; POST creates or replaces, private unless
+  // ?visibility=public; PUT only updates, 404 for a key that was never
+  // written, and changes visibility only when asked to.
   if (seg[1] === 'data' && seg.length === 3) {
     const key = seg[2];
     if (req.method === 'GET') {
       const rec = store.get(userId, key);
-      if (!rec) return sendJson(res, 404, { error: 'not found' });
-      return sendJson(res, 200, {
-        key, value: rec.value, visibility: rec.visibility, updatedAt: rec.updatedAt,
-      });
+      if (!rec) return sendJson(res, 404, { error: 'Data not found' });
+      return sendJson(res, 200, rec.value);
     }
     if (req.method === 'PUT' || req.method === 'POST') {
+      const existing = store.get(userId, key);
+      if (req.method === 'PUT' && !existing) return sendJson(res, 404, { error: 'Data not found' });
       let raw;
       try {
         raw = await readBody(req, MAX_RECORD_BYTES);
@@ -378,16 +564,17 @@ async function handleApi(req, res, url, store) {
       } catch (_) {
         return sendJson(res, 400, { error: 'body must be JSON' });
       }
-      const visibility = url.searchParams.get('visibility') === 'public'
-        ? 'public' : 'private';
+      const asked = url.searchParams.get('visibility');
+      const visibility = asked ? (asked === 'public' ? 'public' : 'private')
+        : req.method === 'PUT' ? existing.visibility : 'private';
       const rec = store.put(userId, key, value, visibility);
-      return sendJson(res, 200, { key, visibility, updatedAt: rec.updatedAt });
+      return sendJson(res, 200, rec.value);
     }
     if (req.method === 'DELETE') {
       // Deleting something that was already gone is the state the caller
       // wanted, so report it the same way rather than as a failure.
       store.del(userId, key);
-      return sendJson(res, 200, { key, deleted: true });
+      return sendJson(res, 200, { success: true });
     }
     return sendJson(res, 405, { error: 'method not allowed' });
   }
@@ -931,7 +1118,7 @@ function createServer(opts) {
           + `${(who || 'anon').slice(0, 8)} ${req.method} ${url.pathname}`
           + `${url.search || ''}`);
       }
-      handleApi(req, res, url, store).catch(err => {
+      handleApi(req, res, url, store, { requireLogin: !!(opts && opts.requireLogin) }).catch(err => {
         if (!res.headersSent) sendJson(res, 500, { error: String(err && err.message || err) });
       });
       return;
@@ -954,7 +1141,39 @@ function createServer(opts) {
     // /dashboard is the multi-session grid (dashboard.html). Aliased because
     // the URL a human is handed should not carry a file extension, and because
     // the page's own tile links are written against this path.
+    // Berrry's app server takes the sign-in token off the URL: it becomes the
+    // session cookie, and the page is reloaded without it (other parameters
+    // kept), so it never reaches the address bar or a shared link.
+    if (opts && opts.requireLogin && url.searchParams.has('token')) {
+      url.searchParams.delete('token');
+      url.searchParams.delete('consent_granted');
+      res.writeHead(302, {
+        'Set-Cookie': `${LOGIN_COOKIE}=1; Path=/; SameSite=Lax; Max-Age=86400`,
+        Location: url.pathname + url.search,
+        'Cache-Control': 'no-store',
+      });
+      return res.end();
+    }
     let pathname = url.pathname;
+    // Many whole files in one response (lib/file-bundle.js): the page's eager
+    // file list in one round trip. Each name is a page-relative URL, already
+    // decoded by URLSearchParams, confined to ROOT like any static GET.
+    if (pathname === '/__bundle' && req.method === 'GET') {
+      const { bundleNames, writeBundle } = require('../lib/file-bundle');
+      const resolveName = async (name) => {
+        if (typeof name !== 'string' || !name || name.indexOf('\0') !== -1) return null;
+        const full = path.resolve(ROOT, '.' + path.posix.normalize('/' + name));
+        if (!full.startsWith(ROOT + path.sep)) return null;
+        const st = await fs.promises.stat(full).catch(() => null);
+        return st && st.isFile() ? full : null;
+      };
+      writeBundle(res, bundleNames(url.searchParams), resolveName, {
+        'Access-Control-Allow-Origin': '*',
+        ...(ISOLATE ? { 'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Embedder-Policy': 'require-corp' } : {}),
+      }).catch(() => { if (!res.headersSent) res.writeHead(500); res.end(); });
+      return;
+    }
     if (pathname === '/') pathname = '/index.html';
     else if (pathname === '/dashboard') pathname = '/dashboard.html';
     serveStatic(req, res, pathname, agentInject);
@@ -987,11 +1206,14 @@ function main() {
     agentToken,
     noAgentInject: process.argv.includes('--no-agent-inject'),
     tls,
+    requireLogin: process.argv.includes('--require-login'),
   });
   server.listen(port, host, () => {
     console.log(`wine-assembly dev server: ${scheme}://${host}:${port}`);
     console.log(`  serving ${ROOT}`);
-    console.log('  signaling API at /api/data, /api/public-data (no login, in memory)');
+    console.log(process.argv.includes('--require-login')
+      ? '  signaling API at /api/data, /api/public-data (401 until signed in at /api/auth/login)'
+      : '  signaling API at /api/data, /api/public-data (no login, in memory)');
     console.log(`  perf stream sink at /api/perf — open ${scheme}://${host}:${port}/?debug&perf&perf-stream`);
     console.log(`  threads probe: ${scheme}://${host}:${port}/threads-probe.html`
       + (ISOLATE ? '  (COOP/COEP served: isolated)' : '  (no COOP/COEP; use --isolate or the page\'s service-worker button)'));

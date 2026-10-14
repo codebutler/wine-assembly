@@ -61,10 +61,7 @@ function manager(main, localLink) {
     await tm._publishLinkLoaderState(local);
     assert.strictEqual(main.s.dllCount, 6, 'local link is skipped');
   }
-  // Both yield-3/5 paths call it after the host resolver.
-  const src = require('fs').readFileSync(require.resolve('../lib/thread-manager'), 'utf8');
-  const calls = src.match(/_resolveThreadSendExternalYield\((?:thread\.)?link, r\)[^\n]*\n\s*await this\._publishLinkLoaderState\(/g) || [];
-  assert.strictEqual(calls.length, 2, 'both worker DLL-load resolver sites publish the loader state');
+  await require('./test-dll-worker-message-lifecycle')();
 
   console.log('PASS  worker COM/LoadLibrary loads publish dll_count and thunks to main');
 })().catch(err => { console.error(err); process.exit(1); });

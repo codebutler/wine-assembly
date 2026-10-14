@@ -6,14 +6,51 @@ const { bootRenderHarness } = require('./render-helper');
 const RegionMap = require('../lib/region-map.generated.js');
 
 const extraWat = String.raw`
+  (func (export "test_expose_children") (param $parent i32) (param $shown i32)
+    (local $i i32) (local $hwnd i32)
+    (call $paint_flag_clear_hwnd (local.get $parent))
+    (call $update_clear_hwnd (local.get $parent))
+    (if (i32.eq (local.get $shown) (i32.const 2))
+      (then
+        ;; Model the modal pump after parent damage has seeded both siblings.
+        (loop $clear
+          (call $paint_flag_store (local.get $i) (i32.const 0))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br_if $clear (i32.lt_u (local.get $i) (global.get $MAX_WINDOWS))))
+        (call $update_invalidate_full (local.get $parent))
+        (drop (call $paint_seed_child_paints (local.get $parent)))
+        (call $update_clear_hwnd (local.get $parent))
+        (block $done (loop $paint
+          (local.set $hwnd (call $paint_flag_take))
+          (br_if $done (i32.eqz (local.get $hwnd)))
+          (drop (call $control_wndproc_dispatch
+            (local.get $hwnd) (i32.const 15) (i32.const 0) (i32.const 0)))
+          (br $paint)))
+        (return)))
+    (if (local.get $shown)
+      (then (drop (call $paint_flush_shown_native_children (local.get $parent))))
+      (else
+        (drop (call $paint_flush_visible_native_children (local.get $parent)))
+        (drop (call $paint_drain_native_control_paints)))))
+
+  (func (export "test_add_background") (param $parent i32) (result i32)
+    (local $child i32)
+    (local.set $child (call $ctrl_create_child
+      (local.get $parent) (i32.const 3) (i32.const 1025)
+      (i32.const 0) (i32.const 0) (i32.const 48) (i32.const 32)
+      (i32.const 0x50000006) (i32.const 0))) ;; SS_WHITERECT
+    ;; Match a dialog template's later background item.
+    (call $wnd_z_set_after (local.get $child) (i32.const 1))
+    (local.get $child))
+
   (func (export "test_seed_etched_static") (param $child i32) (param $style i32)
     (local $brush i32)
     (call $static_set_style (call $g2w (call $wnd_get_state_ptr (local.get $child)))
       (i32.or (i32.const 0x50000000) (local.get $style)))
-    (local.set $brush (call $host_gdi_create_solid_brush (i32.const 0x00332211)))
-    (drop (call $host_gdi_fill_rect (i32.add (local.get $child) (i32.const 0x40000))
+    (local.set $brush (call $gdi_native_create_solid_brush (i32.const 0x00332211)))
+    (drop (call $gdi_native_fill_rect (i32.add (local.get $child) (i32.const 0x40000))
       (i32.const 0) (i32.const 0) (i32.const 16) (i32.const 16) (local.get $brush)))
-    (drop (call $host_gdi_delete_object (local.get $brush))))
+    (drop (call $gdi_native_delete_object (local.get $brush))))
 
   (func (export "test_create_bitmap_static")
       (param $style_bits i32) (param $w i32) (param $h i32) (result i32)
@@ -154,7 +191,33 @@ function pixel(canvas, x, y) {
     if (style === 0x10) assert.deepStrictEqual(left, [17, 34, 51]);
     else assert.notDeepStrictEqual(left, [17, 34, 51]);
   }
-  console.log('PASS  SS_BITMAP resource, STM_SETIMAGE, and etched frame painting');
+  // Turok 2's Video dialog declares its background after its controls. The
+  // USER exposure pass must follow z-order, including later explicit changes,
+  // rather than allowing the last-created background to erase the foreground.
+  const foreground = e.test_create_bitmap_static(0, 4, 2) >>> 0;
+  const parent = e.wnd_get_parent(foreground) >>> 0;
+  const background = e.test_add_background(parent) >>> 0;
+  const fx = e.wnd_window_screen_x(foreground) | 0;
+  const fy = e.wnd_window_screen_y(foreground) | 0;
+  for (const shown of [1, 0, 2]) {
+    e.wnd_z_set_after(background, 1);
+    e.test_expose_children(parent, shown);
+    h.renderer.repaint();
+    assert.deepStrictEqual(pixel(h.canvas, fx, fy), [255, 0, 0],
+      `exposure ${shown}: foreground bitmap survives a later background`);
+    e.wnd_z_set_after(background, 0);
+    e.test_expose_children(parent, shown);
+    h.renderer.repaint();
+    assert.deepStrictEqual(pixel(h.canvas, fx, fy), [255, 255, 255],
+      `exposure ${shown}: raising the background changes the visible result`);
+    e.wnd_set_style_export(background, 0x40000006);
+    e.test_expose_children(parent, shown);
+    h.renderer.repaint();
+    assert.deepStrictEqual(pixel(h.canvas, fx, fy), [255, 0, 0],
+      `exposure ${shown}: hidden siblings do not obscure the bitmap`);
+    e.wnd_set_style_export(background, 0x50000006);
+  }
+  console.log('PASS  SS_BITMAP resource, STM_SETIMAGE, etched frames and sibling exposure');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

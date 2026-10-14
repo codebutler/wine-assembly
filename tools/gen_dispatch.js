@@ -60,9 +60,16 @@ function watI32(value) {
 // Emit the names beside the generated dispatcher so an append/reorder repair
 // updates every consumer through the existing `gen_dispatch.js --check` gate.
 const namedApiIds = [
+  ['IVBDirectX7_QueryInterface', 'API_ID_IVBDirectX7_BASE'],
+  ['IDirectMusic_EnumPort', 'API_ID_IDirectMusic_EnumPort'],
+  ['GetTickCount', 'API_ID_GetTickCount'],
+  ['timeGetTime', 'API_ID_timeGetTime'],
+  ['QueryPerformanceCounter', 'API_ID_QueryPerformanceCounter'],
+  ['QueryPerformanceFrequency', 'API_ID_QueryPerformanceFrequency'],
   ['MsgWaitForMultipleObjects', 'API_ID_MsgWaitForMultipleObjects'],
   ['PeekMessageA', 'API_ID_PeekMessageA'],
   ['PeekMessageW', 'API_ID_PeekMessageW'],
+  ['_EH_prolog', 'API_ID__EH_prolog'],
   ['IDirectDraw_QueryInterface', 'API_ID_IDirectDraw_BASE'],
   ['IAMMultiMediaStream_QueryInterface', 'API_ID_IAMMultiMediaStream_BASE'],
   ['IShellLinkA_QueryInterface', 'API_ID_IShellLinkA_BASE'],
@@ -73,6 +80,7 @@ const namedApiIds = [
   ['IDirect3DStateBlock9_QueryInterface', 'API_ID_IDirect3DStateBlock9_BASE'],
   ['IDirect3DQuery9_QueryInterface', 'API_ID_IDirect3DQuery9_BASE'],
   ['IDirect3DCubeTexture9_QueryInterface', 'API_ID_IDirect3DCubeTexture9_BASE'],
+  ['IDirect3DCubeTexture8_QueryInterface', 'API_ID_IDirect3DCubeTexture8_BASE'],
   ['IDirect3DTexture8_QueryInterface', 'API_ID_IDirect3DTexture8_BASE'],
   ['IDirect3DSurface8_QueryInterface', 'API_ID_IDirect3DSurface8_BASE'],
 ];
@@ -133,8 +141,11 @@ for (const api of stubApis) {
 // Test-only direct-call exports used by focused WAT harnesses.  These have one
 // mechanical ABI: expose the API's declared arguments, zero-fill the handler's
 // remaining argument registers/name pointer, and restore ESP after the stdcall
-// handler advances it.  Anything needing a synthetic stack frame or other
-// setup remains hand-written in 13-exports.wat.
+// handler advances it. For >5 i32 arguments, mirror the entire argument list
+// into the caller-provided guest stack: some handlers also read early words
+// there. These are synchronous test calls, not callback-aware guest runners;
+// callers must provide writable stack space for return address + arguments.
+// Reduced signatures and other setup remain hand-written in 13-exports.wat.
 const testCallApis = apiTable.filter(api => api.test_call === true);
 for (const api of apiTable) {
   if (api.test_call !== undefined && api.test_call !== true) {
@@ -148,18 +159,25 @@ if (testCallApis.length) {
   out.push('  ;; ============================================================');
 }
 for (const api of testCallApis) {
-  if (!Number.isInteger(api.nargs) || api.nargs < 0 || api.nargs > 5) {
-    fatal(`API ${api.name} test_call requires integer nargs in range 0..5`);
+  if (!Number.isInteger(api.nargs) || api.nargs < 0 || api.nargs > 16) {
+    fatal(`API ${api.name} test_call requires integer nargs in range 0..16`);
     continue;
   }
   const handler = watName(api.handler || api.name, `API ${api.name} handler`);
-  const params = Array.from({ length: api.nargs }, (_, i) => ` (param $arg${i} i32)`).join('');
+  const isFloat = i => api.args?.[i]?.type === 'FLOAT';
+  const word = i => isFloat(i) ? `(i32.reinterpret_f32 (local.get $arg${i}))` : `(local.get $arg${i})`;
+  const params = Array.from({ length: api.nargs }, (_, i) => ` (param $arg${i} ${isFloat(i) ? 'f32' : 'i32'})`).join('');
   const args = Array.from({ length: 5 }, (_, i) =>
-    i < api.nargs ? `(local.get $arg${i})` : '(i32.const 0)');
+    i < api.nargs ? word(i) : '(i32.const 0)');
   args.push('(i32.const 0)');
   out.push(`  (func (export "test_call_${api.name}")${params} (result i32)`);
   out.push('    (local $saved_esp i32)');
   out.push(`    (local.set $saved_esp ${getR('esp')})`);
+  if (api.nargs > 5) {
+    for (let i = 0; i < api.nargs; i++) {
+      out.push(`    (call $gs32 (i32.add (local.get $saved_esp) (i32.const ${4 * (i + 1)})) ${word(i)})`);
+    }
+  }
   out.push(`    (call $handle_${handler}`);
   out.push(`      ${args.slice(0, 3).join(' ')}`);
   out.push(`      ${args.slice(3).join(' ')})`);
@@ -260,8 +278,49 @@ const gpuApis = new Map([
   ['glActiveTextureARB', 1],
   ['glClientActiveTextureARB', 1],
   ['glMultiTexCoord2fARB', 3],
+  // Descent 3's OpenGL renderer draws its client arrays unindexed.
+  ['glDrawArrays', 3],
+  // Unreal-engine OpenGlDrv composes its view transform with glMultMatrixf
+  // (Deus Ex demo, OPENGLDRV-GL11-SURFACE).
+  ['glMultMatrixf', 1],
+  // glClearDepth(GLclampd): two physical stack dwords.
+  ['glClearDepth', 2],
+  // glColor3ub(r, g, b): Anachronox's ref_gl HUD and font colours.
+  ['glColor3ub', 3],
+  ['glTexParameterfv', 3], ['glGetTexParameterfv', 3],
+  // Serious Sam's Engine probes GL_TEXTURE_GREEN_SIZE of a 1x1 GL_RGBA8 image
+  // to decide whether 32-bit textures are available.
+  ['glGetTexLevelParameteriv', 4], ['glGetTexLevelParameterfv', 4],
+  // Soldier of Fortune's ref_gl asks whether a texture name is live while
+  // loading a level.
+  ['glIsTexture', 1],
+  // ...and draws its lightmap texture coordinates through the vector form.
+  ['glMultiTexCoord2fvARB', 2],
+  // MDK2 draws projective vertices; w rides in the packed vertex.
+  ['glVertex4f', 4], ['glVertex4fv', 1],
+  // Oni's projective texture coordinates; r and q ride in the packed vertex.
+  ['glTexCoord4f', 4], ['glTexCoord4fv', 1],
+  ['glMultiTexCoord4fARB', 5], ['glMultiTexCoord4fvARB', 2],
+  ['glGenLists', 1],   ['glNewList', 2],   ['glEndList', 0],   ['glCallList', 1],   ['glDeleteLists', 2],   ['glIsList', 1],
+  ['glRasterPos2f', 2],   ['glBitmap', 7],   ['glListBase', 1],   ['glCallLists', 3],
+  ['glPushClientAttrib', 1], ['glPopClientAttrib', 0],
+  ['glStencilMask', 1], ['glStencilFunc', 3], ['glStencilOp', 3], ['glClearStencil', 1],
+  ['glColorMask', 4],
 ]);
 const gpuApiOrder = [...gpuApis.keys()];
+
+// Dynamic WGL lookup must not expose fail-fast aliases merely because their
+// names exist in the global import table. Derive availability from the same
+// implementation map that dispatch uses. GLU helpers are a separate library.
+out.push('  (func $wgl_api_available (param $id i32) (result i32)');
+// These WGL implementations dispatch to native handlers rather than GPU opcodes.
+const nativeWglApis = new Set(['wglSwapLayerBuffers', 'wglGetCurrentContext', 'wglGetCurrentDC']);
+for (const [id, api] of apiTable.entries()) {
+  if ((gpuApis.has(api.name) || nativeWglApis.has(api.name)) && /^(?:gl[A-Z]|wgl[A-Z])/.test(api.name)) {
+    out.push(`    (if (i32.eq (local.get $id) (i32.const ${id})) (then (return (i32.const 1)))) ;; ${api.name}`);
+  }
+}
+out.push('    (i32.const 0))', '');
 
 function handlerCall(api) {
   const gpuOpcode = gpuApiOrder.indexOf(api.name);
@@ -269,14 +328,16 @@ function handlerCall(api) {
     return `      (call $handle_gpu_api (i32.const ${gpuOpcode}) (i32.const ${gpuApis.get(api.name)}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
   }
   const vbDdSlot = api.name.match(/^IVBDirectDraw7_DirectSlot(\d+)$/);
-  if (vbDdSlot) {
-    const slot = parseInt(vbDdSlot[1], 10);
-    return `      (call $handle_IVBDirectDraw7_DirectSlot (i32.const ${slot}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
+  if (vbDdSlot && !api.handler) {
+    const slot = (api.nargs + 1) * 4;
+    return `      (call $handle_vb_unsupported_stdcall (i32.const ${slot}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
   }
   const vbClipSlot = api.name.match(/^IVBDirectDrawClipper_DirectSlot(\d+)$/);
   if (vbClipSlot) {
-    const slot = parseInt(vbClipSlot[1], 10);
-    return `      (call $handle_IVBDirectDrawClipper_DirectSlot (i32.const ${slot}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
+    // Even an unsupported method must consume the complete typelib ABI.
+    // Keep the argument count in api_table, not a second per-slot WAT table.
+    const stackBytes = (api.nargs + 1) * 4;
+    return `      (call $handle_vb_unsupported_stdcall (i32.const ${stackBytes}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
   }
   const vbSoundSlot = api.name.match(/^IVBDirectSound_DirectSlot(\d+)$/);
   if (vbSoundSlot) {
@@ -434,6 +495,8 @@ for (const v of d3d8Vtables) comInterfaces.push(v);
 // IUnknown and its IMarshal. Tail again, same registry-offset reason.
 comInterfaces.push({ prefix: 'IFtmInner', global: 'DX_VTBL_FTM_INNER' });
 comInterfaces.push({ prefix: 'IFtmMarshal', global: 'DX_VTBL_FTM_MARSHAL' });
+// Separate Unicode DirectPlay4 interface; never aliases ANSI method semantics.
+comInterfaces.push({ prefix: 'IDirectPlay4W', global: 'DX_VTBL_DPLAY4W' });
 
 // IDirectInputDevice7: the v2 device vtable plus EnumEffectsInFile and
 // WriteEffectToFile. An app that asks for IID_IDirectInputDevice7A and is
@@ -442,9 +505,19 @@ comInterfaces.push({ prefix: 'IFtmMarshal', global: 'DX_VTBL_FTM_MARSHAL' });
 // those two slots on whatever interface's thunks follow ours. Tail again, same
 // registry-offset reason as every entry above.
 comInterfaces.push({ prefix: 'IDirectInputDevice7', global: 'DX_VTBL_DIDEV7', extends: 'IDirectInputDevice2' });
+comInterfaces.push({ prefix: 'IDirectSound8', global: 'DX_VTBL_DSOUND8', extends: 'IDirectSound' });
 
 // Build a map of prefix → { startId, count } from the api_table
 const byName = new Map(apiTable.map(a => [a.name, a]));
+// Preserve all existing shared vtable registry offsets.
+comInterfaces.push({prefix:'IVBImageSurface7',global:'DX_VTBL_VBIMAGE7'});
+// Unicode IDirectPlayLobby/2/3 (one 19-slot vtable serves all three as a
+// prefix). Tail, so every established registry offset stays where it was.
+comInterfaces.push({ prefix: 'IDirectPlayLobby3W', global: 'DX_VTBL_DPLAYLOBBY3W' });
+// Append only: worker registry offsets of existing interfaces are ABI.
+comInterfaces.push({ prefix: 'IDirectSoundNotify', global: 'DX_VTBL_DSNOTIFY' });
+comInterfaces.push({ prefix: 'IDirectSoundPropertySet', global: 'DX_VTBL_DSPROPERTY' });
+
 const ifaceInfo = new Map();
 for (const iface of comInterfaces) {
   // Find all APIs matching this interface (prefix + "_")
@@ -484,12 +557,22 @@ out.push('  ;; ============================================================');
 out.push('  ;; COM VTABLE INIT — GENERATED, do not edit');
 out.push('  ;; Generated by tools/gen_dispatch.js from api_table.json');
 out.push('  ;; ============================================================');
+const registeredInterfaces = comInterfaces.filter(iface => ifaceInfo.has(iface.prefix));
+out.push(`  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const ${registeredInterfaces.length}))`);
+out.push('  ;; Restore only a complete registry, in the same order as initialization.');
+out.push('  (func $dx_sync_thread_vtables');
+out.push('    (if (i32.lt_u (i32.load (global.get $DX_VTBL_REGISTRY))');
+out.push('                   (global.get $DX_VTBL_REGISTRY_COUNT))');
+out.push('      (then (return)))');
+registeredInterfaces.forEach((iface, index) => {
+  out.push(`    (global.set $${iface.global} (i32.load offset=${4 + index * 4} (global.get $DX_VTBL_REGISTRY)))`);
+});
+out.push('  )');
 out.push('  (func $init_dx_com_thunks (export "init_dx_com_thunks")');
 
 const builtVtableCounts = new Map();
-for (const iface of comInterfaces) {
+for (const iface of registeredInterfaces) {
   const info = ifaceInfo.get(iface.prefix);
-  if (!info) continue;
   if (iface.extends) {
     // Extended interface: copy parent vtable + append extra methods
     const parentInfo = ifaceInfo.get(iface.extends);

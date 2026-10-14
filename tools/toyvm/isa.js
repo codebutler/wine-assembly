@@ -268,9 +268,48 @@ const DEC_INSNS_MAX = 0x4000;
 // ~16MB the pair table already reserves.
 const IPHIST_BASE = DEC_INSNS + DEC_INSNS_MAX * 8;
 const IPHIST_SIZE = THREAD_SIZE;
-const DEC_END = IPHIST_BASE + IPHIST_SIZE;
 
-const MEM_PAGES = ((DEC_END + 0xFFFF) & ~0xFFFF) >> 16;
+// The general register file: EAX ECX EDX EBX ESP EBP ESI EDI, one little-endian
+// dword each in x86 encoding order, so AX is the low half of EAX's slot and AL
+// and AH are its first two bytes. It used to be eight wasm globals, and a
+// global cannot be indexed -- so every register access whose number came out
+// of the arena went through a helper FUNCTION holding a br_table over the
+// eight, which no engine inlines: a frame, a stack check and an indirect jump
+// per operand. In memory the same access is one load or store at
+// REGFILE_BASE + 4 * index, emitted inline (emit.js lowerRegs).
+//
+// The segment registers follow in the same block for the same reason: six
+// selectors (ES CS SS DS FS GS, one dword each) at REGFILE_SEL and the six
+// linear bases derived from them at REGFILE_SEGB, so $sget/$sbase are one load
+// at SLOT + 4 * index instead of a call into a br_table -- and $lin, which
+// every memory access goes through, loses its call with it.
+//
+// Outside the guest's reach on purpose: $lin masks every guest address to at
+// most GUEST_RAM_SIZE - 1, so no guest store can alias a register, which is
+// what lets the region JIT keep one in a wasm local across a loop.
+//
+// Order: selectors first, then the eight registers and the six bases as ONE
+// run of fourteen dwords. That run is the µop tier's guest vregs 0..13
+// (uop-ir.js NREG / SEGV) in the same order, so a resident µop program's vreg
+// file starts at REGFILE_BASE and its guest vregs ARE these registers
+// (uop-wasm.js VFILE) -- no reload on entry, no write-back at an exit.
+const REGFILE_SEL = IPHIST_BASE + IPHIST_SIZE;
+const REGFILE_BASE = REGFILE_SEL + 32;
+const REGFILE_SEGB = REGFILE_BASE + 32;
+const REGFILE_SIZE = 128;                  // from REGFILE_SEL
+// Restart journal belongs to the emulator, beyond all guest physical RAM.
+const PAGE_UNDO_BASE = REGFILE_SEL + REGFILE_SIZE;
+const PAGE_UNDO_SIZE = 4096;
+const PAGE_REG_SAVE = PAGE_UNDO_BASE + PAGE_UNDO_SIZE;
+const PAGE_CTL_SAVE = PAGE_REG_SAVE + REGFILE_SIZE;
+const DEC_END = PAGE_CTL_SAVE + 0x100;
+
+// The µop engines' tail (uop-wasm.js): vreg files, out slots, the one-program
+// code page and the arena where a live run keeps many chained programs at
+// once. Reserved here so the memory's size is one number every module agrees
+// on; nothing in L1 reads it.
+const UOP_TAIL_SIZE = 0x400000;
+const MEM_PAGES = ((DEC_END + UOP_TAIL_SIZE + 0xFFFF) & ~0xFFFF) >> 16;
 
 // Effective-address kinds, in ModRM rm order for mod != 11. Kind 8 is the
 // mod=00,rm=110 special case: a bare disp16 with no base at all.
@@ -296,7 +335,7 @@ const EA_A32 = {
 
 module.exports = {
   REG16, REG8, SEG, F, FLAGS_RESERVED, FLAGS_DEFINED, FLAGS_ARITH,
-  GUEST_RAM, GUEST_RAM_SIZE, THREAD_BASE, THREAD_SIZE, MEM_PAGES,
+  GUEST_RAM, GUEST_RAM_SIZE, THREAD_BASE, THREAD_SIZE, MEM_PAGES, UOP_TAIL_SIZE,
   HIST_BASE, HIST_PAIRS, HIST_SLOTS, HIST_SIZE,
   XMS_BASE, XMS_SIZE, LIN_MASK_REAL, LIN_MASK_FLAT,
   RSTACK_BASE, RSTACK_ENTRIES, RSTACK_SIZE,
@@ -308,6 +347,7 @@ module.exports = {
   CODE_BITMAP, CODE_BITMAP_SIZE,
   DEC_TAB, DEC_TAB_SIZE, DEC_FIXUPS, DEC_FIXUPS_MAX, DEC_FIXUP_WORDS,
   DEC_HEADS, DEC_HEADS_SIZE, DEC_SCRATCH, DEC_SCRATCH_WORDS, DEC_INSNS, DEC_INSNS_MAX, DEC_END,
-  IPHIST_BASE, IPHIST_SIZE,
+  IPHIST_BASE, IPHIST_SIZE, REGFILE_BASE, REGFILE_SEL, REGFILE_SEGB, REGFILE_SIZE,
+  PAGE_UNDO_BASE, PAGE_UNDO_SIZE, PAGE_REG_SAVE, PAGE_CTL_SAVE,
   EA, EA_DEFAULT_SEG, EA_A32,
 };

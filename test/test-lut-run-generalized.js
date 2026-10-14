@@ -297,9 +297,11 @@ function alignPageEnd(p, room) {
     'a fourth inc/dec with no role is declined, not folded');
 
   // Jazz's dominant lighting kernel at 0x474e04 is a straight-line span that
-  // its compiler already unrolled eight pixels wide. H431 mode 2 recognizes
-  // the whole semantic unit: two selected rows of a 64K table, eight in-place
-  // lookups, two packed dword stores, and the exact scratch-register/flag tail.
+  // its compiler already unrolled eight pixels wide: two selected rows of a 64K
+  // table, eight in-place lookups, two packed dword stores, and a scratch
+  // register/flag tail. Its H431 mode 2 fold was retired to the uop tier
+  // (docs/uop-tier-design.md section 18); this stays as an exactness check
+  // with the LUT family on and off, across a destination page boundary.
   const jazzPacked8 = Uint8Array.from([
     0x33, 0xc0,                         // xor eax,eax
     0x33, 0xd2,                         // xor edx,edx
@@ -379,86 +381,16 @@ function alignPageEnd(p, room) {
 
   put(packedDst, packedInput);
   e.set_loop_lut_emit(1);
-  const packedMatches = e.get_lut_span_matches();
-  const packedRuns = e.get_lut_span_runs();
-  const packedBytes = e.get_lut_span_bytes();
   runAt(jazzPacked8, packedSetup);
   assert.deepStrictEqual(get(packedDst, 8), packedBaselineBytes,
-    'H431 packed-eight output agrees across a destination page boundary');
+    'packed-eight output agrees across a destination page boundary');
   assert.deepStrictEqual(packedState(), packedBaselineState,
-    'H431 packed-eight preserves all observable GPR and lazy-flag state');
-  assert.strictEqual(e.get_lut_span_matches(), packedMatches + 1,
-    'packed-eight recognizer matches the authentic Jazz instruction span');
-  assert.strictEqual(e.get_lut_span_runs(), packedRuns + 1,
-    'packed-eight executes through H431 mode 2');
-  assert.strictEqual(Number(e.get_lut_span_bytes() - packedBytes), 8,
-    'packed-eight H431 charges all transformed pixels');
-
-  // Equivalent XOR encoding is a conservative near miss: mode 2 is exact and
-  // ordinary decoding must retain the same result without incrementing H431.
-  const packedNear = Uint8Array.from(jazzPacked8);
-  packedNear[0] = 0x31;
-  put(packedDst, packedInput);
-  const packedNearMatches = e.get_lut_span_matches();
-  const packedNearRuns = e.get_lut_span_runs();
-  runAt(packedNear, packedSetup);
-  assert.deepStrictEqual(get(packedDst, 8), packedBaselineBytes,
-    'packed-eight near miss falls back to equivalent ordinary x86');
-  assert.deepStrictEqual(packedState(), packedBaselineState,
-    'packed-eight near miss preserves ordinary architectural state');
-  assert.strictEqual(e.get_lut_span_matches(), packedNearMatches,
-    'packed-eight near miss is not recognized');
-  assert.strictEqual(e.get_lut_span_runs(), packedNearRuns,
-    'packed-eight near miss never executes H431');
-
-  if (process.env.LUT_PACKED_BENCH) {
-    const iterations = Number(process.env.LUT_PACKED_BENCH_ITERS || 10000);
-    const reps = Number(process.env.LUT_PACKED_BENCH_REPS || 9);
-    const benchDst0 = (rowArena + 0x1000) >>> 0;
-    const benchDst1 = (rowArena + 0x1100) >>> 0;
-    put(benchDst0, packedInput); put(benchDst1, packedInput);
-
-    function setupBench(code, dest) {
-      e.set_esp(stack); dv.setUint32(imageWa(stack), 0, true);
-      e.set_eax(0xaaaaaaaa); e.set_ebx(0xbbbbbbbb); e.set_ecx(0xdead125a);
-      e.set_edx(0xdddddddd); e.set_esi(0xeeeeeeee); e.set_edi(dest);
-      e.set_ebp(packedFrame); e.set_eip(code); e.run(100000);
-    }
-    e.set_loop_lut_emit(0);
-    const packedBaselineCode = install(jazzPacked8);
-    setupBench(packedBaselineCode, benchDst0); // decode/cache ordinary handlers
-    e.set_loop_lut_emit(1);
-    const packedFusedCode = install(jazzPacked8);
-    setupBench(packedFusedCode, benchDst1); // decode/cache H431 mode 2
-
-    function timeArm(code, dest, loops = iterations) {
-      const t0 = process.hrtime.bigint();
-      for (let i = 0; i < loops; i++) setupBench(code, dest);
-      return Number(process.hrtime.bigint() - t0) / 1e6;
-    }
-    timeArm(packedBaselineCode, benchDst0, 100);
-    timeArm(packedFusedCode, benchDst1, 100);
-    const samples = { ordinary: [], h431: [] };
-    for (let rep = 0; rep < reps; rep++) {
-      const order = rep & 1 ? ['h431', 'ordinary'] : ['ordinary', 'h431'];
-      for (const name of order) {
-        const code = name === 'h431' ? packedFusedCode : packedBaselineCode;
-        const dest = name === 'h431' ? benchDst1 : benchDst0;
-        samples[name].push(timeArm(code, dest));
-      }
-    }
-    const median = values => [...values].sort((a, b) => a - b)[values.length >> 1];
-    const ordinaryMs = median(samples.ordinary);
-    const h431Ms = median(samples.h431);
-    console.log(`BENCH Jazz packed-eight LUT: ${iterations} calls, ${reps} alternating reps`);
-    console.log(`  ordinary median ${ordinaryMs.toFixed(2)} ms`);
-    console.log(`  H431     median ${h431Ms.toFixed(2)} ms`);
-    console.log(`  speedup ${(ordinaryMs / h431Ms).toFixed(2)}x`);
-  }
+    'packed-eight preserves all observable GPR and lazy-flag state');
 
   // Heroes III's exact RGB565 form has an 8-bit source and a 16-bit table and
-  // destination. Exercise both destination directions across page boundaries;
-  // the table itself also straddles a page so the affine-span proof is used.
+  // destination. H418's wide16/stack-table forms for it were retired to the
+  // uop tier (docs/uop-tier-design.md section 18); these stay as exactness
+  // checks of whatever runs the loop now, across page boundaries both ways.
   const h3Forward = Uint8Array.from([
     0x31, 0xc9,                         // xor ecx,ecx
     0x8a, 0x0a,                         // mov cl,[edx]
@@ -493,9 +425,6 @@ function alignPageEnd(p, room) {
   for (let i = 0; i < 256; i++) dv.setUint16(wa(h3TableBase + 0x1c) + i * 2, h3Color(i), true);
   const readWords = (ga, n) => Array.from({ length: n }, (_, i) => dv.getUint16(wa(ga) + i * 2, true));
   const h3Expected = h3Input.map(h3Color);
-  const h3Matches = e.get_loop_lut16_matches();
-  const h3Runs = e.get_loop_lut16_runs();
-  const h3Pixels = e.get_loop_lut16_bytes();
   runAt(h3Forward, () => {
     e.set_eax(h3Dst); e.set_ecx(0xcccccccc); e.set_edx(h3Src);
     e.set_ebp(h3Input.length); e.set_edi(h3TableBase);
@@ -509,12 +438,6 @@ function alignPageEnd(p, room) {
   assert.strictEqual(e.get_ebp() >>> 0, 0, 'Heroes III counter');
   assert.strictEqual(e.get_ecx() & 0xffff, h3Expected.at(-1),
     'Heroes III final 16-bit accumulator');
-  assert.strictEqual(e.get_loop_lut16_matches(), h3Matches + 1,
-    'Heroes III wide recognizer matched');
-  assert(e.get_loop_lut16_runs() >= h3Runs + 3,
-    'Heroes III H418 resumes across step quanta');
-  assert.strictEqual(Number(e.get_loop_lut16_bytes() - h3Pixels), h3Input.length,
-    'Heroes III H418 charges every pixel');
 
   runAt(h3Backward, () => {
     e.set_eax(h3BackDst + h3Input.length * 2); e.set_ecx(0); e.set_edx(h3Src);
@@ -524,22 +447,9 @@ function alignPageEnd(p, room) {
     'Heroes III backward RGB565 output');
   assert.strictEqual(e.get_eax() >>> 0, h3BackDst, 'Heroes III backward destination cursor');
 
-  const h3Baseline = (h3BackDst + 0x800) >>> 0;
-  e.set_loop_lut_emit(0);
-  const h3BaselineRuns = e.get_loop_lut16_runs();
-  runAt(h3Forward, () => {
-    e.set_eax(h3Baseline); e.set_ecx(0); e.set_edx(h3Src);
-    e.set_ebp(h3Input.length); e.set_edi(h3TableBase);
-  });
-  assert.deepStrictEqual(readWords(h3Baseline, h3Input.length), h3Expected,
-    'lowered and ordinary Heroes III loops agree');
-  assert.strictEqual(e.get_loop_lut16_runs(), h3BaselineRuns,
-    'LUT-only gate suppresses wide H418');
-  e.set_loop_lut_emit(1);
-
   // The dominant H3 map loop prefixes the same RGB565 body with an invariant
-  // `mov table,[esp+0x40]`. H418 loads that slot once per page/budget chunk
-  // and publishes the architectural table register at exit.
+  // `mov table,[esp+0x40]`; the architectural table register must hold it at
+  // exit.
   const h3StackTable = Uint8Array.from([
     0x8b, 0x4c, 0x24, 0x40,             // mov ecx,[esp+0x40]
     0x31, 0xc0,                         // xor eax,eax
@@ -553,8 +463,6 @@ function alignPageEnd(p, room) {
     0xc3,
   ]);
   const h3StackDst = (h3BackDst + 0x1000) >>> 0;
-  const h3StackMatches = e.get_loop_lut16_matches();
-  const h3StackRuns = e.get_loop_lut16_runs();
   runAt(h3StackTable, () => {
     dv.setUint32(wa(stack + 0x40), h3TableBase, true);
     e.set_eax(0xaaaaaaaa); e.set_ecx(0xcccccccc); e.set_edx(h3Src);
@@ -564,24 +472,6 @@ function alignPageEnd(p, room) {
     'Heroes III stack-table RGB565 output');
   assert.strictEqual(e.get_ecx() >>> 0, h3TableBase,
     'Heroes III stack-loaded table register published');
-  assert.strictEqual(e.get_loop_lut16_matches(), h3StackMatches + 1,
-    'Heroes III stack-table recognizer matched');
-  assert(e.get_loop_lut16_runs() >= h3StackRuns + 3,
-    'Heroes III stack-table H418 resumes across step quanta');
-
-  e.set_loop_lut16_stack_emit(0);
-  const h3StackBaseline = (h3StackDst + 0x800) >>> 0;
-  const h3StackBaselineRuns = e.get_loop_lut16_runs();
-  runAt(h3StackTable, () => {
-    dv.setUint32(wa(stack + 0x40), h3TableBase, true);
-    e.set_eax(0); e.set_ecx(0); e.set_edx(h3Src);
-    e.set_ebp(h3StackBaseline); e.set_esi(h3Input.length);
-  });
-  assert.deepStrictEqual(readWords(h3StackBaseline, h3Input.length), h3Expected,
-    'lowered and ordinary Heroes III stack-table loops agree');
-  assert.strictEqual(e.get_loop_lut16_runs(), h3StackBaselineRuns,
-    'stack-only gate suppresses stack-table H418');
-  e.set_loop_lut16_stack_emit(1);
 
   // d2gfx two-moving-source blend form. The table is absolute in the guest
   // instruction, source2 is also the bounded cursor, and all three streams

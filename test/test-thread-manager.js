@@ -41,6 +41,28 @@ assert.strictEqual(idView.getUint32(threadIdWa, true), 2,
 assert.notStrictEqual(idHandle, idView.getUint32(threadIdWa, true),
   'thread HANDLE and thread id remain distinct Win32 namespaces');
 
+// Event APIs must reject stale and non-event handles without changing state.
+{
+  const events = makeThreadManager();
+  const event = events.createEvent(true, false);
+  const semaphore = events.createSemaphore(0, 2);
+  for (const invalid of [0, 0x12345678, semaphore]) {
+    assert.strictEqual(events.setEvent(invalid), 0, 'SetEvent rejects invalid object');
+    assert.strictEqual(events.resetEvent(invalid), 0, 'ResetEvent rejects invalid object');
+  }
+  assert.strictEqual(events.setEvent(event), 1);
+  assert.strictEqual(events.waitSingle(event, 0), 0);
+  assert.strictEqual(events.waitSingle(event, 0), 0, 'manual reset stays signaled');
+  assert.strictEqual(events.resetEvent(event), 1);
+  assert.strictEqual(events.waitSingle(event, 0), 258);
+  assert.strictEqual(events.closeEvent(semaphore), 0, 'typed close preserves other object types');
+  assert.strictEqual(events.closeEvent(0x12345678), 0);
+  assert.strictEqual(events.closeEvent(event), 1);
+  assert.strictEqual(events.closeEvent(event), 0, 'double event close fails');
+  assert.strictEqual(events.setEvent(event), 0, 'closed handle cannot be signaled');
+  assert.strictEqual(events.resetEvent(event), 0, 'closed handle cannot be reset');
+}
+
 const tm = makeThreadManager();
 const handles = [];
 
@@ -158,8 +180,8 @@ pendingWaitMemory[pendingWaitHandlesWA >>> 2] = pendingWaitEvent;
 pendingWaitMemory[(pendingWaitHandlesWA >>> 2) + 1] = pendingWaitHandle;
 assert.strictEqual(
   pendingWaitTm.waitSingle(pendingWaitHandle, 0),
-  0xFFFF,
-  'a thread handle remains unsignaled while its worker instance is pending'
+  0x102,
+  'a zero-timeout poll reports WAIT_TIMEOUT while its worker instance is pending'
 );
 assert.strictEqual(
   pendingWaitTm.waitMultiple(2, pendingWaitHandlesWA, false, 0),
@@ -421,6 +443,28 @@ mainSleepNow = 110;
 assert.strictEqual(mainSleepTm.checkMainYield(), false,
   'main-thread Sleep resumes when the full timeout has elapsed');
 assert.strictEqual(mainSleepTm._mainSleepUntil, 0);
+
+// The CLI re-runs main between cooperative thread slices and asks
+// isMainSleeping() first. A Sleep main made earlier in the same batch has not
+// been through checkMainYield yet, so noteMainSleep() must record it on its
+// own; otherwise Red Alert's Sleep(1000) after starting its timer thread
+// returned on the next slice and the game reported a timer error.
+let midBatchNow = 500, midBatchPending = 1;
+const midBatchTm = makeThreadManager({ now: () => midBatchNow });
+midBatchTm.mainInstance.exports = {
+  get_sleep_yielded: () => { const v = midBatchPending; midBatchPending = 0; return v; },
+  get_sleep_timeout: () => 1000,
+  get_yield_reason: () => 0,
+};
+assert.strictEqual(midBatchTm.isMainSleeping(), false, 'no deadline before the flag is read');
+midBatchTm.noteMainSleep();
+assert.strictEqual(midBatchTm.isMainSleeping(), true,
+  'a mid-batch Sleep parks main before the end-of-batch checkMainYield');
+assert.strictEqual(midBatchTm._mainSleepUntil, 1500);
+midBatchTm.noteMainSleep();
+assert.strictEqual(midBatchTm._mainSleepUntil, 1500, 'a consumed flag leaves the deadline alone');
+midBatchNow = 1500;
+assert.strictEqual(midBatchTm.checkMainYield(), false, 'the same deadline still expires normally');
 
 let waitClock = 100, wallClock = 9000, splitSleepPending = 1;
 const splitClockTm = makeThreadManager({ now: () => wallClock, waitNow: () => waitClock });
@@ -719,6 +763,20 @@ assert.strictEqual(
 );
 assert.strictEqual(finiteRuns, 0, 'finite waits should not synchronously pump workers');
 
+// Worker backend: the other threads already run on their own host threads,
+// so a nested INFINITE wait has nothing to pump inline and must answer as the
+// ordinary wait does. run.js --threads used to reach the cooperative-only
+// runSlice() here and throw (Diablo's Storm loader waits inside WM_INITDIALOG).
+const workerBackendNestedTm = makeThreadManager({ workerBackend: {} });
+let workerBackendNestedRuns = 0;
+workerBackendNestedTm.threads.set(0xe1015, makeRunnableThread(1, () => { workerBackendNestedRuns++; }));
+assert.strictEqual(workerBackendNestedTm.waitSingleCooperative(0xe1015, 0xFFFFFFFF), 0xFFFF,
+  'worker backend: a nested single wait keeps the ordinary pending answer');
+new DataView(workerBackendNestedTm.memory.buffer).setUint32(0x200, 0xe1015, true);
+assert.strictEqual(workerBackendNestedTm.waitMultipleCooperative(1, 0x200, 0, 0xFFFFFFFF), 0xFFFF,
+  'worker backend: a nested multiple wait keeps the ordinary pending answer');
+assert.strictEqual(workerBackendNestedRuns, 0, 'worker backend: nothing is run inline');
+
 // The browser's isolated-Worker main thread uses resolveMainWorkerWait rather
 // than checkMainYield. Keep a short guest-clock timeout from winning after only
 // one worker slice while another runnable guest thread can still signal it.
@@ -800,6 +858,39 @@ for (const appBase of [0x10001, 0x20001, 0x70001]) {
 assert.strictEqual(makeThreadManager().workerHwndBase(1), 0x10001 + 0x8000,
   'with no app base the manager still lands inside the first app slice');
 
+// Mutex ownership belongs to the thread whose code called the host. Both hosts
+// hand every thread the main thread's sync imports, so the id has to come from
+// the manager's running thread, not from a closure over the main host ctx --
+// that closure said 1 for everyone, and a worker's WaitForSingleObject(mutex, 0)
+// then "re-entered" a mutex main held (Bink's IO ring under Morrowind).
+{
+  const mtm = makeThreadManager();
+  const worker = 0xe1040;
+  mtm.threads.set(worker, { tid: 3, state: 'active' });
+  assert.strictEqual(mtm.currentWin32ThreadId(), 1, 'outside any slice the caller is the main thread');
+  const mutex = mtm.createMutex(false, '', mtm.currentWin32ThreadId());
+  assert.strictEqual(mtm.waitSingle(mutex, 0xFFFFFFFF, mtm.currentWin32ThreadId()), 0, 'main takes the mutex');
+  mtm._runningThreadHandle = worker;
+  assert.strictEqual(mtm.currentWin32ThreadId(), 4, 'inside a worker slice the caller is that worker (tid + 1)');
+  assert.strictEqual(mtm.waitSingle(mutex, 0, mtm.currentWin32ThreadId()), 0x102,
+    'a worker try-lock of a mutex main holds times out instead of re-entering it');
+  assert.strictEqual(mtm.releaseMutex(mutex, mtm.currentWin32ThreadId()), 0,
+    'a worker cannot release a mutex main owns');
+  mtm._runningThreadHandle = 0;
+  assert.strictEqual(mtm.releaseMutex(mutex, mtm.currentWin32ThreadId()), 1, 'main releases it');
+  mtm._runningThreadHandle = worker;
+  assert.strictEqual(mtm.waitSingle(mutex, 0, mtm.currentWin32ThreadId()), 0, 'now the worker gets it');
+  mtm._runningThreadHandle = 0;
+  assert.strictEqual(mtm.waitSingle(mutex, 0, mtm.currentWin32ThreadId()), 0x102,
+    'and main is refused while the worker holds it');
+  for (const file of ['test/run.js', 'host.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    assert(/const win32ThreadId = \(\) => (self\.)?threadManager\.currentWin32ThreadId\(\);/.test(src),
+      `${file} must charge sync-object ownership to the running guest thread`);
+  }
+}
+
+console.log('PASS  ThreadManager charges mutex ownership to the running guest thread');
 console.log('PASS  ThreadManager reuses exited worker cache slots');
 console.log('PASS  ThreadManager schedules, suspends and resumes worker slices');
 console.log('PASS  ThreadManager supports wall-budgeted worker slices');

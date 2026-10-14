@@ -12,9 +12,11 @@ current major regions; the memory-map comment and sized globals in
 0x1C000000 ├────────────────────────┤
            │ Flat guest PTEs (4MB)  │  One packed entry per 4KB guest page
 0x1BC00000 ├────────────────────────┤
+           │ Thread cache (~26MB)   │  Decoded code, pinned out of the direct window
+0x1A000000 ├────────────────────────┤
            │                        │
-           │  VirtualAlloc backing │  316MB for sparse high guest maps
-           │  pool (316MB)          │
+           │  VirtualAlloc backing │  288MB for sparse high guest maps
+           │  pool (288MB)          │
            │                        │
 0x08000000 ├────────────────────────┤  End of direct g2w window
            │  High private tables   │  API hashes, regions, COM/DX state
@@ -73,7 +75,9 @@ classes in order:
 ```
 1. direct: guest_addr - image_base + GUEST_BASE, when result < 0x08000000
 2. DIB:    0x50000000..0x53FFFFFF -> 0x1C000000..0x1FFFFFFF
-3. sparse: scan VIRTUAL_MAP_TABLE for VirtualAlloc guest reservations
+3. sparse: one packed PTE load from GUEST_PAGE_TABLE ($guest_page_translate);
+           a missing entry is authoritative (VIRTUAL_MAP_TABLE is allocation
+           and VirtualQuery metadata, never consulted to translate)
 ```
 
 An address that matches none of these returns the `NULL_SENTINEL` sink. The

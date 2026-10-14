@@ -73,6 +73,95 @@ Roughly, by API call index:
 
 No DirectDraw call fails anywhere in this sequence.
 
+## Invisible in-game cursor: wrong DDERR_NOCLIPPERATTACHED (fixed 2026-10-06)
+
+On the menus AoE uses the system arrow (`SetCursor(IDC_ARROW)`). In
+gameplay it switches to a software cursor: `SetCursor(NULL)`, a NULL class
+cursor, and a 64x48 colour-keyed sprite surface. Each frame it saves the
+render surface under the pointer (`Blt save <- render`, at `0x44def8`), then
+calls `IDirectDrawSurface::GetClipper` (`0x44df71`) and treats exactly
+`DDERR_NOCLIPPERATTACHED` (0x88760238) as "no clipper". Any other failure
+stores the HRESULT and returns **without drawing the cursor**. Our
+`GetClipper` (and `SetClipper(NULL)` with no clipper) answered 0x887600FF,
+which is DDERR_NOTFOUND (255), so the pointer never reached the render
+surface. Only the WM_MOUSEMOVE path's direct `BltFast` onto the primary
+showed it, and the next present erased that. The fix is the constant;
+`test/test-directdraw-surface-clipper.js` now pins 0x88760238.
+
+How it was found: `--trace-dx` over a gameplay window shows the per-frame
+`save -> present -> restore` with nothing drawn between, and the code after
+the save `Blt` names the HRESULT it accepts. `--dx-slot=4 --png=` captures the
+primary; the default `--png` of this app is not the surface the cursor lands
+on.
+
+## LAN multiplayer over the virtual LAN (works 2026-10-06)
+
+`test/test-aoe1-vlan-gameplay.js` (heavy, run on a boat): seat 10.0.0.1 creates
+a TCP/IP game, seat 10.0.0.2 shows games, joins, and both Multiplayer Game
+lobbies list Host and Guest. Evidence `scratch/runs/20261006T1525Z-aoe1-w4-vlan`.
+
+- **Route.** Escape skips each intro video; title buttons are Single Player
+  (320,198) and Multiplayer (320,248). Multiplayer Connection: name field
+  (320,108), the provider list's first row "Internet TCP/IP Connection For
+  DirectPlay" (320,199), OK (190,455). Multiplayer Games: Show Games (320,384),
+  first game row (320,120, reads "Game (Host) (1/8)"), Join (110,455), Create
+  (320,455) → Create Game dialog, Game Name (320,244), OK (240,304).
+- **Hover, not position.** AoE acts on its own hover state: a click with no
+  `mousemove` onto the button first lands on whatever button was last
+  highlighted. A queued click that arrives during the intro is replayed on the
+  title as "Single Player" — which is why the old menu scripts open the Single
+  Player menu whatever coordinate they click.
+- **DirectPlay surface.** `DirectPlayCreate` + QI to IDirectPlay3A (no lobby
+  launch): `Open(CREATE|JOIN)`, `CreatePlayer`, `GetPlayerCaps`, `GetCaps`
+  (two calls), `GetSessionDesc` (size probe then fill), `GetPlayerName`,
+  `EnumSessions` (synchronous, timed), `Send`/`Receive` (12-byte lobby
+  messages) and `SetPlayerData(DPSET_GUARANTEED)` of a 0x2e4-byte lobby record
+  on every lobby change. **That record is the lobby**: until the provider
+  carried it (dpl/1 `PLAYER_DATA`, 2026-10-06) the guest joined at the
+  DirectPlay level, exchanged three messages and gave up with "Unable to join
+  game."
+- **Headless clock.** Both seats need `--real-ticks` (the join waits in guest
+  time), and on the wall clock the intro videos run their real length — so the
+  test waits for each screen in a capture rather than a batch count.
+
+## Fast gameplay route, control response, frame counter (2026-10-10)
+
+At `--batch-size=200000 --tick-ms-per-batch=50` the single-player campaign
+reaches gameplay by batch 1520. That is 25x fewer batches than
+`test-aoe-menu.js`'s 10000-block / 2000 ms route.
+
+```
+600:click:320:200   Single Player      700:click:320:190   Campaign
+800:  type AOE (keydown/keypress/keyup per letter), 820: Enter
+920:click:190:455   Campaign OK (Armies at War / Bronze Age Art of War)
+1120:click:560:465  briefing OK        -> gameplay by 1520
+1520:click:293:160  select the priest  1540:rclick:460:260  move it
+```
+
+Clicking the priest selects it (white diamond, health bar, command panel:
+Egyptian Priest 25/25). A right-click on open ground walks it there. Two
+`--input` runs are byte-identical. An interactive `--control --frozen` session
+along the same route lands a few pixels differently, because control-mode
+input is a different execution, as usual.
+
+**Frame counter.** One rendered frame is one `IDirectDrawSurface_Blt` onto
+surface `0x08011020`, returning to `0x0043bccc`. The cursor's save / present /
+restore Blts (`0x44defb`, `0x44e05a`, `0x44e159`) come once per frame too. Over
+batches 1540-2140 (29.85 guest-s) there are 84 of each. `--present-distinct`
+says 235, because each of the 149 `IDirectDrawPalette_SetEntries` palette-cycle
+updates also presents. Only 78 presents change the picture, all within the 84
+frames: a palette present leaves the 8bpp bytes alone. **For AoE, do not quote
+present counts as frames.**
+
+**The headless frame rate is not the game's.** AoE busy-polls between frames:
+over the run it makes 3.3M `timeGetTime`, 1.9M `GetForegroundWindow`, 1.3M
+`GetCursorPos` and 1.3M `GetAsyncKeyState` calls, and 91% of batches spend
+their whole budget. Raising the budget per 50 ms batch gives *fewer* frames:
+84 at 200k blocks, 76 at 400k, 52 at 800k. So the 2.8 frames per guest-second
+here is a property of these settings, unlike Diablo's fixed 20 Hz. A real FPS
+needs a real-clock (browser) count of the `0x43bccc` Blt.
+Evidence: `scratch/runs/20261010T0430Z-aoe1-control-frames`.
+
 ## Ruled out
 
 - **VFS / `MapViewOfFile`.** Every `.drs` opens (`CreateFileA` → `h:0x700000xx`)

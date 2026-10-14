@@ -38,6 +38,7 @@ async function run() {
     storage,
   });
   assert.strictEqual(restored.restored, 1, 'a later process restores the saved file');
+  assert.strictEqual(second.findFirstFile('C:\\SAVE\\*.SAV').entry.name, 'Game00.sav');
   assert.deepStrictEqual(Array.from(second.files.get('c:\\save\\game00.sav').data), [1, 2, 3, 4]);
   assert.deepStrictEqual(second.files.get('c:\\save\\game00.sav').lastWriteTime, savedWriteTime,
     'persistent files keep their Win32 last-write timestamp');

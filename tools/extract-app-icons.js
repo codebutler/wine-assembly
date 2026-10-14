@@ -25,6 +25,11 @@
 // An id in none of the three (an imported program, a debug-only entry) keeps
 // the original behaviour: try the PNG, fall back to parsing the executable.
 //
+// An executable with no icon resource may name one in the registry instead:
+// `iconFile`, a tracked .ico its publisher shipped some other way (the Quake
+// II demo's quake2.exe has no .rsrc; the retail icon is in id's GPL source
+// release). It goes through the same icon decoder as an RT_ICON.
+//
 // Scope is the apps the desktop *grid* can show: DESKTOP_APPS plus, on a LAN
 // host, LOCAL_CANDIDATE_APPS. DEBUG_ONLY_APPS are deliberately absent — they
 // appear only in the ?debug <select>, which has no images in it and so never
@@ -36,7 +41,7 @@ const fs = require('fs');
 const path = require('path');
 const { PNG } = require('pngjs');
 const { APPS, DESKTOP_APPS, LOCAL_CANDIDATE_APPS } = require('../lib/apps');
-const { extractIconRgba } = require('../lib/resources-icon');
+const { extractIconRgba, extractIcoFileRgba } = require('../lib/resources-icon');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, 'icons', 'apps');
@@ -46,6 +51,7 @@ const listed = [...DESKTOP_APPS, ...LOCAL_CANDIDATE_APPS];
 const expectedNames = new Set();
 const manifest = { icons: [], noIcon: [], runtime: [] };
 let failures = 0;
+let unverified = 0;   // apps whose exe this box lacks (see MISSING handling below)
 
 function encodePng(icon) {
   const png = new PNG({ width: icon.w, height: icon.h });
@@ -61,12 +67,32 @@ for (const [id] of listed) {
     continue;
   }
   const exePath = exe && path.join(ROOT, exe);
-  if (!exePath || !fs.existsSync(exePath)) {
-    console.error(`MISSING EXE  ${id}: ${exe || '(no registry entry)'}`);
+  if (!exe) {
+    console.error(`MISSING EXE  ${id}: (no registry entry)`);
     failures++;
     continue;
   }
-  const icon = extractIconRgba(fs.readFileSync(exePath));
+  if (!fs.existsSync(exePath)) {
+    // Local fixtures are gitignored, so a box can lack any of them (the ops
+    // box has a dangling link for one demo and no exe for a just-registered
+    // one). That says nothing about whether the tracked icon is current: keep
+    // a tracked PNG and its manifest entry, check what this box can, and say
+    // what it could not. Treating the PNG as stale made --check fail on every
+    // partial box and made a regeneration there drop good icons.
+    const name = `${encodeURIComponent(id)}.png`;
+    if (fs.existsSync(path.join(OUT, name))) {
+      expectedNames.add(name);
+      manifest.icons.push(id);
+      console.log(`UNVERIFIED   ${id}: ${exe} is not on this box; keeping the tracked icons/apps/${name}`);
+    } else {
+      console.log(`UNVERIFIED   ${id}: ${exe} is not on this box and no icon is tracked; regenerate where it is`);
+    }
+    unverified++;
+    continue;
+  }
+  const icon = extractIconRgba(fs.readFileSync(exePath))
+    || (APPS[id].iconFile
+      ? extractIcoFileRgba(fs.readFileSync(path.join(ROOT, APPS[id].iconFile))) : null);
   if (!icon) {
     console.log(`NO ICON      ${id}: desktop keeps its fallback glyph`);
     manifest.noIcon.push(id);
@@ -120,5 +146,6 @@ if (CHECK) {
 if (failures) process.exit(1);
 if (CHECK) {
   console.log(`PASS  ${expectedNames.size} pre-extracted desktop icons are current, ` +
-    `manifest covers ${manifest.icons.length + manifest.noIcon.length + manifest.runtime.length} apps`);
+    `manifest covers ${manifest.icons.length + manifest.noIcon.length + manifest.runtime.length} apps` +
+    (unverified ? ` (${unverified} not verifiable here: exe not on this box)` : ''));
 }

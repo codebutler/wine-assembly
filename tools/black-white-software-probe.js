@@ -155,7 +155,10 @@ for(const a of args)if(a.startsWith('--extra='))flags.push(a.slice('--extra='.le
       }
       if(captureEvery&&record.seconds>=nextCapture){
         const filename=`frame-${String(Math.floor(record.seconds)).padStart(4,'0')}.png`;
-        await command('png',{path:path.join(output,filename)});
+        // Best effort: a capture the CLI cannot take at this moment ("renderer is
+        // unavailable") must not end a long progression run.
+        try{await command('png',{path:path.join(output,filename)});}
+        catch(error){console.log(`Capture skipped at ${Math.floor(record.seconds)} s: ${error.message}`);}
         nextCapture=(Math.floor(record.seconds/captureEvery)+1)*captureEvery;
       }
     }

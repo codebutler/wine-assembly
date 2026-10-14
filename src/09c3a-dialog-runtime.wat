@@ -17,10 +17,14 @@
   ;; sends a message, and whatever that paints takes scratch slots of its own.
   ;; Marking here and resetting on the way out recycles everything the inner
   ;; frame took while leaving the caller's slots (taken before the mark) alone.
+  ;; Completion of the immediately returned synchronous send, not its LRESULT.
+  ;; Consumers of temporary output structs must reject a bounded-run timeout.
+  (global $wnd_send_completed (mut i32) (i32.const 0))
   (func $wnd_send_message
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $mark i32) (local $r i32)
     (local.set $mark (call $paint_scratch_mark))
+    (global.set $wnd_send_completed (i32.const 1))
     (local.set $r (call $wnd_send_message_inner
       (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))
     (call $paint_scratch_reset (local.get $mark))
@@ -43,7 +47,7 @@
     (local $old_yield_reason i32) (local $old_yield_flag i32)
     (local $result i32) (local $edit_state i32) (local $edit_state_w ptr<EditState>)
     (local $edit_len_before i32)
-    (local $sync_rounds i32)
+    (local $sync_rounds i32) (local $sleep_rounds i32) (local $old_sleep_yielded i32)
     (local.set $wp (call $wnd_table_get (local.get $hwnd)))
     (if (global.get $send_proc_override)
       (then
@@ -152,6 +156,7 @@
     ;; src/09e-win16-api.wat for the path that does call it.
     (if (global.get $code16)
       (then
+        (global.set $wnd_send_completed (i32.const 0))
         ;; Only for a procedure the task could actually be entered at. A
         ;; sentinel below 0xFFFF0000 — the built-in default, which is what a
         ;; window whose class went unresolved is given — is not one, and
@@ -162,6 +167,23 @@
           (then
             (drop (call $post_queue_push (local.get $hwnd) (local.get $msg)
                     (local.get $wParam) (local.get $lParam)))))
+        (return (i32.const 0))))
+
+    ;; The browser's idle host shadow (Threads: the guest's main thread runs in
+    ;; a Worker) has no guest thread, so it must never enter guest code: its
+    ;; registers, stack and decoded-code cache are not the owning thread's.
+    ;; Running a wndproc here ran Solitaire's on that state when the
+    ;; single-app maximizer sent SC_MAXIMIZE, which reached DialogBoxParamA
+    ;; with the main window's handle and replaced its renderer record with an
+    ;; empty dialog: the phone showed the desktop and nothing else
+    ;; (THREADS-PHONE-SOL-BLANK-20261011). Post to the owner's queue instead,
+    ;; as the comment on this function promises; the owning thread runs the
+    ;; procedure from its own message pump.
+    (if (global.get $host_shadow)
+      (then
+        (global.set $wnd_send_completed (i32.const 0))
+        (drop (call $post_queue_push (local.get $hwnd) (local.get $msg)
+                (local.get $wParam) (local.get $lParam)))
         (return (i32.const 0))))
 
     ;; x86 wndproc — synchronous dispatch via recursive $run.
@@ -196,17 +218,44 @@
     (global.set $steps (i32.const 0))
     (global.set $yield_reason (i32.const 0))
     (global.set $yield_flag (i32.const 0))
-    (global.set $sync_msg_depth (i32.add (global.get $sync_msg_depth) (i32.const 1)))
+    (call $sync_depth_enter)
     ;; A synchronous native-control procedure may legitimately execute more
     ;; than one interpreter slice (property-sheet Cancel walks every tab/page
     ;; before destroying the frame). Continue bounded slices until the return
     ;; thunk sets EIP=0 instead of silently abandoning the guest call midway.
+    ;;
+    ;; A round the procedure ended itself with Sleep is not runaway work, and
+    ;; nothing outside this loop gets a turn between rounds, so the sleep
+    ;; cannot be honoured anyway: count those against their own, larger cap.
+    ;; Unreal Tournament's first-run wizard probes each 3D device from
+    ;; WM_PAINT (sent here by UpdateWindow), polling for the probe's log with
+    ;; Sleep(100) up to 100 times a device; 64 rounds abandoned that paint
+    ;; mid-probe and left "Detecting 3D video devices, please wait..." up for
+    ;; good. A procedure that spins without sleeping is still cut at 64 full
+    ;; slices.
     (local.set $sync_rounds (i32.const 0))
+    (local.set $sleep_rounds (i32.const 0))
+    (local.set $old_sleep_yielded (global.get $sleep_yielded))
+    (global.set $sleep_yielded (i32.const 0))
     (block $sync_done (loop $sync_run
       (call $run (i32.const 1000000))
       (br_if $sync_done (i32.eqz (global.get $eip)))
-      (local.set $sync_rounds (i32.add (local.get $sync_rounds) (i32.const 1)))
-      (if (i32.ge_u (local.get $sync_rounds) (i32.const 64))
+      ;; A LoadLibraryA inside the procedure (Diablo's Select Connection
+      ;; dialog loads every *.snp from WM_INITDIALOG) yields for the host to
+      ;; map the DLL, and nothing returns to the host from here: every later
+      ;; round would stop on the same yield and the message be abandoned.
+      ;; Have the host finish the load now, as it does for one in a DllMain.
+      (if (i32.and (i32.eq (global.get $yield_reason) (i32.const 5))
+            (i32.ne (call $host_service_load_library) (i32.const 0)))
+        (then (br $sync_run)))
+      (if (global.get $sleep_yielded)
+        (then
+          (global.set $sleep_yielded (i32.const 0))
+          (local.set $sleep_rounds (i32.add (local.get $sleep_rounds) (i32.const 1))))
+        (else
+          (local.set $sync_rounds (i32.add (local.get $sync_rounds) (i32.const 1)))))
+      (if (i32.or (i32.ge_u (local.get $sync_rounds) (i32.const 64))
+                  (i32.ge_u (local.get $sleep_rounds) (i32.const 4096)))
         (then
           (call $host_log_i32 (i32.const 0xCADE5000))
           (call $host_log_i32 (global.get $eip))
@@ -217,7 +266,9 @@
           (call $host_log_i32 (local.get $lParam))
           (br $sync_done)))
       (br $sync_run)))
-    (global.set $sync_msg_depth (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
+    (global.set $sleep_yielded (local.get $old_sleep_yielded))
+    (call $sync_depth_leave)
+    (global.set $wnd_send_completed (i32.eqz (global.get $eip)))
     ;; Capture wndproc result (its EAX) before restoring caller's regs.
     (local.set $result (i32.load offset=0 (global.get $reg_base)))
     (global.set $eip (local.get $old_eip))
@@ -245,11 +296,113 @@
     (local.get $result)
   )
 
+  ;; A native control's notification to an x86 parent, as a guest tail call.
+  ;;
+  ;; $wnd_send_message runs an x86 wndproc in a bounded nested $run, and a
+  ;; handler that opens a modal loop there can never receive the input that
+  ;; would end it: after 64 rounds the rest of the handler is abandoned. When
+  ;; the control is running under a USER entry point that returns straight to
+  ;; guest code (DispatchMessage, CallWindowProc), there is a better frame to
+  ;; use: that entry point's own. The control records the notification, and
+  ;; once it returns, the entry point replaces its frame with a call to the
+  ;; parent's wndproc that returns to the entry point's caller — the same
+  ;; shape DispatchMessage already uses for any x86 window. The parent then
+  ;; runs on the ordinary interpreter stack, modal loops and all. VB5's
+  ;; ThunderCommandButton chains WM_LBUTTONUP to BUTTON through CallWindowProc,
+  ;; and every VB Click handler that shows a MsgBox needs this.
+  ;;
+  ;; $ctrl_tail_depth is the $sync_msg_depth of the entry point that armed the
+  ;; tail (-1: none), so a notification from inside some deeper nested run is
+  ;; never hoisted out of it. One slot suffices: an entry point finishes its
+  ;; tail before returning, and a second notification in the same dispatch
+  ;; falls back to the synchronous send.
+  (global $ctrl_tail_depth (mut i32) (i32.const -1))
+  (global $ctrl_tail_pending (mut i32) (i32.const 0))
+  (global $ctrl_tail_proc (mut i32) (i32.const 0))
+  (global $ctrl_tail_hwnd (mut i32) (i32.const 0))
+  (global $ctrl_tail_msg (mut i32) (i32.const 0))
+  (global $ctrl_tail_wparam (mut i32) (i32.const 0))
+  (global $ctrl_tail_lparam (mut i32) (i32.const 0))
+
+  ;; Arm the tail for this entry point; returns the value to hand back to
+  ;; $ctrl_tail_disarm.
+  (func $ctrl_tail_arm (result i32)
+    (local $saved i32)
+    (local.set $saved (global.get $ctrl_tail_depth))
+    (global.set $ctrl_tail_depth (global.get $sync_msg_depth))
+    (local.get $saved))
+
+  (func $ctrl_tail_disarm (param $saved i32)
+    (global.set $ctrl_tail_depth (local.get $saved)))
+
+  ;; Notify an x86 parent: as a recorded tail call when the current entry
+  ;; point armed one, otherwise through $wnd_send_message. Returns the send's
+  ;; LRESULT, or 0 for a deferred call (whose result becomes the entry
+  ;; point's).
+  (func $ctrl_notify_parent
+    (param $parent i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
+    (local $proc i32)
+    (local.set $proc (call $wnd_table_get (local.get $parent)))
+    (if (i32.and
+          (i32.and
+            (i32.eq (global.get $ctrl_tail_depth) (global.get $sync_msg_depth))
+            (i32.eqz (global.get $ctrl_tail_pending)))
+          (i32.and
+            (i32.and (i32.ne (local.get $proc) (i32.const 0))
+                     (i32.lt_u (local.get $proc) (i32.const 0xFFFE0000)))
+            (i32.and (i32.eqz (global.get $code16))
+                     (i32.eqz (call $ctrl_table_get_class (local.get $parent))))))
+      (then
+        ;; Same pre-dispatch rule $wnd_send_message applies to a guest frame.
+        (if (i32.eq (local.get $msg) (i32.const 0x0111))
+          (then
+            (if (call $menu_try_edit_command (i32.and (local.get $wParam) (i32.const 0xFFFF)))
+              (then (return (i32.const 0))))))
+        (global.set $ctrl_tail_pending (i32.const 1))
+        (global.set $ctrl_tail_proc (local.get $proc))
+        (global.set $ctrl_tail_hwnd (local.get $parent))
+        (global.set $ctrl_tail_msg (local.get $msg))
+        (global.set $ctrl_tail_wparam (local.get $wParam))
+        (global.set $ctrl_tail_lparam (local.get $lParam))
+        (return (i32.const 0))))
+    (call $wnd_send_message (local.get $parent) (local.get $msg) (local.get $wParam) (local.get $lParam)))
+
+  ;; Called by the entry point after the control returned and after it popped
+  ;; its own frame as usual (so ESP is the caller's post-return ESP). If a
+  ;; tail is pending, push the parent's wndproc frame returning to $ret and
+  ;; jump there.
+  (func $ctrl_tail_finish (param $ret i32)
+    (if (i32.eqz (global.get $ctrl_tail_pending)) (then (return)))
+    (global.set $ctrl_tail_pending (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (global.get $ctrl_tail_hwnd))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (global.get $ctrl_tail_msg))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (global.get $ctrl_tail_wparam))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (global.get $ctrl_tail_lparam))
+    (global.set $eip (global.get $ctrl_tail_proc))
+    (global.set $steps (i32.const 0)))
+
+  ;; $control_wndproc_dispatch for an entry point whose frame is FRAME bytes
+  ;; including the return address: dispatches with the tail armed, stores
+  ;; EAX, pops the frame, and completes a pending tail.
+  (func $ctrl_dispatch_with_tail
+    (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (param $frame i32)
+    (local $saved i32) (local $ret i32)
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $saved (call $ctrl_tail_arm))
+    (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
+      (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))
+    (call $ctrl_tail_disarm (local.get $saved))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (local.get $frame)))
+    (call $ctrl_tail_finish (local.get $ret)))
+
   ;; The most recent dialog-procedure handled BOOL is separate from the
   ;; message LRESULT returned by DefDlgProc. In particular, a DLGPROC can
   ;; handle WM_COMMAND (TRUE) while leaving DWL_MSGRESULT at zero. Control-side
   ;; default behavior must consult this immediately after synchronous dispatch.
   (global $dialog_last_proc_handled (mut i32) (i32.const 0))
+  (global $dialog_proc_ret_thunk (mut i32) (i32.const 0)) ;; CACA003C
 
   ;; DefDlgProc's erase: the dialog is asked for its face brush with
   ;; WM_CTLCOLORDLG on the erase DC and COLOR_3DFACE is used when it declines.
@@ -299,7 +452,10 @@
     (local $proc i32) (local $handled i32)
     (global.set $dialog_last_proc_handled (i32.const 0))
     (local.set $proc (call $dialog_proc_get (local.get $hwnd)))
-    (if (i32.eqz (local.get $proc)) (then (return (i32.const 0))))
+    ;; A dialog with no DLGPROC (CreateDialogParam(..., NULL, ...), MFC's
+    ;; CDialogBar) skips only the callback: USER still does the default
+    ;; processing below, and WM_ERASEBKGND is the one such a dialog relies on.
+    (if (local.get $proc) (then
     (global.set $send_proc_override (local.get $proc))
     (local.set $handled (call $wnd_send_message
       (local.get $hwnd) (local.get $msg)
@@ -307,6 +463,16 @@
     ;; Set this after the callback returns so any nested dialog dispatch cannot
     ;; overwrite the outer message's handled state.
     (global.set $dialog_last_proc_handled (i32.ne (local.get $handled) (i32.const 0)))
+    ))
+    (call $dialog_proc_result (local.get $hwnd) (local.get $msg)
+      (local.get $wParam) (local.get $lParam) (local.get $handled)))
+
+  ;; Shared epilog for synchronous and guest-continuation DLGPROC calls.
+  ;; Handled is invocation-owned, never inferred from a nested call's global.
+  (func $dialog_proc_result
+    (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
+    (param $handled i32) (result i32)
+    (local $hdc i32)
     (if (local.get $handled)
       (then
         ;; USER's DefDlgProc epilog returns the DLGPROC's own BOOL — not
@@ -358,6 +524,10 @@
       (then
         (drop (call $dlg_focus_first_tabstop (local.get $hwnd)))
         (return (i32.const 0))))
+    ;; WM_GETFONT: the font the dialog manager made from a DS_SETFONT template.
+    (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0031))
+                 (i32.ne (call $dialog_font_get (local.get $hwnd)) (i32.const 0)))
+      (then (return (call $dialog_font_get (local.get $hwnd)))))
     ;; FALSE from the DLGPROC hands WM_WINDOWPOSCHANGED to DefDlgProc's
     ;; DefWindowProc tail, which owns the derived WM_MOVE/WM_SIZE messages.
     (if (i32.eq (local.get $msg) (i32.const 0x0047))
@@ -375,6 +545,15 @@
     (if (i32.eq (local.get $msg) (i32.const 0x0014)) ;; WM_ERASEBKGND
       (then
         (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
+        ;; Erase through wParam's DC: BeginPaint's is clipped to the update
+        ;; region, and filling the whole client through a fresh DC wiped
+        ;; SimCity's status-bar frames, which the clipped paint cannot redraw.
+        ;; The face brush is the one the dialog answers WM_CTLCOLORDLG with.
+        (if (local.get $wParam)
+          (then (return (call $erase_background_dc
+            (local.get $hwnd) (local.get $wParam)
+            (call $ctl_color_brush (local.get $hwnd) (i32.const 0x0136)
+              (local.get $wParam) (local.get $hwnd) (i32.const 16)))))) ;; COLOR_BTNFACE+1
         (return (call $dialog_erase_background (local.get $hwnd)))))
     (if (i32.eq (local.get $msg) (i32.const 0x000F)) ;; WM_PAINT
       (then
@@ -385,7 +564,24 @@
         (if (i32.and (call $nc_flags_test (local.get $hwnd)) (i32.const 2))
           (then
             (call $nc_flags_clear (local.get $hwnd) (i32.const 2))
-            (drop (call $dialog_erase_background (local.get $hwnd)))))
+            ;; DefDlgProc's paint is DefWindowProc's BeginPaint, which sends
+            ;; WM_ERASEBKGND through the window's CURRENT wndproc. A subclassed
+            ;; dialog owns its background there: Hellbender's MFC Quick
+            ;; Configuration dialog draws its 560x420 artwork on erase, and
+            ;; the native fill left it blank grey. Unhandled (0) falls back.
+            (if (i32.and
+                  (i32.ne (call $wnd_table_get (local.get $hwnd)) (global.get $WNDPROC_DIALOG))
+                  (i32.eqz (global.get $code16)))
+              (then
+                (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 0)))
+                (call $dc_apply_client_clip (local.get $hdc) (local.get $hwnd))
+                (if (i32.eqz (call $wnd_send_message
+                      (local.get $hwnd) (i32.const 0x0014) (local.get $hdc) (i32.const 0)))
+                  (then (drop (call $erase_background_dc
+                    (local.get $hwnd) (local.get $hdc) (i32.const 16)))))
+                (drop (call $host_release_dc (local.get $hdc))))
+              (else
+                (drop (call $dialog_erase_background (local.get $hwnd)))))))
         (call $update_clear_hwnd (local.get $hwnd))
         (call $paint_flag_clear_hwnd (local.get $hwnd))
         (return (i32.const 0))))
@@ -612,6 +808,15 @@
                        (i32.eq (load.field.memarg WndRecord parent (local.get $addr)) (local.get $hwnd)))
             (then
               (call $wnd_destroy_tree (local.get $child))
+              ;; Tell the renderer about every descendant, as
+              ;; $wnd_destroy_recursive does; the root is the caller's to
+              ;; report. A CreateDialog page under a sheet's frame control is
+              ;; a renderer window whose parent the renderer never saw, so the
+              ;; root's host_destroy_window cannot reach it: Unreal
+              ;; Tournament's last wizard page stayed hit-testable over the
+              ;; game window and swallowed every click. Unknown hwnds are a
+              ;; no-op on the host.
+              (call $host_destroy_window (local.get $child))
               (br $rescan)))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $scan)))))
@@ -1248,7 +1453,19 @@
         (call $propsheet_page_hwnds_release)
         (call $propsheet_release_pages)
         (return (i32.const 0))))
-    (global.set $main_hwnd (local.get $dlg))
+    ;; The sheet becomes the app's main window only when there is no visible
+    ;; one to keep -- an installer whose whole UI is the wizard (Jazz2's demo
+    ;; setup). A game that opens a wizard over its own window must keep that
+    ;; window as main: $main_hwnd is also where a DirectDraw primary is
+    ;; presented (get_dx_present_hwnd), so handing it to War Wind's
+    ;; Multiplayer Wizard, opened over its exclusive 640x480 display, put the
+    ;; primary into a frame layer over the wizard's client area. Every page
+    ;; control and label was buried under the game frame, and the page read as
+    ;; a captioned hole in the screen.
+    (if (i32.or
+          (i32.eqz (global.get $main_hwnd))
+          (i32.eqz (call $wnd_is_effectively_visible (global.get $main_hwnd))))
+      (then (call $main_hwnd_adopt (local.get $dlg))))
     (local.get $dlg))
 
   ;; Allocate a new control hwnd, register it as WNDPROC_CTRL_NATIVE,

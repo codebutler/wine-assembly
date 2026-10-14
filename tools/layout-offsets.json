@@ -135,6 +135,54 @@
         }
       ]
     },
+    "GetMessageHookNode": {
+      "file": "src/09a-handlers4-late.wat",
+      "frozen": null,
+      "frozenNote": null,
+      "size": 20,
+      "fields": [
+        {
+          "name": "magic",
+          "type": "i32",
+          "offset": 0,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "proc",
+          "type": "i32",
+          "offset": 4,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "next",
+          "type": "i32",
+          "offset": 8,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "retired_next",
+          "type": "i32",
+          "offset": 12,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "owner",
+          "type": "i32",
+          "offset": 16,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        }
+      ]
+    },
     "DxObject": {
       "file": "src/09a8-handlers-directx.wat",
       "frozen": null,
@@ -1315,7 +1363,7 @@
       "file": "src/09c3-controls.wat",
       "frozen": null,
       "frozenNote": null,
-      "size": 156,
+      "size": 160,
       "fields": [
         {
           "name": "normal_text_ptr",
@@ -1358,7 +1406,7 @@
           "stride": 4
         },
         {
-          "name": "min_height",
+          "name": "font",
           "type": "i32",
           "offset": 20,
           "size": 4,
@@ -1366,7 +1414,7 @@
           "stride": 4
         },
         {
-          "name": "part_count",
+          "name": "min_height",
           "type": "i32",
           "offset": 24,
           "size": 4,
@@ -1374,11 +1422,259 @@
           "stride": 4
         },
         {
-          "name": "part_edges",
+          "name": "part_count",
           "type": "i32",
           "offset": 28,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "part_edges",
+          "type": "i32",
+          "offset": 32,
           "size": 128,
           "count": 32,
+          "stride": 4
+        }
+      ]
+    },
+    "AnimateState": {
+      "file": "src/09c3-wndprocs6-animate.wat",
+      "frozen": null,
+      "frozenNote": null,
+      "size": 116,
+      "fields": [
+        {
+          "name": "frec",
+          "type": "i32",
+          "offset": 0,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "sb",
+          "type": "i32",
+          "offset": 4,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "width",
+          "type": "i32",
+          "offset": 8,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "height",
+          "type": "i32",
+          "offset": 12,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "bpp",
+          "type": "i32",
+          "offset": 16,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "compression",
+          "type": "i32",
+          "offset": 20,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "top_down",
+          "type": "i32",
+          "offset": 24,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "frames",
+          "type": "i32",
+          "offset": 28,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "interval",
+          "type": "i32",
+          "offset": 32,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "from_frame",
+          "type": "i32",
+          "offset": 36,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "to_frame",
+          "type": "i32",
+          "offset": 40,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "loop_count",
+          "type": "i32",
+          "offset": 44,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "cur_frame",
+          "type": "i32",
+          "offset": 48,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "decoded",
+          "type": "i32",
+          "offset": 52,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "pc_next",
+          "type": "i32",
+          "offset": 56,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "timer_on",
+          "type": "i32",
+          "offset": 60,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "buf",
+          "type": "i32",
+          "offset": 64,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "pal0_wa",
+          "type": "i32",
+          "offset": 68,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "pal_wa",
+          "type": "i32",
+          "offset": 72,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "bmi_wa",
+          "type": "i32",
+          "offset": 76,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "plane_wa",
+          "type": "i32",
+          "offset": 80,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "frame_wa",
+          "type": "i32",
+          "offset": 84,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "comp_wa",
+          "type": "i32",
+          "offset": 88,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "chunk_ga",
+          "type": "i32",
+          "offset": 92,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "chunk_cap",
+          "type": "i32",
+          "offset": 96,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "key",
+          "type": "i32",
+          "offset": 100,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "threaded",
+          "type": "i32",
+          "offset": 104,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "next_tick",
+          "type": "i32",
+          "offset": 108,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "bg_brush",
+          "type": "i32",
+          "offset": 112,
+          "size": 4,
+          "count": 1,
           "stride": 4
         }
       ]
@@ -1529,8 +1825,24 @@
           "name": "acc_queue",
           "type": "i32",
           "offset": 68,
-          "size": 60,
-          "count": 15,
+          "size": 52,
+          "count": 13,
+          "stride": 4
+        },
+        {
+          "name": "tx_inflight",
+          "type": "i32",
+          "offset": 120,
+          "size": 4,
+          "count": 1,
+          "stride": 4
+        },
+        {
+          "name": "rx_credit",
+          "type": "i32",
+          "offset": 124,
+          "size": 4,
+          "count": 1,
           "stride": 4
         }
       ]

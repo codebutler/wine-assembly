@@ -40,7 +40,7 @@ const RegionMap = require('../lib/region-map.generated.js');
     wat.guest_write16(bmi + 12, 1);
     wat.guest_write16(bmi + 14, 32);
     const bitsOut = allocZero(4);
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert(bitmap && hdc);
     wat.test_call_SelectObject(hdc, bitmap);
@@ -125,10 +125,35 @@ const RegionMap = require('../lib/region-map.generated.js');
     assert.strictEqual(wat.test_call_GetPixelFormat(hdc), 0);
     assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 1, requested), 1);
     assert.strictEqual(wat.test_call_GetPixelFormat(hdc), 1);
-    assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 1, requested), 0);
+    // Setting the format the DC already has succeeds (Warcraft III does it
+    // before creating its real context); a different format is refused.
+    assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 1, requested), 1);
+    assert.strictEqual(wat.test_call_GetPixelFormat(hdc), 1);
+    assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 2, requested), 0);
     assert.strictEqual(wat.test_call_SwapBuffers(hdc), 1);
     wat.test_call_DeleteObject(bitmap);
     wat.test_call_DeleteDC(hdc);
+  });
+
+  check('SetPixelFormat selects by index with NULL or ignored descriptor', () => {
+    for (const descriptor of [0, allocZero(40)]) {
+      const { bitmap, hdc } = createSurface();
+      assert.strictEqual(wat.test_call_ChoosePixelFormat(hdc, descriptor), 0,
+        'ChoosePixelFormat still requires a valid request descriptor');
+      for (const format of [0, 2, -1]) {
+        assert.strictEqual(wat.test_call_SetPixelFormat(hdc, format, descriptor), 0);
+        assert.strictEqual(wat.test_call_GetPixelFormat(hdc), 0, 'invalid index cannot set state');
+      }
+      assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 1, descriptor), 1,
+        'NWN SetPixelFormat(hdc,1,NULL) must select the already-chosen index');
+      assert.strictEqual(wat.test_call_GetPixelFormat(hdc), 1, 'success stores actual pixel-format state');
+      assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 1, descriptor), 1);
+      assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 2, descriptor), 0);
+      assert.strictEqual(wat.test_call_GetPixelFormat(hdc), 1, 'rejected replacement preserves state');
+      wat.test_call_DeleteObject(bitmap); wat.test_call_DeleteDC(hdc);
+      assert.strictEqual(wat.test_call_SetPixelFormat(hdc, 1, descriptor), 0, 'deleted DC rejected');
+    }
+    assert.strictEqual(wat.test_call_SetPixelFormat(0, 1, 0), 0, 'NULL DC rejected');
   });
 
   console.log(`\n${passed}/${passed} checks passed`);

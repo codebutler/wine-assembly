@@ -234,6 +234,18 @@ async function main() {
       popup !== 0, 'popup=0x' + popup.toString(16));
     check('open popup has WS_VISIBLE in WAT state',
       !!(e.wnd_get_style_export(popup) & 0x10000000));
+    // The dropdown is USER's ComboLBox, which never takes activation. A
+    // click on it that activated the popup deactivated the owner frame, and
+    // MFC closed the dropdown in response (Paint's font-size list shut under
+    // a press on its own scrollbar). The inner list's query goes parent-first.
+    const WM_MOUSEACTIVATE = 0x0021, MA_NOACTIVATE = 3;
+    const maLParam = (1 | (WM_LBUTTONDOWN << 16)) >>> 0;   // HTCLIENT, button down
+    check('popup answers WM_MOUSEACTIVATE with MA_NOACTIVATE',
+      e.send_message(popup, WM_MOUSEACTIVATE, popup, maLParam) === MA_NOACTIVATE);
+    check('inner list answers WM_MOUSEACTIVATE with MA_NOACTIVATE',
+      e.send_message(lb, WM_MOUSEACTIVATE, popup, maLParam) === MA_NOACTIVATE);
+    check('WM_MOUSEACTIVATE leaves the dropdown open',
+      e.combobox_is_dropped(cb) === 1);
     // Popup-local (5, row2_y). Each list row is 16px; first row at y=0 in
     // popup-local coords (listbox is at popup-local (0,0)). Row 2 → y in
     // (32..47). Click at (5, 35) should select index 2 = "Left".

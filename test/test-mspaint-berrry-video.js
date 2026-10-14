@@ -65,9 +65,12 @@ const stroke = (batch, x0, y0, x1, y1) => {
 at(10, 'caption-click:0x10001:max');
 
 // Maximizing Paint does not resize the bitmap: its original bottom-right size
-// handle remains at 389,290. Drag that real handle across the gray work area
-// before drawing so the white document fills the maximized window.
-at(13, 'mousedown:389:290');
+// handle is drawn at 386..388,287..289. Drag that real handle across the gray
+// work area before drawing so the white document fills the maximized window.
+// (It was 2px further right and down until ef2f968c7 stopped Paint's frame
+// keeping a second WS_EX_CLIENTEDGE, the same shift df7e33c83 applied to
+// test-mspaint-image-edit; the old 389,290 now misses the handle by a pixel.)
+at(13, 'mousedown:387:288');
 at(14, 'mousemove:500:340');
 at(15, 'mousemove:626:396');
 at(16, 'mouseup:626:396');

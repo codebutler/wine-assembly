@@ -154,7 +154,7 @@ for (const suffix of ['A', 'W']) {
     wat.guest_write16(bmi + 12, 1);
     wat.guest_write16(bmi + 14, 32);
     const bitsOut = allocZero(4);
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert(bitmap && hdc);
     wat.test_call_SelectObject(hdc, bitmap);
@@ -168,7 +168,7 @@ for (const suffix of ['A', 'W']) {
     wat.guest_write16(bmi + 12, 1);
     wat.guest_write16(bmi + 14, 32);
     const bitsOut = allocZero(4);
-    const bitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+    const bitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
     const surfaceHdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert(bitmap && surfaceHdc);
     wat.test_call_SelectObject(surfaceHdc, bitmap);
@@ -275,7 +275,7 @@ for (const suffix of ['A', 'W']) {
     sum + wat.guest_read32(justified.dx + index * 4), 0), justifiedWidth);
 
   const arial = writeWide('Arial');
-  const scalable = wat.test_call_CreateFontW(-24, 400, 0, arial) >>> 0;
+  const scalable = wat.test_call_CreateFontW(-24, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, arial) >>> 0;
   assert(scalable);
   wat.test_call_SelectObject(hdc, scalable);
   assert.strictEqual(wat.test_public_char_widths(hdc, 65, 67, widths, 1), 1);

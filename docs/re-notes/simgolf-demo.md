@@ -1138,3 +1138,135 @@ draws: two calls per vertex on a quad-heavy immediate-mode path, and every one
 of them is an individual wasm->JS import call today. `glTexImage2D` and
 `glGenTextures` at 13/frame say textures are being re-created every frame, not
 cached — worth its own look.
+
+## 2026-09-22: the WAT software GL path (`--gl-renderer=software`)
+
+SimGolf now draws its course on the WAT software rasterizer with no JS in the
+draw path. Three things stood between it and a clean picture, and each looked
+like a different one:
+
+1. **sound.dll overflowed an mmio memory file into Terrain's textures**
+   (fixed in `3c7b023e`). `mmioOpen` with `fccIOProc='MEM '` was treated as a
+   disk file; the reads ran past the caller's buffer and corrupted the texture
+   uploads and the GL command stream downstream of them.
+2. **The span rasterizer always packed RGB565** (fixed in `9bebacdb`). The GL
+   target is the app's own `CreateDIBSection` bitmap, `800x-600`, 16bpp BI_RGB —
+   which is **X1R5G5B5**. Packing 565 into it moves green's top bit into red, so
+   grass and trees read as red/magenta speckle that was worst at blended
+   borders. The uploads were clean the whole time; checking them first is what
+   ruled out the texture path.
+3. **`glTexEnvi(GL_TEXTURE_2D, GL_TEXTURE_ENV_MODE, GL_REPLACE)` ×474** — the
+   wrong target, which real GL rejects with GL_INVALID_ENUM. Honouring it drew
+   the lit terrain unlit (same commit, both backends).
+
+**"The course goes black after batch ~1850" is not a bug.** Every frame
+afterwards does `StretchBlt(0x310009 @(64,40) ← cache 0x31000b)` — a scroll —
+and GL fills the exposed strip. The headless cursor sits at (0,0), which is the
+top-left scroll edge, so the view scrolls off the course into void. Park the
+mouse mid-screen:
+
+```
+node test/run.js --app=simgolf_demo --no-build --gl-renderer=software --quiet-api \
+  --quiet-blocks --batch-size=100000 --max-batches=2400 --max-seconds=280 --no-close \
+  --input=100:mousemove:400:300,1500:mousemove:400:300,1900:mousemove:401:300,2350:png:out.png
+```
+
+At 2350 that shows the course, the clubhouse and the welcome dialog.
+GL context: `CreateCompatibleDC` → `0x310009`, bitmap `0x410008`; the
+`SelectObject(0x310009, 0x41000a/b/c)` pairs returning `0x3001d` are font
+swaps for text drawn into the GL DC, not a change of render target.
+
+## 2026-09-29: call forms by runtime weight, and the uop tier's one gap
+
+Headless gameplay route, counts only (load-immune), taken on a bench box:
+
+```
+node test/run.js --app=simgolf_demo --no-build --quiet-api --quiet-blocks --no-close \
+  --gl-renderer=software --batch-size=100000 --max-batches=4000 --tick-ms-per-batch=37 \
+  --stuck-after=100000000 \
+  --input=100:mousemove:400:300,1500:mousemove:400:300,1900:mousemove:401:300,2400:keydown:13,2405:keyup:13 \
+  --handler-hist-thread=0,0,0 --handler-hist-start=2500 --handler-hist-stop=4000 \
+  --edge-hist --hist-json=sg2.json --hist-json-blocks=0 --uop-census > sg2.log
+node tools/call-form-weighted.js sg2.json.T0.2500 sg2.json.T0.3000 sg2.json.T0.3500 \
+  --exe=$D/golf.exe --pe-dir=$D --log=sg2.log      # D = .../simgolf-demo-installer/installed
+```
+
+The Enter at 2400 dismisses the "Welcome to Dolphin Coast" box. From then on
+golfers walk the course and the frame keeps changing. The route runs 4000
+batches in about 26s. By batch 1800 the course is up.
+
+**Where the block entries go.** The windows agree to within 0.2pp:
+
+- 74% of all block entries run inside uop programs.
+- Terminators of the rest:
+
+  | terminator | share of all entries |
+  |---|---|
+  | jcc | 19.2% |
+  | jmp rel | 2.6% |
+  | fallthrough | 1.6% |
+  | call rel32 | 0.9% |
+  | ret | 0.9% |
+  | guest-target indirect | **0.21%** (137-148 sites, all monomorphic) |
+
+jgl.dll is 48% vtable calls statically (`tools/call-form-census.js`), but at
+runtime a vtable call ends only 0.19% of block entries. The hot sprite loops
+make no calls. A vtable inline cache has nothing to buy here; see
+uop-tier-design.md §15.
+
+**The one loop the tier cannot take.** One loop is 79.5% of the *threaded*
+entries, which is about 20% of all of them: `jgl.dll+0x100180df..0x1001811a`.
+It is a scaled blit with a colour key and a `0xf8+` shadow case, and a 16.16
+source step:
+
+```
+100180df  cmp byte [esi],0xff / jnb 0x10018108      ; transparent
+100180e4  cmp byte [esi],0xf8 / jnb 0x100180f6      ; shadow via [ebp+eax*2]
+100180eb  mov al,[esi] / mov ax,[ecx+eax*2] / mov [edi],ax
+10018108  add dx,bx / adc esi,[0x10062e58] / add edi,2 / sub ebx,0x10000 / jns 0x100180df
+```
+
+uop-census names the cause:
+
+- `adc r32, r/m32` (opcode 0x13) is unsupported.
+- The scan from `0x10018108` stops there and declines `no-backedge`, weight
+  28.5M entries per 500 batches.
+- The head `0x100180df` installs a program that exits at `0x10018108` every
+  pixel (1.5 blocks per entry), which is then retired `poor`.
+
+The other big blitters are live programs: `0x10017b69` (5324 blocks per
+entry), `0x1001546b` and `0x10016e88`. That includes the colour-key LUT loop
+the 2026-09 browser profile blamed.
+
+So the next SimGolf lever is `adc r32,m32` taking the carry from a 16-bit
+`add` in the uop compiler. In this window it is the only `adc` in any
+declined scan (4 heads).
+
+## 2026-09-29: the blitter is a live uop program (adc lowered)
+
+The uop compiler now lowers 32-bit adc/sbb in every form, memory operands
+included (commits aeb999d8 and 856774d5; see uop-tier-design.md §15.1).
+Here is the same census command as above, on box 3, base e4dddd7d against
+the adc build:
+
+| | base | adc |
+|---|---|---|
+| block entries inside uop programs | 77.05 / 74.23 / 74.32% | **94.30 / 94.60 / 94.65%** |
+| threaded entries per 500 batches | 46.7M / 52.5M / 52.4M | 11.6M / 11.0M / 10.9M |
+| `jgl+0x100180df` (blitter head) | retired poor (exit at `0x10018108` every pixel) | live, 31 insns, 4710 blocks/entry |
+| `jgl+0x10018108` (`add dx,bx` step) | declined no-backedge | live, 3117 blocks/entry |
+
+What stays threaded (about 5.5% of all entries):
+
+- exe call/ret chains, with no verdict or declined `no-backedge`, about 1.6%
+  each;
+- live-program exits, 1.8%;
+- `mul8` at `jgl+0x100153ed` (0.3M entries), the largest single decline left.
+
+A/B timing (box 3, `tools/uop-game-ab.js --games=sg --branch-clock`):
+- Frames are identical on all four arms.
+- Whole-run user CPU: 20.85/21.53s against the pre-change reference's
+  23.10/23.56s. That is **−10.8%**, with a null band of about 2–3%.
+- Gameplay phase 2500..4000: 1.3/1.4s against 1.9/2.0s.
+
+The full table, with H3 and WC3g (both neutral), is in uop-tier-design.md §15.1.

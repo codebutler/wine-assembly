@@ -146,6 +146,46 @@ const { bootRenderHarness } = require('./render-helper');
       (call $gs32 (i32.const 0x074ff018) (local.get $out))
       (call $handle_IDirect3DDevice8_CreateIndexBuffer (local.get $dev) (i32.const 48)
         (i32.const 0x08) (i32.const 101) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_set_rs") (param $dev i32) (param $rs i32) (param $v i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice9_SetRenderState (local.get $dev) (local.get $rs)
+        (local.get $v) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_get_rs") (param $dev i32) (param $rs i32) (param $out i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice9_GetRenderState (local.get $dev) (local.get $rs)
+        (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_sb_begin") (param $dev i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice9_BeginStateBlock (local.get $dev) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_sb_end") (param $dev i32) (param $out i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice9_EndStateBlock (local.get $dev) (local.get $out)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_sb_create") (param $dev i32) (param $type i32) (param $out i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice9_CreateStateBlock (local.get $dev) (local.get $type)
+        (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_sb_apply") (param $dev i32) (param $token i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_d3d8_ApplyStateBlock (local.get $dev) (local.get $token)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_sb_capture") (param $dev i32) (param $token i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_d3d8_CaptureStateBlock (local.get $dev) (local.get $token)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_sb_delete") (param $dev i32) (param $token i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_d3d8_DeleteStateBlock (local.get $dev) (local.get $token)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_set_vs") (param $dev i32) (param $vs i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice8_SetVertexShader (local.get $dev) (local.get $vs)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+    (func (export "d3d8_get_vs") (param $dev i32) (param $out i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice8_GetVertexShader (local.get $dev) (local.get $out)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "d3d8_create_vertex_decl") (param $dev i32) (param $tokens i32) (param $out i32) (result i32)
       (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_IDirect3DDevice8_CreateVertexShader (local.get $dev) (local.get $tokens)
@@ -181,12 +221,12 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.get_esp() >>> 0, 0x074ff014);
   assert.strictEqual(e.guest_read32(p), 1);
   assert.strictEqual(e.guest_read32(p + 0x0c), 0x00080000, 'windowed rendering is advertised');
-  assert.strictEqual(e.guest_read32(p + 0x3c), 0x00004405,
-    '2D alpha/projected/mipmap texture support is advertised without cube/volume support');
+  assert.strictEqual(e.guest_read32(p + 0x3c), 0x00014c05,
+    '2D and cube mipmap texture support is advertised without volume support');
   assert.strictEqual(e.guest_read32(p + 0x40), 0x03030300,
     'point/linear minification, magnification and mip filtering are advertised');
-  assert.strictEqual(e.guest_read32(p + 0x44), 0,
-    'cube filtering remains unavailable with CreateCubeTexture unimplemented');
+  assert.strictEqual(e.guest_read32(p + 0x44), 0x03030300,
+    'cube point/linear filtering matches the implemented cube texture adapter');
   assert.strictEqual(e.guest_read32(p + 0x90), 0x03feffff,
     'caps expose exactly the implemented fixed-function texture operations');
   assert.strictEqual(e.guest_read32(p + 0x94), 8);
@@ -224,7 +264,9 @@ const { bootRenderHarness } = require('./render-helper');
     checkCapability(e.d3d8_check_format, [0, 1, 22, 0, 3, format], D3D_OK, 0x074ff020,
       `UT2003 texture format 0x${format.toString(16)} is backed by CreateTexture`);
   }
-  checkCapability(e.d3d8_check_format, [0, 1, 22, 0, 3, 24], D3DERR_NOTAVAILABLE,
+  // X1R5G5B5/A1R5G5B5 (24/25) are stored and decoded now (LithTech's 16-bit
+  // textures); A2B10G10R10 (31) is still not.
+  checkCapability(e.d3d8_check_format, [0, 1, 22, 0, 3, 31], D3DERR_NOTAVAILABLE,
     0x074ff020, 'unsupported texture storage format is unavailable');
   checkCapability(e.d3d8_check_format, [0, 1, 22, 1, 3, 22], D3DERR_NOTAVAILABLE,
     0x074ff020, 'unmodeled render-target usage is unavailable');
@@ -345,5 +387,63 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.d3d8_create_vertex_decl(device, tokens, out) >>> 0, 0,
     'D3D8 accepts UT2003 terrain declarations split over streams 0..4');
   assert(e.guest_read32(out), 'multi-stream compatibility declaration returns a handle');
-  console.log('PASS  Direct3D8 factory/device ABI, caps bounds and D3D9-backed device creation');
+  // State blocks (MilkDrop records its render state in one): a D3D8 token
+  // is a DWORD naming the block, and Apply/Capture/Delete take it by value.
+  assert.deepStrictEqual(deviceMethods.slice(52, 58).map(m => m.name), [
+    'BeginStateBlock', 'EndStateBlock', 'ApplyStateBlock', 'CaptureStateBlock',
+    'DeleteStateBlock', 'CreateStateBlock']);
+  assert(deviceMethods.slice(52, 58).every(m => m.handler !== 'd3d8_unimplemented'),
+    'every D3D8 state-block slot is implemented');
+  const CULLMODE = 22, rsOut = pp + 0x300;
+  const cull = () => {
+    assert.strictEqual(e.d3d8_get_rs(device, CULLMODE, rsOut) >>> 0, 0);
+    return e.guest_read32(rsOut) >>> 0;
+  };
+  assert.strictEqual(e.d3d8_set_rs(device, CULLMODE, 1) >>> 0, 0);
+  assert.strictEqual(e.d3d8_sb_begin(device) >>> 0, 0);
+  assert.strictEqual(e.d3d8_set_rs(device, CULLMODE, 3) >>> 0, 0);
+  e.guest_write32(out, 0);
+  assert.strictEqual(e.d3d8_sb_end(device, out) >>> 0, 0, 'EndStateBlock returns a token');
+  assert.strictEqual(e.get_esp() >>> 0, 0x074ff00c);
+  const recorded = e.guest_read32(out) >>> 0;
+  assert(recorded, 'the recorded token is nonzero');
+  e.d3d8_set_rs(device, CULLMODE, 1);
+  assert.strictEqual(e.d3d8_sb_apply(device, recorded) >>> 0, 0);
+  assert.strictEqual(e.get_esp() >>> 0, 0x074ff00c, 'ApplyStateBlock pops (device, token)');
+  assert.strictEqual(cull(), 3, 'applying the recorded block restores CULLMODE 3');
+  e.d3d8_set_rs(device, CULLMODE, 2);
+  assert.strictEqual(e.d3d8_sb_capture(device, recorded) >>> 0, 0);
+  assert.strictEqual(e.get_esp() >>> 0, 0x074ff00c, 'CaptureStateBlock pops (device, token)');
+  e.d3d8_set_rs(device, CULLMODE, 1);
+  e.d3d8_sb_apply(device, recorded);
+  assert.strictEqual(cull(), 2, 'Capture refreshes the recorded state from the device');
+  assert.strictEqual(e.d3d8_sb_apply(device, 0) >>> 0, 0x8876086c, 'token 0 is D3DERR_INVALIDCALL');
+  assert.strictEqual(e.d3d8_sb_delete(device, recorded) >>> 0, 0, 'DeleteStateBlock is D3D_OK');
+  assert.strictEqual(e.get_esp() >>> 0, 0x074ff00c, 'DeleteStateBlock pops (device, token)');
+  e.d3d8_set_rs(device, CULLMODE, 1);
+  e.guest_write32(out, 0);
+  assert.strictEqual(e.d3d8_sb_create(device, 1, out) >>> 0, 0, 'CreateStateBlock(D3DSBT_ALL)');
+  assert.strictEqual(e.get_esp() >>> 0, 0x074ff010);
+  const all = e.guest_read32(out) >>> 0;
+  assert(all, 'CreateStateBlock returns a token');
+  e.d3d8_set_rs(device, CULLMODE, 3);
+  e.d3d8_sb_apply(device, all);
+  assert.strictEqual(cull(), 1, 'a D3DSBT_ALL block restores the state at its creation');
+  assert.strictEqual(e.d3d8_sb_delete(device, all) >>> 0, 0);
+
+  // SetVertexShader(FVF) inside a block records the FVF (MilkDrop does this).
+  const vs = () => { assert.strictEqual(e.d3d8_get_vs(device, rsOut) >>> 0, 0); return e.guest_read32(rsOut) >>> 0; };
+  assert.strictEqual(e.d3d8_set_vs(device, 0x102) >>> 0, 0);
+  assert.strictEqual(e.d3d8_sb_begin(device) >>> 0, 0);
+  assert.strictEqual(e.d3d8_set_vs(device, 0x144) >>> 0, 0, 'SetVertexShader(FVF) records');
+  assert.strictEqual(e.get_esp() >>> 0, 0x074ff00c, 'recorded SetVertexShader pops (device, handle)');
+  assert.strictEqual(vs(), 0x102, 'recording leaves the live FVF');
+  e.guest_write32(out, 0);
+  assert.strictEqual(e.d3d8_sb_end(device, out) >>> 0, 0);
+  const fvfBlock = e.guest_read32(out) >>> 0;
+  e.d3d8_sb_apply(device, fvfBlock);
+  assert.strictEqual(vs(), 0x144, 'applying the block restores the recorded FVF');
+  assert.strictEqual(e.d3d8_sb_delete(device, fvfBlock) >>> 0, 0);
+
+  console.log('PASS  Direct3D8 factory/device ABI, caps bounds, D3D9-backed device creation and state-block tokens');
 })().catch(error => { console.error(error && error.stack || error); process.exit(1); });

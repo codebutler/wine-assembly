@@ -302,3 +302,97 @@ copies the complete game payload, and reaches the final shortcut/readme page.
 The installer-produced tree contains `h3demo.exe`, the four middleware files,
 the map, all 14 MP3s, and the complete SND/LOD/VID data set. No runtime crash or
 unimplemented API occurs along that path.
+
+## Where gameplay's x87 runs (2026-09-28)
+
+On the adventure map (the `h3` route in `tools/uop-game-ab.js`, batches
+4100-5101), the game thread T0 retires no x87: 585 of 1.19G dispatches. All of
+it is on guest thread T1, the first thread created (start `0x8414a0`,
+presumably the Miles mixer worker; not yet confirmed from its module). There
+it is 47% of dispatches: 66.6M of 141M over batches 4100-4300 (`$th_fpu_mem_ro`
+31.8%, `$th_fpu_reg` 10.8%, `$th_fpu_mem` 4.5%). T2 and T3 do nothing there.
+Read it per thread: `--handler-hist --handler-hist-thread=1,3,2
+--handler-hist-start=4100 --handler-hist-stop=4700` splits that window three
+ways, one thread each.
+
+`--x87-fusion` absorbs 79% of T1's x87 dispatches (66.6M raw down to 14.1M
+raw plus 4.2M fused) and is off for this app by default. Numbers and the time
+A/B are in docs/uop-tier-design.md §8.
+
+Time, measured on the idle bench box (x86_64 V8, 2026-09-28): turning on
+`--x87-fusion` with `--uop` already on cuts whole-run user CPU by 4.3%
+(86.6 s vs 90.5 s; repeats agree to 0.03%), and the frames are identical.
+The main-thread gameplay slice does not change, as expected, since the saving
+is all on T1.
+
+## The gameplay test's 2026-10 failure was the capture clock, not the game
+
+`test/test-heroes3-demo-gameplay.js` began failing ("batch 4000 still resembles
+the sky main menu") with nothing wrong in the game: on main the objective dialog
+comes up between batch 4000 and 4050, and the test photographed it at 4000. The
+map load is counted in batches, which are block budgets, so its end moves with
+every change to block formation -- up by 4000 on 2026-08-26 (0610459e), still on
+the loading screen at 4000 on 2026-09-25 (2b1e1bb0), map without dialog at 4000
+on 2026-09-29 and on main. `--no-uop` does not move it. A plain bisect cannot
+name one commit: 2026-09-02..09-21 stall in the 3DO intro on this route instead
+(4001 batches in under a second). The test now photographs the dialog at 4600,
+which it holds until clicked, and runs dismissal and the pan after that
+(claude:65967384, `scratch/runs/20261006T0930Z-heroes3_demo-w4-testfail`).
+
+## Threads mode: "sound stuck on repeat" under lazy-file latency (2026-10-06)
+
+The user's report was audio looping while the game waited on file loads. Two
+separate causes, both fixed:
+
+- **Cooperative:** a main-thread lazy `ReadFile` park held the whole host step
+  for the fetch, so the Miles thread stopped refilling DirectSound
+  (537fa2a6; the Worker twin is e909298e).
+- **Threads (the browser default):** with 150 ms or more of HTTP Range latency
+  the 3DO/NWC intro audio repeats one ring lap (511 ms: 22 kHz 16-bit
+  *stereo*, 45,056 bytes) for 20-30 s, and at 400 ms the video freezes on the
+  3DO clip's first frame. It was not the park mechanics: an injected 400 ms
+  main stall with eager files played fine, while any real `io_wait` park
+  reproduced it. The cause was `07-decoder.wat` ignoring `LOCK`, so the
+  guest's own lock-prefixed RMW and `xchg [mem]` were not atomic across
+  Workers; a park shifts when Miles' service thread starts relative to
+  Smacker's setup on main, which is what exposed the race. 2805fe86 makes
+  them atomic under Worker threads only.
+
+Ruled out on the way (so nobody redoes them): the AudioWorklet cursor (it is
+right; b0003 is stereo), Miles' service re-entrancy counter at
+`MSS32+0x4aee0` (idle at 0 throughout), VFS read data (VIDEO.VID directory
+count 9 in both arms; the EOF polling at 0x96c130 is normal Smacker read-ahead,
+the cooperative arm does it too), the guest clock (1:1 with the wall), and
+`timeSetEvent` (the demo never calls it; its only `CreateThread` is Miles'
+service loop at `MSS32+0x14a0`, a `WaitForSingleObject(event, timeout)` loop).
+
+Measure it on the output, not on counters: `tools/record-probe.js --threads
+--before-load=<delay Range fetches>` plus `tools/audio-loop-check.js` (STUCK-LOOP
+vs OK). `tools/page-probes/arm-dsound-underrun.js` miscounted worklet-routed
+rings as stale until 79d82607. Evidence:
+`scratch/runs/20261006T1500Z-heroes3_demo-threads-lazy-audio-{before,after}`.
+
+## Adventure-map control and a qualified present counter (2026-10-10)
+
+On main 3fc7a885c the `test-heroes3-demo-gameplay.js` route still reaches the
+playable map at batch 4700 (800x600, 200,000-block batches, 100 ms tick,
+`--thread-slices=1`). Ordinary control works end to end: a click on the
+Treasure Chest at guest (368,312) plots the path, a second click walks Orrin
+there, the Chest dialog offers 1000 gold / 500 experience, and taking the gold
+(336,365 then OK 400,477) moves the gold readout 20500 -> 21500. A
+non-interactive `--input` replay at the same batches reproduces the gold frame
+byte-identically. Evidence:
+`scratch/runs/20261010T0430Z-heroes3-demo-control-frames`.
+
+**What a present is here.** Over batches 4700-5100, `--present-distinct`
+counted 62 presents on slot 1 and `--trace-api` saw exactly 62
+`IDirectDrawSurface_Blt` calls to the primary (`0x08011008`), all from one site
+(return `0x58dd8c`, in the presenter that the screen-update code calls at
+`0x58dd20`). Every other Blt and all Lock/Unlock pairs target offscreen
+surfaces; there is no Flip. H3 presents **on demand** (dirty rectangles): the
+idle map presents once per 11-12 batches (its idle animation), motion and
+dialogs come in bursts, and a static open dialog presents nothing (a 142-batch
+gap). The present count is therefore screen updates, not a fixed-rate FPS.
+
+Trace with `--trace-from` only: a `--trace-to` also windows the present
+counting itself (RCT counted 80 of 36,866).

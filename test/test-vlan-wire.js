@@ -15,7 +15,7 @@
 'use strict';
 
 const assert = require('assert');
-const { LoopbackSegment } = require('../lib/vlan-wire');
+const { LoopbackSegment, describeFrame } = require('../lib/vlan-wire');
 const { compile, makeNode, ip2int, AF_INET, SOCK_STREAM, INVALID_SOCKET } = require('./vlan-node');
 
 const SOCK_DGRAM = 2;
@@ -26,6 +26,7 @@ const SD_SEND = 1;
 const WSAEWOULDBLOCK = 10035;
 const WSAEALREADY = 10037;
 const WSAECONNRESET = 10054;
+const WSAETIMEDOUT = 10060;
 const WSAECONNREFUSED = 10061;
 
 const HOST_IP = '10.0.0.1';
@@ -57,6 +58,23 @@ function settle(...nodes) {
 }
 
 async function main() {
+  // The [net] trace names what it carries. DDEML frames share the wire under
+  // 'DDE1' and must be read with their own layout: decoded as vln/1, a Hearts
+  // poke (DDE type 6) printed as "DGRAM", and test-win16-hearts-vlan.js, which
+  // counts pokes by that line, never saw one.
+  check('describeFrame names DDE frames and keeps vln/1 type 6 as DGRAM', () => {
+    const frame = (magic, type, words) => {
+      const b = Buffer.alloc(28);
+      b.writeUInt32LE(magic, 0); b.writeUInt32LE(type, 4);
+      words.forEach((w, i) => b.writeUInt32LE(w >>> 0, 8 + i * 4));
+      return new Uint8Array(b.buffer, b.byteOffset, b.length);
+    };
+    assert.strictEqual(describeFrame(frame(0x31454444, 6, [ip2int(PEER_IP), 1, 7, 1, 0])),
+      'dde POKE 10.0.0.2 conv 1 -> 7 len=1');
+    assert.strictEqual(describeFrame(frame(VLN_MAGIC, 6, [ip2int(PEER_IP), 5, ip2int(HOST_IP), 7, 46])),
+      'DGRAM 10.0.0.2:5 -> 10.0.0.1:7 len=46');
+  });
+
   const wasm = await compile();
   const segment = new LoopbackSegment();
   const host = await makeNode(wasm, segment.attach(), HOST_IP);
@@ -129,11 +147,54 @@ async function main() {
     assert.strictEqual(host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0, live.length,
       `the live socket got nothing: ${host.wire.pending} frame(s) still queued behind the idle one`);
     assert.deepStrictEqual(host.readBuf(rx, live.length), live);
-    // The idle socket kept the datagram that fit and lost the one that did
-    // not, which is what a full UDP buffer does.
+    // The idle socket queued both, in order, each still one datagram.
     assert.strictEqual(host.wat.test_call_recvfrom(idle, rx, 8, 0, 0, 0) | 0, 1);
     assert.deepStrictEqual(host.readBuf(rx, 1), [7]);
+    assert.strictEqual(host.wat.test_call_recvfrom(idle, rx, 8, 0, 0, 0) | 0, 1);
+    assert.deepStrictEqual(host.readBuf(rx, 1), [8]);
     assert.strictEqual(host.wat.test_call_recvfrom(idle, rx, 8, 0, 0, 0) | 0, -1);
+  });
+
+  // Atomic Bomberman's join request is sent on every pass of a one-second
+  // wait loop, and its IPX reader pulls up to 64 datagrams per poll into a
+  // 64-slot ring that reads as empty after exactly 64. A real receive buffer
+  // drops the flood; an unbounded queue hands all of it over.
+  check('a flooded datagram socket keeps a bounded backlog and drops the rest', () => {
+    const dst = peer.sockaddr(HOST_IP, GAME_PORT + 1);
+    for (let i = 0; i < 100; i++) {
+      assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf([i]), 1, 0, dst, 16) | 0, 1);
+    }
+    settle(host, peer);
+    assert.strictEqual(host.wire.pending, 0, 'the flood must not wait on the wire');
+    const rx = host.buf(8);
+    const got = [];
+    for (let n; (n = host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0) > 0;) {
+      got.push(host.readBuf(rx, n)[0]);
+    }
+    assert.deepStrictEqual(got, Array.from({ length: 32 }, (_, i) => i));
+  });
+
+  // FIONREAD is a poll: a program that loops on sendto + FIONREAD and never
+  // takes a message must still see what arrived, and a datagram socket
+  // reports the payload bytes of everything queued.
+  check('FIONREAD moves the wire and counts queued datagram payload', () => {
+    const FIONREAD = 0x4004667f | 0;
+    const dst = peer.sockaddr(HOST_IP, GAME_PORT + 1);
+    for (const d of [[1, 2, 3], [4, 5]]) {
+      assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(d), d.length, 0, dst, 16) | 0, d.length);
+    }
+    assert.strictEqual(host.wire.pending, 2);
+    const p = host.buf(4);
+    assert.strictEqual(host.wat.test_call_ioctlsocket(udpHost, FIONREAD, p) | 0, 0);
+    assert.deepStrictEqual(host.readBuf(p, 4), [5, 0, 0, 0]);
+    const rx = host.buf(8);
+    const from = host.buf(16);
+    const fromLen = host.buf([16, 0, 0, 0]);
+    assert.strictEqual(host.wat.test_call_recvfrom(udpHost, rx, 8, 0, from, fromLen) | 0, 3);
+    assert.strictEqual(host.readSockaddr(from).ip, PEER_IP);
+    assert.strictEqual(host.wat.test_call_ioctlsocket(udpHost, FIONREAD, p) | 0, 0);
+    assert.deepStrictEqual(host.readBuf(p, 4), [2, 0, 0, 0]);
+    assert.strictEqual(host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0, 2);
   });
 
   check('a socket that is being read keeps every datagram in order', () => {
@@ -254,6 +315,82 @@ async function main() {
       drained += got;
     }
     assert.strictEqual(drained, MAX_PAYLOAD);
+  });
+
+  // ---- flow control ---------------------------------------------------
+  //
+  // A stream frame that does not fit its ring cannot be dropped, and while it
+  // waits at the head of the wire nothing behind it moves. So the sender
+  // stops at the far ring's size, and the reader hands the room back.
+
+  const WINDOW = 16384;
+  const drainStream = () => {
+    const rx = host.buf(MAX_PAYLOAD);
+    let total = 0;
+    for (;;) {
+      settle(host, peer);
+      const got = host.wat.test_call_recv(acc, rx, MAX_PAYLOAD, 0) | 0;
+      if (got <= 0) break;
+      total += got;
+    }
+    settle(host, peer);
+    return total;
+  };
+  const writable = (node, s) =>
+    (node.wat.test_call_select(0, 0, node.fdset([s]), 0, node.timeval(0, 0)) | 0) === 1;
+
+  check('a sender stops at the far ring\'s size and is no longer writable', () => {
+    const big = peer.buf(new Array(MAX_PAYLOAD).fill(0x33));
+    let sent = 0;
+    for (let i = 0; i < 16; i++) {
+      const n = peer.wat.test_call_send(cli, big, MAX_PAYLOAD, 0) | 0;
+      if (n < 0) { assert.strictEqual(peer.err(), WSAEWOULDBLOCK); break; }
+      sent += n;
+      settle(host, peer);
+    }
+    assert.strictEqual(sent, WINDOW);
+    assert.strictEqual(writable(peer, cli), false);
+  });
+
+  check('a stalled connection does not hold up the rest of the wire', () => {
+    // Nobody has read the stream, yet a datagram sent after it arrives.
+    const msg = [9, 8, 7];
+    assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(msg), msg.length, 0,
+      peer.sockaddr(HOST_IP, GAME_PORT + 1), 16) | 0, msg.length);
+    settle(host, peer);
+    assert.strictEqual(host.wire.pending, 0, 'a frame is stuck at the head of the wire');
+    const rx = host.buf(8);
+    assert.strictEqual(host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0, msg.length);
+    assert.deepStrictEqual(host.readBuf(rx, msg.length), msg);
+  });
+
+  check('reading hands the window back, and the sender carries on', () => {
+    const rx = host.buf(MAX_PAYLOAD);
+    assert.strictEqual(host.wat.test_call_recv(acc, rx, MAX_PAYLOAD, 0) | 0, MAX_PAYLOAD);
+    settle(host, peer);
+    assert.strictEqual(writable(peer, cli), true);
+    const big = peer.buf(new Array(MAX_PAYLOAD).fill(0x44));
+    assert.strictEqual(peer.wat.test_call_send(cli, big, MAX_PAYLOAD, 0) | 0, MAX_PAYLOAD);
+    settle(host, peer);
+    assert.strictEqual(drainStream(), WINDOW);
+  });
+
+  check('a flood of 1-byte sends is bounded in frames, not only bytes', () => {
+    const one = peer.buf([1]);
+    let frames = 0;
+    for (;;) {
+      const n = peer.wat.test_call_send(cli, one, 1, 0) | 0;
+      if (n < 0) { assert.strictEqual(peer.err(), WSAEWOULDBLOCK); break; }
+      frames++;
+      assert.ok(frames <= WINDOW, 'the window never closed');
+    }
+    assert.strictEqual(frames, WINDOW / 64);
+    assert.strictEqual(host.wire.pending, frames);
+    // Taking the frames off the wire returns their overhead without the
+    // guest reading a byte.
+    settle(host, peer);
+    assert.strictEqual(writable(peer, cli), true);
+    assert.strictEqual(drainStream(), frames);
   });
 
   // ---- addressing and malformed input ---------------------------------
@@ -387,7 +524,9 @@ async function main() {
     settle(host, peer);
     const a6 = host.wat.test_call_accept(s6, 0, 0) | 0;
     assert.notStrictEqual(a6, INVALID_SOCKET);
-    // a6 stays blocking: nothing is buffered, so recv must park.
+    // Accepted sockets inherit the nonblocking listener mode. Explicitly
+    // switch this socket to blocking before asserting that recv parks.
+    assert.strictEqual(host.wat.test_call_ioctlsocket(a6, 0x8004667e | 0, host.buf([0,0,0,0])) | 0, 0);
     host.wat.test_call_recv(a6, host.buf(8), 8, 0);
     assert.strictEqual(host.wat.get_yield_reason() | 0, 8, 'net_wait');
     host.wat.clear_yield();
@@ -423,7 +562,91 @@ async function main() {
     host.wat.test_call_closesocket(s8);
   });
 
+  // ---- a peer that leaves without a word ------------------------------
+
+  check('a closed link resets every connection to that address', () => {
+    const s9 = host.wat.test_call_socket(AF_INET, SOCK_STREAM, 0) | 0;
+    host.nonblocking(s9);
+    assert.strictEqual(host.wat.test_call_bind(s9, host.sockaddr('0.0.0.0', 9600), 16) | 0, 0);
+    assert.strictEqual(host.wat.test_call_listen(s9, 5) | 0, 0);
+    const c9 = peer.wat.test_call_socket(AF_INET, SOCK_STREAM, 0) | 0;
+    peer.nonblocking(c9);
+    peer.wat.test_call_connect(c9, peer.sockaddr(HOST_IP, 9600), 16);
+    settle(host, peer);
+    const a9 = host.wat.test_call_accept(s9, 0, 0) | 0;
+    assert.notStrictEqual(a9, INVALID_SOCKET);
+    // Request blocking mode explicitly; accept inherits the listener mode.
+    assert.strictEqual(host.wat.test_call_ioctlsocket(a9, 0x8004667e | 0, host.buf([0,0,0,0])) | 0, 0);
+    host.wat.test_call_recv(a9, host.buf(8), 8, 0);
+    assert.strictEqual(host.wat.get_yield_reason() | 0, 8, 'parked before the link closes');
+    host.wat.clear_yield();
+    host.wire.peerGone(ip2int(PEER_IP));
+    assert.strictEqual(host.wat.test_call_recv(a9, host.buf(8), 8, 0) | 0, -1);
+    assert.strictEqual(host.err(), WSAECONNRESET);
+    assert.strictEqual(host.wat.get_yield_reason() | 0, 0, 'answered, not parked');
+    // The listener belongs to nobody in particular and keeps listening.
+    const set = host.fdset([s9]);
+    assert.strictEqual(host.wat.test_call_select(0, 0, 0, set, host.timeval(0, 0)) | 0, 0);
+    host.wat.test_call_closesocket(a9);
+    host.wat.test_call_closesocket(s9);
+    peer.wat.test_call_closesocket(c9);
+    host.wire.inbox.length = 0;
+  });
+
+  check('losing every address fails a connect in flight with WSAETIMEDOUT', () => {
+    const c10 = peer.wat.test_call_socket(AF_INET, SOCK_STREAM, 0) | 0;
+    peer.nonblocking(c10);
+    assert.strictEqual(peer.wat.test_call_connect(c10, peer.sockaddr(HOST_IP, 9700), 16) | 0, -1);
+    assert.strictEqual(peer.err(), WSAEWOULDBLOCK);
+    host.wire.inbox.length = 0;         // the SYN is lost with the link
+    peer.wire.peerGone(0xFFFFFFFF);
+    assert.strictEqual(peer.wat.test_call_connect(c10, peer.sockaddr(HOST_IP, 9700), 16) | 0, -1);
+    assert.strictEqual(peer.err(), WSAETIMEDOUT);
+    peer.wat.test_call_closesocket(c10);
+  });
+
+  await mutePeer(wasm);
+
   console.log(`\n${passed}/${passed} virtual LAN wire checks passed`);
+}
+
+// A connect whose SYN reaches nobody gives up after the 20 s the switch
+// allows, measured on the WALL clock -- here a clock the test moves. Not the
+// guest clock: test/run.js runs that at 200 ms a batch, and a client idling
+// while its SYN crossed the process hub gave up in milliseconds and reset the
+// server's freshly accepted socket (TetriNET, Liquid War: WSAECONNRESET).
+async function mutePeer(wasm) {
+  const segment = new LoopbackSegment();
+  let now = 1000;
+  let guest = 1000;
+  const node = await makeNode(wasm, segment.attach(), PEER_IP,
+    { realNowMs: () => now, guestNowMs: () => guest });
+  segment.attach();                     // a seat that never reads its wire
+  check('a connect nobody answers times out on the wall clock, not the guest clock', () => {
+    const c = node.wat.test_call_socket(AF_INET, SOCK_STREAM, 0) | 0;
+    // Blocking: the call parks and is re-entered, as the host does.
+    node.wat.test_call_connect(c, node.sockaddr(HOST_IP, 9800), 16);
+    assert.strictEqual(node.wat.get_yield_reason() | 0, 8, 'net_wait');
+    node.wat.clear_yield();
+    guest += 600000;                    // ten guest minutes, no real time
+    node.wat.test_call_connect(c, node.sockaddr(HOST_IP, 9800), 16);
+    assert.strictEqual(node.wat.get_yield_reason() | 0, 8,
+      'the guest clock racing ahead does not time the connect out');
+    node.wat.clear_yield();
+    now += 19000;
+    node.wat.test_call_connect(c, node.sockaddr(HOST_IP, 9800), 16);
+    assert.strictEqual(node.wat.get_yield_reason() | 0, 8, 'still waiting at 19 s');
+    node.wat.clear_yield();
+    now += 2000;
+    assert.strictEqual(node.wat.test_call_connect(c, node.sockaddr(HOST_IP, 9800), 16) | 0, -1);
+    assert.strictEqual(node.err(), WSAETIMEDOUT);
+    // A late answer is refused for it: the switch sent a reset after the SYN.
+    assert.strictEqual(node.wire.sentFrames, 2);
+    // And the socket can be pointed somewhere else.
+    node.wat.test_call_connect(c, node.sockaddr(HOST_IP, 9801), 16);
+    assert.strictEqual(node.wat.get_yield_reason() | 0, 8, 'a fresh connect');
+    node.wat.clear_yield();
+  });
 }
 
 main().catch(err => {

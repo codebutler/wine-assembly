@@ -1,5 +1,243 @@
 # TODOS
 
+## Coordinated migration queue — 2026-10-01
+
+Historical sections below are preserved; they are not automatically ready work.
+Coordinator: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0.
+Resource and acknowledgment ledger: `ops/handoffs/orchestrator-status.md`.
+
+**No product decision needed for current independent work.** FP comparisons and
+result download are complete. REP final validation remains blocked by automated
+review. Codex handoff reconciliation is
+complete, including one explicitly reconstructed documentary handoff. Five
+Claude roots are deferred under the updated orchestration scope; their files
+and jobs remain preserved. No old-session wakeup is requested.
+
+- [x] Receive in-scope Codex handoffs and reconcile resource ownership
+  id: MIG-HANDOFF
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  started: 2026-10-01T23:44:20Z
+  Next: complete; eight root handoffs accepted plus one reconstructed Codex handoff. Five Claude roots deferred; preserve unverified jobs and their ownership.
+  Done: all in-scope Codex custody documented without inferring process termination.
+  Evidence: ops/handoffs/initial-inventory.md; ops/handoffs/orchestrator-status.md.
+
+- [x] Review and verify released dashboard blocker workflow
+  id: MIG-OPS
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  started: 2026-10-01T23:45:00Z
+  Next: complete; UTF-8 regression passes. Ops owner reloaded8098 with CPU/RSS work,10/10tests and browser/live checks pass; Unicode fix active.
+  Done: bounded review and relevant tests recorded, defects fixed or explicitly queued.
+  Evidence: ops/handoffs/ops-dashboard.md; ops/handoffs/mig-ops-review.md.
+
+- [x] Verify existing PCP artifact correctness
+  id: MIG-FP
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  started: 2026-10-01T23:45:00Z
+  Next: complete; 400 sequences/14834ops pass, 264 preserved files unchanged. Native/game gates remain.
+  Done: parity result and remaining native/game gates recorded.
+  Evidence: ops/handoffs/fp-next-root.md; ops/handoffs/mig-fp-parity.md.
+
+- [x] Review remaining Serious Sam production integration
+  id: MIG-SAM
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  started: 2026-10-01T23:45:00Z
+  Next: complete; timer TLS/SEH isolation recommended after frozen replay, preserve mixed-file ownership.
+  Done: precise next task with ownership boundaries and validation; goal remains incomplete.
+  Evidence: ops/handoffs/01a0f6ff-da61-7710-a604-d9442103dbbd.md; ops/handoffs/mig-sam-review.md.
+
+- [ ] Defer NFS2 and IS3 root migration
+  id: MIG-NFS2
+  status: deferred
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Next: Claude migration deferred per updated ops/ORCHESTRATOR.md; preserve files/jobs and do not take overlapping claims. IS3/icon commits and tests are recorded but do not imply root transfer.
+  Done: resume only when scope includes Claude migration.
+
+- [x] Verify handed-off renderer specular correction in isolated candidate
+  id: MIG-RENDER
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Next: complete; fixed72 and actual shared-worker WebGL/native software pass after narrow fog correction. Broader migration remains incomplete.
+  Done: unchanged analytical expected pixels pass; exact tested module/source evidence retained.
+  Evidence: ops/handoffs/01a0eb29-4302-7e20-9b06-7084fb37358b.md; ops/handoffs/mig-render-validation.md.
+
+- [x] Correct generated fixed fog/specular guard without widening guest support
+  id: MIG-RENDER-FOG
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Next: complete; unchanged analytical fog/specular pixels pass and both mixed guest/generated negative checks reject.
+  Done: existing analytical fog/specular pixels pass while unsupported guest/mixed paths remain rejected.
+  Evidence: ops/handoffs/mig-render-fog-review.md; ops/handoffs/mig-render-validation.md.
+
+- [x] Prepare coherent texture-registry validation snapshot
+  id: MIG-RENDER-TEXTURES
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Next: complete;9/9 gates PASS,144 protected hashes unchanged,12file manifest/backups/logs downloaded and own jobs cleaned. Separate Q2 route assigned; empty-quad excluded.
+  Done: registry/lowering/GL/Glide correctness checks on identified source, or concrete failing gate recorded before further migration.
+  Evidence: ops/handoffs/mig-render-textures-validation.md; scratch/mig-render-textures-validation-20261002/result.json.
+
+- [x] Validate Q2 world and movement with shared texture registry
+  id: MIG-RENDER-Q2
+  candidate: quake-2-demo-installer
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Next: complete; reviewed textured world and scripted-W framechangePASS6205colors/40457pixels. Physical traversal unproven;284source hashes stable, no budget rejection on this route. Own jobs cleaned, remote slot released.
+  Done: reviewed world/movement images, registry budget behavior and exact tested identities; or concrete failure. No performance acceptance or merge.
+  Evidence: ops/handoffs/mig-render-q2.md; scratch/runs/20261002T010210Z-quake-2-demo-installer-mig-render-registry/result.json.
+
+- [x] Replay Serious Sam production TLS diagnostic artifact to intro
+  id: MIG-SAM-REPLAY
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  Next: bounded replay complete with FAILED visual criterion: near-black87000 despite quitfalse/credits0. Follow-up paired replay assigned; production TLS visual pass remains unproven.
+  Done:87000 intro state and reviewed capture, or concrete failure evidence; stop only own new run.
+  Evidence: ops/handoffs/mig-sam-review.md; ops/handoffs/mig-sam-replay.md.
+
+- [x] Isolate Serious Sam near-black intro checkpoint
+  id: MIG-SAM-VISUAL
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  Next: complete; both87000/90000 images byte-identical across405db/363d, brightGODGAMES90000, hosts unchanged and both runs stopped. Earlier black frame is transition.
+  Done: frame-phase versus module difference recorded with reviewed paired evidence; no unsupported TLS blame.
+  Evidence: ops/handoffs/mig-sam-replay.md.
+
+- [x] Capture matching FP native code on dedicated x64 box
+  id: MIG-FP-NATIVE-X64
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  Next: complete; six captures/30function records/121download hashes verified. Both engines retain spilled countdown; no speed claim. ARM64 remains next after local slot release.
+  Done: captures downloaded and reviewed with tier/engine/hash provenance; no speed claim.
+  Evidence: ops/handoffs/mig-fp-native-plan.md; ops/handoffs/mig-fp-native-x64.md.
+
+- [x] Capture matching FP native code on local ARM64
+  id: MIG-FP-NATIVE-ARM64
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  Next: complete; six captures/30functions/input hashes verified. Countdown remains spilled; affected Ion fast frames shrink16bytes. CPU released, version differences retained; no speed claim.
+  Done: actual disassembly reviewed with version/tier/module provenance; no timing conclusion.
+  Evidence: ops/handoffs/mig-fp-native-plan.md; ops/handoffs/mig-fp-native-arm64.md.
+
+- [x] Restore missing MW3 assets and verify frozen P browser baseline
+  id: MIG-FP-BROWSER-BASELINE
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  Next: complete;43assets verified, cockpit and3windows PASS;23artifacts downloaded/hash matched, source stable and own jobs cleaned. CDP SwiftShader contradicts endpointIntel string; diagnostic evidence only.
+  Done: reviewed gameplay route or concrete failure with exact source/module/renderer provenance; no variant timing campaign or EPYC comparison.
+  Evidence: ops/handoffs/fp-next-root.md; ops/handoffs/mig-fp-browser-baseline.md.
+
+- [x] Prepare existing FP copied-kernel comparison recipe
+  id: MIG-FP-KERNEL-PLAN
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  Next: complete;112frozen inputs pinned and exact3pair recipe reviewed. MIG-FP-KERNEL assigned on dedicated ASCII host after quiet preflight.
+  Done: concrete recipe with MIXED_CONTROL census guard and explicit mixed-kernel versus pure-path/gameplay coverage limits; no new variant/default change.
+  Evidence: ops/handoffs/fp-next-root.md; ops/handoffs/mig-fp-native-arm64.md; ops/handoffs/mig-fp-native-x64.md.
+
+- [x] Prepare matching FP native-code capture commands
+  id: MIG-FP-NATIVE-PLAN
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Next: plan complete; local captures wait for Serious Sam CPU release, remote prerequisites need separate verification.
+  Done: executable matching P/PCM/PCP V8/Ion capture plan with prerequisites explicit.
+  Evidence: ops/handoffs/mig-fp-native-plan.md.
+
+- [x] Audit incoming owner evidence and missing handoffs
+  id: MIG-OWNERS
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  Next: audit complete; nine original roots still lack durable handoffs, keep individual blockers open.
+  Done: received/released/retained resource distinctions and ready candidates recorded without runtime disturbance.
+  Evidence: ops/handoffs/mig-ownership-audit.md.
+
+- [x] Receive Pirates Worker sailing handoff
+  id: MIG-PIRATES
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Next: handoff accepted; preserve8159, review exact StretchRect/Worker hunks before game-path validation.
+  Evidence: ops/handoffs/01a0f736-78f1-7822-8b37-159d6f8ed94d.md.
+  Done: accepted handoff and safe next task.
+
+- [x] Verify Pirates actual-game rectangular StretchRect path
+  id: MIG-PIRATES-STRETCH
+  candidate: pirates-2004
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  Next: bounded route complete with INCONCLUSIVE transfer outcome; guest stopped after captain before any transfer. Root reviewed image and verified58artifact hashes;143inputs unchanged. Cause unresolved; no rerun assigned.
+  Done: opcode0x30015 and ordered source readback observed with reviewed game captures, or concrete route failure. A zero-transfer sailing pass is insufficient; white terrain remains separate.
+  Evidence: ops/handoffs/mig-pirates-stretch.md; scratch/mig-pirates-stretch-20261002/result.json.
+
+- [x] Complete MMX root resource audit
+  id: MIG-MMX
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Next: durable root/three-child handoff acknowledged; preserve notes/artifacts/server58114, no slower default enabled and no new optimization campaign assigned.
+  Evidence: ops/handoffs/01a0eef4-21b2-76b3-8352-48b0d6ac6e7f.md.
+  Done: checkpoint accepted, remaining work scoped from owner evidence.
+
+- [ ] Defer four older Claude roots; accept reconstructed Codex coordination history
+  id: MIG-LEGACY
+  status: deferred
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Next: Claude PID10341,36638,68796,53759 deferred with claims preserved. Codex01a0a731 documentary reconstruction accepted; completed commits are ancestors and dedicated files clean. Preserve its unverified processes.
+  Done: Codex migration closed; Claude work stays deferred until scope changes.
+  Evidence: ops/handoffs/reconstructed-remaining.md; ops/ORCHESTRATOR.md.
+
+- [x] Revalidate transferred bounded wave capability writes
+  id: MIG-AUDIO-CAPS
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Next: complete;920ABI/input/full isolatedbuildPASS, committedcd50cfdf only4ownedpaths; foreign timeSetEvent hunk preserved.
+  Done: current920-case caps and existing input suite validated, isolated/full build identity recorded, report finished and only owned hunks integrated.
+  Evidence: ops/handoffs/01a04d26-4255-7ee2-bb58-9e2cbedb68df.md; ops/handoffs/mig-audio-caps.md.
+
+- [x] Integrate persistent multimedia timer TLS and SEH context
+  id: MIG-SAM-TIMER
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  Next: complete; new context fixture plus five regressions and static gates PASS. Narrow source additions preserved uncommitted; private diagnostic intro replay assigned.
+  Done: stable FS base, separate persistent registered callback TLS, main TLS/SEH restoration, late templates/TlsFree and waveOut regressions pass; no fault/REP/launcher expansion.
+  Evidence: ops/handoffs/mig-sam-timer.md; scratch/mig-sam-timer-20261002/.
+
+- [x] Replay production timer context in private Serious Sam diagnostic module
+  id: MIG-SAM-TIMER-REPLAY
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  Next: complete; private0c5d6ab0 matches both prior modules PNG/snapshot/GL at87000/90000;250inputs unchanged and own8147 quit0. Private fault/REP transforms remain.
+  Done: exact source/module/host identity and intro result, own8147 run stopped, retained8138/8146 untouched. Current-source replay is not a timer-only A/B or gameplay completion.
+  Evidence: ops/handoffs/mig-sam-timer-replay.md; scratch/runs/20261002T005200Z-serious-sam-production-timer-intro/result.json.
+
+- [x] Scope remaining Serious Sam production fault and REP restart integration
+  id: MIG-SAM-FAULT-PLAN
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Next: complete; REP-specific absent-page slice proposed, separate MOVSW and raw-SEH classifier gaps identified. New fixture/fallback audit assigned without production changes.
+  Done: concrete ready or blocked steps with exact source dependencies and precise-PC strategy; no broad diagnostic instrumentation shipped.
+  Evidence: ops/handoffs/mig-sam-review.md; ops/handoffs/mig-sam-timer-replay.md.
+
+- [x] Run existing FP copied projection kernel pairs
+  id: MIG-FP-KERNEL
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  Next: Complete: three pairs passed correctness/census/island gates; nine downloaded evidence hashes verified,115inputs unchanged and own jobs stopped. Timing inconclusive against biased P/P control; no default change.
+  Done: source/module/work identities, parity/census/island coverage and paired spread against P/P null recorded; own jobs cleaned. Mixed workload does not validate PCP pure-path benefit or game speed.
+  Evidence: ops/handoffs/mig-fp-kernel.md; scratch/mig-fp-kernel-20261002/analysis.json
+  status: done
+
+- [x] Establish decoded REP sparse-fault restart regression
+  id: MIG-SAM-FAULT-FIXTURE
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Next: complete; both diagnostic baselines expose stale blockheadPC/writekind0/repeated premarker; MOVSD also stale progress. Two immutable165file snapshots/logs retained; narrow REP correction assigned.
+  Done: precise fault/progress/retry baseline evidence and MOVSW/fallback coverage limits, without weakening expected behavior or promoting diagnostic shortcuts.
+  Evidence: ops/handoffs/mig-sam-fault-plan.md.
+
+- [!] Correct REP MOVS restart on absent sparse pages
+  id: MIG-SAM-REP-RESTART
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Next: incomplete handoff accepted; seven file/patch hashes verified. Matrices/regressions/zero-count/block paths pass. Corrected uop log passes with2entries/1COPYdeopt, tool exit unconfirmed. ContinueSearch, direct MOVS code-write review and final static gates remain after automated review stopped the worker.
+  Done: correct single fault, first absent byte, failed-element preservation and retry at REP for widths1/2/4 DF0/1, with source identities and coverage limits. No generic fault-policy/classifier/layout changes or canonical build.
+  Evidence: ops/handoffs/mig-sam-rep-restart.md; scratch/mig-sam-rep-restart-20261002/evidence-summary.json.
+  blocker: Worker execution stopped by automated cybersecurity-risk flag; final validation incomplete.
+  waiting-on: automated review resolution
+  needs: Resolve the blocked validation step before promoting or committing this change.
+
+- [x] Review remaining Serious Sam diagnostic fault transforms
+  id: MIG-SAM-FAULT-REMAINDER
+  candidate: serious-sam-demo
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  Next: complete;3transforms obsolete,5generic/classifier dependencies remain. Original builder is incompatible with current REP signatures; no replay or implementation assigned until REP review gates resolve.
+  Done: exact redundant versus still-needed transforms and safe next validation documented.
+  Evidence: ops/handoffs/mig-sam-fault-remainder.md.
+
+---
+
 Snapshot of remaining work, written 2026-08-16 by picking up five Claude sessions
 that ran the night of 2026-08-15 and stopped mid-flight. Each item names the
 session that owns it, the files it touches, and what the *next* concrete step is.
@@ -622,3 +860,661 @@ dirty. A verified `$prop_key` fix was reverted from disk between a read and a
 commit; `git commit <path>` then silently committed only the other file, and the
 loss was visible only in the `1 file changed` stat. **Check the file count in
 commit output — do not assume your hunks landed.**
+
+## Follow-through and 3D performance — user requested 2026-10-01
+
+- [x] Reconcile Codex handoffs and turn unfinished outcomes into tasks
+  id: OPS-HANDOFF-FOLLOWTHROUGH
+  status: done
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  Next: Complete: all nine original roots and child dispositions mapped to integrated, queued, blocked or deferred outcomes; six missing follow-ups added without launching backlog.
+  Done: Each handoff has an explicit disposition: integrated, queued with a task ID, blocked with a concrete reason, or deferred. Update TODOS and STATUS from evidence; distinguish accepted custody from completed implementation. Preserve the automated-review block and deferred Claude ownership.
+  Evidence: ops/handoffs/ops-handoff-followthrough.md
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  accepted: 2026-10-02T04:11:37.233064+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+
+- [x] Build a repair queue from failing EXE candidates
+  id: EXE-FAILURE-TRIAGE
+  status: done
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  Next: Complete:167result hashes checked,5failed/1harness-error deduplicated; actionable findings mapped to Zuma, Pirates route/terrain, SAM production and Q2 traversal tasks. Historical/unknown captures kept distinct.
+  Done: Each actionable failure has a candidate-linked task with route, build, evidence, reproduction and done criteria. Distinguish historical/unreviewed evidence, application failures and harness errors; merge duplicates and shared root causes. Unknown or missing captures are not automatically failures. Do not launch the whole corpus concurrently.
+  Evidence: ops/handoffs/exe-failure-triage.md; scratch/exe-failure-triage-20261002/run-inventory.json
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  accepted: 2026-10-02T04:11:37.233064+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+
+- [x] Reproduce and resolve Zuma startup QueueUserAPC failure
+  id: EXE-ZUMA-STARTUP
+  status: done
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  candidate: reflexive-zuma-deluxe
+  Next: None for startup triage: reviewed title/loading reached on c474288d with no historical missing QueueUserAPC; menu/gameplay unverified and would require a separate task.
+  Done: A current reviewed run either demonstrates the historical failure is resolved or reproduces and fixes its cause with a focused regression. Capture startup/menu evidence and exact build/command; do not claim gameplay from a menu alone or add a silent-success stub.
+  Evidence: ops/handoffs/exe-zuma-startup.md; ops/handoffs/exe-zuma-preflight.md; scratch/runs/20261002T042949Z-reflexive-zuma-deluxe-startup/result.json
+  accepted: 2026-10-02T04:11:37.233064+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  owner: codex:01a0f9db-89c0-73b3-b528-fe8bf239e061
+  Notes: Planned60s observation ended normally4290batches/exit0; outer90s guard unused,6084 frozen hashes unchanged. Root reviewed640x480 title/loading PNG; no hang or gameplay claim. Both earlier harness failures preserved.
+
+- [~] Compare NFS3 speed and correctness in Glide, D3D and original software
+  id: NFS3-RENDERER-BENCH
+  status: active
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  candidate: need-for-speed-3-demo
+  Next: Review CDP SwiftShader versus Glide endpoint Intel/Mesa identity discrepancy from the completed failed attempt; propose evidence-backed correction without rerunning.
+  Done: Report all three guest renderer paths on the same identified source/WASM/browser/CPU/GPU, resolution and controlled race/weather/input route. Separate original game software rendering from our software backend; verify no hidden GPU fallback or SwiftShader substitution. Save reviewed race images, repeated warmed-up FPS/frame-time median and p95, CPU profiles, draw/triangle/texture/upload/readback/fallback counters, sample counts and spread, plus same-path control. Report unavailable paths explicitly. Record bottlenecks and a predeclared performance acceptance budget; historical high-load FPS is not a current baseline.
+  Evidence: ops/handoffs/nfs3-renderer-bench.md; scratch/nfs3-renderer-bench-20261002/closure-report.json; scratch/nfs3-renderer-bench-20261002/local-resource-preflight.json; ops/handoffs/nfs3-capacity-recheck.md; ops/handoffs/nfs3-software-prep.md
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  accepted: 2026-10-02T04:11:37.233064+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Notes: Root34 downloaded hashes/cleanup/post-input checks pass; car/road image reviewed but no qualified timing. Failure occurred before qualification windows at backend identity gate. Host explicitly released for GTA2 then Unreal; all three original renderer paths remain required.
+
+- [x] Audit the actual shared 3D rendering pipeline across APIs
+  id: RENDER-SHARED-AUDIT
+  status: done
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  Next: Complete: main/private API-backend matrices, semantic/resource gaps and proposed slices S1-S5 documented. Backlog implementation awaits scheduling; no broad private merge.
+  Done: Publish an implementation-backed API/backend matrix, ownership boundaries, duplicate semantic lowering and remaining divergence, with bounded migration tasks and representative correctness/performance fixtures. Distinguish one shared worker or texture registry from a shared drawing contract. Preserve API-specific semantics at adapters and explicit fallback behavior. Do not claim the proposal is already implemented.
+  Evidence: ops/handoffs/render-shared-audit.md; scratch/render-shared-audit-20261002/source-manifest.json
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  accepted: 2026-10-02T04:11:37.233064+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+
+- [x] Keep the coordinator picking up tasks and completed handoffs
+  id: OPS-COORDINATOR-CONTINUITY
+  status: done
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  Next: Use the durable inbox at each queue/handoff boundary under the existing active native goal; refresh truthful runtime evidence and acknowledge exact reviewed notice IDs.
+  Done: New ready tasks and worker handoffs are acknowledged and reconciled without manual prompting, with deduplicated wake requests and at most one coordinator. Never send wake text into a tool approval or a busy terminal. Test idle, busy, approval, disconnect and restart cases using fixtures. Before going idle, convert unfinished outcomes into follow-ups and record why remaining work cannot proceed; do not bypass blocked review or take deferred claims.
+  Evidence: ops/handoffs/coordinator-continuity.md; ops/coordinator-inbox.js; ops/coordinator-inbox.test.js; scratch/coordinator-live-scan.json; scratch/coordinator-live-ack-restart.json; scratch/coordinator-natural-handoff.json
+  accepted: 2026-10-02T04:11:37.233064+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  owner: codex:01a0f9db-4a5d-7733-ade9-8b71d8e3f05f
+  Notes: 10 fixture tests PASS; live busy scan51 notices,2 exact ack/restart persistence, and natural Zuma handoff change delivered with prior version retained until explicit ack.4 notices acknowledged total; remaining pending preserved. Native goal owns continuation; no wake daemon or terminal input.
+
+- [ ] Implement the next bounded shared 3D command-contract slice
+  id: RENDER-SHARED-IMPLEMENT
+  status: backlog
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  depends-on: RENDER-SHARED-AUDIT
+  Next: Use the audited matrix to select and record the smallest shared semantic slice, exact owned files and per-API regression cases before implementation.
+  Done: The chosen slice uses one explicit drawing/resource contract with thin API adapters and GPU/software executors, removes the corresponding duplicate interpretation, and passes differential pixel/state/resource-lifetime and ordering tests for affected APIs plus representative game captures. Record unsupported semantics and remaining migration tasks; a shared worker alone is not completion.
+  Evidence: docs/render-command-unification.md; ops/handoffs/mig-render-textures-validation.md
+
+- [ ] Profile and optimize the shared 3D path with repeatable performance gates
+  id: RENDER-PERF-GATE
+  status: backlog
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  depends-on: NFS3-RENDERER-BENCH, RENDER-SHARED-AUDIT
+  Next: Select the largest measured shared bottleneck from the renderer matrix, declare workload/metric/regression budget and compare one bounded change against an unchanged control on a quiet host.
+  Done: Show repeatable improvement beyond control noise with unchanged reviewed images/state and no regression beyond the declared budgets across representative legacy D3D, D3D8/9, OpenGL and Glide GPU/software workloads. Attribute CPU emulation, translation, submission, GPU, readback and presentation costs separately. Save raw measurements/profiles/build hashes and reject changes whose gains disappear in game routes. No default switch on microbenchmark-only evidence.
+  Evidence: docs/render-command-unification.md; docs/re-notes/need-for-speed.md; ops/handoffs/mig-fp-kernel.md
+
+- [ ] Diagnose Pirates stopping before the target rendering operation
+  id: PIRATES-ROUTE-FOLLOWUP
+  status: backlog
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  candidate: pirates-2004
+  Next: Captain-route stop remains independent and unmeasured. Before claiming current-main actual rectangular/filter2 transfer, reconcile missing archived implementation under PIRATES-TRANSFER-REENTRANCY; main058b82eba still explicitly traps those shapes. Preserve historical no-transfer outcome; do not rerun old-build recipe as current-main acceptance.
+  Done: Identify the route failure and either validate the actual game transfer/readback with reviewed images or record a precise blocking dependency. Link unresolved terrain defects separately; a zero-transfer run is not a rendering pass.
+  Evidence: ops/handoffs/mig-pirates-stretch.md; ops/handoffs/mig-pirates-stretch-recipe.md
+
+- [x] Verify Quake II world traversal beyond a changed frame
+  id: Q2-MOVEMENT-FOLLOWUP
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  created: 2026-10-02T04:00:31.545Z
+  created-by: user-request via ops-dashboard
+  candidate: quake-2-demo-installer
+  Next: Complete: original ordinary forward/reverse/idle traversal independently reviewed on WebGL2534731b3 and software069662726. Runs20261007T213620Z-quake2-ordinary-traversal and20261008T000901Z-quake2-software-ordinary retain reference identities; no redundant run.
+  Done: Reviewed before/after world captures and position/landmark evidence demonstrate actual traversal, with exact build, route and renderer provenance. Retain texture/resource checks and distinguish movement from animation or camera-only changes.
+  Evidence: ops/handoffs/mig-render-q2.md
+
+- [x] Recover and review screenshots and diagrams from historical runs
+  id: OPS-HISTORICAL-VISUALS
+  status: done
+  created: 2026-10-02T04:03:23.368Z
+  created-by: user-request
+  Next: None for this bounded recovery/audit. Unlinked-candidate and unresolved-association searches are recorded separately as backlog; no new game runs or automatic restorations.
+  Done: Publish confidently associated screenshots/diagrams as file-backed run bundles with exact original path, content hash, source timestamp basis, build/route when known and provenance. Link candidate, session and task only with evidence; unknowns stay unknown. Deduplicate by image hash, visually inspect contact sheets, classify blank/loading/error/gameplay captures and select a representative frame. Preserve failed/black-frame evidence in run details rather than deleting or calling it a pass. Review the 147 previously quarantined ambiguous bundles; restore only verified associations, never infer GeneRally from prose containing generally. Produce a coverage report listing recovered images, missing sources and unresolved associations; do not execute historical commands or rerun games to fabricate historical captures. Keep historical/unreviewed status explicit, and link failures to EXE-FAILURE-TRIAGE without claiming current compatibility.
+  Evidence: ops/handoffs/ops-visual-acceptance.md; ops/handoffs/ops-quarantine-review.md; ops/handoffs/ops-visual-coverage.md; scratch/ops-visual-acceptance-20261002/final-verification.json
+  accepted: 2026-10-02T04:11:37.233064+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  owner: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Notes: Final18images/18distinct hashes and metadata verified; seven new images reviewed,522protected inputs unchanged,441quarantine files preserved.147rows reconcile9supported/5incorrect/133unresolved with rootNFS2proof. All9supported rows and separately correctedNFS3 copy published; coverage30of76,46unlinked. No current compatibility/performance claim.
+
+## Original handoff follow-ups — reconciled 2026-10-02
+
+- [ ] Validate FP variants in matched-work game windows
+  id: FP-GAME-GATES
+  status: backlog
+  created: 2026-10-02T04:16:51.185761+00:00
+  created-by: orchestrator-handoff-audit
+  depends-on: MIG-FP-KERNEL
+  Next: Prepare P/P control and P/PCM/PCP game windows with FP_SHARE_CALENDAR=1, reviewed pixels/API/tier counters and exact host identities.
+  Done: Matched work and meaningful timing precision/control established, or exact failed gate recorded; no default switch from microkernel evidence.
+  Evidence: ops/handoffs/fp-next-root.md; ops/handoffs/mig-fp-kernel.md
+
+- [!] Complete Serious Sam production integration and ordinary gameplay
+  id: SAM-PRODUCTION-FOLLOWTHROUGH
+  status: blocked
+  created: 2026-10-02T04:16:51.185761+00:00
+  created-by: orchestrator-handoff-audit
+  depends-on: MIG-SAM-REP-RESTART
+  candidate: serious-sam-demo
+  Next: After REP review clears, validate generic fault/classifier contracts, integrate only owned tested timer/TLS/memory slices and review diagnostic transform removal before launcher/input work.
+  Done: Production build reaches menu and level with supported input, verified movement/combat and no private diagnostic shortcuts; exact source/module and focused regressions retained.
+  Evidence: ops/handoffs/mig-sam-fault-remainder.md; ops/handoffs/01a0f6ff-da61-7710-a604-d9442103dbbd.md
+  blocker: REP validation remains incomplete after automated review; do not retry through another channel.
+  waiting-on: MIG-SAM-REP-RESTART review resolution
+
+- [ ] Integrate tested private renderer changes without losing main work
+  id: RENDER-PRIVATE-INTEGRATION
+  status: backlog
+  created: 2026-10-02T04:16:51.185761+00:00
+  created-by: orchestrator-handoff-audit
+  depends-on: RENDER-SHARED-AUDIT
+  Next: Use audit to select a coherent private patch, reconcile intervening main changes and create a frozen integration candidate; exclude unvalidated empty-quad optimization.
+  Done: Selected changes validated on current integration base with affected API games/tests and exact identities; unvalidated changes kept separate and any merge follows explicit ownership review.
+  Evidence: ops/handoffs/01a0eb29-4302-7e20-9b06-7084fb37358b.md; ops/handoffs/mig-render-textures-validation.md
+
+- [ ] Diagnose Pirates white terrain with a controlled capture
+  id: PIRATES-TERRAIN-REVIEW
+  status: backlog
+  created: 2026-10-02T04:16:51.185761+00:00
+  created-by: orchestrator-handoff-audit
+  depends-on: PIRATES-ROUTE-FOLLOWUP
+  candidate: pirates-2004
+  Next: Separate terrain rendering from the captain-route stop and reproduce the visible defect on an identified reachable gameplay state.
+  Done: Reviewed terrain evidence identifies the failing contract and focused correction or concrete dependency; no zero-transfer pass used as terrain proof.
+  Evidence: ops/handoffs/01a0f736-78f1-7822-8b37-159d6f8ed94d.md
+
+- [ ] Review nested transfer packet preservation
+  id: PIRATES-TRANSFER-REENTRANCY
+  status: backlog
+  created: 2026-10-02T04:16:51.185761+00:00
+  created-by: orchestrator-handoff-audit
+  candidate: pirates-2004
+  Next: October8 main058b82eba audit: only whole-surface/filter0 support; archived428c9abed rectangle/filter2 packet implementation is absent from main. Isolate archived source/tests, audit nested callback deferral and per-invocation stage/packet ownership, prove negative/positive nested pixel/cleanup behavior before integration. See ops/handoffs/pirates-stretch-main-reconciliation-20261008.md.
+  Done: Explicit ownership/lifetime contract and focused nested-call regression, or exact unsupported case recorded; no unchecked pooling/copy removal.
+  Evidence: ops/handoffs/01a0f736-78f1-7822-8b37-159d6f8ed94d.md
+
+- [ ] Reconcile remaining historical recovery changes against current main
+  id: RECOVERY-PATCH-RETRIAGE
+  status: backlog
+  created: 2026-10-02T04:16:51.185761+00:00
+  created-by: orchestrator-handoff-audit
+  Next: Perform read-only patch-equivalence audit of codex/recovery-main-20260910 and current main, separating landed, obsolete and missing runtime/overlay/save/screensaver changes.
+  Done: Each remaining change has current evidence and explicit disposition/task; no stale branch bulk merge or old-build acceptance reused.
+  Evidence: ops/handoffs/01a08812-a2da-7333-83fc-851ef8fff7b1.md
+
+
+- [~] Measure browser FPS for strongest local and desktop game candidates
+  id: OPS-GAME-FPS-BASELINE
+  status: active
+  candidate: jazz-jackrabbit-2-demo-installer, reflexive-collapse-crunch, reflexive-ricochet-xtreme, unreal-special-edition, gta2-demo
+  done: Publish run performance metadata with guest present counts, wall duration, per-sample p95 frame time, renderer/GPU, hardware-versus-SwiftShader, scene, build hash and measurement date; review playable route before measuring. No menu, browser rAF or CLI batch timing relabelled as gameplay FPS.
+  Next: Review ordinary Ricochet ball-launch input and evolving-gameplay scene admission; preserve ready-board diagnostic without publishing it as gameplay FPS. Continue GTA2 after NFS3 clean release.
+  Notes: Ricochet root100hash/arithmetic audit and eight images reviewed: apparently unlaunched ball/full bricks/zero score, gameplay measurement unaccepted. Host released; NFS3 transferring. Collapse association preparation under root review/callsite proof assigned; Jazz route and Unreal package remain pending.
+  owner: codex:01a0f9db-07f4-71d2-9fe8-42d5efc7f642
+  accepted: 2026-10-02T05:21:49.472399+00:00
+  accepted-by: codex:01a0f9d8-c0cd-73b3-a357-fb3ff1c784c0
+  Evidence: ops/handoffs/ops-game-fps-baseline.md; ops/handoffs/ops-fps-labels.md; ops/handoffs/ops-historical-fps-semantics.md; scratch/ops-gta2-fps-20261002/root-review.md; ops/handoffs/ops-unreal-fps-preparation.md; ops/handoffs/ops-jazz2-package.md; ops/handoffs/ops-collapse-v2-package.md; ops/handoffs/ops-ricochet-measurement.md
+
+- [ ] Investigate remaining unlinked historical visuals and uncertain associations
+  id: OPS-HISTORICAL-UNLINKED
+  status: backlog
+  created: 2026-10-02T05:58:39.995255+00:00
+  created-by: orchestrator-historical-audit
+  depends-on: OPS-HISTORICAL-VISUALS
+  Next: Select a bounded evidence-only batch from46unlinked candidates or133 unresolved exact associations after scheduling; use existing source paths/tests/notes before any separately scoped transcript work.
+  Done: Publish only confidently associated existing captures with exact hashes/provenance, update coverage and disposition deltas, preserve originals and explicit unknowns; never rerun games to fabricate historical evidence.
+  Evidence: ops/handoffs/ops-visual-acceptance.md; ops/handoffs/ops-quarantine-review.md; scratch/ops-visual-acceptance-20261002/final-verification.json
+  Notes: The completed18-image recovery/147-bundle audit remains accepted. This deeper search is unscheduled, not permission to take deferred Claude claims or restore incorrect associations.
+
+
+## Codex reclaimed work — 2026-10-07
+
+Current scoped ownership after reconciling the stopped fleet. The shared operational ledger retains other historical and released tasks. See ops/handoffs/codex-resume-20261007.md.
+
+- [~] Keep two new games moving toward playable gameplay with screenshots
+  id: NEW-GAMES-PIPELINE
+  status: active
+  reclaimed: 2026-10-07T07:42:56.312Z
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  accepted: 2026-10-04T02:11:10.446Z
+  accepted-by: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Next: Return Fire native/browser movement and colors verified; audio quality/FPS open. Alice native movement reviewed on held DLL lifecycle candidate; finish correctness review and browser registration. BG2 media extracted; assemble installer-defined game tree and run startup. One worker/runtime, temporary boats only.
+  done: Recurring user priority, not complete after two games; each child task needs a working launch route, visible player-controlled gameplay, ordinary input response and a reviewed screenshot linked to its run and source.
+  notes: Known freeware/shareware/demo titles first; public NFS/Diablo/StarCraft variants do not count as new games. Serialize browser and benchmark ownership; preserve review gates. Standing policy in ops/ORCHESTRATOR.md.
+
+- [~] Inventory every game and complete gameplay screenshot/FPS coverage
+  id: OPS-ALL-GAMEPLAY-COVERAGE
+  status: active
+  reclaimed: 2026-10-07T07:42:56.312Z
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  created: 2026-10-03T08:30:54.631Z
+  created-by: user via Telegram
+  accepted: 2026-10-03T08:30:54.631Z
+  accepted-by: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Next: Nine October9 owned records repaired to dashboard schema with original metadata retained; actual reader accepts9/9, zero matching warnings. SimCity reviewed city/budget images now exposed (2 gameplay images); failed startup, EULA hold and native-only tests remain unqualified. Continue existing FPS/audio and two-backend obligations; evidence ops/handoffs/run-metadata-schema-repair-20261009.json.
+  Done: Each game has a reviewed actual-gameplay screenshot and valid scene-qualified FPS evidence, or an explicit per-game blocker with exact missing paths; menus, intros and raw Flip event rates are not gameplay FPS.
+  Evidence: ops/handoffs/migration-core-ready-20261003.md
+
+- [x] New-game lane: original Daggerfall ordinary player-controlled dungeon
+  id: NEW-GAME-DAGGERFALL-20261005
+  status: done
+  reclaimed: 2026-10-07T07:42:56.312Z
+  candidate: gog-free-elder-scrolls-daggerfall
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: /root/coverage_audit
+  prev-owner: /root/coverage_audit — Codex out of credits until 2026-10-12; its uncommitted shared-tree work is preserved on archive/codex-shared-tree-20261006 (see ops/handoffs/codex-release-review-20261006.md)
+  created: 2026-10-05T18:27:59.455Z
+  accepted: 2026-10-05T18:27:59.455Z
+  accepted-by: /root/coverage_audit
+  Next: Qualified narrow ordinary dungeon movement on October7; documentation integrated remote main 724637d9, save repair fe7cfb95. Root reviewed forward/reverse/idle wall geometry in scratch/runs/20261007-daggerfall-dungeon-controls/result.json (708 artifact hashes). Runtime source3b8189/module8eb; optional bundle403 and driver exit1 preserved, clean process closure. No FPS, audio or sustained-play claim; worker refills lane.
+  Done: Reviewed actual first-person dungeon and finite ordinary movement response, exact source/fixture/input receipts and cleanup; character-review screens do not count.
+  Evidence: scratch/new-games-pipeline-20261005/daggerfall-reserve/activation.json; docs/re-notes/daggerfall-gog.md; tools/run-daggerfall-gameplay.js
+
+- [x] New-game lane: Die Hard: Nakatomi Plaza demo (Piranha/Fox 2002, LithTech, Direct3D)
+  id: NEW-GAME-DIEHARD-NAKATOMI-DEMO-20261006
+  status: done
+  reclaimed: 2026-10-07T07:42:56.312Z
+  Next: Narrow ordinary player-control qualified and root accepted2026-10-07. No further gameplay retry required; FPS/audio/sustained-level remain separate coverage obligations. Refill lane Arx Fatalis source preparation.
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: /root/restore_evidence
+  created: 2026-10-06T18:40:00.000Z
+  candidate: test/binaries/win98-games-a-d/Diehard nacatomi demoD3D.exe (local, no download)
+  Earlier: 2026-10-06T20:00Z -- installs headless (03e2f5f3 LoadLibrary system path); boots past every emulator blocker so far: 33e4ff16 (_EH_prolog EBP), b15fa588 (__p___argv/argc), 0dbe4ab6 (D3D8 16-bit mode + back-buffer view, Reset, CopyRects, A1R5G5B5/X1R5G5B5 textures; A/B on other D3D8 apps clean). lithtech.exe initializes D3D8 at 640x480x16, presents, and is on its loading screen decompressing rez data at 1.8M batches (~7 min). Notes 16191cf9 docs/re-notes/diehard-nakatomi-demo.md. Waiting on orchestrator: long local run vs boat. Then registration (apps.js + corpus-categories + manifest) and gameplay input.
+  Done: registered app, reviewed gameplay screenshot with input evidence, result.json (candidateId = app id), commit on main, manifest generator command posted.
+  Evidence: main236e8be9 thread-zero-poll fix; localregistration mainfea60cb9; scratch/runs/20261007-diehard-nakatomi-player-control (34hashes, four reviewed gameplay images); docs0be37005 pending root publication.
+
+- [x] USER REPORT: Drakan demo crashes in the browser (Threads on): 'render endpoint is closed' + fs_read_file_result threw in notifyGuestWrite
+  id: DRAKAN-WEB-THREADS-LAZY-CRASH-20261006
+  status: done
+  reclaimed: 2026-10-07T07:42:56.312Z
+  note: 2026-10-06T21:25Z d3ec2640: invalidate_code_range runs with d3dim_lazy_bypass -- the page shadow no longer traps materializing a lazy D3DIM surface after a Worker ReadFile; Drakan reaches its main menu in the page with Threads on (scratch/runs/20261006T2120Z-drakan-threads-lazy). Next: fence the destination of host writes (ReadFile etc.) in the guest BEFORE the host writes so a later readback cannot overwrite file bytes read into an armed surface; regression test for that; Threads-off page check. Also: headless probe clicks/Enter do not dismiss the beta MessageBox in guest-Worker mode (renderer handleMouseDown via evalfile does) -- probe issue, pre-existing.
+  note: 2026-10-06T21:00Z claude:1863d2b5 taking it.
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: /root/corpus_categories
+  created: 2026-10-06T20:57:00.000Z
+  Next: Completed October7: owner-side host-write fence maina1710870, actual-WASM/VFS negative control and candidate + Worker regression/full gates PASS; actual browser level personally reviewed with Threads on and off, clean process/server closure. Acceptance doc/hashes integrated mainea63ceed; ops/handoffs/drakan-threads-acceptance-20261007.json. No new movement, FPS, sound quality or PBO-warning-resolution claim.
+  Done: Drakan reaches its level in the page with Threads on and off; regression test for the lazy read completion in Worker mode; commit on main.
+  Evidence: user Telegram 2026-10-06T20:5xZ (log pasted in the orchestrator session)
+
+
+## GL/D3D reconciliation — October 7
+
+- [ ] GL/Direct3D corpus: every 3D app works on software and WebGL
+  id: GLD3D-CORPUS-27-20261006
+  status: active
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  prev-owner: claude:1863d2b5-bc58-4c0b-9c15-00fc951f0256 (fleet stopped)
+  created: 2026-10-06T02:09:48.337Z
+  accepted-by: claude:80aa9e95-435b-4acb-aeea-8ae3d860613c
+  Next: October9 coverage reconciles retained Morrowind prison movement (4image hashes + module verified), Pirates sailing images (6referenced logs missing, no fresh backend qualification), AoWII software army movement (render defects remain), and BW2 fixed Worker startup/live normal intro. QuakeII/Crimsonland/AlienShooter/WC3 two-backend results retained. PBO standalone Chrome reproduction completed; do not restart speculative renderer diagnosis. Finish ordinary BW2 route, then queued DisciplesII; retain software/WebGL/FPS/audio/current-main gaps per docs/gl-d3d-corpus-status.md. Winamp held, HeroesII laptop-owned.
+  Done: Status table for the full GL/D3D set in docs (software + WebGL per app, with run ids), and each fixed app has a reviewed in-game screenshot and commit on main.
+  Evidence: memory project_gl_d3d_corpus_goal (27-app set, 2026-09-22); tools/gfx-app-census.js; tools/gl-name-census.js
+
+- [ ] D3DIM async-flip PBO trips Chrome "READ-usage buffer written again before being read back"
+  id: D3DIM-ASYNC-PBO-WARN-20261006
+  status: blocked
+  note: 2026-10-06T21:25Z parked at WIND-DOWN, not started. Next: page probe on MW3 menu wrapping the D3DIM executor's readPixels/fenceSync/getBufferSubData (lib/d3dim-gpu.js asyncFlip path) to find which PBO is written again before its readback; likely reuse of one PIXEL_PACK_BUFFER across flips while an earlier read is inflight -> ring of PBOs or wait on the fence before reuse.
+  note: 2026-10-06T20:25Z claude:1863d2b5 claimed: code read finds no write-before-read path; next a page probe wrapping readPixels/fenceSync/getBufferSubData on MW3's live context (browser queue).
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  prev-owner: claude:1863d2b5-bc58-4c0b-9c15-00fc951f0256 (my change, fcfa4989) (fleet stopped)
+  created: 2026-10-06T20:20:00Z
+  Next: Warning isolated outside emulator: Chrome151 standalone4x4 WebGL2 yields six identical warnings despite8 correct pixel readbacks/GL_NO_ERROR. Matching browser source retains readback shadow allocation in GetBufferSubDataCHROMIUM path. Emulator trace216writes215reads has zero overwrite violations; one pending at capture end. No speculative renderer fix. Browser warning remains; no user input required. Recheck after browser-side correction; performance impact unmeasured. Receipt ops/handoffs/pbo-chrome151-reproduction-20261007.json.
+  Evidence: scratch/runs/20261006T1935Z-gld3d-webgl-recheck/c/mw3-2.console
+
+- [x] New-game lane: Croc 2 demo (Fox Interactive / Argonaut 1999, software 3D platformer)
+  id: NEW-GAME-CROC2-DEMO-20261006
+  status: done
+  reparked: 2026-10-06T16:20Z -- second look (e37aa7c6 re-notes): D3DDevice/DisplayDevice seeds select a hardware D3D record but the game stays on its software renderer (no CreateDevice); Demo Mode at ~8 presents/s with defaults; at tick 10 the picture freezes ~120k with main computing and T2 in InterlockedExchange+CS. Not a clock artifact alone. Next: what main waits on (T2 handshake).
+  resumed: 2026-10-06T16:00Z by claude:d10ba697 -- testing whether the black front end after Enter is the headless 200ms/batch clock (menu idle timeout) rather than a render bug.
+  candidate: win98-games-a-d/Croc2DemoSW-D3D.exe (local, no download)
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: /root/coverage_audit
+  prev-owner: claude:d10ba697-f69c-4855-aeff-e6a61b6e2735 (fleet stopped)
+  created: 2026-10-06T05:27:48.000Z
+  accepted-by: claude:80aa9e95-435b-4acb-aeea-8ae3d860613c
+  Next: Completed narrow ordinary Jungle movement/reversal/settled idle, personally reviewed by root; main20bdd9c6 registration and600be49b findings. Evidence scratch/runs/20261007-croc2-jungle-controls/result.json, 500 artifact hashes, exit0/clean closure. No FPS/audio/sustained-play claim. Refill lane with Antara source investigation.
+  Done: Working registered launch, ordinary player input visibly changes actual gameplay, reviewed gameplay screenshot with run/source identity, scoped fixes + tests on main. FPS, audio and browser separate.
+  Evidence: scratch/new-game-croc2-20261006 (work), scratch/runs/<id> (reviewed captures)
+
+- [~] Run DOSBox-packaged games directly in ToyVM for the dedicated DOS production route
+  id: TOYVM-DOS-NATIVE-GAMEPLAY-20261007
+  status: active
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: /root
+  created: 2026-10-07T09:08:16.475Z
+  requested-by: user via Telegram, dedicated DOS VM preferred over DOSBox inside Win98
+  Next: Reviewed CALL gate/RETF and hidden segment cache repair integrated4f1e083b/fcd391dd, fallback tests/bundlesc2cded63.36 targeted cases,16 real/VM86 cases, four existingCPU suites, full backend-install and bundle checks PASS;92 integrated source pins match tested tree. Recheck original Daggerfall extender next with bounded correctness run; paging/earlier invalid stack remain unresolved, ArenaCD/U4world still open. No native gameplay qualification.
+  Done: Every DOSBox-packaged corpus title has a direct dedicated-DOS/ToyVM launch route with ordinary player-controlled gameplay, reviewed native screenshot and source/run identity, sound/input/save validation and honest FPS evidence or explicit remaining per-title blockers. Implement compatibility gaps rather than substituting DOSBox wrapper evidence. Main dashboard clearly distinguishes native and Win98+DOSBox results, routes to the native player when supported, and exposes required/lazy loading and actionable errors. Scoped fixes/tests integrated to main; no public deployment.
+  Evidence: test/toyvm-dos-corpus/manifest.json; test/toyvm-dos-corpus/titles.json; ops/dos-corpus.json; tools/toyvm-dos-corpus.js; user instruction2026-10-07. Daggerfall/Arena DOSBox gameplay does not establish native compatibility.
+- [~] New-game lane: Betrayal in Antara demo (Sierra 1997, SCI32 RPG)
+  id: NEW-GAME-BETRAYAL-ANTARA-DEMO-20261006
+  status: blocked
+  candidate: win98-games-a-d/Betrayl-a-Antara-DEMO-SW (16-bit Sierra SETUP.EXE installs the game; local, no download)
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (automatic security rejection; exited1)
+  created: 2026-10-06T04:51:54.000Z
+  accepted-by: claude:80aa9e95-435b-4acb-aeea-8ae3d860613c
+  Next: Hold rejected crash diagnostic; no retry/rephrase. WIP preserved, remote bx_fugmje42 authoritatively stopped after expiry, full cleanup/evidence retrieval incomplete. See ops/handoffs/antara-security-hold-20261008.md. No installation/gameplay qualification.
+  Done: Working registered launch, ordinary player input visibly changes actual gameplay, reviewed gameplay screenshot with run/source identity, scoped fixes + tests on main. FPS, audio and browser separate.
+  Evidence: scratch/new-game-antara-20261006 (work), scratch/runs/<id> (reviewed captures)
+
+- [ ] New-game lane: Arx Fatalis demo (original local MSI/CAB media)
+  id: NEW-GAME-ARX-FATALIS-DEMO-20261007
+  status: blocked
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none; arx-fault exited1
+  candidate: test/binaries/win98-games-a-d/Arx_Fatalis-demo-D3D-Glide
+  Next: Automated possible-cybersecurity-risk rejection stopped diagnostic; no retry/rephrase. Root cleaned remote and preserved scratch/runs/20261007-arx-diagnostic-interrupted. Prior introAV unresolved; Darkstone refills lane.
+  Done: Original asset closure registered locally, ordinary reviewed player scene and control evidence, scoped tested fixes integrated on main; no FPS claim without separate measurement.
+  Evidence: scratch/wt-diehard-20261007/scratch/refill-after-diehard/shortlist.json; original ARX.exe SHAebd3e2b3; no currentmain registration or historical qualified run found.
+
+- [x] Additional game lane: Carmageddon TDR2000 demo
+  id: NEW-GAME-TDR2000-DEMO-20261007
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: fresh CLI tdr (scratch/fresh-workers-20261007)
+  candidate: test/binaries/win98-games-a-d/Carmageddon TDR2000 demo-D3D
+  requested-by: user Telegram two more games in parallel, 2026-10-07
+  Next: Completed mainb7cdb5fd: durable local-only registry/manifest, exact2963rows (148required/2815lazy), focused tests and fail-closed diskguard. Ordinary actualrace forward/reverse/brake screenshots reviewed; evidence1124777f, sentTelegram851/852. FPS/audio unmeasured; no public deployment.
+  Done: Faithful registered launch, ordinary player-controlled gameplay, reviewed screenshot with source/run identity and scoped tested changes on main; audio/FPS claims require separate evidence.
+
+- [~] Additional game lane: Comanche 3 demo
+  id: NEW-GAME-COMANCHE3-DEMO-20261007
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (comanche-catalog exited0; root integration review passed)
+  candidate: test/binaries/win98-games-a-d/Commanche3-demo-SW
+  requested-by: user Telegram two more games in parallel, 2026-10-07
+  depends-on: TOYVM-386-PAGING-20261007
+  Next: Complete scoped original controlled flight plus normal registered ToyVM dashboard launch. Root verified245 flight and21 startup artifact hashes, reviewed startup image, and passed29 ops/launcher plus22 generator cases. Eleven originals remain gitignored; no private route required. No public deployment or current live8098 claim; FPS/audio/combat/mission completion remain unqualified.
+  Done: Faithful registered launch, ordinary player-controlled gameplay, reviewed screenshot with source/run identity and scoped tested changes on main; audio/FPS claims require separate evidence.
+
+- [ ] Quake II WebGL ordinary world movement validation
+  id: GLD3D-QUAKE2-TRAVERSAL-20261007
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (fresh q2-gl-validation completed)
+  Next: Completed main2534731b3: fb1be916 ordinary Game/Easy/W/S/idle worldtranslation personally reviewed byroot. Sixscreens/38artifacts contained and present; Telegramphotos860/861 sent. Actualbrowser/driver cleanclosure,16ancillaryVLANAPIrefusals retained; FPS/audio/network unqualified.
+  Done: Current source/host/run identity, reviewed actual gameplay and input movement, scoped corpus table update on main; FPS/audio separate.
+
+- [x] Implement generic 386 paging for original DOS extenders
+  id: TOYVM-386-PAGING-20261007
+  handoff: ops/handoffs/toyvm-paging-implementation-20261007.md
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (fresh toyvm-paging-integrate completed)
+  Next: Complete main72e306790 with foundation4b0955e79. All47 correctness groups passed; root verified1495 artifacts and integrated source pins. Original authenticated16KiB copy maps correctly and preservesIVT, progresses Loading Install for75s without CPU faults; installation/gameplay remain separate.
+  Evidence: docs/re-notes/comanche3-later-execution-20261007.md; scratch/runs/20261007-comanche3-paging-diagnostic/evidence-index.json; source emit.js dropsCR3 and maskslinear24bits.
+  Done: Generic paging correctness reviewed with fault semantics and original Comanche startup progressing beyond paged copy; no gameplay claim without ordinary control evidence.
+
+- [ ] New-game lane: Command & Conquer: Tiberian Sun demo
+  id: NEW-GAME-TIBERIAN-SUN-DEMO-20261006
+  status: blocked
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (bad-transfer worker exited1 at2026-10-08T13:02:23.732Z after automatic cybersecurity rejection)
+  candidate: test/binaries/win98-games-a-d/CnC-TiberianSun-demo-SW/extracted
+  Next: Parent10002 DirectDraw repaint loop and registered COM shadow-CPU activation repaired, including AddRef ULONG edge correction; root11182 hashes and real owner/paint regressions passed. Ordinary campaign loading now reaches first OleRun, then owning trap atEIP00d88176/ESP00d88168 in heap frame data. Next capture first bad control-flow producer, including activation continuation integrity; do not assume an independent guest defect or redo cleared menu/COM causes. Final AddRef edge tested/build-only d8d4096 differs from actual browser ff3281; gameplay still unqualified.
+  Evidence: Shared historical task and fresh worker title audit2026-10-07. Darkstone already has controlledTown/camera evidence, so it is not rerun or counted as a new title. Tiberian Sun remains nonpublic and unqualified.
+  Done: Registered original launch reaches a mission, ordinary input visibly commands units, reviewed screenshot with exact source/run identity, scoped tested changes pushed main. FPS/audio require separate evidence.
+  Blocker: Diagnostic preparation was rejected automatically for possible cybersecurity risk. No retry, rephrasing, or delegation of rejected operation. Existing work preserved; no new gameplay evidence.
+
+- [~] Diagnose original Winamp MilkDrop exception and validate visualization
+  id: GLD3D-WINAMP-EXCEPTION-20261007
+  status: blocked
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (worker exited1 after automated rejection)
+  Next: HELD: automated cybersecurity-risk rejection terminated Winamp diagnostic worker at23:52:06. No retry/rephrasing/delegation of rejected diagnostic. Root recovered14 existing outputs and verified driver/browser exited; no exception cause or visualization qualification.
+  Done: Demonstrated generic cause repaired with regression and ordinary original visualization reviewed; FPS/audio separate.
+  Evidence: scratch/runs/20261007-winamp-milkdrop-complete-closure; ops/handoffs/winamp-milkdrop-ordinary-20261007.md
+
+- [x] Validate original Quake II OpenGL workload on emulator software backend
+  id: GLD3D-QUAKE2-SOFTWARE-20261007
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (q2-software exited0)
+  Next: Done scoped software forward/reverse/idle gameplay, reviewed original ref_gl and owning renderer software proof; main069662726. Exact reference096889e/fb1be916, not current-main build validation. FPS/audio/network unqualified.
+  Done: Reviewed ordinary gameplay/input evidence, exact backend/source/module/original identity, scoped GL table update on main; FPS/audio separate.
+  Evidence: scratch/runs/20261008T000901Z-quake2-software-ordinary; ops/handoffs/quake2-software-ordinary-20261008.md
+
+- [x] Validate Crimsonland Tutorial control on WebGL
+  id: GLD3D-CRIMSONLAND-WEBGL-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (crimsonland-relative-input exited0)
+  Next: Done scoped WebGL Tutorial movement and relative aiming; root reviewed3images and100contained hashes. Integrated6f4f74b19. Original referencef62/module4dc5; no engine patch. FPS/audio/combat/long-session qualification remain separate.
+  Done: Reviewed ordinary gameplay/input with actual WebGL backend and original source/module/media identity; GL table and scoped changes on main.
+  Evidence: scratch/runs/20261008T0105Z-crimsonland-relative-input; ops/handoffs/crimsonland-relative-input-20261008.md; Telegram879.
+
+- [~] Validate Alien Shooter Mission 01 control on WebGL
+  id: GLD3D-ALIEN-SHOOTER-WEBGL-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: completed; actual exit0 2026-10-08T01:26:18Z
+  Next: Complete scoped WebGL Mission01 movement/aiming acceptance; root reviewed images/backend and all109 contained hashes. Findings integrated bf8d2e134; run20261008T0114Z-alien-shooter-webgl. No FPS/audio/combat-completion or current-main runtime claim.
+  Done: Reviewed actual Mission01 ordinary player movement and aim on owning WebGL backend, source/module/originalmedia identities, scoped commits and GL table on main.
+  Evidence: historical software scratch/runs/20261006T0612Z-alien_shooter-w4-gameplay2; reviewed WebGL scratch/runs/20261008T0114Z-alien-shooter-webgl.
+
+- [x] Warcraft III original Prologue ordinary WebGL gameplay
+  id: GLD3D-WARCRAFT3-PROLOGUE-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (exited0; coordinator review passed)
+  Next: Complete scoped WebGL Prologue gameplay validation: root reviewed Thrall selection and two opposing ordinary right-click moves against fixed terrain; 675 contained artifact hashes pass. Run20261008T0156Z-warcraft3-campaign-world-runtime, referencef62/module4dc5. No FPS/audio/combat/campaign-completion claim.
+  Done: Reviewed original Prologue ordinary unit selection/move evidence with exact source/backend, scoped fixes tested and pushed; FPS/audio separate.
+
+- [x] Warcraft III original Prologue software-backend gameplay
+  id: GLD3D-WARCRAFT3-SOFTWARE-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (worker exited0; root review PASS)
+  Next: Complete: root reviewed software Thrall selection/two opposing moves with matching host/owning OpenGL software backend;666 contained hashes and helper negative/review contracts PASS. Integrated0d9515322; run0400 referencef62/module4dc5. FPS/audio/combat/campaigncompletion/current-main runtime remain unverified.
+  Done: Reviewed software gameplay/control images and owning backend/module/source evidence, scoped fixes/tests if needed, pushed main.
+
+- [x] Expose real held keyboard controls in ToyVM web sessions
+  id: TOYVM-HELD-KEY-WEB-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (fresh toyvm-held-key-web exited0 07:08:27)
+  Next: Complete on main d87b54eca. Root180 contained evidence hashes and held/released/mission-menu captures verified; actual Machine/LiveRun tests and bundle reproducibility pass. Browser initial lifecycle closure proves ordinary holds, release, repeat, blur and Stop. Final keypad/code mapping and modifier-wait corrections unit/full-build tested but not original-media browser rerun. No production deployment or Comanche cockpit/gameplay qualification.
+  Evidence: tools/toyvm/dos.js pushKey; tools/toyvm/live.js key; ops/toyvm-live/live.js canvas keydown; tools/toyvm/site.js generated canvas handler; native Comanche roster response with held input.
+  Done: Meaningful key press/release and focus-loss tests plus reviewed browser held-input game response; scoped source/bundles/site changes pushed to main.
+
+- [ ] Gameplay screenshot and FPS: Arcanum: Of Steamworks & Magick Obscura Demo
+  id: GAMEPLAY-arcanum-demo
+  status: ready
+
+  candidate: arcanum-demo
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (coverage worker exited0; gameplay both backends and WebGL measurement reviewed)
+  prev-owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5 — Codex out of credits until 2026-10-12; its uncommitted shared-tree work is preserved on archive/codex-shared-tree-20261006 (see ops/handoffs/codex-release-review-20261006.md)
+  created: 2026-10-03T08:42:45.967Z
+  accepted: 2026-10-03T08:42:45.967Z
+  accepted-by: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Next: Remaining software scene-qualified FPS only. Root reviewed ordinary crash-site movement on software/WebGL and336 contained hashes. WebGL434 visible compositor submissions/20.127145s=21.562919/s verified from raw samples; physical scanout/unique pixels not claimed. Initial software observer missed OffscreenCanvas; raw zero rejected, not 0FPS. Corrected observer contracts pass; use them for a future bounded software measurement without repeating already-qualified screenshots. Run20261008T1431Z-arcanum-gameplay-qualified, reference7e4/moduled8d4096; no engine fix.
+  Done: Reviewed gameplay screenshot and scene-qualified frame measurement with raw samples, counter proof and tested build identity; retain explicit failures.
+  Evidence: scratch/gameplay-coverage-20261003/tasks/GAMEPLAY-arcanum-demo.json
+  notes: Migration missing-file blocker cleared against current registered route: arcanum_demo. Historical missing-path report is superseded for this route; gameplay remains unverified.
+
+- [ ] Gameplay screenshot and FPS: Black & White 2 Demo
+  id: GAMEPLAY-black_white_2_demo
+  status: ready
+  Next: Normal-route browser ended at fixed90minute deadline05:05:50Z, moving island flyover only. Final242 artifacts retained run20261009T0335Z-black-white2-staging-fix; no player-control/FPS credit. Diagnose current missing declaration binding/rendered right edge, then validate ordinary gameplay; old drive34 already ruled out SetFVF(0) for that route.
+
+  candidate: black_white_2_demo
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: root direct; no subagent (one-worker budget)
+  prev-owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5 — Codex out of credits until 2026-10-12; its uncommitted shared-tree work is preserved on archive/codex-shared-tree-20261006 (see ops/handoffs/codex-release-review-20261006.md)
+  created: 2026-10-03T08:42:45.967Z
+  accepted: 2026-10-03T08:42:45.967Z
+  accepted-by: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Done: Reviewed gameplay screenshot and scene-qualified frame measurement with raw samples, counter proof and tested build identity; retain explicit failures.
+  Evidence: scratch/gameplay-coverage-20261003/tasks/GAMEPLAY-black_white_2_demo.json
+  notes: Migration missing-file blocker cleared against current registered route: black_white_2_demo. Historical missing-path report is superseded for this route; gameplay remains unverified.
+
+- [ ] Gameplay screenshot and FPS: Deus Ex demo
+  id: GAMEPLAY-deus-ex-demo
+  status: ready
+
+  candidate: deus-ex-demo
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (queued under one-worker budget)
+  prev-owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5 — Codex out of credits until 2026-10-12; its uncommitted shared-tree work is preserved on archive/codex-shared-tree-20261006 (see ops/handoffs/codex-release-review-20261006.md)
+  created: 2026-10-03T08:42:45.967Z
+  accepted: 2026-10-03T08:42:45.967Z
+  accepted-by: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Next: Registered deus_ex_demo fixture rechecked2026-10-08: 112 declared executable/DLL/asset/manifest paths exist, declared sizes match. Missing-file blocker is cleared; queue ordinary gameplay and scene-qualified FPS validation after current sole lane. Presence does not prove runtime readiness. Receipt scratch/runs/20261008T0810Z-queued-fixture-recheck/fixture-presence.json; docs ops/handoffs/queued-fixture-recheck-20261008.md.
+  Done: Reviewed gameplay screenshot and scene-qualified frame measurement with raw samples, counter proof and tested build identity; retain explicit failures.
+  Evidence: scratch/gameplay-coverage-20261003/tasks/GAMEPLAY-deus-ex-demo.json
+  notes: Migration missing-file blocker cleared against current registered route: deus_ex_demo. Historical missing-path report is superseded for this route; gameplay remains unverified.
+
+- [x] New-game lane: Age of Wonders II demo
+  id: NEW-GAME-AGE-OF-WONDERS2-DEMO-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none; browser41887 exited0; bx_2sdgzsm6 stopped03:11:23.355Z
+  candidate: test/binaries/win98-games-a-d/Age of Wonders2 demo-SW.exe
+  Next: Initial ordinary gameplay verified: select party and click destination twice, army moves and movement20->13. Generic FVF RESERVED1 fix plus control-failing/candidate-passing native tests integrated with this task update. Evidence run20261009T0306Z-age-of-wonders2-gameplay,67 hashes. Rendering overlap/FPS/audio tracked separately; no release claim.
+  Evidence: Original installer SHA256 1244f0114965d011d1e28b97e207db15c902d124ebb25af8a6c97748beb73dc0. Runs20261008T1518Z-age-of-wonders2-demo-before and-after retain crash/menu evidence, original payload identities and runtime inputs. No gameplay qualification yet; held Scenario click eventual outcome unknown.
+  Done: Normal registered launch, actual player-controlled gameplay, reviewed screenshot with original/source/build identity and tested changes pushed main. FPS/audio require separately valid measurements.
+
+- [ ] New-game lane: Dungeon Siege demo
+  id: NEW-GAME-DUNGEON-SIEGE-DEMO-20261008
+  status: blocked
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none; browser56868 exited0, bx_f8a9afpr stopped2026-10-09T01:31:52Z
+  candidate: test/binaries/win98-games-a-d/DungeonSiege-demo-D3D.exe
+  Next: Await user decision on accepting demo EULA under the instruction not to answer approvals. Generic lazy RTF fix main b493bc3b9 passes; original EULA window renders, screenshot Telegram947. Evidence scratch/runs/20261009T0125Z-dungeon-siege-eula (36 hashes). No gameplay/FPS/audio qualification.
+  Evidence: Local original installer 192188416 bytes, SHA256 a501306cad88c0fc41f986d92109343d68ac79fc11aaa6611724d84be628f3f8. Experimental local registration and checked CAB extraction integrated ef51b4f59; registration is not gameplay qualification.
+  Done: Normal registered launch, actual player-controlled gameplay, reviewed screenshot with original/source/build identity and tested changes pushed main. FPS/audio require separately valid measurements.
+
+- [x] Restore registered local candidates missing from the launch picker
+  id: OPS-PICKER-MISSING-CANDIDATES-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Result: Added20 missing LOCAL_CANDIDATE_APPS options to the existing Local Candidates group in index.html. Dynamic picker derives its catalog from this select; existing eligibility filters remain unchanged. No public deployment or gameplay qualification.
+  Validation: Existing test/test-app-selector-options.js failed before on20missing entries and passes after for all173apps across3lists, including duplicate/list-disjointness checks. No browser run required for this static option correction. Receipt scratch/picker-completeness-20261008/receipt.json.
+
+- [x] Implement missing ANSI resource enumeration callback chain
+  id: WIN32-ENUM-RESOURCE-ANSI-20261008
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: none (coordinator implemented and validated directly)
+  Result: Implemented, validated and pushed main77cca122f; fresh original Dungeon Siege progressed beyond old resource trap to next missing API VerLanguageNameA. No gameplay claim.
+  Evidence: ops/handoffs/resource-enumeration-ansi-20261008.md; scratch/runs/20261008T2343Z-resource-enum-ansi/result.json. Unchanged-main control fails nested callback assertion; candidate passes full hash/thunk chain, actual LANGIDs, CP1252, nested/early-stop/error/DLL contracts and ESP restoration; canonical build and thread-resource-sync pass.
+  Done: Generic contract and nesting tests pass, original runtime limitation is accurately updated, reviewed changes pushed main; no silent-success stub.
+
+- [x] Real 256-color display mode and SimCity verification
+  id: SIMCITY-256-COLOR-20261009
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: coordinator direct, isolated wt-simcity-256-20261009
+  Result: Real indexed desktop and palette-preserving copies verified on original SimCity2000: warning absent, demo city simulation advances, ordinary centering click changes viewport, water palette animation restored. Before: scratch/runs/20261009T0010Z-simcity-truecolor-before; after: scratch/runs/20261009T0048Z-simcity-indexed-desktop. Canonical build and indexed/palette/window regressions pass. FPS/audio not measured.
+  Done: Contract regressions, browser before/after and ordinary gameplay evidence reviewed; explicit-path commit pushed main.
+
+- [x] Implement version-resource language descriptions
+  id: WIN32-VERLANGUAGE-20261009
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Result: VerLanguageNameA/W lookup, bounded copying and generated API dispatch implemented; canonical build plus language/locale/version regressions pass on temporary box.
+  Evidence: scratch/runs/20261009T0105Z-version-language; ops/handoffs/version-language-20261009.md.
+  Limitation: Original Dungeon Siege startup validation remains separate; no gameplay/FPS/audio qualification.
+
+- [x] Park lazy RTF opens without losing formatting or handles
+  id: VFS-LAZY-RTF-OPEN-20261009
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: coordinator direct; one-worker budget
+  Result: Original Dungeon Siege now renders its EULA without the lazy-file trap. Native A/W thread/stack/retry, canonical build,45 VFS and50 lazy tests pass. Evidence scratch/runs/20261009T0122Z-lazy-rtf-open; browser proof scratch/runs/20261009T0125Z-dungeon-siege-eula (36 hashes), HTTP206 EULA bytes0-6531. Pushed main b493bc3b9. Accept untouched pending user decision.
+  Scope: Thread-owned IO_WAIT for CreateFileA/W RTF expansion, preserving ordinary lazy opens and delayed loading UX. No blanket eager manifest or formatting bypass.
+
+- [x] Keep ordinary Worker slices out of suspended send callbacks
+  id: WORKER-SEND-SLICE-OWNERSHIP-20261009
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Evidence: main28a104092; run20261009T0203Z-age-of-wonders2-send-ownership. Actual boundary trace shows nested EIP0 sentinel consumed by normal slice; real Worker control regression fails, candidate12checks/timing/scheduler/build pass. Original AoWII advances to scenario setup; later Start exit remains separate work.
+
+
+- [ ] New-game lane: Disciples II demo
+  id: NEW-GAME-DISCIPLES2-DEMO-20261009
+  status: active
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: root; native and browser movement verified, input/FPS/audio follow-up ready; all runtimes terminal
+  candidate: test/binaries/win98-games-a-d/Discipless2_demo-D3D.exe
+  Next: Registered native and browser gameplay verified: ordinary leader move20/20->16/20 and camera follow, reviewed run20261009T0728Z-disciples2-browser-gameplay, photo967. Registration fd5aa4a35 on main. Browser50788/50800 clean stop07:28:27Z. Menu repeat-click issue remains despite1000ms holds and both down/up reaching renderer/input log; inspect guest consumption/activation.30.10599s presentation sample2432 events/1649 uploads is80.7813/54.7732 per second, not logical FPS. Qualify gameplay counter and audio separately. No public promotion. Alice real GL implementation is next unblocked implementation lane.
+  Evidence: scratch/disciples2-preflight-20261009/preflight.json
+  Done: Registered normal launch, actual gameplay control, reviewed screenshot, fixes/tests pushed main.
+
+- [ ] AoWII rendering overlap and gameplay measurement
+  id: AOW2-RENDERING-COVERAGE-20261009
+  status: ready
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Next: Diagnose terrain crossing lower UI/black polygons after validated FVF fix; measure actual gameplay FPS and audio separately. Initial army movement is verified, release readiness is not. Use temporary box and serialized browser.
+  Evidence: scratch/runs/20261009T0306Z-age-of-wonders2-gameplay/result.json
+
+- [ ] New-game lane: American McGee's Alice demo
+  id: NEW-GAME-ALICE-DEMO-20261009
+  status: active
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: root direct; gameplay proven on held candidate, lifecycle correctness review before main
+  candidate: test/binaries/win98-games-a-d/american McGees-alice_demo-OpenGL.exe
+  Next: Held runtime d5a47f240 pushed codex/alice-dll-lifetime-20261009, NOT main. Full build and seven loader suites pass, including unrooted cycles, cross-cycle detach callbacks, actual Worker unload, and automatic dependency references in native/Worker routes; module862681ea, run20261009T2330Z-dll-cycle-worker-review. Concurrent two-Worker control still fails: shared PE_STAGING content and DLL table slot are overwritten; serialize staging/publication and graph mutation before integration. Then rerun original Alice and browser. Earlier native movement2151 remains separate build evidence; local candidate media missing.
+  Done: Original demo launches with ordinary input, player-controlled gameplay independently reviewed, exact build/media and screenshots retained; menus do not qualify.
+  Evidence: scratch/alice-preflight-20261009/preflight.json; scratch/alice-preflight-20261009/import-audit.json; scratch/alice-preflight-20261009/transfer.json; docs/re-notes/alice-demo.md
+
+
+- [ ] Sizeless virtual decommit corrupts neighboring allocation
+  id: VIRTUAL-DECOMMIT-NEIGHBOR-20261009
+  status: ready
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Next: test-virtual-decommit-zero fails neighboring allocation page0 untouched with unchanged HEAD helpers and prefix candidate. Static cause: virtual_map_decommit_zero chooses each scanned record end when size0, so all higher allocations are zeroed. Bound once to the owning reservation before scanning; handle invalid/interior bases and split mappings with tests. Do not attribute this baseline failure to prefix patch. Native tests only on temporary boat, serialize with game lanes.
+  Evidence: scratch/runs/20261009T0608Z-virtual-prefix-initial/result.json
+
+- [x] New-game lane: Baldurs Gate II demo
+  id: NEW-GAME-BALDURS-GATE2-DEMO-20261009
+  status: done
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  candidate: baldurs-gate2-demo
+  Next: Gameplay qualification complete on main5aafa6658; current-main moduleb84324ed revalidates dialogue and floor movement. Apparent pointer mismatch was diagnostic Puppeteer.connect default viewport mutation; preserved viewport fixes mapping without runtime changes. Audio/FPS remain coverage follow-ups.
+  Done: Registered working launch, ordinary player input changes visible gameplay, reviewed screenshot linked to exact run/source. No installer/menu credit or public deployment.
+
+- [ ] User priority: Return Fire demo
+  id: NEW-GAME-RETURN-FIRE-DEMO-20261009
+  status: active
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  candidate: return-fire-demo
+  priority: user-first
+  Next: Correct windowed depth/palette and ordinary H/W gameplay verified in native run20261009T2046Z-return-fire-realized-native and browser run20261009T2050Z-return-fire-realized-browser. Build/focused display suites pass run20261009T2045Z-return-fire-realized-build. Audio output presence now observed in run20261009T2052Z-return-fire-browser-audio (99/100 non-silent windows, running44100Hz clock); recording retained, sound quality/sync and logical FPS still unverified. Registered local-only, no public deploy.
+  Done: Registered launch, ordinary input visibly changes gameplay, reviewed screenshot with original source/build evidence; FPS/audio separate.
+
+- [ ] Serialize shared DLL mapping and lifetime mutation
+  id: DLL-CONCURRENT-MAPPING-20261009
+  status: ready
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  Next: Two actual Node workers forced to interleave after PE_STAGING copy reproduce wrong module bytes and same published table slot, even with distinct low destination addresses. Original main280d28eb1/module527004d9 also fails the same staged-image control (worker B receives worker A bytes); shared staging is a pre-existing race. Candidate d5a47f240 additionally needs graph lifetime synchronization. Implement loader serialization without holding a spinlock across host imports or callbacks. Also protect reachability and reference mutation across instances and refresh per-instance DLL counts. Reproducer: scratch/alice-border-20261009/concurrent-loader-control.js; evidence run20261009T2330Z-dll-cycle-worker-review. No merge-ready claim.
+  Done: Concurrent load/free/import tests preserve exact images and module ownership, callback execution stays live without deadlock, normal Alice gameplay/browser revalidated.
+
+- [ ] New-game lane: Aliens versus Predator 2 single-player demo
+  id: NEW-GAME-AVP2-DEMO-20261010
+  status: active
+  owner: codex:01a0ff91-cf9d-7f42-ba93-f9e7616b35a5
+  worker: root direct, serialized after BG2 evidence collection
+  candidate: test/binaries/win98-games-a-d/alien vs predator 2-sp demo-D3D.exe
+  Next: Original launcher-captured lithtech.exe -cmdfile avp2cmds.txt reaches Single Player -> Marine -> Unwelcome Guests but mission launch fails HUDMgr font initialization. Reviewed run20261010T0237Z-avp2-hud-font; replay142017/142024 terminal0 confirms same error, run20261010T0239Z-avp2-font-trace. cshell factory preferred VA1011bfd0 returns null to10036b3b; discriminate argument/allocation/virtual-init failure before implementing a fix. Branch replay controller143279 live on boat bx_hx8msa33 with600s guard; output /home/user/avp2-font-branch-20261010. Menu model textures also corrupt. Missing local installed media test/binaries/candidates/avp2-demo; original payload remains on boat, disk below2GiB prevents bulk restore. No gameplay qualification or public deployment.
+  Done: Original demo launch, ordinary player input visibly changes gameplay, reviewed screenshot with exact source/build/run evidence.

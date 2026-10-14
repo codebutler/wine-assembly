@@ -409,7 +409,7 @@ async function main() {
   wat.guest_write32(bmi + 8, -2);
   wat.guest_write16(bmi + 12, 1);
   wat.guest_write16(bmi + 14, 32);
-  const sourceBitmap = wat.test_call_CreateDIBSection(0, bmi, bitsOut) >>> 0;
+  const sourceBitmap = wat.test_call_CreateDIBSection(0, bmi, 0, bitsOut, 0, 0) >>> 0;
   const sourceDc = wat.test_call_CreateCompatibleDC(0) >>> 0;
   assert(sourceBitmap && sourceDc);
   assert.strictEqual(wat.test_call_SelectObject(hdc, sourceBitmap) >>> 0, 0,
@@ -438,7 +438,7 @@ async function main() {
   // is a second draw touching that map that would mean corruption.
   assert.strictEqual(wat.test_call_TextOutA(hdc, 10, 10, text, 1), 1);
   const dibPageMapBeforeText = Buffer.from(
-    new Uint8Array(memory.buffer, 0x07E10000, 0x4000));
+    new Uint8Array(memory.buffer, RegionMap.BASE.DIB_PAGE_USED, RegionMap.SIZE.DIB_PAGE_USED));
   textPresentation.surface.rgbaRect = (...args) => {
     destinationReads.push(args);
     return rgbaRect(...args);
@@ -448,7 +448,7 @@ async function main() {
   assert.strictEqual(destinationReads.length, 0,
     'TextOut must not read its destination presentation or canonical surface');
   assert.deepStrictEqual(
-    Buffer.from(new Uint8Array(memory.buffer, 0x07E10000, 0x4000)),
+    Buffer.from(new Uint8Array(memory.buffer, RegionMap.BASE.DIB_PAGE_USED, RegionMap.SIZE.DIB_PAGE_USED)),
     dibPageMapBeforeText, 'text composition must not corrupt DIB allocator metadata');
   assert.deepStrictEqual(
     [...canvas.getContext('2d').getImageData(4, 6, 1, 1).data.subarray(0, 3)],
@@ -514,7 +514,7 @@ async function main() {
 
   const bluePen = wat.test_call_CreatePen(0, 1, 0x00FF0000) >>> 0;
   assert.strictEqual(wat.test_call_SelectObject(hdc, bluePen), 0x30017);
-  assert.strictEqual(wat.test_call_MoveToEx(hdc, 0, 0), 1);
+  assert.strictEqual(wat.test_call_MoveToEx(hdc, 0, 0, 0), 1);
   assert.strictEqual(wat.test_call_LineTo(hdc, 6, 0), 1);
   assert.deepStrictEqual(
     [...canvas.getContext('2d').getImageData(3, 5, 1, 1).data.subarray(0, 3)],
@@ -545,7 +545,7 @@ async function main() {
       wat.guest_write32(dragBmi + 8, -height);
       wat.guest_write16(dragBmi + 12, 1);
       wat.guest_write16(dragBmi + 14, 32);
-      const bitmap = wat.test_call_CreateDIBSection(0, dragBmi, dragBitsOut) >>> 0;
+      const bitmap = wat.test_call_CreateDIBSection(0, dragBmi, 0, dragBitsOut, 0, 0) >>> 0;
       const dc = wat.test_call_CreateCompatibleDC(0) >>> 0;
       assert(bitmap && dc,
         `drag scratch DIB/DC allocation failed (bitmap=0x${bitmap.toString(16)}, dc=0x${dc.toString(16)})`);

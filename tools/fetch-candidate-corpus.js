@@ -1,5 +1,21 @@
 #!/usr/bin/env node
 
+// Parse non-executing requests before imports or any fixture access.
+const argv = process.argv.slice(2);
+function usage(message) {
+  const write = message ? console.error : console.log;
+  if (message) write(message);
+  write('usage: node tools/fetch-candidate-corpus.js [--id=a,b] [--force|--prepare]');
+  write('Without --id, processes all candidates. --prepare uses existing fixtures.');
+  process.exit(message ? 2 : 0);
+}
+if (argv.includes('--help') || argv.includes('-h')) usage();
+for (const arg of argv) {
+  if (arg === '--force' || arg === '--prepare') continue;
+  if (arg.startsWith('--id=') && arg.slice(5).split(',').every(id => id.trim())) continue;
+  usage(`unknown or invalid argument: ${arg}`);
+}
+
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -14,19 +30,12 @@ const ROOT = path.join(__dirname, '..');
 const MANIFEST_PATH = path.join(ROOT, 'test', 'candidate-corpus', 'manifest.json');
 const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
 const ASSET_ROOT = path.resolve(ROOT, manifest.assetRoot);
-const argv = process.argv.slice(2);
 const force = argv.includes('--force');
 const prepare = argv.includes('--prepare');
 const idArg = argv.find(arg => arg.startsWith('--id='));
 const selectedIds = idArg
   ? new Set(idArg.slice('--id='.length).split(',').map(value => value.trim()).filter(Boolean))
   : null;
-
-function usage(message) {
-  if (message) console.error(message);
-  console.error('usage: node tools/fetch-candidate-corpus.js [--id=a,b] [--force|--prepare]');
-  process.exit(2);
-}
 
 function fixtureId(candidate) {
   return candidate.fixture || candidate.id;
@@ -79,7 +88,43 @@ function delay(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
+// archive.org/download/<item>/<file> redirects to one datanode, and that node
+// can be down for the whole item (HTTP 500 on every file) while the item's
+// own servers serve it. Ask /metadata for them and try each directly; the
+// manifest's pinned SHA-1 still decides whether the bytes are accepted.
+async function archiveOrgServerUrls(url) {
+  const match = /^https:\/\/archive\.org\/download\/([^/]+)\/(.+)$/.exec(url);
+  if (!match) return [];
+  try {
+    const response = await fetch(`https://archive.org/metadata/${match[1]}`);
+    if (!response.ok) return [];
+    const meta = await response.json();
+    // d1 (the primary) first: a workable server can still crawl at ~20 KB/s.
+    const servers = [...new Set([meta.d1, meta.d2, ...(meta.workable_servers || [])]
+      .filter(server => typeof server === 'string' && /^[a-z0-9.-]+$/i.test(server)))];
+    if (typeof meta.dir !== 'string' || !meta.dir.startsWith('/')) return [];
+    return servers.map(server => `https://${server}${meta.dir}/${match[2]}`);
+  } catch {
+    return [];
+  }
+}
+
 async function downloadWithRetries(url, destination) {
+  try {
+    await downloadOneWithRetries(url, destination);
+  } catch (error) {
+    for (const alternate of await archiveOrgServerUrls(url)) {
+      console.log(`MIRROR ${alternate}`);
+      try {
+        await downloadOneWithRetries(alternate, destination);
+        return;
+      } catch {}
+    }
+    throw error;
+  }
+}
+
+async function downloadOneWithRetries(url, destination) {
   const retryableStatuses = new Set([429, 500, 502, 503, 504]);
   let lastError;
   for (let attempt = 1; attempt <= 4; attempt++) {
@@ -98,6 +143,25 @@ async function downloadWithRetries(url, destination) {
   throw lastError;
 }
 
+// Move every entry of `source` into `destination`, replacing what is there.
+// A file is unlinked first rather than overwritten, because unlinking needs
+// only a writable directory while overwriting needs a writable file.
+function mergeExtractedTree(source, destination) {
+  fs.mkdirSync(destination, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name);
+    const to = path.join(destination, entry.name);
+    if (entry.isDirectory()) {
+      const existing = fs.lstatSync(to, { throwIfNoEntry: false });
+      if (existing && !existing.isDirectory()) fs.rmSync(to, { force: true });
+      mergeExtractedTree(from, to);
+    } else {
+      fs.rmSync(to, { recursive: true, force: true });
+      fs.renameSync(from, to);
+    }
+  }
+}
+
 function extractArchive(archive, destination, options = {}) {
   fs.mkdirSync(destination, { recursive: true });
   const result = spawnSync('7z', ['x', '-y', `-o${destination}`, archive], {
@@ -110,14 +174,25 @@ function extractArchive(archive, destination, options = {}) {
     fs.rmSync(destination, { recursive: true, force: true });
     fs.mkdirSync(destination, { recursive: true });
   }
+  // unar extracts into a fresh directory that is then merged over the
+  // destination. A 7z that fails partway leaves the entries it could not
+  // decode behind as empty files, and a RAR's read-only attribute makes them
+  // read-only, so `unar -f` straight into the destination fails on every one
+  // (Battlezone demo on a boat's codec-less 7z: 257 files).
+  const staging = fs.mkdtempSync(`${destination.replace(/[\\/]+$/, '')}.unar-`);
   const fallbackArgs = ['-f'];
   if (options.noDirectory) fallbackArgs.push('-D');
-  fallbackArgs.push('-o', destination, archive);
+  fallbackArgs.push('-o', staging, archive);
   const fallback = spawnSync('unar', fallbackArgs, {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
-  if (fallback.status === 0) return;
+  if (fallback.status === 0) {
+    mergeExtractedTree(staging, destination);
+    fs.rmSync(staging, { recursive: true, force: true });
+    return;
+  }
+  fs.rmSync(staging, { recursive: true, force: true });
 
   const primary = result.error && result.error.code === 'ENOENT'
     ? '7z unavailable'
@@ -126,7 +201,11 @@ function extractArchive(archive, destination, options = {}) {
     ? 'unar unavailable'
     : `unar exit ${fallback.status}`;
   const detail = `${fallback.stdout || ''}\n${fallback.stderr || ''}`.trim().split('\n').slice(-8).join('\n');
-  throw new Error(`archive extraction failed (${primary}; ${secondary})${detail ? `:\n${detail}` : ''}`);
+  // Ubuntu's `7zip` package is the DFSG build without the RAR codec, so on a
+  // fresh boat fork every RAR candidate lands here; unar opens them.
+  const hint = fallback.error && fallback.error.code === 'ENOENT'
+    ? '\n(install unar for RAR and other formats 7z cannot open: sudo apt-get install -y unar)' : '';
+  throw new Error(`archive extraction failed (${primary}; ${secondary})${detail ? `:\n${detail}` : ''}${hint}`);
 }
 
 function extractRawMode1Cd(image, destination) {
@@ -200,15 +279,82 @@ function runPostExtract(candidate, destination) {
       const cab = path.join(destination, step.cab);
       const into = path.join(destination, step.into);
       fs.mkdirSync(into, { recursive: true });
-      const result = spawnSync('unshield', ['-d', into, '-g', step.group, 'x', cab], {
+      let result = spawnSync('unshield', ['-d', into, '-g', step.group, 'x', cab], {
         encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024,
       });
-      if (result.status !== 0) {
-        const unavailable = result.error && result.error.code === 'ENOENT';
-        const detail = `${result.stdout || ''}\n${result.stderr || ''}`.trim().split('\n').slice(-8).join('\n');
-        throw new Error(`InstallShield extraction failed (${unavailable ? 'unshield unavailable' : `exit ${result.status}`})${detail ? `:\n${detail}` : ''}`);
+      // No unshield on this host (the ops box has none), or unshield failed:
+      // tools/is5-extract.js reads InstallShield 5 cabs and its --group writes
+      // unshield's layout, so the manifest's later copy steps find the same
+      // paths. unshield 1.5 exits 1 on files split across volumes -- the
+      // Requiem demo's 4.3 MB Art\HW\ReqArt3D.art and maps\demopp3.jam span
+      // data1..data5.cab -- which is5-extract joins.
+      const unshieldMissing = result.error && result.error.code === 'ENOENT';
+      if (unshieldMissing || result.status !== 0) {
+        result = spawnSync(process.execPath, [
+          path.join(ROOT, 'tools', 'is5-extract.js'), cab, `--group=${step.group}`, `--out=${into}`,
+        ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
       }
+      if (result.status !== 0) {
+        const detail = `${result.stdout || ''}\n${result.stderr || ''}`.trim().split('\n').slice(-8).join('\n');
+        throw new Error(`InstallShield extraction failed (${unshieldMissing ? 'unshield unavailable; ' : 'unshield failed; '}is5-extract exit ${result.status})${detail ? `:\n${detail}` : ''}`);
+      }
+    } else if (step.type === 'is3Extract') {
+      // InstallShield 3 DATA.Z (1996-98 installers); 7z and unshield refuse it.
+      assertSafeRelative(step.archive, `${candidate.id}.postExtract[${index}].archive`);
+      assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
+      const into = path.join(destination, step.into);
+      fs.mkdirSync(into, { recursive: true });
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'is3-extract.js'),
+        path.join(destination, step.archive), `--out=${into}`,
+      ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+      if (result.status !== 0) {
+        const detail = `${result.stdout || ''}\n${result.stderr || ''}`.trim().split('\n').slice(-8).join('\n');
+        throw new Error(`InstallShield 3 extraction failed (exit ${result.status})${detail ? `:\n${detail}` : ''}`);
+      }
+    } else if (step.type === 'is5Extract') {
+      // Early InstallShield 5 data1.cab sets (version 0x01000004) that
+      // unshield mis-reads; see tools/is5-extract.js.
+      assertSafeRelative(step.cab, `${candidate.id}.postExtract[${index}].cab`);
+      assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
+      const into = path.join(destination, step.into);
+      fs.mkdirSync(into, { recursive: true });
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'is5-extract.js'),
+        path.join(destination, step.cab), `--out=${into}`,
+      ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+      if (result.status !== 0) {
+        const detail = `${result.stdout || ''}\n${result.stderr || ''}`.trim().split('\n').slice(-8).join('\n');
+        throw new Error(`InstallShield 5 extraction failed (exit ${result.status})${detail ? `:\n${detail}` : ''}`);
+      }
+    } else if (step.type === 'innoextract') {
+      assertSafeRelative(step.installer, `${candidate.id}.postExtract[${index}].installer`);
+      assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
+      if (typeof step.language !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(step.language)) {
+        throw new Error(`${candidate.id}.postExtract[${index}].language is required`);
+      }
+      const result = spawnSync('innoextract', [
+        '--language', step.language, '--exclude-temp', '--silent',
+        '-d', path.join(destination, step.into), path.join(destination, step.installer),
+      ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+      if (result.status !== 0) {
+        throw new Error(`Inno extraction failed: ${result.error || result.stderr || result.stdout}`);
+      }
+    } else if (step.type === 'msiFiles') {
+      for (const key of ['msi', 'cabinets', 'source', 'into']) {
+        assertSafeRelative(step[key], `${candidate.id}.postExtract[${index}].${key}`);
+      }
+      const { installMsiFiles } = require('./msi-file-layout');
+      const count = installMsiFiles({
+        msiFile: path.join(destination, step.msi),
+        cabinetRoot: path.join(destination, step.cabinets),
+        sourceRoot: path.join(destination, step.source),
+        destination: path.join(destination, step.into),
+        rootDirectory: step.rootDirectory,
+        directoryAliases: step.directoryAliases,
+      });
+      console.log(`MSI    ${candidate.id}: ${count} payload files`);
     } else if (step.type === 'copyTree') {
       assertSafeRelative(step.from, `${candidate.id}.postExtract[${index}].from`);
       assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
@@ -280,6 +426,63 @@ function runPostExtract(candidate, destination) {
       if (result.error) throw result.error;
       if (result.status !== 0) {
         throw new Error(`authentic Deus Ex installer failed with exit ${result.status}`);
+      }
+    } else if (step.type === 'installQuake3Demo') {
+      // Q3ADemo.exe is an Installer VISE package no host tool unpacks; the
+      // tree comes from running that installer in the emulator
+      // (tools/install-quake3-demo.js), as the quake3_demo registry entry
+      // expects under installed/ with its browser manifest.
+      assertSafeRelative(step.installer, `${candidate.id}.postExtract[${index}].installer`);
+      assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'install-quake3-demo.js'),
+        `--installer=${path.join(destination, step.installer)}`,
+        `--output=${path.join(destination, step.into)}`,
+      ], { cwd: ROOT, stdio: 'inherit' });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(`authentic Quake III demo installer failed with exit ${result.status}`);
+      }
+    } else if (step.type === 'installThps2Demo') {
+      assertSafeRelative(step.installer, `${candidate.id}.postExtract[${index}].installer`);
+      assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'install-thps2-demo.js'),
+        `--installer=${path.join(destination, step.installer)}`,
+        `--output=${path.join(destination, step.into)}`,
+      ], { cwd: ROOT, stdio: 'inherit' });
+      if (result.error) throw result.error;
+      if (result.status !== 0) throw new Error(`THPS2 installer failed with exit ${result.status}`);
+    } else if (step.type === 'installHomeworldDemo') {
+      // HWDemo.exe is a Wise package; the tree comes from running that
+      // installer in the emulator (tools/install-homeworld-demo.js), as the
+      // homeworld_demo registry entry expects under installed/.
+      assertSafeRelative(step.installer, `${candidate.id}.postExtract[${index}].installer`);
+      assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'install-homeworld-demo.js'),
+        `--installer=${path.join(destination, step.installer)}`,
+        `--output=${path.join(destination, step.into)}`,
+      ], { cwd: ROOT, stdio: 'inherit' });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(`authentic Homeworld demo installer failed with exit ${result.status}`);
+      }
+    } else if (step.type === 'installWarcraft3Demo') {
+      // W3Demo.exe is a small PE with an MPQ appended, not a 7-Zip/RAR
+      // self-extractor: 7z and unar both fail on it on every host ("cannot
+      // open as archive"), which is what broke fresh boat forks. The install
+      // tree is unpacked from that MPQ by tools/install-warcraft3-demo.js.
+      assertSafeRelative(step.installer, `${candidate.id}.postExtract[${index}].installer`);
+      assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'install-warcraft3-demo.js'),
+        `--installer=${path.join(destination, step.installer)}`,
+        `--out=${path.join(destination, step.into)}`,
+      ], { cwd: ROOT, stdio: 'inherit' });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(`Warcraft III demo MPQ install failed with exit ${result.status}`);
       }
     } else if (step.type === 'installUnrealDemo') {
       for (const field of ['id', 'source', 'into']) {
@@ -403,7 +606,7 @@ function walkBrowserFiles(directory, relative = '', output = []) {
 
 // Browser app entries cannot enumerate an ignored retail tree at runtime.
 // Preparation therefore writes a tiny, untracked inventory beside the local
-// fixture. It contains paths and sizes only; no proprietary bytes enter git.
+// fixture. It contains paths and optional file metadata; no proprietary bytes enter git.
 function writeBrowserManifest(candidate, destination) {
   const browser = candidate.browser;
   if (!browser) return;
@@ -411,6 +614,13 @@ function writeBrowserManifest(candidate, destination) {
   assertSafeRelative(browser.exe, `${candidate.id}.browser.exe`);
   if (browser.cue) assertSafeRelative(browser.cue, `${candidate.id}.browser.cue`);
 
+  const modes = ['required', 'lazy', 'background'];
+  if (browser.defaultLoadMode !== undefined && !modes.includes(browser.defaultLoadMode)) throw new Error('Invalid browser.defaultLoadMode');
+  const fileModes = browser.fileLoadModes || {};
+  for (const [name, mode] of Object.entries(fileModes)) {
+    assertSafeRelative(name, 'browser.fileLoadModes');
+    if (!modes.includes(mode)) throw new Error('Invalid browser.fileLoadModes value: ' + name);
+  }
   const fileRoot = path.join(destination, browser.fileRoot);
   const executable = path.normalize(browser.exe);
   if (!fs.statSync(fileRoot).isDirectory()) {
@@ -427,6 +637,11 @@ function writeBrowserManifest(candidate, destination) {
   // disc, for a game that proves its CD is present by opening a file there.
   // Aliases of one URL share a single fetch, so the mirror costs no bytes.
   const cdMirror = browser.cdMirror || null;
+  // Prepared caches may retain exact FILETIME values from a save bundle.
+  // Keep this optional sidecar local alongside the ignored fixture bytes.
+  const metadataPath = path.join(destination, '.wine-assembly-file-metadata.json');
+  const fileMetadata = fs.existsSync(metadataPath)
+    ? JSON.parse(fs.readFileSync(metadataPath, 'utf8')) : {};
   const files = walkBrowserFiles(fileRoot).sort((a, b) => a.localeCompare(b))
     .map(relative => {
       const fixtureRelative = path.join(browser.fileRoot, relative);
@@ -437,7 +652,20 @@ function writeBrowserManifest(candidate, destination) {
       }
       const key = relative.split(path.sep).join('/');
       const vfsPath = vfsPaths[key] || 'c:\\' + relative.split(path.sep).join('\\');
-      return onDisc ? { url, vfsPaths: [vfsPath, onDisc] } : { url, vfsPath };
+      const metadata = fileMetadata[url] || {};
+      const times = {};
+      for (const key of ['creationTime', 'lastAccessTime', 'lastWriteTime']) {
+        if (metadata[key] !== undefined) times[key] = metadata[key];
+      }
+      const size = fs.statSync(path.join(fileRoot, relative)).size;
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error('Invalid file size: ' + url);
+      // Native modules and fonts can be read during synchronous initialization.
+      // They stay required even when the asset tree opts into on-demand data.
+      const synchronous = /\.(?:exe|dll|ocx|vbx|drv|ttf|ttc|fon)$/i.test(relative);
+      const requestedMode = fileModes[key] || browser.defaultLoadMode;
+      const loadMode = requestedMode === undefined ? undefined : synchronous ? 'required' : requestedMode;
+      const loading = {size, ...(loadMode === undefined ? {} : {loadMode})};
+      return onDisc ? { url, vfsPaths: [vfsPath, onDisc], ...times, ...loading } : { url, vfsPath, ...times, ...loading };
     }).filter(Boolean);
 
   const trackSizes = {};
@@ -467,10 +695,6 @@ async function fetchCandidate(candidate) {
     console.log(`SHARED ${candidate.id}: uses fixture ${candidate.fixture}`);
     return { shared: 1 };
   }
-  if (!candidate.packages.length) {
-    console.log(`MANUAL ${candidate.id}: ${candidate.manual || 'no automated package is pinned'}`);
-    return { manual: 1 };
-  }
   const provenanceFile = path.join(destination, '.candidate-source.json');
   if (prepare) {
     if (!fs.existsSync(destination)) {
@@ -480,6 +704,10 @@ async function fetchCandidate(candidate) {
     writeBrowserManifest(candidate, destination);
     console.log(`PREP   ${candidate.id}: ${path.relative(ROOT, destination)}`);
     return { kept: 1 };
+  }
+  if (!candidate.packages.length) {
+    console.log(`MANUAL ${candidate.id}: ${candidate.manual || 'no automated package is pinned'}`);
+    return { manual: 1 };
   }
   if (fs.existsSync(provenanceFile) && !force) {
     writeBrowserManifest(candidate, destination);

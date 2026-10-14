@@ -49,11 +49,23 @@ async function step(session, count) {
   return true;
 }
 
+// The media's own spelling of a name. The UT2004 demo archive ships
+// System/MSVCR71.dll; a case-insensitive host (macOS) finds 'msvcr71.dll' anyway,
+// a Linux boat did not and the install asserted.
+function inDir(dir, name) {
+  const exact = path.join(dir, name);
+  if (fs.existsSync(exact)) return exact;
+  let entries = [];
+  try { entries = fs.readdirSync(dir); } catch (_) {}
+  const hit = entries.find(entry => entry.toLowerCase() === name.toLowerCase());
+  return hit ? path.join(dir, hit) : exact;
+}
+
 async function runUnrealSetup(source, installVfs, spec) {
-  const system = path.join(source, 'System');
-  const setup = path.join(system, 'Setup.exe');
-  const seeds = [path.join(system, 'Core.dll'), path.join(system, 'Window.dll')];
-  if (spec.crt) seeds.push(path.join(system, spec.crt));
+  const system = inDir(source, 'System');
+  const setup = inDir(system, 'Setup.exe');
+  const seeds = [inDir(system, 'Core.dll'), inDir(system, 'Window.dll')];
+  if (spec.crt) seeds.push(inDir(system, spec.crt));
   for (const file of [setup, ...seeds]) assert(fs.existsSync(file), `missing setup dependency: ${file}`);
 
   const session = startControlSession([RUN,
@@ -172,12 +184,13 @@ function configureLocalRenderer(installed, spec) {
     return;
   }
   if (!spec.ini) return;
+  // Keep Setup's RenderDevice=D3DDrv: the registry launches these with -d3d
+  // on the D3D8 layer, and UT2003 ignores -d3d when the INI names OpenGLDrv
+  // (which asserts on hRC because our GL surface lacks 298 names).
   for (const name of [spec.ini, 'default.ini']) {
     const file = path.join(system, name);
     let text = fs.readFileSync(file, 'utf8');
-    text = text.replaceAll('RenderDevice=D3DDrv.D3DRenderDevice',
-      'RenderDevice=OpenGLDrv.OpenGLRenderDevice')
-      .replaceAll('StartupFullscreen=True', 'StartupFullscreen=False');
+    text = text.replaceAll('StartupFullscreen=True', 'StartupFullscreen=False');
     fs.writeFileSync(file, text);
   }
 }

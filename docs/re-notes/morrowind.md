@@ -606,6 +606,76 @@ button — it sits at roughly (447,262) in the 640x480 capture, with the
 cursor parked near (325,250), so a corner-slam `relmousemove` followed by a
 known offset and `di-mousedown:1` is a deterministic way to hit it.
 
+### SOLVED: the Name box clears, and the world resumes
+
+That suggestion is the answer. Corner-slam the cursor, move it to the OK
+button, click with DirectInput, and repeat the whole thing every 4000
+batches:
+
+```
+B:relmousemove:-2000:-2000,
+B+200:relmousemove:447:262,
+B+300:keypress:74,
+B+400:di-mousedown:1,
+B+500:di-mouseup:1
+```
+
+for `B` in `seq 610000 4000 780000`. The box is gone afterwards and every
+subsequent capture is a distinct hash, so the world is animating again. The
+run reaches the **prison-ship hold** — textured and lit, Jiub standing in
+frame, camera live — at batch ~636k of an 85-second headless-GL run. Pressing
+ESC there opens the in-game pause menu (Return / New / Load / Options /
+Exit), which is independent proof the world is live and taking input.
+
+A `keypress:74` was sent before each click and was not isolated from the
+click, so which of the two clears the box is still unknown. The click is the
+one with a mechanism behind it.
+
+That is character generation, not gameplay: no HUD, and the player has not
+been released from the census office. Two NPC conversations and a walk out of
+the hold remain, which is **wall clock, not a blocker** — at the measured
+9.4k batches/s the world appears at ~605k batches, around 65-85 s, leaving
+nothing in a 90 s budget. Give this one run **200-240 s** and a real gameplay
+frame is in reach.
+
+### Two more things the earlier runs got wrong
+
+- **ESC in the world opens the pause menu, and a blind DI click closes it.**
+  The "two opposite inputs, same result" reading above is wrong about why: a
+  DI click with the cursor near screen centre lands on the pause menu's
+  *first* item, which is `Return`. So a plain click train run through the
+  world silently undoes the pause menus the ESC train opens, and captures
+  alternate between menu-open and clean-world frames for that reason alone.
+- **`--quiet-api-fast` is worth ~25% here** and is not mentioned anywhere
+  above: 7,245 -> 9,027 batches/s on back-to-back runs with otherwise
+  identical flags. Morrowind makes ~20M API calls in 85 s, so the name-decode
+  path is a real share of the run.
+
+### A fixed-batch `--input` schedule is not reproducible for this app
+
+Batch numbers are reproducible *for a fixed input schedule*; how many batches
+fit in a fixed wall-clock budget is not. Across runs on one box the rate
+ranged **6,836-9,497 batches/s (+-33%)**, so the same 85 s reached anywhere
+between batch 604k and 807k. That is why an ESC train ending at 600k skips
+`mw_intro.bik` in one run and lets it play in the next. Either repeat every
+action across a wide batch span, or drive live with `--control-stdin` /
+`tools/ctl.js`; do not aim a single action at a single batch.
+
+**Build the train with `seq -f "%.0f"`.** BSD `seq` switches to `%g` past a
+million and prints `1.02e+06`; `run.js` parses that batch number as `1`, so
+every action above batch 1M fires immediately and silently. A run built with
+a bare `seq` loses its entire walk train and parks on whatever screen the
+sub-1M actions left up — which looks exactly like the app being stuck.
+
+Phase timeline on the current build at `--tick-ms-per-batch=2` with a
+**700-batch** ESC pulse spacing (denser than the 1500 used above): main menu
+up at **460k-545k**, New click then world-load splash ~30k batches later,
+`mw_intro.bik` next, world by **~605k** when the ESC train covers the intro.
+
+One run put up `[MessageBox] "Error": "Music Error: Can not play file. Data
+Files/Music/Special/morrowind title.mp3"` even at `--memory-mb=1024`. It did
+not block progress and did not recur.
+
 ### Cheap oracle: md5 the capture series
 
 Every one of these runs was diagnosed by
@@ -619,3 +689,298 @@ how the DI-key teardown was spotted at all.
 
 Runs are deterministic (see `project_headless_determinism`), so a batch
 number learned from one capture series is reusable in the next run.
+
+## Bink video hang: every thread owned mutexes as thread 1 (2026-09-28, FIXED 82b4c4a5)
+
+Symptom: on the software D3D9 arm a Bink video froze mid-play: run 1 on the
+Bethesda logo, run 2 on `mw_intro.bik` frame 224 (the stopping point moves
+with the schedule). Main sat in `BinkDoFrame` (exe `call [0x738408]` at
+`0x424b75`, return `0x424b7b`), with the MMX count frozen, looping in Bink's
+audio decoder (`binkw32+0x30005df4` calling `0x3000cb50`) over a 907 MB
+"packet length" read from the frame buffer.
+
+binkw32.dll 1.5a (origBase `0x30000000`) IO layer, `io = bink+0x110`:
+
+| io+ | meaning |
+|---|---|
+| `0x3c` | ring size (`0x8a000` intro, `0x83000` logo) |
+| `0x48` | bytes available to the consumer |
+| `0x50` | file read position |
+| `0x54` | consumer file position |
+| `0x58` | consumer ring pointer |
+| `0x5c` | free bytes |
+| `0x64`/`0x68` | ring start / end |
+| `0x6c` | producer ring pointer |
+| `0xcc`/`0xd0`/`0xd4` | lock (WFSO INFINITE) / try-lock (WFSO 0) / unlock (ReleaseMutex); mutex handle at `io+0xdc+4` |
+
+The reader thread (`0x3000a157`) try-locks the mutex, checks
+`free >= 0x1000` **unsigned**, reads 0x1000 bytes and `lock add`s the
+counters. The consumer (`0x30009d38`) takes the same mutex. Invariant:
+`avail + free == ring size`.
+
+Cause: `test/run.js` and `host.js` computed the caller's Win32 thread id from
+`ctx.threadId`. Nothing sets it, and every worker import table adopts the
+main thread's sync imports, so every thread was thread 1. The reader's
+try-lock therefore "re-entered" a mutex main held, and the two sides raced on
+the counters. Once `free` went negative, the unsigned check let the reader
+fill forever (avail 22 MB in a 0x8a000 ring), overwriting data main had not
+read yet. Fix: `ThreadManager.currentWin32ThreadId()` returns the running
+slice/RPC thread's id, else 1.
+
+Check it live: find BINK by `[640, 480, frames]` in the first three dwords,
+then read dwords `0x53` (size), `0x56` (avail) and `0x5b` (free) of the
+struct.
+
+## Title music rebuilt its graph every frame: QUARTZ.VXD (2026-09-28, FIXED ae31f419)
+
+Symptom: from about batch 3.9M, while `mw_logo.bik` still plays, the
+software-D3D9 run creates a new DirectShow filter graph on almost every
+frame until the guest heap runs out (OOM before the menu at 1024 MB). This is
+not the track-end restart described above: the graph never runs at all.
+
+Music code in Morrowind.exe:
+
+| VA | what |
+|---|---|
+| `0x403630` | music update (entry; `find_fn.js` wrongly says `0x40367d`). Calls play at `0x403702` when `[esi+0x7c]` holds a path, clears it, then calls `0x4034a0` |
+| `0x403250` | play: `CoCreateInstance(CLSID_FilterGraph, IID_IGraphBuilder)` at `0x40337a`, `RenderFile` (vtbl+0x34), QI IBasicAudio, flag = 1 |
+| `0x4034a0` | QI IMediaControl (IID at `0x73d770`) and IMediaPosition (`0x73d750`), `put_CurrentPosition(0)`, `IMediaControl::Run` (vtbl+0x1c). Success lands on `0x403526` (flag = 2) |
+| `0x4037ac` | IMediaEvent poll (`0x73d760`), gated on flag 2 |
+
+Track: `Data Files/Music/Special/morrowind title.mp3`. Counting `0x403526`
+is the one-number check: 0 means Run never succeeded.
+
+Cause: Win98 quartz.dll (installed copy, origBase `0x35500000`) builds its
+parser ring buffers through `\\.\QUARTZ.VXD`:
+
+- `CreateFileA("\\.\QUARTZ.VXD", GENERIC_WRITE, share 2, OPEN_ALWAYS)`; the
+  handle is global `0x355c9088`.
+- `0x355c4029`: `DeviceIoControl(h, 1, &pages, 4, obj, 4)` returns a base
+  whose `[base+N, base+2N)` is a second mapping of `[base, base+N)`.
+  Refcount at `0x355da1cc`; failure gives `hr = 0x8007000e`.
+- `0x35533363` / `0x355c3f9c`: ioctl 2 with `&base` frees it; the last
+  reference closes the handle.
+- The fallback when CreateFile fails (`0x35536014`, ring ctor
+  `0x35535fb2(size, extra)`) is NT-style: `CreateFileMappingA` plus two
+  `MapViewOfFileEx` at a fixed base. The Win98 section model (one address per
+  section) refuses that, so the fallback cannot work here either.
+
+The VFS created a plain file for that name, quartz trusted a VxD that was not
+there, ioctl 1 failed, and every Pause/Run returned E_OUTOFMEMORY. Fix: the
+VFS fails the whole `\\.\` namespace, and `09a0c` emulates the device. ioctl 1
+reserves 2N, commits N and points the upper half's PTEs at the lower half's
+backing. After the fix `0x403526` counts once per `0x403250`, about every
+60K batches at `--tick-ms-per-batch=2`: that is the title track's own
+114 s, so the track really ends and restarts.
+
+### Next wall: the main menu binds an A4R4G4B4 texture (FIXED, same day)
+
+Once the music graph runs, the software run reaches the main menu with a
+black background. The host logs `invalid texture resource stage=0 kind=3
+levels=1 lod=0 format=26` on every menu draw: D3DFMT_A4R4G4B4. The WAT create
+gate had admitted 26 since B&W2 needed it, but `lib/d3d9-host.js` never
+learned to sample it, so the whole draw was dropped. It now decodes 26
+(nibble × 17); `test-d3d9-pipeline-web.js` draws one through the GPU path.
+
+### Past the menu on software: intro, world, and `--sse` (2026-09-28, box 1)
+
+Same frozen `--control` run shape as above (`--d3d9-renderer=software
+--memory-mb=1024 --tick-ms-per-batch=2 --quiet-api --quiet-blocks`, six
+ESC press/release pairs 100K batches apart to get through the logos).
+
+- **Menu → New**: a DI click (`di-mousedown:1`, 60 batches, `di-mouseup:1`)
+  on New at ~4.2M batches starts "Loading Interior", then `mw_intro.bik`.
+- **mw_intro plays past frame 224** (the frame the Bink mutex bug froze on,
+  82b4c4a5). Its BINK struct is `[640, 480, 1678 frames, FrameNum, ...]`;
+  it advances ~50 frames per 200K batches and is wall-paced (400K batches
+  took 17 s), so an ESC at ~5.69M skips it.
+- **The world renders on the software D3D9 backend** by ~5.77M: the
+  prison-ship hold, with the character-name box over it.
+- **Open: the name box takes no input.** DI moves and clicks on its OK,
+  `type`, and a raw `keypress` all left the frame byte-identical. That was
+  measured while rendering had dropped to ~11 requests per 9K batches, so it
+  may be the same "not polling while busy" B&W2 shows in its land picker
+  (black-white-2.md), not a dead input path. Unverified.
+- **A render-wait "stall" is unconfirmed.** Once, main sat on yield 16 with
+  its request marked `done` across many steps, and a manual `clear_yield`
+  released it. B&W2 later showed the same snapshot (one `done` request,
+  yield 16), but wrapping `ctx.waitD3DRender` showed tokens advancing, about
+  one per 17 batches, i.e. just slow. `test/run.js` now logs `[render] main
+  parked on completed request` after 1000 checks (666c3e4e); trust that line,
+  not a snapshot.
+
+**`--sse` is neutral on boot.** Two fresh runs per arm, identical ESC
+schedule, boot to batch 1,492,001 on a quiet box (load < 1): process CPU
+**43 s in all four runs**, wall 82/45 s without and 58/39 s with. The wall
+spread is present pacing (the headless Present gate is wall-clock 60 Hz),
+not work. Gameplay, where SSE code paths would actually run, is unmeasured.
+
+## Call-form census (2026-09-29, box 1, uop-tier-design §15.1)
+
+`--handler-hist --handler-hist-thread=0,0,0 --edge-hist --uop-census`, analysed with
+`tools/call-form-weighted.js`. We measured three windows:
+
+- **mw1**: batches 6.1-6.3M.
+- **mw2**: 5.0-5.8M, loading `morrowind.esm`.
+- **mw3**: 13.0-13.4M. The chargen Name box is up over the software-D3D9
+  world. That box takes no typed input on this path, so a free-roam window
+  was not reached.
+
+Box 1 needed symlinks `Morrowind.cue` and `Morrowind.iso` in
+`~/tdef/test/binaries/candidates/morrowind/cd/` for the CD check.
+
+Results for mw3, as % of all block entries:
+
+- The uop tier covers 40.5-40.7%.
+- Guest indirect transfers are 5.5%, spread over about 115 sites; 4.5% of the
+  5.5% is at monomorphic sites.
+- The top site is `exe+0x6f38d0 call [esp+0x2c]` at 0.67%. It has one target, a
+  float interval-overlap callback.
+- msvcrt `qsort` (`0x7801ed9a..0x7801ee6f`, 42 blocks) holds 3.9-4.0%. Its three
+  `call [ebp+0x14]` sites split 1/3 each across the per-axis comparators
+  `exe+0x6e9710`, `exe+0x6e9750` and `exe+0x6e9790`, which looks like
+  sweep-and-prune. The comparator is fixed for each `qsort` call.
+- Loops declined for `call-indirect`: the heads are 6.6% and the bodies (union
+  of SCCs) 11.0-11.3%.
+- `_ftol` and `_stricmp` are native overrides of the loaded msvcrt. The fixed
+  tool now counts them as api. `jmp [abs] -> guest` is 0.00%.
+
+The load window mw2 had 2.4-3.3% guest indirect, mostly
+`exe+0x4d11c7 call [edx+0xe8]` (1.6%, monomorphic), and a declined loop at
+`exe+0x4d11c3` with a 5.3% body.
+
+## CRT exports (2026-09-29, docs/crt-native-overrides.md)
+
+Morrowind imports the VC6 `msvcrt.dll`. `tools/crt-hot-exports.js` over the
+census windows charges its CRT time as follows:
+
+- **Load:** `sprintf` -> `_output` about 4.4%, `free` 0.78%, `strtok` 0.33%,
+  `_strnicmp` 0.15%.
+- **Frame:** `qsort` about 4%, almost all of it in the guest comparator
+  callback, and `sprintf` -> `$I10_OUTPUT` about 1%.
+
+None of that is a PURE export. `sprintf` needs a byte-exact `_output`, `qsort`
+calls back into the guest, and `free`/`strtok` own CRT state. So the
+wide-string and `floor` overrides added for UT do not move Morrowind.
+
+The older `_stricmp` override that Morrowind does use does not check the
+locale. It is exact only while the app stays in the "C" locale. That holds
+for `Morrowind.exe`: its msvcrt imports include `_stricmp` but no `setlocale`
+(`tools/pe-imports.js --all --dll=msvcrt.dll`). A DLL it loads could still
+change the locale, and that path was not checked.
+
+## 2026-10-05: ordinary browser title reached; input qualification pending
+
+A headful, audio-enabled ordinary run on tested module
+`2638e876e6002d0e34cf7acba3d85ddbabb02069f559695f28fe6bad4620eb95`
+(source implementation `6604fb90`, subsequently integrated on main) reached the
+Bethesda movie and Morrowind title. The registered running instance exposed an
+actual 2,147,483,648-byte memory and owning guest Worker; presentation used WebGL.
+These are observed values, not an inference from the registry's `bigMemory` flag.
+
+The first harness attempt denied the required shared `msvcp60`, `msvcrt` and
+`comctl32` DLL URLs, then trapped at `0x4012e0`. That was an invalid reproduction,
+not evidence for an emulator fix. The corrected attempt loaded all four seeded/
+required DLLs including Bink and reached the title. A reviewed Bethesda movie
+received Escape for 200 ms. Later captures alternated between the rendered title
+and black frames; the run did not establish their cause.
+
+One normal pointer move/click requested `(319,247)` over New, then a separately
+reviewed 200 ms Enter did not leave the title. The pictured game cursor was near
+`(616,471)` within a 640×480 title drawn into a 1024×768 page. This is not enough to
+prove a viewport mapping bug: `lib/browser-input.js` maps CSS to logical canvas,
+`renderer-input.js` applies the exclusive presentation mapping, and
+`handleMouseMove` also accumulates relative DirectInput deltas per input memory.
+A game-owned cursor can therefore differ from the browser click position. The
+next ordinary route needs actual canvas/client/exclusive viewport and lock state
+alongside before/after cursor captures, rather than another guessed click or a
+forced guest cursor/text write. No character-generation or gameplay was reached.
+
+The runtime COM search also made HTTP probes for `quartz.dll`, `devenum.dll`, and
+`l3codecx.ax` under `binaries/dlls`, `binaries/plugins`, and `dlls`. Although the
+strict harness mistakenly returned 403, all three subsequently loaded via the
+existing app VFS fallback at `0x7ece0000`, `0x7ecb0000`, and `0x7ec90000`.
+Thus these probes do not establish missing filters or failed music initialization.
+The normal search order must remain intact: absent shared copies should return
+404, not be replaced with invented shared aliases to app-local copies.
+
+Prepared harness parity now inventories finite native names from the frozen DLL
+registry plus the declared native images/imports: 60 names, 22 present exact
+search paths, and 218 explicitly absent probes. Present bytes are hash-pinned;
+normal negative probes receive recorded 404s without poisoning the run, while
+unlisted paths remain refused. Native COM and LoadLibrary search paths and the
+VFS fallback remain the emulator's original behavior. Runtime closure is not a
+claim that all possible dynamic names have been observed.
+
+Local evidence: `scratch/new-game-morrowind-20261005/attempt2`, its
+`attempt2-classification.json`, and `runtime-dependency-closure.json`. Session
+63255 closed browser/server at 15:34:22.353 UTC with browser exit 0 and no pending
+streams; driver exit 1 retains the harness's negative-probe errors. No FPS, audio
+quality, or gameplay qualification is claimed. The subsequent helper is prepared
+only; it has not been run.
+
+### 2026-10-05 follow-up: relative motion reaches the title, button result unresolved
+
+Attempt6 kept the original1024×768 browser connection and tested module2638.
+After a first ordinary16,16 move seeded the per-memory DirectInput point, a
+second ordinary+16,0 move completed. The title snapshots differ in exactly417
+pixels, bounded by `[320,242,352,263]`; root independently obtained the same
+result. This supports a narrow cursor/hover response, not gameplay or an absolute
+browser-to-game scaling factor. The game-owned pointer/hover pixels overlap New
+and the title logo, so exact target identification remains uncertain.
+
+Read-only getters on the actual owning Worker reported cursor425728,
+display count0, and focusHWND65537. Browser state showed CSS cursor`default`,
+focused CANVAS, matching keyboard owner, visible Morrowind640×480 at0,0 and an
+invisible ActiveMovie window. Exclusive transforms were null. A missing pointer
+in a browser screenshot alone was therefore an overly strict harness gate;
+these observations do not prove missing guest input.
+
+One ordinary button hold258ms at the unchanged browser point32,16 followed the
+relative movement. The title remained after a3second settle. No Name prompt or
+gameplay was reached. A later Enter command arrived after the absolute300second
+session deadline and was not delivered. Browser/server closed16:51:12.833UTC,
+errors empty, Chrome exit0; driver exit2 denotes the deadline.
+
+The frozen source provides two distinct button paths. In
+`lib/renderer-input.js:1532`, down updates the host button mask and queues a
+DirectInput edge before normal WM routing. Up clears that mask and queues its
+edge. `src/09a8-handlers-directx.wat:9447` GetDeviceState samples
+`host_get_mouse_buttons`; `lib/host-window.js:1131` returns the current renderer
+mask. Buffered GetDeviceData consumes the separate edge ring. A short hold can
+only be observed by GetDeviceState if the guest polls during it. Neither the
+saved screenshots nor host input receipt establish that polling happened, or
+that New's exact hit region contained the interpreted pointer. Do not diagnose
+WM coordinate mapping from this alone.
+
+The next useful evidence is a bounded passive observation of actual owning
+GetDeviceState/GetDeviceData mouse polls and ordinary button down/up, preserving
+original receivers/results and recording callback timing and selected device.
+A separately reviewed ordinary longer hold can then test missed polling if
+needed; no guest button injection, cursor setter, or guessed scaling belongs in
+that experiment. No identical seed-only launch is proposed.
+
+Local immutable evidence: `scratch/new-game-morrowind-20261005/attempt6`, including
+`cursor-diff.json`, read-only state snapshots, `pointer-receipts.json`, and
+`cleanup.json`. Earlier attempt3 secondary-connection viewport change and
+attempt5 human-review phase timeout remain harness failures, not game failures.
+
+
+## 2026-10-05 — ordinary New click reaches prison Name prompt
+
+The generic DirectInput live-button repair is integrated as main `520d1cde` (source `94d18605`). It separates physical mouse buttons from queued Win32 message snapshots while preserving message and OLE consumers. Its real-WAT before-control failed the new physical-button assertion; the candidate, full production/shake build, CLI mouse control and renderer message-mask regressions passed.
+
+Ordinary browser attempt9 used module `2e2fd8d1ca62cd87f0bc09312bc4836108df610d00cb7771bb5ae22755eceedc`. The original Puppeteer connection seeded (16,16), then moved to (32,16). A reviewed New-target click held the button for 1500 ms and released it normally. The passive host census recorded the actual canvas recipient at page (32,16), then live mask 1. Four retained physical reads returned 0x8000 while the active WM_MOUSEMOVE snapshot still held button mask 0. All 62 retained completed GetDeviceState outputs inside the resolved-down/requested-up interval contained left-button byte 0x80; attempt8's corresponding outputs were zero. This supports the repaired state-selection path, without confusing browser coordinates with the independently observed game cursor.
+
+The click advanced to the red opening movie and then the prison Name dialog, personally reviewed by the coordinator. An Escape intended for the movie arrived after the prison loaded and opened its pause menu; a separately reviewed second Escape returned to the Name prompt. Ordinary typing of Codex completed, but its screenshot raced the original 300-second deadline. Name submission, free movement, gameplay qualification, audio quality and FPS remain unproven.
+
+Local evidence: `scratch/new-game-morrowind-20261005/attempt9/analysis.json`, `host-button-census.json`, `button-observer.json`, `pointer-receipts.json`, `settled.png`, `return-prison.png` and `prison-wait.png`. The host census closed with 73 records and no observer errors. Worker coverage is main-instance only and its 128-record cap overflowed, so the unrecorded tail is unknown. Session 33855 ended at the original deadline, browser/server closed at 17:57:32.462 UTC, Chrome exited 0 and no processes remained; driver exit 2 and the screenshot TargetClose error are retained. The next ordinary route gets a predeclared 600-second total budget for Name/OK and actual player control, without repeating button diagnosis.
+
+
+## 2026-10-05 — reviewed first-person movement after Name
+
+Ordinary continuation attempt10 used the exact built source `94d18605` and module `2e2fd8d1ca62cd87f0bc09312bc4836108df610d00cb7771bb5ae22755eceedc`, including the generic live DirectInput button repair integrated as main `520d1cde`. No private Worker, API census, instruction trace or guest-state writes were used. The original browser connection clicked New, skipped the opening movie with Space, visibly entered a Name and clicked OK. Requested text Codex rendered as cox; that partial name was accepted normally and the typing limitation remains unresolved.
+
+After the tutorial popup was dismissed with Enter, ordinary W was held from18:22:36.945 to18:22:38.150 UTC (requested1200ms); the camera advanced toward the corridor and the left NPC left view. S from18:22:58.855 to18:23:00.068 reversed movement, restoring the left NPC and wider doorway. A1500ms idle observation retained the camera geometry while NPCs animated. Root personally reviewed all movement frames and input receipts and accepted narrow first-person player control inside the prison ship. This is gameplay evidence beyond the Name form, not proof of complete character generation, quests, audio quality or FPS.
+
+Immutable run: `scratch/runs/20261005-morrowind-prison-movement/result.json`, with four reviewed gameplay images, exact inputs, root review, served-response receipts, frozen source closure and SHA256 artifact manifest. Actual registered memory was2GiB with Worker/WebGL backend; rendered scene640x480 inside1024x768 browser viewport. Session78331 exited0 on ordinary quit before its original600-second deadline. Browser/server closed18:23:55.881 UTC, no cleanup errors, no pending streams, Chrome exited0 and owning processes were absent. Remaining work includes typing fidelity, later game progression and a separately justified gameplay performance counter.
