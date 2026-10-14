@@ -114,7 +114,7 @@ async function main() {
   const get = makeCaller('ImageList_GetIcon');
   const getIconInfo = makeCaller('GetIconInfo');
   const destroyIcon = makeCaller('DestroyIcon');
-  const drawIcon = makeCaller('DrawIcon');
+  const drawIconEx = makeCaller('DrawIconEx');
   const deleteObject = makeCaller('DeleteObject');
 
   assert.strictEqual(loadA([0xffffffff, 0, 15, 1, 0xffffffff, 1, 0]), 0,
@@ -312,8 +312,10 @@ async function main() {
   for (let i = 0; i < 64; i++) dv.setUint32(targetBits + i * 4, background, true);
   const targetDc = e.test_call_CreateCompatibleDC(0) >>> 0;
   e.test_call_SelectObject(targetDc, target);
-  assert.strictEqual(drawIcon([targetDc, 2, 2, bitmapIcon]), 1,
-    'DrawIcon accepts the materialized image-list HICON');
+  // DrawIconEx at 0x0 without DI_DEFAULTSIZE draws the icon's own 4x4 size;
+  // DrawIcon would stretch it to SM_CXICON x SM_CYICON, as USER does.
+  assert.strictEqual(drawIconEx([targetDc, 2, 2, bitmapIcon, 0, 0, 0, 0, 3]), 1,
+    'DrawIconEx accepts the materialized image-list HICON');
   assert.strictEqual(dv.getUint32(targetBits + (2 * 8 + 2) * 4, true), 0x000000ff,
     'CLR_DEFAULT comes from the whole strip pixel 0,0, not each cell origin');
   assert.strictEqual(dv.getUint32(targetBits + (2 * 8 + 5) * 4, true), background,
