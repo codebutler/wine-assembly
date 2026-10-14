@@ -171,6 +171,7 @@ add('EditState', [
   '$edit_hscroll_to', '$edit_insert_bytes', '$edit_insert_char', '$edit_layout_build',
   '$edit_layout_xy_to_offset', '$edit_line_from_char', '$edit_line_index',
   '$edit_line_len', '$edit_line_start', '$edit_line_text_len', '$edit_reset_caret_timer',
+  '$edit_rich_text_ex',
   '$edit_scroll_caret_into_view', '$edit_scroll_to', '$edit_sel_hi', '$edit_sel_lo',
   '$edit_stop_caret_timer', '$edit_stream_project', '$edit_view_metrics',
   '$edit_wndproc', '$edit_word_end', '$edit_word_start', '$edit_xy_to_offset',

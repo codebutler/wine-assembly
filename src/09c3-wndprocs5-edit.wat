@@ -2375,7 +2375,52 @@
         (call $invalidate_hwnd (local.get $hwnd))
         (return (local.get $hi))))
 
-    ;; ---------- EM_GETSEL (0x00B0) ----------
+;; ---------- EM_GETTEXTEX (0x045E) / EM_GETTEXTLENGTHEX (0x045F) ----------
+    ;; RichEdit 2.0's text readers. Programs that keep an input line in a
+    ;; RichEdit read it with these rather than WM_GETTEXT; mIRC's editbox asks
+    ;; EM_GETTEXTLENGTHEX on Enter and beeps when the answer is zero.
+    (if (i32.and
+          (i32.eq (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 25))
+          (i32.eq (local.get $msg) (i32.const 0x045F))) ;; EM_GETTEXTLENGTHEX
+      (then
+        (if (i32.or (i32.eqz (local.get $state)) (i32.eqz (local.get $wParam)))
+          (then (return (i32.const 0))))
+        (local.set $lo (call $gl32 (local.get $wParam)))              ;; flags
+        (local.set $hi (call $gl32 (i32.add (local.get $wParam) (i32.const 4)))) ;; codepage
+        ;; GTL_NUMCHARS and GTL_NUMBYTES together are E_INVALIDARG.
+        (if (i32.eq (i32.and (local.get $lo) (i32.const 0x18)) (i32.const 0x18))
+          (then (return (i32.const 0x80070057))))
+        (local.set $text_len
+          (call $edit_rich_text_ex (call $g2w (local.get $state))
+            (i32.and (local.get $lo) (i32.const 1)) (i32.const 0) (i32.const 0) (i32.const 0)))
+        ;; Bytes of UTF-16 text are two per character.
+        (if (i32.and
+              (i32.ne (i32.and (local.get $lo) (i32.const 0x10)) (i32.const 0))
+              (i32.eq (local.get $hi) (i32.const 1200)))
+          (then (local.set $text_len (i32.shl (local.get $text_len) (i32.const 1)))))
+        (return (local.get $text_len))))
+
+    (if (i32.and
+          (i32.eq (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 25))
+          (i32.eq (local.get $msg) (i32.const 0x045E))) ;; EM_GETTEXTEX
+      (then
+        (if (i32.or (i32.eqz (local.get $state))
+              (i32.or (i32.eqz (local.get $wParam)) (i32.eqz (local.get $lParam))))
+          (then (return (i32.const 0))))
+        (local.set $text_len (call $gl32 (local.get $wParam)))        ;; cb, bytes
+        (local.set $lo (call $gl32 (i32.add (local.get $wParam) (i32.const 4)))) ;; flags
+        (local.set $hi (i32.eq (call $gl32 (i32.add (local.get $wParam) (i32.const 8)))
+                               (i32.const 1200)))                     ;; UTF-16?
+        (if (local.get $hi)
+          (then (local.set $text_len (i32.shr_u (local.get $text_len) (i32.const 1)))))
+        (if (i32.eqz (local.get $text_len)) (then (return (i32.const 0))))
+        (return (call $edit_rich_text_ex (call $g2w (local.get $state))
+          (i32.and (local.get $lo) (i32.const 1))   ;; GT_USECRLF
+          (i32.and (local.get $lo) (i32.const 2))   ;; GT_SELECTION
+          (local.get $lParam)
+          (i32.or (local.get $text_len) (i32.shl (local.get $hi) (i32.const 31)))))))
+
+        ;; ---------- EM_GETSEL (0x00B0) ----------
     (if (i32.eq (local.get $msg) (i32.const 0x00B0))
       (then
         (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
@@ -2629,6 +2674,67 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.sub (local.get $i) (local.get $line_start)))
+
+  ;; RichEdit's view of the text, for EM_GETTEXTEX and EM_GETTEXTLENGTHEX.
+  ;; A paragraph break (CRLF, or a lone LF or CR in the buffer) reads as CR,
+  ;; or as CRLF with $crlf. $sel limits it to the selection. With $dst zero
+  ;; it only counts; otherwise $cap holds the destination's size in units
+  ;; (a terminator included) and bit 31 asks for UTF-16. Returns the units
+  ;; written or counted, not the terminator.
+  (func $edit_rich_text_ex (param $state_w ptr<EditState>) (param $crlf i32) (param $sel i32)
+                          (param $dst i32) (param $cap i32) (result i32)
+    (local $buf_w i32) (local $i i32) (local $end i32) (local $ch i32)
+    (local $n i32) (local $wide i32) (local $room i32) (local $unit i32) (local $k i32)
+    (local.set $buf_w (load.field EditState text_buf_ptr (local.get $state_w)))
+    (local.set $wide (i32.shr_u (local.get $cap) (i32.const 31)))
+    (local.set $cap (i32.and (local.get $cap) (i32.const 0x7FFFFFFF)))
+    ;; Units available for text: the terminator takes one.
+    (local.set $room (select (i32.sub (local.get $cap) (i32.const 1)) (i32.const -1)
+                             (local.get $dst)))
+    (local.set $end (load.field.memarg EditState text_len (local.get $state_w)))
+    (if (local.get $sel)
+      (then
+        (local.set $i (call $edit_sel_lo (local.get $state_w)))
+        (local.set $end (call $edit_sel_hi (local.get $state_w)))))
+    (if (local.get $buf_w)
+      (then
+        (local.set $buf_w (call $g2w (local.get $buf_w)))
+        (block $done (loop $scan
+          (br_if $done (i32.ge_u (local.get $i) (local.get $end)))
+          (local.set $ch (i32.load8_u (i32.add (local.get $buf_w) (local.get $i))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (if (i32.or (i32.eq (local.get $ch) (i32.const 0x0D)) (i32.eq (local.get $ch) (i32.const 0x0A)))
+            (then
+              ;; CRLF is one break.
+              (if (i32.and (i32.eq (local.get $ch) (i32.const 0x0D))
+                    (i32.and (i32.lt_u (local.get $i) (local.get $end))
+                      (i32.eq (i32.load8_u (i32.add (local.get $buf_w) (local.get $i))) (i32.const 0x0A))))
+                (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))
+              (local.set $ch (i32.const 0x0D))
+              (local.set $k (i32.add (local.get $crlf) (i32.const 1))))
+            (else (local.set $k (i32.const 1))))
+          ;; A break written as CRLF is all or nothing.
+          (br_if $done (i32.gt_u (i32.add (local.get $n) (local.get $k)) (local.get $room)))
+          (local.set $unit (local.get $ch))
+          (block $emit (loop $more
+            (br_if $emit (i32.eqz (local.get $k)))
+            (if (local.get $dst)
+              (then
+                (if (local.get $wide)
+                  (then (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $n) (i32.const 1)))
+                                    (local.get $unit)))
+                  (else (call $gs8 (i32.add (local.get $dst) (local.get $n)) (local.get $unit))))))
+            (local.set $n (i32.add (local.get $n) (i32.const 1)))
+            (local.set $unit (i32.const 0x0A))
+            (local.set $k (i32.sub (local.get $k) (i32.const 1)))
+            (br $more)))
+          (br $scan)))))
+    (if (local.get $dst)
+      (then
+        (if (local.get $wide)
+          (then (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $n) (i32.const 1))) (i32.const 0)))
+          (else (call $gs8 (i32.add (local.get $dst) (local.get $n)) (i32.const 0))))))
+    (local.get $n))
 
   ;; The line's text length: $edit_line_len without the CR of a CRLF break.
   ;; $edit_line_len stops at the \n and so still counts that CR, which is

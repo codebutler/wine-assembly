@@ -21,6 +21,8 @@ const EM_GETLIMITTEXT = 0x00D5;
 const EM_EXGETSEL = 0x0434;
 const EM_EXLIMITTEXT = 0x0435;
 const EM_EXSETSEL = 0x0437;
+const EM_GETTEXTEX = 0x045E;
+const EM_GETTEXTLENGTHEX = 0x045F;
 
 async function main() {
   const wasm = compileSrcWasm();
@@ -117,6 +119,62 @@ async function main() {
   e.send_message(v1, EM_LIMITTEXT, 0, 0);
   check('RichEdit 1.0 zero legacy limit resolves to the 64K default',
     e.send_message(v1, EM_GETLIMITTEXT, 0, 0) === 64000);
+
+  // EM_GETTEXTLENGTHEX / EM_GETTEXTEX (RichEdit 2.0). mIRC's editbox reads its
+  // line this way on Enter and beeps when the length comes back zero.
+  const lenEx = (h, flags, codepage) => {
+    const p = e.guest_alloc(8);
+    e.guest_write32(p, flags);
+    e.guest_write32(p + 4, codepage);
+    return e.send_message(h, EM_GETTEXTLENGTHEX, p, 0) | 0;
+  };
+  const getEx = (h, cb, flags, codepage) => {
+    const p = e.guest_alloc(20);
+    e.guest_write32(p, cb);
+    e.guest_write32(p + 4, flags);
+    e.guest_write32(p + 8, codepage);
+    e.guest_write32(p + 12, 0);
+    e.guest_write32(p + 16, 0);
+    const buf = e.guest_alloc(cb + 2);
+    const n = e.send_message(h, EM_GETTEXTEX, p, buf) | 0;
+    let out = '';
+    for (let i = 0; ; i++) {
+      const c = codepage === 1200 ? dv.getUint16(wa(buf) + i * 2, true) : u8[wa(buf) + i];
+      if (!c) break;
+      out += String.fromCharCode(c);
+    }
+    return { n, out };
+  };
+  check('RichEdit 2.0 EM_GETTEXTLENGTHEX counts the text',
+    lenEx(v2, 0, 0) === 16, `len=${lenEx(v2, 0, 0)}`);
+  check('RichEdit 2.0 EM_GETTEXTLENGTHEX counts UTF-16 bytes with GTL_NUMBYTES',
+    lenEx(v2, 0x10, 1200) === 32);
+  check('EM_GETTEXTLENGTHEX rejects GTL_NUMCHARS with GTL_NUMBYTES',
+    (lenEx(v2, 0x18, 0) >>> 0) === 0x80070057);
+  let got = getEx(v2, 64, 0, 0);
+  check('RichEdit 2.0 EM_GETTEXTEX copies ANSI text',
+    got.n === 16 && got.out === 'alpha beta gamma', JSON.stringify(got));
+  got = getEx(v2, 64, 0, 1200);
+  check('RichEdit 2.0 EM_GETTEXTEX copies UTF-16 text for codepage 1200',
+    got.n === 16 && got.out === 'alpha beta gamma', JSON.stringify(got));
+  got = getEx(v2, 6, 0, 0);
+  check('EM_GETTEXTEX stops at the buffer size, terminator included',
+    got.n === 5 && got.out === 'alpha', JSON.stringify(got));
+  e.guest_write32(range, 6);
+  e.guest_write32(range + 4, 10);
+  e.send_message(v2, EM_EXSETSEL, 0, range);
+  got = getEx(v2, 64, 2, 0);
+  check('EM_GETTEXTEX with GT_SELECTION copies the selection',
+    got.n === 4 && got.out === 'beta', JSON.stringify(got));
+  const lines = e.test_create_richedit(2, style, allocAscii('one\r\ntwo'));
+  got = getEx(lines, 64, 0, 0);
+  check('EM_GETTEXTEX reads a paragraph break as CR',
+    got.out === 'one\rtwo' && lenEx(lines, 0, 0) === 7, JSON.stringify(got));
+  got = getEx(lines, 64, 1, 0);
+  check('EM_GETTEXTEX with GT_USECRLF reads it as CRLF',
+    got.out === 'one\r\ntwo' && lenEx(lines, 1, 0) === 8, JSON.stringify(got));
+  check('RichEdit 1.0 leaves EM_GETTEXTLENGTHEX unsupported',
+    lenEx(v1, 0, 0) === 0);
 
   console.log(`${passed}/${passed + failed} checks passed`);
   if (failed) process.exit(1);
