@@ -104,7 +104,10 @@ async function main() {
   const destroy = makeCaller('ImageList_Destroy');
   const copyIcon = makeCaller('CopyIcon');
   const destroyIcon = makeCaller('DestroyIcon');
-  const drawIcon = makeCaller('DrawIcon');
+  const drawIconEx = makeCaller('DrawIconEx');
+  // DrawIconEx at 0x0 without DI_DEFAULTSIZE: the icon's own size. (DrawIcon
+  // passes DI_DEFAULTSIZE and draws at SM_CXICON x SM_CYICON, as USER does.)
+  const drawIcon = ([hdc, x, y, icon]) => drawIconEx([hdc, x, y, icon, 0, 0, 0, 0, 3]);
   const SHGFI_SMALLICON = 0x0001;
   const SHGFI_OPENICON = 0x0002;
   const SHGFI_PIDL = 0x0008;
@@ -168,7 +171,7 @@ async function main() {
   assert.strictEqual(e.guest_read32(iconInfo + 4) >>> 0, 3,
     'SHGFI_ICON also writes the matching system image index');
 
-  // DrawIcon must use the icon's natural 16px dimensions and preserve the
+  // Drawn at its own size, the icon is 16px and must preserve the
   // transparent corner of the magenta-keyed system-list cell.
   const target = e.test_call_CreateBitmap(20, 20, 1, 32, 0) >>> 0;
   const targetBits = e.test_gdi_bitmap_storage(target) >>> 0;
@@ -178,7 +181,7 @@ async function main() {
   const targetDc = e.test_call_CreateCompatibleDC(0) >>> 0;
   assert(targetDc, 'shell icon draw DC exists');
   e.test_call_SelectObject(targetDc, target);
-  assert.strictEqual(drawIcon([targetDc, 2, 2, shellIcon]), 1, 'DrawIcon accepts the shell HICON');
+  assert.strictEqual(drawIcon([targetDc, 2, 2, shellIcon]), 1, 'DrawIconEx accepts the shell HICON');
   assert.strictEqual(dv.getUint32(targetBits + (2 * 20 + 2) * 4, true), background,
     'transparent icon corner does not paint the image-list magenta key');
   let changed = 0;
@@ -187,7 +190,7 @@ async function main() {
       if (dv.getUint32(targetBits + (y * 20 + x) * 4, true) !== background) changed++;
     }
   }
-  assert(changed >= 20, 'DrawIcon paints the visible shell glyph');
+  assert(changed >= 20, 'DrawIconEx paints the visible shell glyph');
   assert.strictEqual(dv.getUint32(targetBits + (19 * 20 + 19) * 4, true), background,
     'small HICON does not overpaint a 32px default rectangle');
 
