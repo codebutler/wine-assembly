@@ -125,7 +125,8 @@ async function main() {
   assert.strictEqual(e.test_system_ordinal_api_id(dllName, 115), id('WSAStartup'),
     'WS2_32 exposes the WinSock 1.1 WSAStartup ordinal used by Baldur\'s Gate');
   assert.strictEqual(e.test_system_ordinal_api_id(dllName, 116), id('WSACleanup'));
-  assert.strictEqual(e.test_system_ordinal_api_id(dllName, 114), -1,
+  assert.strictEqual(e.test_system_ordinal_api_id(dllName, 114), id('WSAIsBlocking'));
+  assert.strictEqual(e.test_system_ordinal_api_id(dllName, 999), -1,
     'unsupported WS2_32 ordinals remain explicit diagnostics');
   // Callback ABI and stack-owned iterator: default alias, concrete output,
   // FALSE cancellation, nested invocation, and opening the enumerated GUID.

@@ -472,7 +472,7 @@
   (func $dialog_proc_result
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
     (param $handled i32) (result i32)
-    (local $hdc i32)
+    (local $hdc i32) (local $brush i32)
     (if (local.get $handled)
       (then
         ;; USER's DefDlgProc epilog returns the DLGPROC's own BOOL — not
@@ -549,11 +549,15 @@
         ;; region, and filling the whole client through a fresh DC wiped
         ;; SimCity's status-bar frames, which the clipped paint cannot redraw.
         ;; The face brush is the one the dialog answers WM_CTLCOLORDLG with.
+        ;; Like DefWindowProc, the answer is "erased with a brush", not whether
+        ;; the fill reached a surface: a 0 makes $dialog_send_erase erase again.
         (if (local.get $wParam)
-          (then (return (call $erase_background_dc
-            (local.get $hwnd) (local.get $wParam)
-            (call $ctl_color_brush (local.get $hwnd) (i32.const 0x0136)
-              (local.get $wParam) (local.get $hwnd) (i32.const 16)))))) ;; COLOR_BTNFACE+1
+          (then
+            (local.set $brush (call $ctl_color_brush (local.get $hwnd) (i32.const 0x0136)
+              (local.get $wParam) (local.get $hwnd) (i32.const 16))) ;; COLOR_BTNFACE+1
+            (drop (call $erase_background_dc
+              (local.get $hwnd) (local.get $wParam) (local.get $brush)))
+            (return (i32.ne (local.get $brush) (i32.const 0)))))
         (return (call $dialog_erase_background (local.get $hwnd)))))
     (if (i32.eq (local.get $msg) (i32.const 0x000F)) ;; WM_PAINT
       (then
