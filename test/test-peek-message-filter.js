@@ -267,7 +267,9 @@ const extraWat = String.raw`
     'PM_REMOVE consumes the retained hardware event after it matches');
 
   const pollsBeforeDisjoint = hardwarePolls;
-  hardware.push(0x000D0102, 0x00000200); // WM_CHAR Enter, then WM_MOUSEMOVE
+  // WM_KEYDOWN Enter, then WM_MOUSEMOVE. (A host WM_CHAR reaches only a thread
+  // that calls TranslateMessage, as WM_CHAR comes from TranslateMessage.)
+  hardware.push(0x000D0100, 0x00000200);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0x00FF, 1), 0);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0109, 0x01FF, 1), 0);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x020A, 0xFFFF, 1), 0,
@@ -279,7 +281,7 @@ const extraWat = String.raw`
   assert.strictEqual(msg.getUint32(4, true), 0x0200);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0100, 0x0108, 1), 1,
     'the earlier excluded key remains queued in original order for its own filter');
-  assert.strictEqual(msg.getUint32(4, true), 0x0102);
+  assert.strictEqual(msg.getUint32(4, true), 0x0100);
   assert.strictEqual(msg.getUint32(8, true), 13);
 
   e.test_timer_set(0x4444, 7, 10, 0);
