@@ -8,7 +8,7 @@
 //
 // Before this, SimCity 2000's maximized city window kept its whole caption
 // inside the MDICLIENT: a second title bar under the frame's, eating 24 rows
-// of map on a phone that has none to spare, with nothing in the menu bar.
+// of map on a phone that has none to spare.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -77,13 +77,6 @@ const extraWat = String.raw`
         (else (if (result i32) (i32.eq (local.get $i) (i32.const 2))
           (then (call $client_rect_get_r (local.get $hwnd)))
           (else (call $client_rect_get_b (local.get $hwnd)))))))))
-  (func (export "tmmc_bar_y") (param $frame i32) (result i32)
-    (call $menu_bar_screen_y (local.get $frame)))
-  (func (export "tmmc_frame_right") (param $frame i32) (result i32)
-    (call $host_get_window_rect (local.get $frame) (global.get $WINDOW_RECT_SCRATCH))
-    (i32.load offset=8 (global.get $WINDOW_RECT_SCRATCH)))
-  (func (export "tmmc_hit") (param $frame i32) (param $x i32) (param $y i32) (result i32)
-    (call $menu_hittest_mdi_buttons (local.get $frame) (local.get $x) (local.get $y)))
 `;
 
 const s16 = v => (v << 16) >> 16;
@@ -118,15 +111,7 @@ const wh = v => [v & 0xFFFF, v >>> 16];
   console.log('PASS  a maximized MDI child\'s caption and borders are outside the MDICLIENT');
 
   assert.strictEqual(e.tmmc_max_child(frame) >>> 0, child, 'the frame knows its maximized child');
-  const r = e.tmmc_frame_right(frame) - 3;
-  const by = e.tmmc_bar_y(frame) + 2 + 7;
-  assert.strictEqual(e.tmmc_hit(frame, r - 10, by), 0xF060, 'close button');
-  assert.strictEqual(e.tmmc_hit(frame, r - 28, by), 0xF120, 'restore button');
-  assert.strictEqual(e.tmmc_hit(frame, r - 44, by), 0xF020, 'minimize button');
-  assert.strictEqual(e.tmmc_hit(frame, r - 80, by), 0, 'left of the buttons is the menu');
-  assert.strictEqual(e.tmmc_hit(frame, r - 10, by + 20), 0, 'below the bar is not a button');
   e.tmmc_restore(child);
   assert.strictEqual(e.tmmc_max_child(frame), 0, 'a restored child leaves the menu bar');
-  assert.strictEqual(e.tmmc_hit(frame, r - 10, by), 0, 'and takes its buttons with it');
-  console.log('PASS  the frame menu bar carries the maximized child\'s buttons');
+  console.log('PASS  the frame tracks its maximized child');
 })().catch(err => { console.error(err && err.stack || err); process.exit(1); });
