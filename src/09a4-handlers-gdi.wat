@@ -1170,6 +1170,7 @@
 
   ;; 175: SetMapMode(hdc, fnMapMode) → previous map mode.
   (func $handle_SetMapMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $units_per_inch i32) (local $dpi i32)
     (if (i32.and (i32.ge_u (local.get $arg1) (i32.const 1))
           (i32.le_u (local.get $arg1) (i32.const 8)))
       (then
@@ -1187,7 +1188,36 @@
             (drop (call $gdi_dc_set_field
               (local.get $arg0) (i32.const 64) (i32.const 1) (i32.const 1)))
             (drop (call $gdi_dc_set_field
-              (local.get $arg0) (i32.const 68) (i32.const 1) (i32.const 1))))))
+              (local.get $arg0) (i32.const 68) (i32.const 1) (i32.const 1)))))
+        ;; The fixed physical modes set the logical scale and upward Y axis
+        ;; themselves. CScrollView clients commonly call only SetMapMode before
+        ;; drawing; they do not issue SetWindowExtEx/SetViewportExtEx.
+        (if (i32.and (i32.ge_u (local.get $arg1) (i32.const 2))
+              (i32.le_u (local.get $arg1) (i32.const 6)))
+          (then
+            (local.set $units_per_inch
+              (if (result i32) (i32.eq (local.get $arg1) (i32.const 2))
+                (then (i32.const 254))
+                (else (if (result i32) (i32.eq (local.get $arg1) (i32.const 3))
+                  (then (i32.const 2540))
+                  (else (if (result i32) (i32.eq (local.get $arg1) (i32.const 4))
+                    (then (i32.const 100))
+                    (else (if (result i32) (i32.eq (local.get $arg1) (i32.const 5))
+                      (then (i32.const 1000))
+                      (else (i32.const 1440))))))))))
+            (local.set $dpi
+              (select (i32.const 300) (i32.const 96)
+                (i32.and (i32.ne (global.get $printer_hdc) (i32.const 0))
+                  (i32.eq (local.get $arg0) (global.get $printer_hdc)))))
+            (drop (call $gdi_dc_set_field
+              (local.get $arg0) (i32.const 48) (local.get $units_per_inch) (i32.const 1)))
+            (drop (call $gdi_dc_set_field
+              (local.get $arg0) (i32.const 52) (local.get $units_per_inch) (i32.const 1)))
+            (drop (call $gdi_dc_set_field
+              (local.get $arg0) (i32.const 64) (local.get $dpi) (i32.const 1)))
+            (drop (call $gdi_dc_set_field
+              (local.get $arg0) (i32.const 68) (i32.sub (i32.const 0) (local.get $dpi))
+              (i32.const 1))))))
       (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )

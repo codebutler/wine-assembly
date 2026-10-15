@@ -676,6 +676,44 @@ async function main() {
     assert.strictEqual(wat.test_call_AbortPath(dib.hdc), 1);
   });
 
+  check('fixed physical map modes scale path inches and invert logical Y', () => {
+    const metric = makeDib(180, 150);
+    wat.test_gdi_dc_set_field(metric.hdc, 56, 10, 0);
+    wat.test_gdi_dc_set_field(metric.hdc, 60, 10, 0);
+    const stroke = (x, y) => {
+      assert.strictEqual(wat.test_call_BeginPath(metric.hdc), 1);
+      assert.strictEqual(wat.test_call_MoveToEx(metric.hdc, 0, 0, 0), 1);
+      assert.strictEqual(wat.test_call_LineTo(metric.hdc, x, y), 1);
+      assert.strictEqual(wat.test_call_EndPath(metric.hdc), 1);
+      assert.strictEqual(wat.test_call_StrokePath(metric.hdc), 1);
+    };
+
+    clearDib(metric);
+    assert.strictEqual(wat.test_call_SetMapMode(metric.hdc, 1), 1); // MM_TEXT
+    stroke(120, 0);
+    assert.deepStrictEqual(pixel(metric, 100, 10), [0, 0, 0],
+      'MM_TEXT remains one device pixel per logical unit');
+
+    // One inch in each fixed mode should land near 96 device pixels on the
+    // display DC. Positive logical Y points up, so -1 inch paints downward.
+    for (const [mode, inch] of [[2, 254], [3, 2540], [4, 100],
+      [5, 1000], [6, 1440]]) {
+      clearDib(metric);
+      assert.strictEqual(wat.test_call_SetMapMode(metric.hdc, mode),
+        mode === 2 ? 1 : mode - 1);
+      stroke(inch, 0);
+      stroke(0, -inch);
+      assert.deepStrictEqual(pixel(metric, 50, 10), [0, 0, 0],
+        `map mode ${mode} should paint within its first inch`);
+      assert.deepStrictEqual(pixel(metric, 140, 10), [255, 255, 255],
+        `map mode ${mode} must stop after one device inch`);
+      assert.deepStrictEqual(pixel(metric, 10, 50), [0, 0, 0],
+        `map mode ${mode} must invert logical Y`);
+    }
+    assert.strictEqual(wat.test_call_DeleteDC(metric.hdc), 1);
+    assert.strictEqual(wat.test_call_DeleteObject(metric.bitmap), 1);
+  });
+
   check('path buffer grows past its initial capacity and DC deletion releases it', () => {
     const values = Array.from({ length: 40 }, (_, i) => [i % 20, (i * 3) % 15]);
     const points = allocPoints(values);
