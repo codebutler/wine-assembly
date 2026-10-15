@@ -3759,9 +3759,9 @@
             (if (i32.gt_s (local.get $left) (local.get $right))
               (then (local.set $swap (local.get $left))
                 (local.set $left (local.get $right)) (local.set $right (local.get $swap))))
-            ;; Preserve the mapped top and bottom device corners. Fixed
-            ;; physical modes such as MM_TWIPS point upward, so top may be
-            ;; greater than bottom; sorting Y loses the clip's orientation.
+            (if (i32.gt_s (local.get $top) (local.get $bottom))
+              (then (local.set $swap (local.get $top))
+                (local.set $top (local.get $bottom)) (local.set $bottom (local.get $swap))))
             (i32.store (local.get $rect) (local.get $left))
             (i32.store offset=4 (local.get $rect) (local.get $top))
             (i32.store offset=8 (local.get $rect) (local.get $right))
