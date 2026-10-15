@@ -1498,7 +1498,8 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
           (local.get $previous) (i32.const 0x0006) ;; WM_ACTIVATE
           (i32.shl (call $wnd_min_get (local.get $previous)) (i32.const 16)) ;; WA_INACTIVE
           (local.get $target)))
-        (call $host_invalidate_frame (local.get $previous))))
+        (call $host_invalidate_frame (local.get $previous))
+        (call $mdi_frame_child_caption_dirty (local.get $previous))))
     ;; Synchronous callbacks may activate a different window. That nested
     ;; transition owns its state; do not send the superseded target a later
     ;; activation or clear the focus it just selected.
@@ -1518,7 +1519,8 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
           (i32.or (local.get $reason) ;; WA_ACTIVE or WA_CLICKACTIVE
             (i32.shl (call $wnd_min_get (local.get $target)) (i32.const 16)))
           (local.get $previous)))
-        (call $host_invalidate_frame (local.get $target))))
+        (call $host_invalidate_frame (local.get $target))
+        (call $mdi_frame_child_caption_dirty (local.get $target))))
     (if (i32.or (i32.ne (global.get $active_transition_serial) (local.get $serial))
           (i32.ne (global.get $active_hwnd) (local.get $target)))
       (then (return (local.get $previous))))

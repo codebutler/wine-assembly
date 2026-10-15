@@ -1020,7 +1020,8 @@
 
 GetTopWindow(hWnd) — 1 arg stdcall
   (func $handle_GetTopWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $wnd_find_first_child (local.get $arg0)))
+    ;; The child at the top of the z order, as GetWindow(GW_CHILD).
+    (i32.store offset=0 (global.get $reg_base) (call $find_window_z_first (local.get $arg0)))
     (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (i32.store offset=0 (global.get $reg_base) (call $host_get_window_related (local.get $arg0) (i32.const 5)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
@@ -1795,13 +1796,27 @@ GetTopWindow(hWnd) — 1 arg stdcall
             (drop (call $mdi_child_maximize (local.get $child)))))
         (call $wnd_apply_show_state (local.get $old) (i32.const 9))
         (drop (call $mdi_child_restore (local.get $old)))))
+    ;; Only the active child's caption is drawn active ($defwndproc_do_ncpaint).
+    (if (local.get $old) (then (call $nc_flags_set (local.get $old) (i32.const 1))))
+    (if (local.get $child) (then (call $nc_flags_set (local.get $child) (i32.const 1))))
+    ;; USER's MDI activation tells each side twice, in this order: the old
+    ;; child WM_NCACTIVATE(FALSE) then WM_MDIACTIVATE; the new child, once it
+    ;; is on top, WM_NCACTIVATE(TRUE) when the frame is active, then
+    ;; WM_MDIACTIVATE.
     (if (local.get $old)
-      (then (drop (call $wnd_send_message
-        (local.get $old) (i32.const 0x0222)
-        (local.get $old) (local.get $child))))) ;; WM_MDIACTIVATE
+      (then
+        (drop (call $wnd_send_message (local.get $old) (i32.const 0x0086) (i32.const 0) (i32.const 0)))
+        (drop (call $wnd_send_message
+          (local.get $old) (i32.const 0x0222)
+          (local.get $old) (local.get $child))))) ;; WM_MDIACTIVATE
     (if (local.get $child)
       (then
-        (call $host_set_window_zorder (local.get $child) (i32.const 0))
+        ;; The active child is the top sibling: GetWindow(client, GW_CHILD)
+        ;; answers it, and clicks and paint follow.
+        (call $wnd_child_zorder (local.get $child) (i32.const 0)) ;; HWND_TOP
+        (if (i32.eq (global.get $active_hwnd) (call $wnd_top_level (local.get $client)))
+          (then (drop (call $wnd_send_message
+            (local.get $child) (i32.const 0x0086) (i32.const 1) (i32.const 0)))))
         (drop (call $wnd_send_message
           (local.get $child) (i32.const 0x0222)
           (local.get $old) (local.get $child)))
@@ -1811,9 +1826,9 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (i32.const 1))
 
   ;; Give a newly created MDI child the next CLIENTCREATESTRUCT command ID
-  ;; when CreateWindowEx did not provide one, then make the first/new child
-  ;; active. The ID is what DefFrameProc receives from the frame's Window menu.
-  (func $mdi_client_register_child (param $child i32) (result i32)
+  ;; when CreateWindowEx did not provide one. The ID is what DefFrameProc
+  ;; receives from the frame's Window menu.
+  (func $mdi_client_assign_child_id (param $child i32) (result i32)
     (local $client i32) (local $state i32) (local $id i32)
     (local.set $client (call $wnd_get_parent (local.get $child)))
     (local.set $state (call $mdi_client_state (local.get $client)))
@@ -1822,7 +1837,29 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then
         (local.set $id (call $mdi_client_take_child_id (local.get $client)))
         (drop (call $ctrl_table_set_id (local.get $child) (local.get $id)))))
-    (drop (call $mdi_client_activate (local.get $client) (local.get $child)))
+    (i32.const 1))
+
+  ;; DefMDIChildProc's WM_CHILDACTIVATE / WM_SETFOCUS: make the child active.
+  (func $mdi_client_register_child (param $child i32) (result i32)
+    (if (i32.eqz (call $mdi_client_assign_child_id (local.get $child)))
+      (then (return (i32.const 0))))
+    (drop (call $mdi_client_activate (call $wnd_get_parent (local.get $child)) (local.get $child)))
+    (i32.const 1))
+
+  ;; A child of an MDICLIENT has been created and its WM_CREATE accepted it.
+  ;; USER activates it then only if it was created visible (CreateWindowEx
+  ;; shows it, then SetWindowPos(HWND_TOP) sends WM_CHILDACTIVATE). A hidden
+  ;; child waits for its program to activate it: mIRC creates its windows
+  ;; hidden, records them in its own list, and then calls BringWindowToTop and
+  ;; SetFocus, whose WM_SETFOCUS is where it marks the window active. Taking
+  ;; the focus here, before the window was in that list, made mIRC's own
+  ;; SetFocus a no-op, so it went on believing the previous window was active.
+  (func $mdi_client_child_created (param $child i32) (result i32)
+    (if (i32.eqz (call $mdi_client_assign_child_id (local.get $child)))
+      (then (return (i32.const 0))))
+    (if (call $wnd_is_effectively_visible (local.get $child))
+      (then (drop (call $mdi_client_activate
+        (call $wnd_get_parent (local.get $child)) (local.get $child)))))
     (i32.const 1))
 
   (func $mdi_client_next_child (param $client i32) (param $from i32) (param $previous i32) (result i32)
@@ -2004,6 +2041,7 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.eq (local.get $msg) (i32.const 0x0086)) ;; WM_NCACTIVATE
       (then
         (local.set $child (call $mdi_client_active (local.get $client)))
+        (if (local.get $child) (then (call $nc_flags_set (local.get $child) (i32.const 1))))
         (if (local.get $child)
           (then (drop (call $wnd_send_message
             (local.get $child) (local.get $msg)
@@ -2197,6 +2235,13 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (call $nc_flags_set (local.get $frame) (i32.const 1))
     (call $defwndproc_do_ncpaint (local.get $frame))
     (call $host_set_window_text (local.get $frame) (local.get $wa)))
+
+;; A frame's activation changed: its active MDI child's caption follows it.
+  (func $mdi_frame_child_caption_dirty (param $frame i32)
+    (local $child i32)
+    (if (i32.eqz (local.get $frame)) (then (return)))
+    (local.set $child (call $mdi_client_active (call $mdi_client_of_frame (local.get $frame))))
+    (if (local.get $child) (then (call $nc_flags_set (local.get $child) (i32.const 1)))))
 
   ;; The MDI client of a frame, or 0.
   (func $mdi_client_of_frame (param $frame i32) (result i32)
@@ -2492,11 +2537,13 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local.set $client (call $wnd_get_parent (local.get $child)))
     (if (i32.eqz (call $mdi_client_state (local.get $client)))
       (then (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0001))  ;; WM_CREATE
+      (then
+        (drop (call $mdi_client_assign_child_id (local.get $child)))
+        (return (i32.const 1))))
     (if (i32.or
-          (i32.eq (local.get $msg) (i32.const 0x0001))  ;; WM_CREATE
-          (i32.or
-            (i32.eq (local.get $msg) (i32.const 0x0022)) ;; WM_CHILDACTIVATE
-            (i32.eq (local.get $msg) (i32.const 0x0007)))) ;; WM_SETFOCUS
+          (i32.eq (local.get $msg) (i32.const 0x0022)) ;; WM_CHILDACTIVATE
+          (i32.eq (local.get $msg) (i32.const 0x0007))) ;; WM_SETFOCUS
       (then
         (drop (call $mdi_client_register_child (local.get $child)))
         (return (i32.const 1))))

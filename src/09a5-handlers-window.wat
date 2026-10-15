@@ -467,7 +467,14 @@
         (call $wnd_set_parent (local.get $hwnd)
           (local.get $parent_hwnd))
         (call $host_set_parent (local.get $hwnd)
-          (local.get $parent_hwnd)))
+          (local.get $parent_hwnd))
+        ;; USER links a new child window at the BOTTOM of its siblings, and a
+        ;; maximized one at the top (a top-level window always goes on top):
+        ;; a program's children stay in creation order, top to bottom, until
+        ;; something raises one. GetWindow walks that order, MFC lays its
+        ;; control bars out in it, and MDI activation raises the active child.
+        (if (i32.eqz (i32.and (local.get $arg3) (i32.const 0x01000000))) ;; WS_MAXIMIZE
+          (then (call $wnd_child_zorder_link (local.get $hwnd) (i32.const 1)))))  ;; HWND_BOTTOM
       (else
         (call $wnd_set_owner (local.get $hwnd)
           (local.get $parent_hwnd))))
@@ -4146,7 +4153,7 @@
     (if (i32.and
           (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
           (i32.eq (global.get $eip) (local.get $mdi_eip)))
-      (then (drop (call $mdi_client_register_child (i32.load offset=0 (global.get $reg_base))))))
+      (then (drop (call $mdi_client_child_created (i32.load offset=0 (global.get $reg_base))))))
   )
 
   ;; 81: SendMessageA(hwnd, msg, wParam, lParam) — 4 args stdcall
@@ -4259,7 +4266,7 @@
         (if (i32.and
               (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
               (i32.eq (global.get $eip) (local.get $mdi_eip)))
-          (then (drop (call $mdi_client_register_child (i32.load offset=0 (global.get $reg_base))))))
+          (then (drop (call $mdi_client_child_created (i32.load offset=0 (global.get $reg_base))))))
         (return)))
     ;; EM_FORMATRANGE. The Win98 RichEdit DLL's printer message path cannot
     ;; reliably preserve its LRESULT through the emulated native wndproc (it

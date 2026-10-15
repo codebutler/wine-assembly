@@ -134,9 +134,11 @@ const extraWat = String.raw`
   assert.deepStrictEqual(zOrders, [[top, 0]],
     'top-level SetWindowPos without SWP_NOZORDER moves the window to HWND_TOP');
 
+  // A child moves in USER's sibling order and the renderer's together:
+  // one order, so what is hit and clipped is what is drawn on top.
   e.test_call_SetWindowPos(first, 0, 0, 20, 10, 0x03);
-  assert.deepStrictEqual(zOrders, [[top, 0]],
-    'child z-order stays in the retained sibling model, not the host global list');
+  assert.deepStrictEqual(zOrders, [[top, 0], [first, 0]],
+    'child SetWindowPos(HWND_TOP) moves the child in the renderer order too');
 
   // Native control geometry cleanup must not enqueue parent/sibling paints
   // when the public API explicitly suppresses redraw.

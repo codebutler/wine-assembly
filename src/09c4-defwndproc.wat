@@ -877,6 +877,18 @@
         (i32.and
           (i32.ne (local.get $foreground) (i32.const 0))
           (i32.eq (local.get $hwnd) (local.get $foreground)))))
+    ;; An MDI child's caption is active only while it is its client's active
+    ;; child and its frame is the active window, as DefMDIChildProc's
+    ;; WM_NCACTIVATE draws it. Every other one was drawn active too.
+    (if (i32.and (local.get $is_child)
+          (i32.ne (call $mdi_client_state (call $wnd_get_parent (local.get $hwnd))) (i32.const 0)))
+      (then
+        (local.set $flags
+          (i32.and
+            (i32.eq (call $mdi_client_active (call $wnd_get_parent (local.get $hwnd))) (local.get $hwnd))
+            (i32.and
+              (i32.ne (local.get $foreground) (i32.const 0))
+              (i32.eq (call $wnd_top_level (local.get $hwnd)) (local.get $foreground)))))))
     ;; FlashWindow reverses the current active/inactive appearance; it does
     ;; not replace the underlying activation state.
     (if (call $get_flash_state_slot (local.get $hwnd))

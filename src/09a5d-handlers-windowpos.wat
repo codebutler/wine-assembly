@@ -390,6 +390,9 @@
     (if (i32.eqz (local.get $parent)) (then (return)))
     (local.set $l (i32.shr_s (i32.shl (local.get $old_xy) (i32.const 16)) (i32.const 16)))
     (local.set $t (i32.shr_s (local.get $old_xy) (i32.const 16)))
+    (call $wnd_expose_siblings (local.get $hwnd) (local.get $l) (local.get $t)
+      (i32.add (local.get $l) (i32.and (local.get $old_wh) (i32.const 0xFFFF)))
+      (i32.add (local.get $t) (i32.shr_u (local.get $old_wh) (i32.const 16))))
     (call $invalidate_rect_core (local.get $parent)
       (local.get $l) (local.get $t)
       (i32.add (local.get $l) (i32.and (local.get $old_wh) (i32.const 0xFFFF)))
@@ -511,8 +514,15 @@
     (local.set $old_xy (call $window_xy_packed (local.get $arg0)))
     ;; Commit geometry and z-order independently, as the SWP flags require.
     (call $host_move_window (local.get $arg0) (local.get $x) (local.get $y) (local.get $cx) (local.get $cy) (local.get $uFlags))
-    (if (i32.and (i32.eqz (i32.and (local.get $uFlags) (i32.const 0x0004))) (i32.eqz (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000)))) (then (call $host_set_window_zorder (local.get $arg0) (local.get $insert_after))))
+    ;; A child moves in both z-orders ($wnd_child_zorder); a top-level window
+    ;; only in the renderer's, which owns the cross-instance top-level stack.
+    (if (i32.eqz (i32.and (local.get $uFlags) (i32.const 0x0004)))
+      (then
+        (if (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000))
+          (then (call $wnd_child_zorder (local.get $arg0) (local.get $insert_after)))
+          (else (call $host_set_window_zorder (local.get $arg0) (local.get $insert_after))))))
     (call $ctrl_geom_sync (local.get $arg0) (local.get $x) (local.get $y) (local.get $cx) (local.get $cy) (local.get $uFlags))
+    (call $wnd_child_activate_notify (local.get $arg0) (local.get $uFlags))
     (call $windowpos_expose_vacated (local.get $arg0) (local.get $old_xy) (local.get $old_wh) (local.get $uFlags))
     (if (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000))
       (then (local.set $new_wh (call $ctrl_get_wh_packed (local.get $arg0))))
@@ -616,6 +626,9 @@
     (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd))) (then (return)))
     (local.set $x (i32.shr_s (i32.shl (local.get $old_xy) (i32.const 16)) (i32.const 16)))
     (local.set $y (i32.shr_s (local.get $old_xy) (i32.const 16)))
+    (call $wnd_expose_siblings (local.get $hwnd) (local.get $x) (local.get $y)
+      (i32.add (local.get $x) (i32.and (local.get $old_wh) (i32.const 0xFFFF)))
+      (i32.add (local.get $y) (i32.shr_u (local.get $old_wh) (i32.const 16))))
     (call $update_invalidate_rect (local.get $parent)
       (local.get $x) (local.get $y)
       (i32.add (local.get $x) (i32.and (local.get $old_wh) (i32.const 0xFFFF)))
@@ -626,7 +639,7 @@
       (else (call $paint_flag_set (local.get $parent))))
     (call $host_invalidate (local.get $parent))
     (call $update_invalidate_full (local.get $hwnd))
-    (call $nc_flags_set (local.get $hwnd) (i32.const 2))
+    (call $nc_flags_set (local.get $hwnd) (i32.const 3)) ;; its frame, and erase
     (call $paint_flag_set (local.get $hwnd))
     (call $host_invalidate (local.get $hwnd))
     (drop (call $paint_seed_child_paints (local.get $hwnd))))

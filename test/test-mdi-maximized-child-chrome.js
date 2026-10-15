@@ -53,6 +53,8 @@ const extraWat = String.raw`
     (local.set $child
       (call $tmmc_make_window (local.get $client) (i32.const 0) (i32.const 0x56CF0000)))
     (drop (call $mdi_child_message (local.get $child) (i32.const 1) (i32.const 0) (i32.const 0)))
+    ;; CreateWindowEx then activates a child it created visible.
+    (drop (call $mdi_client_child_created (local.get $child)))
     (call $host_move_window (local.get $child)
       (i32.const 10) (i32.const 10) (i32.const 160) (i32.const 120) (i32.const 0x14))
     (call $ctrl_geom_sync (local.get $child)

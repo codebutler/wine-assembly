@@ -1697,9 +1697,11 @@
     (local.set $old_wh (call $ctrl_get_wh_packed (local.get $arg0)))
     (call $host_move_window (local.get $arg0) (local.get $x) (local.get $y)
       (local.get $cx) (local.get $cy) (local.get $flags))
-    (if (i32.and (i32.eqz (i32.and (local.get $flags) (i32.const 4)))
-          (i32.eqz (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000))))
-      (then (call $host_set_window_zorder (local.get $arg0) (local.get $insert_after))))
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 4)))
+      (then
+        (if (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000))
+          (then (call $wnd_child_zorder (local.get $arg0) (local.get $insert_after)))
+          (else (call $host_set_window_zorder (local.get $arg0) (local.get $insert_after))))))
     (call $ctrl_geom_sync (local.get $arg0) (local.get $x) (local.get $y)
       (local.get $cx) (local.get $cy) (local.get $flags))
     (call $windowpos_expose_vacated (local.get $arg0) (local.get $old_xy) (local.get $old_wh) (local.get $flags))
@@ -2617,6 +2619,53 @@
       (br $scan)))
     (local.get $best))
 
+;; Lowest sibling in the same Z order: GetWindow(GW_HWNDLAST).
+  (func $find_window_z_last (param $parent i32) (result i32)
+    (local $i i32) (local $hwnd i32) (local $rank i32)
+    (local $best i32) (local $best_rank i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
+      (local.set $hwnd (call $wnd_slot_hwnd (local.get $i)))
+      (if (i32.and
+            (i32.ne (local.get $hwnd) (i32.const 0))
+            (i32.eq (call $wnd_get_parent (local.get $hwnd)) (local.get $parent)))
+        (then
+          (local.set $rank (call $wnd_z_get (local.get $hwnd)))
+          (if (i32.or
+                (i32.eqz (local.get $best))
+                (i32.lt_s (local.get $rank) (local.get $best_rank)))
+            (then
+              (local.set $best (local.get $hwnd))
+              (local.set $best_rank (local.get $rank))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $best))
+
+  ;; Lowest sibling above $before: GetWindow(GW_HWNDPREV).
+  (func $find_window_z_prev (param $parent i32) (param $before i32) (result i32)
+    (local $i i32) (local $hwnd i32) (local $rank i32)
+    (local $before_rank i32) (local $best i32) (local $best_rank i32)
+    (local.set $before_rank (call $wnd_z_get (local.get $before)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
+      (local.set $hwnd (call $wnd_slot_hwnd (local.get $i)))
+      (if (i32.and
+            (i32.ne (local.get $hwnd) (i32.const 0))
+            (i32.eq (call $wnd_get_parent (local.get $hwnd)) (local.get $parent)))
+        (then
+          (local.set $rank (call $wnd_z_get (local.get $hwnd)))
+          (if (i32.and
+                (i32.gt_s (local.get $rank) (local.get $before_rank))
+                (i32.or
+                  (i32.eqz (local.get $best))
+                  (i32.lt_s (local.get $rank) (local.get $best_rank))))
+            (then
+              (local.set $best (local.get $hwnd))
+              (local.set $best_rank (local.get $rank))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $best))
+
   ;; Shared FindWindow/FindWindowEx walk. A non-null hwndChildAfter must be a
   ;; live direct child of the requested parent; accepting an unrelated window
   ;; would silently continue in the wrong tree. Candidates are visited from
@@ -2668,7 +2717,13 @@
   (func $handle_BringWindowToTop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $top i32)
     (local.set $top (call $wnd_top_level (local.get $arg0)))
-    (call $host_set_window_zorder (local.get $arg0) (i32.const 0)) (i32.store offset=0 (global.get $reg_base) (call $host_activate_window (local.get $arg0))) ;; HWND_TOP then activate
+    ;; HWND_TOP among its siblings (both z-orders for a child), then activate.
+    (if (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x40000000))
+      (then
+        (call $wnd_child_zorder (local.get $arg0) (i32.const 0))
+        (call $wnd_child_activate_notify (local.get $arg0) (i32.const 0x0003))) ;; NOMOVE|NOSIZE
+      (else (call $host_set_window_zorder (local.get $arg0) (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_activate_window (local.get $arg0)))
     (if (i32.and
           (i32.ge_s (call $wnd_table_find (local.get $top)) (i32.const 0))
           (i32.eq (call $wnd_get_thread (local.get $top)) (global.get $current_thread_id)))

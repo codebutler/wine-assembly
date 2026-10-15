@@ -11511,11 +11511,11 @@
 
   (func $win16_position_zorder (param $hwnd i32) (param $after i32) (param $flags i32)
     (if (i32.and (local.get $flags) (i32.const 4)) (then (return)))
-    (call $wnd_z_set_after (local.get $hwnd) (local.get $after))
-    ;; SetWindowPos already forwards top-level order to the host. Its child
-    ;; branch needs this bridge, but top-level calls must not be sent twice.
-    (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000))
-      (then (call $host_set_window_zorder (local.get $hwnd) (local.get $after)))))
+    ;; The shared SetWindowPos core has already moved a child in both
+    ;; z-orders ($wnd_child_zorder) and a top-level window in the renderer's;
+    ;; a top-level window's WAT rank is the part left to move here.
+    (if (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)))
+      (then (call $wnd_z_set_after (local.get $hwnd) (local.get $after)))))
 
   ;; USER.259/260/261 share the Win32 HDWP queue and validator. Only the
   ;; commit loop differs: each entry uses the Pascal SetWindowPos bridge so

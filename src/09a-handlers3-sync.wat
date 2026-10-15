@@ -324,10 +324,12 @@
       (then
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
         ;; The renderer owns the combined top-level z-order across app
-        ;; instances. WAT remains authoritative for local child siblings.
+        ;; instances. WAT remains authoritative for local child siblings, in
+        ;; the z order SetWindowPos and MDI activation move (not slot order:
+        ;; mIRC's switchbar asks GW_CHILD which MDI child is on top).
         (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
-            (else (call $wnd_find_first_child (local.get $parent)))))
+            (else (call $find_window_z_first (local.get $parent)))))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eq (local.get $arg1) (i32.const 1))
@@ -335,7 +337,7 @@
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
         (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
-            (else (call $wnd_find_last_child (local.get $parent)))))
+            (else (call $find_window_z_last (local.get $parent)))))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_HWNDNEXT = 2
@@ -344,7 +346,7 @@
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
         (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
-            (else (call $wnd_find_next_sibling (local.get $arg0)))))
+            (else (call $find_window_z_next (local.get $parent) (local.get $arg0)))))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_HWNDPREV = 3
@@ -353,7 +355,7 @@
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
         (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
-            (else (call $wnd_find_prev_sibling (local.get $arg0)))))
+            (else (call $find_window_z_prev (local.get $parent) (local.get $arg0)))))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_OWNER = 4 → return owner hwnd, not child geometry parent.
@@ -364,10 +366,10 @@
           (then (i32.store offset=0 (global.get $reg_base) (call $host_get_window_related (local.get $arg0) (local.get $arg1)))))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    ;; GW_CHILD = 5 → first child of hwnd
+    ;; GW_CHILD = 5 → the child at the top of hwnd's z order
     (if (i32.eq (local.get $arg1) (i32.const 5))
       (then
-        (i32.store offset=0 (global.get $reg_base) (call $wnd_find_first_child (local.get $arg0)))
+        (i32.store offset=0 (global.get $reg_base) (call $find_window_z_first (local.get $arg0)))
         (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base))) (i32.eqz (local.get $known)))
           (then (i32.store offset=0 (global.get $reg_base) (call $host_get_window_related (local.get $arg0) (local.get $arg1)))))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))

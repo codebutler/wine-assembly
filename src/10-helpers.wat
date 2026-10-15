@@ -4372,6 +4372,42 @@
   ;; NSIS's wizard swaps pages by destroying the old page dialog, and without
   ;; this the license text and the options checkboxes stayed on screen
   ;; underneath the Installing Files page.
+;; The siblings a child exposes when it leaves the rectangle l,t,r,b of
+  ;; its parent's client area (moved, resized, hidden or destroyed). USER
+  ;; repaints the vacated area with RDW_FRAME | RDW_ALLCHILDREN, so a sibling
+  ;; under it repaints its frame as well as its client area, whatever the
+  ;; parent's WS_CLIPCHILDREN says. Only the parent was repainted here, so
+  ;; restoring a maximized MDI child left the children behind it with no
+  ;; caption or border.
+  (func $wnd_expose_siblings (param $hwnd i32) (param $l i32) (param $t i32) (param $r i32) (param $b i32)
+    (local $parent i32) (local $slot i32) (local $sib i32)
+    (local $x i32) (local $y i32) (local $wh i32)
+    (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    (if (i32.eqz (local.get $parent)) (then (return)))
+    (block $done (loop $scan
+      (local.set $slot (call $wnd_next_child_slot (local.get $parent) (local.get $slot)))
+      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
+      (local.set $sib (call $wnd_slot_hwnd (local.get $slot)))
+      (if (i32.and (i32.ne (local.get $sib) (local.get $hwnd))
+            (call $wnd_is_effectively_visible (local.get $sib)))
+        (then
+          (local.set $x (call $ctrl_get_x_s (local.get $sib)))
+          (local.set $y (call $ctrl_get_y_s (local.get $sib)))
+          (local.set $wh (call $ctrl_get_wh_packed (local.get $sib)))
+          (if (i32.and
+                (i32.and
+                  (i32.lt_s (local.get $l) (i32.add (local.get $x) (i32.and (local.get $wh) (i32.const 0xFFFF))))
+                  (i32.gt_s (local.get $r) (local.get $x)))
+                (i32.and
+                  (i32.lt_s (local.get $t) (i32.add (local.get $y) (i32.shr_u (local.get $wh) (i32.const 16))))
+                  (i32.gt_s (local.get $b) (local.get $y))))
+            (then
+              (call $nc_flags_set (local.get $sib) (i32.const 1))
+              (call $invalidate_rect_core (local.get $sib)
+                (i32.const 0) (i32.const 0) (i32.const 0x7FFF) (i32.const 0x7FFF) (i32.const 1))))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan))))
+
   (func $wnd_uncover_parent (param $hwnd i32)
     (local $parent i32) (local $xy i32) (local $wh i32)
     (local $x i32) (local $y i32) (local $w i32) (local $h i32)
@@ -4394,6 +4430,8 @@
     (if (i32.and (i32.gt_s (local.get $w) (i32.const 0))
                  (i32.gt_s (local.get $h) (i32.const 0)))
       (then
+        (call $wnd_expose_siblings (local.get $hwnd) (local.get $x) (local.get $y)
+          (i32.add (local.get $x) (local.get $w)) (i32.add (local.get $y) (local.get $h)))
         (call $update_invalidate_rect (local.get $parent)
           (local.get $x) (local.get $y)
           (i32.add (local.get $x) (local.get $w))
@@ -7809,7 +7847,12 @@
     ;; sibling above it. mIRC parks a minimized MDI child at (-100,-100) in the
     ;; MDI client; without this its title bar painted over the frame's caption.
     (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))
-    (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
+    (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd))
+    ;; ...and not under a window above one of its ancestors, as the client
+    ;; and window DCs already exclude: a scrollbar control inside a lower MDI
+    ;; child drew its frame over the caption of the child above.
+    (call $dc_exclude_ancestor_siblings_for_clip (local.get $hdc) (local.get $hwnd)
+      (i32.const 0) (i32.const 0)))
 
   ;; Every WASM instance owns its count and its corresponding thread partition.
   (func $post_queue_base (result i32)

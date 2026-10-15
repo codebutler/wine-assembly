@@ -255,6 +255,66 @@
     (i32.store (call $wnd_z_addr_for_slot (local.get $slot))
       (i32.sub (local.get $after_rank) (i32.const 1))))
 
+;; Move a CHILD window in its parent's z-order. USER keeps one sibling list;
+  ;; here it is two -- the WAT rank (hit testing, clipping, FindWindowEx,
+  ;; GetWindow) and the renderer's compositing order -- and they must move
+  ;; together, or a click lands on one window while another is drawn on top.
+  ;; Top-level windows are left to the activation path, which raises whole
+  ;; owner groups ($wnd_z_raise_owner_group).
+  ;; Like SetWindowPos, a move that changes the order repaints what it
+  ;; exposed: a raised window repaints itself (frame, client and children);
+  ;; a lowered one hands the area it covered back to its parent. Raising the
+  ;; window already on top changes nothing and repaints nothing.
+  (func $wnd_child_zorder (param $hwnd i32) (param $after i32)
+    (local $parent i32) (local $top i32)
+    (if (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)))
+      (then (return)))
+    ;; A child is never topmost: HWND_NOTOPMOST leaves it where it is and
+    ;; HWND_TOPMOST is HWND_TOP. The renderer reads both the same way.
+    (if (i32.eq (local.get $after) (i32.const -2))
+      (then
+        (call $host_set_window_zorder (local.get $hwnd) (local.get $after))
+        (return)))
+    (local.set $top (i32.or (i32.eqz (local.get $after)) (i32.eq (local.get $after) (i32.const -1))))
+    (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    ;; Already on top: nothing moves and nothing repaints, but the renderer
+    ;; still hears it -- it reorders on its own when a window is shown.
+    (if (i32.and (local.get $top)
+          (i32.eq (call $find_window_z_first (local.get $parent)) (local.get $hwnd)))
+      (then
+        (call $host_set_window_zorder (local.get $hwnd) (local.get $after))
+        (return)))
+    (call $wnd_child_zorder_link (local.get $hwnd) (local.get $after))
+    (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd))) (then (return)))
+    (if (local.get $top)
+      (then
+        (call $nc_flags_set (local.get $hwnd) (i32.const 1))
+        (call $invalidate_rect_core (local.get $hwnd)
+          (i32.const 0) (i32.const 0) (i32.const 0x7FFF) (i32.const 0x7FFF) (i32.const 1)))
+      (else (call $wnd_uncover_parent (local.get $hwnd)))))
+
+  ;; The two z-orders, moved together, without any repaint: CreateWindowEx
+  ;; links a window that has not been painted yet.
+  (func $wnd_child_zorder_link (param $hwnd i32) (param $after i32)
+    (call $wnd_z_set_after (local.get $hwnd) (local.get $after))
+    (call $host_set_window_zorder (local.get $hwnd) (local.get $after))
+    ;; Retained DCs cache a visible region that excludes the siblings above
+    ;; each window; a new order changes it for the moved window's siblings
+    ;; and all their descendants. Without this, a scrollbar inside an MDI
+    ;; child kept the clip from before another child was raised over it and
+    ;; drew across that child's caption.
+    (call $gdi_refresh_window_dc_system_clips))
+
+;; SetWindowPos on a child without SWP_NOACTIVATE (or SWP_HIDEWINDOW) sends
+  ;; it WM_CHILDACTIVATE; DefMDIChildProc makes an MDI child active on it.
+  ;; BringWindowToTop is SetWindowPos(HWND_TOP) and does the same.
+  (func $wnd_child_activate_notify (param $hwnd i32) (param $swp_flags i32)
+    (if (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x40000000)))
+      (then (return)))
+    (if (i32.and (local.get $swp_flags) (i32.const 0x0090)) ;; SWP_NOACTIVATE | SWP_HIDEWINDOW
+      (then (return)))
+    (drop (call $wnd_send_message (local.get $hwnd) (i32.const 0x0022) (i32.const 0) (i32.const 0))))
+
   ;; MENU_DATA_TABLE is parallel to WND_RECORDS. Clear it while the slot is
   ;; still known; host_destroy_window runs after wnd_table_remove and can no
   ;; longer resolve hwnd back to the slot. Leaving this pointer behind makes a

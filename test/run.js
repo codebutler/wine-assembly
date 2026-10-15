@@ -8859,7 +8859,7 @@ async function main() {
                 return (lt || rb) ? `${lt & 0xffff},${lt >> 16},${rb & 0xffff},${rb >> 16}` : 'none';
               })()
               : 'n/a';
-            children.push(`slot=${slot} hwnd=0x${hwnd.toString(16)} upd=${upd} parent=0x${par.toString(16)} proc=0x${proc.toString(16)} cls=${cls} id=${id} style=0x${style.toString(16)} buttonFlags=0x${buttonFlags.toString(16)} xy=${xy & 0xffff},${xy >>> 16} wh=${wh & 0xffff}x${wh >>> 16} cr=${cr} dirty=${dirty}`);
+            children.push(`slot=${slot} hwnd=0x${hwnd.toString(16)} upd=${upd} parent=0x${par.toString(16)} proc=0x${proc.toString(16)} cls=${cls} id=${id} style=0x${style.toString(16)} buttonFlags=0x${buttonFlags.toString(16)} xy=${xy & 0xffff},${xy >>> 16} wh=${wh & 0xffff}x${wh >>> 16} cr=${cr} dirty=${dirty}` + (we.wnd_z_get ? ` z=${we.wnd_z_get(hwnd) | 0}` : ''));
             slot++;
           }
         }

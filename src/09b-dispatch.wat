@@ -723,7 +723,7 @@
         (if (i32.eq
               (call $ctrl_table_get_class (call $wnd_get_parent (local.get $arg0)))
               (i32.const 33))
-          (then (drop (call $mdi_client_register_child (local.get $arg0)))))
+          (then (drop (call $mdi_client_child_created (local.get $arg0)))))
         (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
         (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))

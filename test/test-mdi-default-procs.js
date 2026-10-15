@@ -24,6 +24,10 @@ const extraWat = String.raw`
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_BUILTIN))
     (call $wnd_set_parent (local.get $hwnd) (local.get $parent))
+    ;; Visible, as a frame and its client are: a child counts as shown only
+    ;; when its ancestors are.
+    (drop (call $wnd_set_style (local.get $hwnd)
+      (select (i32.const 0x50000000) (i32.const 0x10000000) (local.get $parent))))
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (call $ctrl_table_set (local.get $slot) (local.get $class) (local.get $id))
     (local.get $hwnd))
@@ -53,13 +57,41 @@ const extraWat = String.raw`
       (then (return (i32.const 0))))
     (local.get $client))
 
+  ;; A visible MDI child, created as CreateWindowEx finishes one: WM_CREATE
+  ;; through DefMDIChildProc (the ID), then the creation hook (activation).
   (func (export "test_make_child") (param $client i32) (param $id i32) (result i32)
     (local $child i32)
     (local.set $child
       (call $test_make_window (local.get $client) (i32.const 0) (local.get $id)))
+    (drop (call $wnd_set_style (local.get $child) (i32.const 0x56cf0000)))
     (drop (call $mdi_child_message
       (local.get $child) (i32.const 1) (i32.const 0) (i32.const 0)))
+    (drop (call $mdi_client_child_created (local.get $child)))
     (local.get $child))
+  ;; The same child created hidden, as mIRC creates its windows.
+  (func (export "test_make_hidden_child") (param $client i32) (result i32)
+    (local $child i32)
+    (local.set $child
+      (call $test_make_window (local.get $client) (i32.const 0) (i32.const 0)))
+    (drop (call $wnd_set_style (local.get $child) (i32.const 0x46cf0000)))
+    (drop (call $mdi_child_message
+      (local.get $child) (i32.const 1) (i32.const 0) (i32.const 0)))
+    (drop (call $mdi_client_child_created (local.get $child)))
+    (local.get $child))
+  (func (export "test_child_message") (param $child i32) (param $msg i32) (result i32)
+    (call $mdi_child_message (local.get $child) (local.get $msg) (i32.const 0) (i32.const 0)))
+  (func (export "test_show") (param $hwnd i32)
+    (drop (call $wnd_set_style (local.get $hwnd)
+      (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000)))))
+  (func (export "test_get_window") (param $hwnd i32) (param $cmd i32) (result i32)
+    (local $saved i32)
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetWindow (local.get $hwnd) (local.get $cmd)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_z_above") (param $hwnd i32) (param $sibling i32) (result i32)
+    (call $wnd_z_is_above_sibling (local.get $hwnd) (local.get $sibling)))
 
   (func (export "test_active") (param $client i32) (result i32)
     (call $mdi_client_active (local.get $client)))
@@ -227,6 +259,16 @@ const extraWat = String.raw`
     'newly created MDI child becomes active');
   assert.strictEqual(e.test_focus() >>> 0, second,
     'newly active application MDI child receives keyboard focus');
+  // The active child is the top sibling, in every z-order a program can ask
+  // (mIRC's switchbar asks GW_CHILD which window is on top).
+  assert.strictEqual(e.test_get_window(client, 5) >>> 0, second,
+    'GetWindow(client, GW_CHILD) answers the active child');
+  assert.strictEqual(e.test_get_window(second, 2) >>> 0, first,
+    'GW_HWNDNEXT walks down from the active child');
+  assert.strictEqual(e.test_get_window(first, 3) >>> 0, second,
+    'GW_HWNDPREV walks back up');
+  assert.strictEqual(e.test_z_above(first, second), 1,
+    'hit testing and clipping see the active child above the other');
 
   assert.strictEqual(e.test_frame_message(frame, client, 0x0111, 0xe900, 0), 1,
     'DefFrameProc consumes Window-menu child commands');
@@ -234,6 +276,8 @@ const extraWat = String.raw`
     'Window-menu command activates the matching child');
   assert.strictEqual(e.test_focus() >>> 0, first,
     'Window-menu activation also transfers keyboard focus');
+  assert.strictEqual(e.test_get_window(client, 5) >>> 0, first,
+    'activating a child raises it to the top of the z order');
   e.test_client_message(client, 0x0224, first, 0);
   assert.strictEqual(e.test_active(client) >>> 0, second,
     'WM_MDINEXT advances to the following child');
@@ -261,6 +305,25 @@ const extraWat = String.raw`
   e.test_client_message(client, 0x0222, first, 0);
   assert.strictEqual(e.test_focus() >>> 0, first,
     'activating a child that does not hold focus gives it the focus');
+
+  // A child created hidden is not activated by its creation: USER waits for
+  // the program to show and activate it (WM_CHILDACTIVATE from
+  // SetWindowPos/BringWindowToTop). mIRC records its window in its own list
+  // between the two, and marks it active on the WM_SETFOCUS that follows.
+  const hidden = e.test_make_hidden_child(client) >>> 0;
+  assert.strictEqual(e.test_child_id(hidden), 0xe902,
+    'a hidden MDI child still receives its Window-menu command ID');
+  assert.strictEqual(e.test_active(client) >>> 0, first,
+    'creating a hidden MDI child leaves the active child alone');
+  e.test_show(hidden);
+  e.test_child_message(hidden, 0x0022); // WM_CHILDACTIVATE
+  assert.strictEqual(e.test_active(client) >>> 0, hidden,
+    'WM_CHILDACTIVATE through DefMDIChildProc activates the child');
+  assert.strictEqual(e.test_focus() >>> 0, hidden,
+    'and gives it the focus');
+  assert.strictEqual(e.test_get_window(client, 5) >>> 0, hidden,
+    'and raises it to the top');
+  e.test_client_message(client, 0x0222, first, 0);
 
   const observed = e.guest_alloc(4) >>> 0;
   const proc = e.guest_alloc(32) >>> 0;
