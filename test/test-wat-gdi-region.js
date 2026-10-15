@@ -364,6 +364,20 @@ async function main() {
     assert.strictEqual(wat.test_gdi_dc_clip_get(hdc, copy), 0);
   });
 
+  check('GetClipBox preserves mapped corner order in upward-Y MM_TWIPS', () => {
+    const hdc = finiteDc();
+    const rect = () => [0, 4, 8, 12].map(offset =>
+      dv.getInt32(RECT_SCRATCH + offset, true));
+    assert.strictEqual(wat.test_gdi_dc_clip_get_box(hdc, RECT_SCRATCH), 2);
+    assert.deepStrictEqual(rect(), [0, 0, 640, 480],
+      'MM_TEXT reports device-space corners without changing their order');
+
+    assert.strictEqual(wat.test_call_SetMapMode(hdc, 6), 1);
+    assert.strictEqual(wat.test_gdi_dc_clip_get_box(hdc, RECT_SCRATCH), 2);
+    assert.deepStrictEqual(rect(), [0, 0, 9600, -7200],
+      'MM_TWIPS maps the top-left and bottom-right device corners directly');
+  });
+
   console.log(`\n${passed}/${passed} checks passed`);
 }
 
