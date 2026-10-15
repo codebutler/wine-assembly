@@ -1038,13 +1038,11 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
-  ;; 390: IsWindowVisible
+  ;; 390: IsWindowVisible. WS_VISIBLE on the HWND alone is insufficient:
+  ;; a visible child of a hidden container is still invisible to USER.
   (func $handle_IsWindowVisible (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
-        (then
-          (if (result i32) (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x10000000))
-            (then (i32.const 1))
-            (else (i32.const 0))))
+        (then (call $wnd_is_effectively_visible (local.get $arg0)))
         (else (call $host_get_window_info (local.get $arg0) (i32.const 1)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
