@@ -881,7 +881,7 @@
     (local $img_bmp_w i32) (local $img_bmp_h i32) (local $img_src_x i32)
     (local $draw_w i32) (local $draw_h i32) (local $dst_x i32) (local $dst_y i32)
     (local $memdc i32) (local $image_dc i32) (local $mask_dc i32)
-    (local $stock_himl i32) (local $ret i32)
+    (local $stock_himl i32) (local $owned_himl i32) (local $ret i32)
     (local.set $img_list (call $lv_normal_image_list (local.get $sw)))
     (if (i32.eqz (local.get $img_list))
       (then (local.set $img_list (call $lv_image_list (local.get $sw)))))
@@ -902,6 +902,8 @@
         (local.set $image_dc (i32.load offset=56 (local.get $img_sw)))
         (local.set $mask_dc (i32.load offset=60 (local.get $img_sw))))
       (else
+        (local.set $owned_himl
+          (i32.eq (i32.load offset=32 (local.get $img_sw)) (i32.const 0x4C4D4948)))
         (local.set $img_cx (i32.load (local.get $img_sw)))
         (local.set $img_cy (i32.load offset=4 (local.get $img_sw)))
         (local.set $img_count (i32.load offset=12 (local.get $img_sw)))
@@ -911,8 +913,9 @@
                   (i32.or (i32.le_s (local.get $img_cy) (i32.const 0))
                           (i32.gt_s (local.get $img_cx) (i32.const 256))))
           (i32.or (i32.le_s (local.get $img_count) (local.get $img_idx))
-                  (i32.and (i32.eqz (local.get $image_dc))
-                           (i32.eqz (local.get $img_bmp)))))
+                  (i32.and (i32.eqz (local.get $owned_himl))
+                    (i32.and (i32.eqz (local.get $image_dc))
+                           (i32.eqz (local.get $img_bmp))))))
       (then (return (i32.const 0))))
     (local.set $img_src_x (i32.mul (local.get $img_idx) (local.get $img_cx)))
     (if (local.get $img_bmp)
@@ -933,6 +936,13 @@
       (i32.div_s (i32.sub (i32.const 32) (local.get $draw_w)) (i32.const 2))))
     (local.set $dst_y (i32.add (local.get $y)
       (i32.div_s (i32.sub (i32.const 32) (local.get $draw_h)) (i32.const 2))))
+    ;; ImageList_Add copies cells into owned icons and releases the strip.
+    ;; The shared image-list painter handles both storage forms.
+    (if (local.get $owned_himl)
+      (then (return (call $image_list_draw
+        (local.get $img_list) (local.get $img_idx) (local.get $hdc)
+        (local.get $dst_x) (local.get $dst_y)
+        (local.get $draw_w) (local.get $draw_h) (i32.const 1))))) ;; ILD_TRANSPARENT
     (if (local.get $image_dc)
       (then
         (if (local.get $mask_dc)
