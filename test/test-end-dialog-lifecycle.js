@@ -74,6 +74,14 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
 
+  (func (export "test_queue_modal_wake") (param $hwnd i32)
+    (drop (call $post_queue_push
+      (local.get $hwnd) (i32.const 0) (i32.const 0) (i32.const 0))))
+  (func (export "test_post_count") (result i32)
+    (call $shared_post_queue_total_count))
+  (func (export "test_finish_native_modal") (param $hwnd i32)
+    (call $wnd_destroy_recursive (local.get $hwnd)))
+
   ;; DialogBoxParamA writes both the instance global and its shared-memory
   ;; mirror; EndDialog reads the mirror, because the thread that calls it is
   ;; not always the thread running the pump.
@@ -172,6 +180,22 @@ function u32(value) {
     'EndDialog clears focus held by a destroyed child');
   assert.strictEqual(e.test_yield_flag(), 0,
     'modeless EndDialog does not abandon its synchronous native call stack');
+
+  const nativePacked = BigInt.asUintN(64, e.test_create_modeless_dialog(proc));
+  const nativeDialog = Number(nativePacked & 0xffffffffn) >>> 0;
+  const nativeChild = Number(nativePacked >> 32n) >>> 0;
+  e.test_queue_modal_wake(nativeDialog);
+  assert.strictEqual(e.test_post_count(), 1, 'native modal wake is queued');
+  e.test_call_EndDialog(nativeDialog, 1);
+  assert.strictEqual(e.test_window_exists(nativeDialog), 1,
+    'EndDialog leaves a guest-driven modal dialog alive for its loop cleanup');
+  assert.strictEqual(e.test_window_exists(nativeChild), 1,
+    'the native modal loop can still address its controls');
+  assert.strictEqual(e.test_yield_flag(), 0,
+    'guest-driven modal completion does not yield to the WAT pump');
+  e.test_finish_native_modal(nativeDialog);
+  assert.strictEqual(e.test_window_exists(nativeDialog), 0,
+    'the native modal owner destroys its dialog after the loop returns');
 
   const modalPacked = BigInt.asUintN(64, e.test_create_modeless_dialog(proc));
   const modalDialog = Number(modalPacked & 0xffffffffn) >>> 0;
