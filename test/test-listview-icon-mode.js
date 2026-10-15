@@ -20,7 +20,7 @@ const extraWat = String.raw`
       (local.get $x0) (local.get $y0) (local.get $x1) (local.get $y1)
       (local.get $brush)))
     (drop (call $gdi_native_delete_object (local.get $brush))))
-  (func (export "test_owned_image_list") (param $bitmap i32) (result i32)
+  (func (export "test_owned_image_list") (param $bitmap i32) (param $mask i32) (result i32)
     (local $list i32) (local $sw i32)
     (local.set $list (call $heap_alloc (i32.const 36)))
     (local.set $sw (call $g2w (local.get $list)))
@@ -30,7 +30,7 @@ const extraWat = String.raw`
     (i32.store offset=8 (local.get $sw) (i32.const -1))
     (i32.store offset=32 (local.get $sw) (i32.const 0x4c4d4948))
     (if (i32.ne (call $image_list_add (local.get $list) (local.get $bitmap)
-          (i32.const 0) (i32.const -1)) (i32.const 0))
+          (local.get $mask) (i32.const -1)) (i32.const 0))
       (then (unreachable)))
     (local.get $list))
 `;
@@ -134,7 +134,7 @@ const extraWat = String.raw`
   e.test_call_SelectObject(sourceDc, sourceBmp);
   e.test_fill_color(sourceDc, 0, 0, 40, 40, 0x00ffffff);
   e.test_fill_color(sourceDc, 8, 8, 32, 32, 0x0000ff00);
-  const ownedList = e.test_owned_image_list(sourceBmp) >>> 0;
+  const ownedList = e.test_owned_image_list(sourceBmp, 0) >>> 0;
   assert(ownedList, 'ImageList_Add must create an owned list');
   assert.strictEqual(dv.getUint32(wa(ownedList) + 12, true), 1);
   assert.strictEqual(dv.getUint32(wa(ownedList) + 16, true), 0,
@@ -149,6 +149,22 @@ const extraWat = String.raw`
     }
   }
   assert(green > 100, `LVS_ICON must paint an owned image-list cell (pixels=${green})`);
+  const maskedBmp = e.test_call_CreateCompatibleBitmap(hdc, 40, 40) >>> 0;
+  e.test_call_SelectObject(sourceDc, maskedBmp);
+  e.test_fill_color(sourceDc, 0, 0, 40, 40, 0x00ffffff);
+  e.test_fill_color(sourceDc, 8, 8, 32, 32, 0x00000000);
+  const maskedList = e.test_owned_image_list(maskedBmp, maskedBmp) >>> 0;
+  assert(maskedList, 'ImageList_Add must accept a bitmap mask');
+  assert.strictEqual(e.send_message(lv, 0x1003, 0, maskedList), ownedList);
+  e.test_fill_desktop(hdc, 150, 140);
+  assert.strictEqual(e.send_message(lv, 0x000F, 0, 0), 0);
+  let black = 0;
+  for (let y = 0; y < 45; y++) {
+    for (let x = 0; x < 80; x++) {
+      if ((e.test_call_GetPixel(hdc, x, y) >>> 0) === 0x00000000) black++;
+    }
+  }
+  assert(black > 100, `LVS_ICON must paint a masked owned image-list cell (pixels=${black})`);
   console.log('PASS  LVS_ICON paints desktop labels without report chrome');
 })().catch(error => {
   console.error(error && error.stack || error);
