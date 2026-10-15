@@ -88,6 +88,14 @@ async function main() {
     assert.deepStrictEqual([dv.getUint32(fixed + 8, true), dv.getUint32(fixed + 12, true)],
       expected, `${file} file version`);
   }
+  for (const file of boot.NETWORK_SYSTEM_MODULE_FILES) {
+    const full = 'C:\\WINDOWS\\SYSTEM\\' + file;
+    assert.strictEqual(ctx.vfs.getFileAttributes(full), 0x20, `${file} exists on disk`);
+    assert.strictEqual(imports.host.has_dll_file(wa(writeStr(full, false))), 0,
+      `${file} is dispatched statically, not mapped as a PE`);
+    assert.notStrictEqual(e.test_call_GetModuleHandleA(writeStr(file, false)) >>> 0, 0,
+      `${file} has a system module handle`);
+  }
   // A real DLL in the same lookup is still found.
   const realDll = { data: new Uint8Array([0x4d, 0x5a]), attrs: 0x20 };
   ctx.vfs.files.set('c:\\plugins\\real.dll', realDll);

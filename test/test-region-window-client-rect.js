@@ -101,6 +101,21 @@ const RegionMap = require('../lib/region-map.generated');
     assert.strictEqual(renderer.windows[dock].clientRect.h, h);
   }
 
+  // A framed window may be created at zero size while its controls compute
+  // their preferred extent. Its borders must not turn the empty client into
+  // a negative width that wraps to 65530 when packed into a Win32 SIZE.
+  const empty = 0x10003;
+  renderer.createWindow(empty, style, 0, 0, 0, 0, 'empty', 0, instance, memory);
+  e.wnd_table_set(empty, 0);
+  e.wnd_set_style_export(empty, style);
+  e.host_resize_commit(empty, 0, 0, 0, 0);
+  assert.strictEqual(e.get_client_rect_r(empty) - e.get_client_rect_l(empty), 0);
+  assert.strictEqual(e.get_client_rect_b(empty) - e.get_client_rect_t(empty), 0);
+  assert.strictEqual(e.get_client_rect_wh(empty), 0);
+  renderer._computeClientRect(renderer.windows[empty]);
+  assert.strictEqual(renderer.windows[empty].clientRect.w, 0);
+  assert.strictEqual(renderer.windows[empty].clientRect.h, 0);
+
   console.log('PASS  regioned window client rect survives move/resize nccalc');
 })().catch(err => {
   console.error(err && err.stack || err);

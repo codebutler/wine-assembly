@@ -38991,5 +38991,21 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 4084317733
+  },
+  {
+    "id": 4586,
+    "name": "PathFindExtensionA",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 3873328397
+  },
+  {
+    "id": 4587,
+    "name": "IsDBCSLeadByteEx",
+    "nargs": 2,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 956716356
   }
 ]

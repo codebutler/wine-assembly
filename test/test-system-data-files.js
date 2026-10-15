@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   SYSTEM_DATA_FILES, mountSystemDataFiles,
-  WIN16_SYSTEM_MODULE_FILES, DIRECTX_SYSTEM_MODULE_FILES,
+  WIN16_SYSTEM_MODULE_FILES, DIRECTX_SYSTEM_MODULE_FILES, NETWORK_SYSTEM_MODULE_FILES,
 } = require('../lib/process-boot');
 const { clearStore, exportStore } = require('../lib/storage');
 
@@ -26,7 +26,8 @@ assert.strictEqual(Buffer.from(bytes.subarray(0, 4)).toString('ascii'), 'MSFT',
 const vfs = { files: new Map() };
 // The count also takes in the emulator's own system-module stubs.
 assert.strictEqual(mountSystemDataFiles(vfs, [{ ...stdole, bytes }]),
-  1 + WIN16_SYSTEM_MODULE_FILES.length + DIRECTX_SYSTEM_MODULE_FILES.length);
+  1 + WIN16_SYSTEM_MODULE_FILES.length + DIRECTX_SYSTEM_MODULE_FILES.length
+    + NETWORK_SYSTEM_MODULE_FILES.length);
 assert.strictEqual(vfs.files.get('c:\\windows\\system\\stdole2.tlb').data, bytes);
 
 clearStore();

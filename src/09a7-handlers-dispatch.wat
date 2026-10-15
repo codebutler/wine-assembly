@@ -5090,6 +5090,38 @@
     (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $last) (local.get $base)) (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
+  ;; PathFindExtensionA returns a pointer into the caller's path, or its NUL.
+  ;; A separator starts a new file component; a space invalidates an extension.
+  (func $handle_PathFindExtensionA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $base i32) (local $ptr i32) (local $dot i32) (local $ch i32) (local $count i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (return)))
+    (local.set $base (call $g2w (local.get $arg0)))
+    (local.set $ptr (local.get $base))
+    (block $done (loop $scan
+      (local.set $ch (i32.load8_u (local.get $ptr)))
+      (br_if $done (i32.eqz (local.get $ch)))
+      (br_if $done (i32.ge_u (local.get $count) (i32.const 260)))
+      (if (i32.or (i32.eq (local.get $ch) (i32.const 0x5c))
+                  (i32.eq (local.get $ch) (i32.const 0x2f)))
+        (then (local.set $dot (i32.const 0)))
+        (else
+          (if (i32.eq (local.get $ch) (i32.const 0x2e))
+            (then (local.set $dot (local.get $ptr)))
+            (else
+              (if (i32.eq (local.get $ch) (i32.const 0x20))
+                (then (local.set $dot (i32.const 0))))))))
+      (local.set $ptr (i32.add (local.get $ptr) (i32.const 1)))
+      (local.set $count (i32.add (local.get $count) (i32.const 1)))
+      (br $scan)))
+    (if (i32.eqz (local.get $dot)) (then (local.set $dot (local.get $ptr))))
+    (i32.store offset=0 (global.get $reg_base)
+      (i32.add (local.get $arg0) (i32.sub (local.get $dot) (local.get $base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
   ;; 815: StrStrIA(lpFirst, lpSrch) → pointer to match or NULL
   ;; Case-insensitive substring search using byte-by-byte comparison
   (func $handle_StrStrIA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

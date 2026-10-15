@@ -1107,8 +1107,10 @@
     ;; Store window-local l/t/r/b.
     (call $client_rect_set (local.get $hwnd)
       (local.get $bw) (local.get $cy)
-      (i32.sub (local.get $w) (local.get $right))
-      (i32.sub (local.get $h) (local.get $bot))))
+      (select (i32.sub (local.get $w) (local.get $right)) (local.get $bw)
+        (i32.ge_s (i32.sub (local.get $w) (local.get $right)) (local.get $bw)))
+      (select (i32.sub (local.get $h) (local.get $bot)) (local.get $cy)
+        (i32.ge_s (i32.sub (local.get $h) (local.get $bot)) (local.get $cy)))))
 
   ;; Default WM_NCHITTEST: classify (screen_x, screen_y) against window
   ;; chrome. Returns a HT* code. Button geometry matches
