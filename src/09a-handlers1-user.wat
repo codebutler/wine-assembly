@@ -1425,6 +1425,7 @@
 ;; 114: EndDialog(hDlg, nResult) — end modal dialog, set result
   (func $handle_EndDialog (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $deferred i32)
+    (local $qidx i32)
     ;; MFC also calls EndDialog on dialogs created through CreateDialogParamA.
     ;; Those modeless dialogs have no CACA0004 pump, so do not poison the
     ;; global modal-completion flags unless this hwnd is the active modal.
@@ -1466,6 +1467,31 @@
         ;; and the run dies with the host log buffer eating all of the JS
         ;; heap.
         (local.set $deferred (i32.const 1))))
+    ;; A native modal loop can be implemented by the guest rather than our
+    ;; CACA0004 pump. MFC's EndModalLoop posts WM_NULL to wake RunModalLoop,
+    ;; then calls EndDialog. Its loop still needs the HWND for its final
+    ;; SetWindowPos before the owner destroys it. Keep that dialog alive while
+    ;; the wake message is queued, as USER does after EndDialog returns from
+    ;; the current handler. A plain modeless EndDialog (Storm) has no such
+    ;; wake and retains its synchronous destruction behavior.
+    (if (i32.eqz (local.get $deferred))
+      (then
+        (block $wake_scan_done
+          (loop $wake_scan
+            (br_if $wake_scan_done
+              (i32.ge_u (local.get $qidx) (call $shared_post_queue_total_count)))
+            (if (i32.and
+                  (i32.eq (call $shared_post_queue_peek_field_tid
+                    (global.get $current_thread_id) (local.get $qidx) (i32.const 0))
+                    (local.get $arg0))
+                  (i32.eq (call $shared_post_queue_peek_field_tid
+                    (global.get $current_thread_id) (local.get $qidx) (i32.const 1))
+                    (i32.const 0)))
+              (then
+                (local.set $deferred (i32.const 1))
+                (br $wake_scan_done)))
+            (local.set $qidx (i32.add (local.get $qidx) (i32.const 1)))
+            (br $wake_scan)))))
     ;; Remove the visible frame here, even for DialogBoxParamA. Renderer-side
     ;; WAT dialog routing can call EndDialog synchronously while the guest is
     ;; between modal-pump turns; waiting for the pump leaves the dialog stuck
