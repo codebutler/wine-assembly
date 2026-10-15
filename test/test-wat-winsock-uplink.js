@@ -167,7 +167,12 @@ async function main() {
     const s = wat.test_call_socket(AF_INET, SOCK_STREAM, 0) | 0;
     n.nonblocking(s);
     assert.strictEqual(wat.test_call_connect(s, n.sockaddr(OUTSIDE_IP, PORT), 16) | 0, SOCKET_ERROR);
+    assert.strictEqual(wat.test_call_GetLastError() | 0, WSAEWOULDBLOCK,
+      'a pending nonblocking connect sets the shared Win32 last error');
     assert.strictEqual(wat.test_call_WSAGetLastError() | 0, WSAEWOULDBLOCK);
+    wat.test_call_SetLastError(10022);
+    assert.strictEqual(wat.test_call_WSAGetLastError() | 0, 10022,
+      'Winsock reads the shared Win32 last error');
     const syn = wire.sent.find(f => f.type === SYN);
     assert(syn, 'connect emits a SYN on the wire');
     assert.strictEqual(syn.dip, OUTSIDE_IP);

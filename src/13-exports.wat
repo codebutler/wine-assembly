@@ -3965,7 +3965,7 @@
       (call $vsock_destroy (local.get $i) (i32.const 0))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
-    (global.set $wsa_last_error (i32.const 0))
+    (global.set $last_error (i32.const 0))
     (i32.atomic.store (global.get $WSA_STARTED_SHARED) (i32.const 0))
     (global.set $vsock_sel_waiting (i32.const 0))
     (global.set $vsock_local_ip (i32.const 0x0A000001))  ;; 10.0.0.1

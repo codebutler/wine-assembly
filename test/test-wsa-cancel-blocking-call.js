@@ -16,8 +16,9 @@ const extraWat = String.raw`
     (call $handle_WSACancelBlockingCall (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load (global.get $reg_base)))
-  (func (export "t_last_error") (result i32) (global.get $wsa_last_error))
-  (func (export "t_set_started") (param $n i32) (global.set $wsa_started (local.get $n)))
+  (func (export "t_last_error") (result i32) (global.get $last_error))
+  (func (export "t_set_started") (param $n i32)
+    (i32.atomic.store (global.get $WSA_STARTED_SHARED) (local.get $n)))
   (func (export "t_api_id") (result i32) (call $lookup_api_id "WSACancelBlockingCall"))
 `;
 

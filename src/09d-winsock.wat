@@ -149,7 +149,6 @@
   (global $vsock_local_ip (mut i32) (i32.const 0x0A000001))  ;; 10.0.0.1
   ;; The ephemeral-port cursor is at $VSOCK_NEXT_PORT_SHARED — process-wide, not
   ;; per instance. See $vsock_alloc_port.
-  (global $wsa_last_error (mut i32) (i32.const 0))
   ;; Startup references live at $WSA_STARTED_SHARED, not in an instance global.
   ;; Win16 DDEML shares the virtual-LAN wire reader with Winsock. Keeping an
   ;; explicit user count lets ordinary GUI message pumps avoid a host wire
@@ -166,8 +165,9 @@
     (i32.add (global.get $VSOCK_TABLE)
       (i32.mul (local.get $idx) (global.get $VSOCK_REC_SIZE))))
 
+  ;; On Win32, Winsock and Kernel32 use the same per-thread last-error value.
   (func $vsock_set_error (param $err i32)
-    (global.set $wsa_last_error (local.get $err)))
+    (global.set $last_error (local.get $err)))
 
   ;; Guest SOCKET handle → record index, or -1 when the handle is not a
   ;; live socket. Handles are tagged so they cannot be confused with file,
@@ -2552,7 +2552,7 @@
       (local.set $count (local.get $r))
       ;; recvfrom consumes and copies the prefix of an oversized datagram.
       (if (i32.eq (local.get $r) (i32.const -1)) (then
-        (if (i32.eq (global.get $wsa_last_error) (i32.const 10040))
+        (if (i32.eq (global.get $last_error) (i32.const 10040))
           (then (local.set $count (local.get $total))))))
       (local.set $i (i32.const 0))
       (block $scattered (loop $scatter
@@ -3892,7 +3892,7 @@
       (then (global.set $wsa_async_task (i32.const 1))))
     (local.set $task (global.get $wsa_async_task))
     (if (i32.eqz (local.get $he))
-      (then (local.set $err (global.get $wsa_last_error)))
+      (then (local.set $err (global.get $last_error)))
       (else
         (if (i32.lt_u (local.get $buflen) (i32.const 128))
           (then (local.set $err (i32.const 10055)))            ;; WSAENOBUFS
@@ -4289,7 +4289,7 @@
   (func $handle_WSAGetLastError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                 (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (i32.store offset=0 (global.get $reg_base) (global.get $wsa_last_error)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $last_error)))
 
   ;; WSAIsBlocking() -- Winsock 1.x asks whether a blocking hook call is in
   ;; progress. Socket waits here yield cooperatively back to the host instead
@@ -4313,7 +4313,7 @@
   (func $handle_WSASetLastError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                 (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-    (global.set $wsa_last_error (local.get $arg0)))
+    (global.set $last_error (local.get $arg0)))
 
   ;; Winsock2 catalog for the virtual TCP/UDP/IPX provider. Never advertise native
   ;; interfaces, multicast, QoS, IFS handles or transports we cannot serve.
@@ -4555,7 +4555,7 @@
       (local.set $count (local.get $r))
       ;; recvfrom consumes and copies the prefix of an oversized datagram.
       (if (i32.eq (local.get $r) (i32.const -1)) (then
-        (if (i32.eq (global.get $wsa_last_error) (i32.const 10040))
+        (if (i32.eq (global.get $last_error) (i32.const 10040))
           (then (local.set $count (local.get $total))))))
       (local.set $i (i32.const 0))
       (block $scattered (loop $scatter
@@ -4666,7 +4666,7 @@
         (local.set $r (call $vsock_send_core (local.get $arg0) (local.get $tmp) (local.get $chunk) (i32.const 32)))
         (call $heap_free (local.get $tmp))
         (if (i32.eq (local.get $r) (i32.const -2)) (then (return)))
-        (local.set $error (global.get $wsa_last_error))
+        (local.set $error (global.get $last_error))
         (br_if $failed (i32.lt_s (local.get $r) (i32.const 0)))
         (global.set $wsasend_progress (i32.add (global.get $wsasend_progress) (local.get $r)))
         (if (i32.and (i32.eqz (load.field VSock mode (call $vsock_rec (local.get $idx))))

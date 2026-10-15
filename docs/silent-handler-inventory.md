@@ -789,3 +789,12 @@ The software RGB565 candidate changes IDirect3D9::CheckDeviceFormatConversion
 from unconditional success to rejecting conversions involving format23, which
 StretchRect does not implement. The existing BGRA8 behavior is unchanged.
 This removes one straight-line handler from the inventory:243 to242.
+
+## Shared Win32 and Winsock last error (2026-10-15)
+
+The count remains 241. The two straight-line Winsock last-error handlers now
+read and write the same per-thread value as Kernel32 GetLastError and
+SetLastError. They remain state accessors, and the changed digest records the
+shared field. The nonblocking uplink connect fixture checks both getter APIs
+after WSAEWOULDBLOCK and SetLastError visibility through WSAGetLastError.
+Pin241/16b4541b407e2e97400277ab321030ab5d6a7b3c7ca52c3aba93e985edd20594.
