@@ -4328,6 +4328,31 @@
             (i32.store offset=0 (global.get $reg_base) (call $tab_native_paint (local.get $arg0)))
             (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
             (return)))))
+    ;; Registered comctl32 bars still receive their other guest messages,
+    ;; but WAT owns their status panes as well as their shared-surface paint.
+    ;; Sending SB_* only to the incomplete guest comctl32 left the WAT paint
+    ;; mirror without parts, text, or owner-draw itemData.
+    (if (i32.and
+          (call $statusbar_native_is (local.get $arg0))
+          (i32.or
+            (i32.or
+              (i32.or (i32.eq (local.get $arg1) (i32.const 0x0401))
+                      (i32.eq (local.get $arg1) (i32.const 0x040B)))
+              (i32.or (i32.eq (local.get $arg1) (i32.const 0x0402))
+                      (i32.eq (local.get $arg1) (i32.const 0x0403))))
+            (i32.or
+              (i32.or (i32.eq (local.get $arg1) (i32.const 0x0404))
+                      (i32.eq (local.get $arg1) (i32.const 0x0406)))
+              (i32.or
+                (i32.or (i32.eq (local.get $arg1) (i32.const 0x0407))
+                        (i32.eq (local.get $arg1) (i32.const 0x0408)))
+                (i32.or (i32.eq (local.get $arg1) (i32.const 0x0409))
+                        (i32.eq (local.get $arg1) (i32.const 0x040E)))))))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (call $statusbar_wndproc
+          (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (return)))
     (if (i32.and (call $statusbar_native_is (local.get $arg0))
                  (i32.eq (local.get $arg1) (i32.const 0x000F)))
       (then

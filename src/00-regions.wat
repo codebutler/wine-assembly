@@ -612,7 +612,7 @@
     (owner "09a4b-handlers-cursor-icon.wat:$icon_slot_size_set"))
   (region.declare $CURSOR_TABLE (size 0x00000300) (align 0x00000100)
     (stride $CURSOR_TABLE_STRIDE (count 32))
-    (owner "09a4b-handlers-cursor-icon.wat:$cursor_record"))
+    (owner "09a4b-handlers-cursor-icon.wat:$cursor_slot_record"))
   (region.declare $CURSOR_MASK_DESC (size 0x00000050) (align 0x00000100)
     (owner "09a4b-handlers-cursor-icon.wat:$cursor_scale_bitmap"))
   (region.declare $CURSOR_COLOR_DESC (size 0x00000050) (align 0x00000010)

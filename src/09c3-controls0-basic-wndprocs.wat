@@ -2152,6 +2152,9 @@
     (local $text_w i32) (local $text_len i32) (local $right i32)
     (local $state i32) (local $sw ptr<StatusBarState>)
     (local $simple i32) (local $text_g i32) (local $tmp_g i32)
+    (local $part i32) (local $flags i32) (local $part_count i32)
+    (local $left i32) (local $pane_right i32) (local $draw_right i32)
+    (local $dis i32) (local $disw i32)
     (local $is_paint i32)
     (local $parent i32) (local $view i32) (local $view_sz i32) (local $slot i32)
     (local $mouse i32) (local $coord_x i32) (local $coord_y i32)
@@ -2182,8 +2185,8 @@
       (then
         (call $statusbar_state_release (local.get $hwnd))
         (return (i32.const 0))))
-    ;; WM_SETTEXT updates the ordinary pane. SB_SETTEXTA/W part 0xFF updates
-    ;; the simple pane that MenuHelp uses; part zero remains the ordinary pane.
+    ;; WM_SETTEXT updates the ordinary pane. SB_SETTEXTA/W retain each part's
+    ;; text or owner-draw itemData; part 0xFF is MenuHelp's simple pane.
     (if (i32.or
           (i32.eq (local.get $msg) (i32.const 0x000C))
           (i32.or
@@ -2194,45 +2197,66 @@
           (i32.and
             (i32.ne (local.get $msg) (i32.const 0x000C))
             (i32.eq (i32.and (local.get $wParam) (i32.const 0xFF)) (i32.const 0xFF))))
-        (if (i32.or
-              (i32.eq (local.get $msg) (i32.const 0x000C))
-              (i32.or
-                (i32.eqz (i32.and (local.get $wParam) (i32.const 0xFF)))
-                (local.get $simple)))
+        (local.set $part (i32.and (local.get $wParam) (i32.const 0xFF)))
+        (if (i32.eq (local.get $msg) (i32.const 0x000C))
+          (then (local.set $part (i32.const 0))))
+        (if (i32.and (i32.eqz (local.get $simple))
+              (i32.ge_u (local.get $part) (global.get $STATUSBAR_MAX_PARTS)))
+          (then (return (i32.const 0))))
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+        (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+        (local.set $flags
+          (if (result i32) (i32.eq (local.get $msg) (i32.const 0x000C))
+            (then (i32.const 0))
+            (else (i32.and (local.get $wParam) (i32.const 0xFF00)))))
+        (if (i32.and (i32.eqz (local.get $simple))
+              (i32.ne (i32.and (local.get $flags) (i32.const 0x1000)) (i32.const 0)))
           (then
-            (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
-            (if (local.get $state)
+            (drop (call $statusbar_store_part_text
+              (local.get $sw) (local.get $part) (i32.const 0) (i32.const 0)))
+            (i32.store (call $statusbar_part_slot
+              (local.get $sw) (global.get $STATUSBAR_PART_DATA) (local.get $part))
+              (local.get $lParam)))
+          (else
+            (if (i32.eq (local.get $msg) (i32.const 0x040B))
               (then
-                (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
-                (if (i32.eq (local.get $msg) (i32.const 0x040B))
-                  (then
-                    (local.set $tmp_g (call $heap_alloc (i32.const 256)))
-                    (if (local.get $tmp_g)
-                      (then
-                        (local.set $text_len
-                          (if (result i32) (local.get $lParam)
-                            (then (call $wide_to_ansi
-                              (local.get $lParam) (local.get $tmp_g) (i32.const 256)))
-                            (else (i32.const 0))))
-                        (drop (call $statusbar_state_store_text
-                          (local.get $sw) (local.get $simple)
-                          (call $g2w (local.get $tmp_g)) (local.get $text_len)))
-                        (call $heap_free (local.get $tmp_g)))))
-                  (else
-                    (local.set $text_len
-                      (if (result i32) (local.get $lParam)
-                        (then (call $guest_strlen (local.get $lParam)))
-                        (else (i32.const 0))))
-                    (drop (call $statusbar_state_store_text
-                      (local.get $sw) (local.get $simple)
-                      (if (result i32) (local.get $lParam)
-                        (then (call $g2w (local.get $lParam)))
-                        (else (i32.const 0)))
-                      (local.get $text_len)))))
-                (if (i32.eq (local.get $simple)
-                            (call $statusbar_simple_mode (local.get $sw)))
-                  (then (call $statusbar_state_publish
-                    (local.get $hwnd) (local.get $sw))))))))
+                (local.set $tmp_g (call $heap_alloc (i32.const 256)))
+                (if (i32.eqz (local.get $tmp_g)) (then (return (i32.const 0))))
+                (local.set $text_len
+                  (if (result i32) (local.get $lParam)
+                    (then (call $wide_to_ansi
+                      (local.get $lParam) (local.get $tmp_g) (i32.const 256)))
+                    (else (i32.const 0))))
+                (local.set $text_g (call $g2w (local.get $tmp_g))))
+              (else
+                (local.set $text_len
+                  (if (result i32) (local.get $lParam)
+                    (then (call $guest_strlen (local.get $lParam)))
+                    (else (i32.const 0))))
+                (local.set $text_g
+                  (if (result i32) (local.get $lParam)
+                    (then (call $g2w (local.get $lParam)))
+                    (else (i32.const 0))))))
+            (local.set $text_len
+              (if (result i32) (local.get $simple)
+                (then (call $statusbar_state_store_text
+                  (local.get $sw) (i32.const 1)
+                  (local.get $text_g) (local.get $text_len)))
+                (else (call $statusbar_store_part_text
+                  (local.get $sw) (local.get $part)
+                  (local.get $text_g) (local.get $text_len)))))
+            (if (local.get $tmp_g) (then (call $heap_free (local.get $tmp_g))))
+            (if (i32.eqz (local.get $text_len)) (then (return (i32.const 0))))))
+        (if (i32.eqz (local.get $simple))
+          (then
+            (i32.store (call $statusbar_part_slot
+              (local.get $sw) (global.get $STATUSBAR_PART_FLAGS) (local.get $part))
+              (local.get $flags))))
+        (if (i32.and (i32.eqz (local.get $simple))
+              (i32.eqz (local.get $part)))
+          (then (call $statusbar_state_publish (local.get $hwnd) (local.get $sw)))
+          (else (call $invalidate_hwnd (local.get $hwnd))))
         (return (i32.const 1))))
     ;; SB_SIMPLE selects between the preserved ordinary pane and simple part.
     (if (i32.eq (local.get $msg) (i32.const 0x0409))
@@ -2342,15 +2366,16 @@
         (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
         (return (call $statusbar_simple_mode
           (cast ptr<StatusBarState> (call $g2w (local.get $state)))))))
-    ;; SB_GETTEXTA / SB_GETTEXTLENGTHA: LOWORD = length, HIWORD = drawing
-    ;; type (0). Part zero reads the ordinary pane, part 0xFF (or simple
-    ;; mode) the simple pane; other parts hold no text.
+    ;; SB_GETTEXTA / SB_GETTEXTLENGTHA return each pane's drawing type and
+    ;; length. For an owner-drawn pane, SB_GETTEXT returns its 32-bit itemData.
     (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0402))
                 (i32.eq (local.get $msg) (i32.const 0x0403)))
       (then
         (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
         (local.set $text_g (i32.const 0))
         (local.set $text_len (i32.const 0))
+        (local.set $flags (i32.const 0))
+        (local.set $part (i32.and (local.get $wParam) (i32.const 0xFF)))
         (if (local.get $state)
           (then
             (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
@@ -2362,10 +2387,25 @@
                 (local.set $text_g (call $statusbar_simple_ptr (local.get $sw)))
                 (local.set $text_len (call $statusbar_simple_len (local.get $sw))))
               (else
-                (if (i32.eqz (i32.and (local.get $wParam) (i32.const 0xFF)))
+                (if (i32.lt_u (local.get $part) (global.get $STATUSBAR_MAX_PARTS))
                   (then
-                    (local.set $text_g (call $statusbar_normal_ptr (local.get $sw)))
-                    (local.set $text_len (call $statusbar_normal_len (local.get $sw)))))))))
+                    (local.set $flags (i32.load (call $statusbar_part_slot
+                      (local.get $sw) (global.get $STATUSBAR_PART_FLAGS) (local.get $part))))
+                    (if (i32.and (local.get $flags) (i32.const 0x1000))
+                      (then
+                        (if (i32.eq (local.get $msg) (i32.const 0x0402))
+                          (then (return (i32.load (call $statusbar_part_slot
+                            (local.get $sw) (global.get $STATUSBAR_PART_DATA) (local.get $part))))))
+                        (return (i32.shl (local.get $flags) (i32.const 16)))))
+                    (if (i32.eqz (local.get $part))
+                      (then
+                        (local.set $text_g (call $statusbar_normal_ptr (local.get $sw)))
+                        (local.set $text_len (call $statusbar_normal_len (local.get $sw))))
+                      (else
+                        (local.set $text_g (i32.load (call $statusbar_part_slot
+                          (local.get $sw) (global.get $STATUSBAR_PART_DATA) (local.get $part))))
+                        (local.set $text_len (i32.load (call $statusbar_part_slot
+                          (local.get $sw) (global.get $STATUSBAR_PART_LENS) (local.get $part))))))))))))
         (if (i32.eqz (local.get $text_g)) (then (local.set $text_len (i32.const 0))))
         (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0402))
                      (i32.ne (local.get $lParam) (i32.const 0)))
@@ -2376,7 +2416,9 @@
                                  (local.get $text_len))))
             (i32.store8 (i32.add (call $g2w (local.get $lParam)) (local.get $text_len))
                         (i32.const 0))))
-        (return (i32.and (local.get $text_len) (i32.const 0xFFFF)))))
+        (return (i32.or
+          (i32.and (local.get $text_len) (i32.const 0xFFFF))
+          (i32.shl (local.get $flags) (i32.const 16))))))
     ;; WM_PAINT
     (if (i32.eq (local.get $msg) (i32.const 0x000F))
       (then
@@ -2392,6 +2434,110 @@
             (drop (call $gdi_native_fill_rect (local.get $hdc)
               (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
               (i32.const 0x30011))) ;; COLOR_3DFACE
+            ;; Comctl32 partitions the bar into independently drawn panes.
+            ;; SBT_OWNERDRAW passes the application's itemData back in a
+            ;; DRAWITEMSTRUCT; Miranda uses that to paint each protocol icon.
+            (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 0)))
+            (if (i32.and (i32.eqz (local.get $is_paint))
+                  (i32.ne (local.get $state) (i32.const 0)))
+              (then
+                (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+                (local.set $part_count (load.field.memarg StatusBarState part_count (local.get $sw)))
+                (if (i32.and (i32.gt_u (local.get $part_count) (i32.const 0))
+                      (i32.eqz (call $statusbar_simple_mode (local.get $sw))))
+                  (then
+                    (local.set $part (i32.const 0))
+                    (local.set $left (i32.const 1))
+                    (block $panes_done (loop $panes
+                      (br_if $panes_done (i32.ge_u (local.get $part) (local.get $part_count)))
+                      (local.set $pane_right (i32.load (call $statusbar_part_slot
+                        (local.get $sw) (global.get $STATUSBAR_PART_EDGES) (local.get $part))))
+                      (if (i32.or (i32.eq (local.get $pane_right) (i32.const -1))
+                            (i32.gt_s (local.get $pane_right) (local.get $w)))
+                        (then
+                          (local.set $pane_right
+                            (if (result i32)
+                                (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x100))
+                              (then (i32.sub (local.get $w) (i32.const 17)))
+                              (else (i32.sub (local.get $w) (i32.const 2)))))))
+                      (local.set $flags (i32.load (call $statusbar_part_slot
+                        (local.get $sw) (global.get $STATUSBAR_PART_FLAGS) (local.get $part))))
+                      (if (i32.gt_s (local.get $pane_right) (i32.add (local.get $left) (i32.const 4)))
+                        (then
+                          (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x0100)))
+                            (then
+                              (drop (call $gdi_native_draw_edge (local.get $hdc)
+                                (local.get $left) (i32.const 2) (local.get $pane_right)
+                                (i32.sub (local.get $h) (i32.const 2))
+                                (i32.const 0x0A) (i32.const 0x0F)))))
+                          (if (i32.and (local.get $flags) (i32.const 0x1000))
+                            (then
+                              (local.set $dis (call $heap_alloc (i32.const 48)))
+                              (if (local.get $dis)
+                                (then
+                                  (local.set $disw (call $g2w (local.get $dis)))
+                                  (i32.store (local.get $disw) (i32.const 5)) ;; ODT_STATIC
+                                  (i32.store offset=4 (local.get $disw)
+                                    (i32.and (call $ctrl_table_get_id (local.get $hwnd)) (i32.const 0xFFFF)))
+                                  (i32.store offset=8 (local.get $disw) (local.get $part))
+                                  (i32.store offset=12 (local.get $disw) (i32.const 1)) ;; ODA_DRAWENTIRE
+                                  (i32.store offset=16 (local.get $disw) (i32.const 0))
+                                  (i32.store offset=20 (local.get $disw) (local.get $hwnd))
+                                  (i32.store offset=24 (local.get $disw) (local.get $hdc))
+                                  (i32.store offset=28 (local.get $disw)
+                                    (i32.add (local.get $left) (i32.const 2)))
+                                  (i32.store offset=32 (local.get $disw) (i32.const 3))
+                                  (i32.store offset=36 (local.get $disw)
+                                    (i32.sub (local.get $pane_right) (i32.const 2)))
+                                  (i32.store offset=40 (local.get $disw)
+                                    (i32.sub (local.get $h) (i32.const 3)))
+                                  (i32.store offset=44 (local.get $disw)
+                                    (i32.load (call $statusbar_part_slot
+                                      (local.get $sw) (global.get $STATUSBAR_PART_DATA) (local.get $part))))
+                                  (drop (call $gdi_native_select_object
+                                    (local.get $hdc) (call $statusbar_hfont (local.get $hwnd))))
+                                  (drop (call $gdi_native_set_bk_mode
+                                    (local.get $hdc) (i32.const 1)))
+                                  (drop (call $wnd_send_message
+                                    (call $wnd_get_parent (local.get $hwnd)) (i32.const 0x002B)
+                                    (i32.and (call $ctrl_table_get_id (local.get $hwnd)) (i32.const 0xFFFF))
+                                    (local.get $dis)))
+                                  (call $heap_free (local.get $dis)))))
+                            (else
+                              (if (i32.eqz (local.get $part))
+                                (then
+                                  (local.set $text_w (call $statusbar_normal_ptr (local.get $sw)))
+                                  (local.set $text_len (call $statusbar_normal_len (local.get $sw))))
+                                (else
+                                  (local.set $text_w (i32.load (call $statusbar_part_slot
+                                    (local.get $sw) (global.get $STATUSBAR_PART_DATA) (local.get $part))))
+                                  (local.set $text_len (i32.load (call $statusbar_part_slot
+                                    (local.get $sw) (global.get $STATUSBAR_PART_LENS) (local.get $part))))))
+                              (if (i32.and (i32.ne (local.get $text_w) (i32.const 0))
+                                    (i32.ne (local.get $text_len) (i32.const 0)))
+                                (then
+                                  (drop (call $gdi_native_select_object
+                                    (local.get $hdc) (call $statusbar_hfont (local.get $hwnd))))
+                                  (drop (call $gdi_native_set_bk_mode
+                                    (local.get $hdc) (i32.const 1)))
+                                  (drop (call $gdi_native_draw_text (local.get $hdc)
+                                    (call $g2w (local.get $text_w)) (local.get $text_len)
+                                    (call $paint_rect
+                                      (i32.add (local.get $left) (i32.const 3)) (i32.const 2)
+                                      (i32.sub (local.get $pane_right) (i32.const 2))
+                                      (i32.sub (local.get $h) (i32.const 2)))
+                                    (i32.const 0x824) (i32.const 0)))))))))
+                      (local.set $left (i32.add (local.get $pane_right) (i32.const 2)))
+                      (local.set $part (i32.add (local.get $part) (i32.const 1)))
+                      (br $panes)))
+                    (if (i32.and
+                          (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x100))
+                            (i32.const 0))
+                          (i32.and (i32.ge_s (local.get $w) (i32.const 16))
+                                   (i32.ge_s (local.get $h) (i32.const 12))))
+                      (then (call $statusbar_draw_size_grip
+                        (local.get $hdc) (local.get $w) (local.get $h))))
+                    (return (i32.const 0))))))
             ;; Paint's MFC bar has a fixed 166px help pane and a coordinate
             ;; pane extending beneath its size grip. Generic status bars keep
             ;; the SBARS_SIZEGRIP reservation used by comctl32.

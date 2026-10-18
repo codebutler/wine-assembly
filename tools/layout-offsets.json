@@ -1363,7 +1363,7 @@
       "file": "src/09c3-controls.wat",
       "frozen": null,
       "frozenNote": null,
-      "size": 160,
+      "size": 544,
       "fields": [
         {
           "name": "normal_text_ptr",
@@ -1433,6 +1433,30 @@
           "name": "part_edges",
           "type": "i32",
           "offset": 32,
+          "size": 128,
+          "count": 32,
+          "stride": 4
+        },
+        {
+          "name": "part_flags",
+          "type": "i32",
+          "offset": 160,
+          "size": 128,
+          "count": 32,
+          "stride": 4
+        },
+        {
+          "name": "part_data",
+          "type": "i32",
+          "offset": 288,
+          "size": 128,
+          "count": 32,
+          "stride": 4
+        },
+        {
+          "name": "part_lens",
+          "type": "i32",
+          "offset": 416,
           "size": 128,
           "count": 32,
           "stride": 4

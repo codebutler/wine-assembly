@@ -330,10 +330,50 @@
     (field font            i32)    ;; +20 WM_SETFONT HFONT, 0 = status font
     (field min_height      i32)    ;; +24 SB_SETMINHEIGHT
     (field part_count      i32)    ;; +28 SB_SETPARTS count, 0 = never set (one pane)
-    (field part_edges      i32 32)) ;; +32 SB_SETPARTS right edges; ends at +160
+    (field part_edges      i32 32)  ;; +32 SB_SETPARTS right edges
+    (field part_flags      i32 32)  ;; +160 SBT_* drawing flags
+    (field part_data       i32 32)  ;; +288 owner itemData or owned text pointer
+    (field part_lens       i32 32)) ;; +416 owned text lengths; ends at +544
   ;; Byte offset of part_edges, for the indexed accessors.
   (global $STATUSBAR_PART_EDGES i32 (i32.const 32))
+  (global $STATUSBAR_PART_FLAGS i32 (i32.const 160))
+  (global $STATUSBAR_PART_DATA  i32 (i32.const 288))
+  (global $STATUSBAR_PART_LENS  i32 (i32.const 416))
   (global $STATUSBAR_MAX_PARTS  i32 (i32.const 32))
+
+  (func $statusbar_part_slot (param $sw ptr<StatusBarState>) (param $base i32)
+        (param $part i32) (result i32)
+    (i32.add (local.get $sw)
+      (i32.add (local.get $base) (i32.shl (local.get $part) (i32.const 2)))))
+
+  ;; Pane zero has its historical normal-text storage. Other panes retain
+  ;; independent strings; owner-draw itemData is borrowed and never freed.
+  (func $statusbar_store_part_text (param $sw ptr<StatusBarState>)
+        (param $part i32) (param $src_wa i32) (param $len i32) (result i32)
+    (local $slot i32) (local $old i32) (local $buf i32)
+    (if (i32.eqz (local.get $part))
+      (then (return (call $statusbar_state_store_text
+        (local.get $sw) (i32.const 0) (local.get $src_wa) (local.get $len)))))
+    (if (i32.gt_u (local.get $len) (i32.const 255))
+      (then (local.set $len (i32.const 255))))
+    (local.set $slot (call $statusbar_part_slot
+      (local.get $sw) (global.get $STATUSBAR_PART_DATA) (local.get $part)))
+    (local.set $old (i32.load (local.get $slot)))
+    (if (local.get $len)
+      (then
+        (local.set $buf (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+        (if (i32.eqz (local.get $buf)) (then (return (i32.const 0))))
+        (memory.copy (call $g2w (local.get $buf)) (local.get $src_wa) (local.get $len))
+        (i32.store8 (i32.add (call $g2w (local.get $buf)) (local.get $len)) (i32.const 0))))
+    (if (i32.and (i32.ne (local.get $old) (i32.const 0))
+          (i32.eqz (i32.and (i32.load (call $statusbar_part_slot
+            (local.get $sw) (global.get $STATUSBAR_PART_FLAGS) (local.get $part)))
+            (i32.const 0x1000))))
+      (then (call $heap_free (local.get $old))))
+    (i32.store (local.get $slot) (local.get $buf))
+    (i32.store (call $statusbar_part_slot
+      (local.get $sw) (global.get $STATUSBAR_PART_LENS) (local.get $part)) (local.get $len))
+    (i32.const 1))
 
   ;; ---- ButtonState accessors ----
   ;;
@@ -931,7 +971,7 @@
     (local.get $state))
 
   (func $statusbar_state_release (param $hwnd i32)
-    (local $state i32) (local $sw ptr<StatusBarState>) (local $ptr i32)
+    (local $state i32) (local $sw ptr<StatusBarState>) (local $ptr i32) (local $part i32)
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $state)) (then (return)))
     (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
@@ -939,6 +979,18 @@
     (if (local.get $ptr) (then (call $heap_free (local.get $ptr))))
     (local.set $ptr (call $statusbar_simple_ptr (local.get $sw)))
     (if (local.get $ptr) (then (call $heap_free (local.get $ptr))))
+    (local.set $part (i32.const 1))
+    (block $done (loop $parts
+      (br_if $done (i32.ge_u (local.get $part) (global.get $STATUSBAR_MAX_PARTS)))
+      (local.set $ptr (i32.load (call $statusbar_part_slot
+        (local.get $sw) (global.get $STATUSBAR_PART_DATA) (local.get $part))))
+      (if (i32.and (i32.ne (local.get $ptr) (i32.const 0))
+            (i32.eqz (i32.and (i32.load (call $statusbar_part_slot
+              (local.get $sw) (global.get $STATUSBAR_PART_FLAGS) (local.get $part)))
+              (i32.const 0x1000))))
+        (then (call $heap_free (local.get $ptr))))
+      (local.set $part (i32.add (local.get $part) (i32.const 1)))
+      (br $parts)))
     (call $heap_free (local.get $state))
     (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0)))
 

@@ -545,6 +545,28 @@
   ;; return dropped the bitmaps on the floor and every cursor in the app
   ;; became the host's default arrow.
 
+  (func $cursor_slot_record (param $index i32) (param $create i32) (result i32)
+    (local $ext i32) (local $bytes i32)
+    (if (i32.ge_u (local.get $index) (global.get $MAX_CURSORS))
+      (then (return (i32.const 0))))
+    (if (i32.lt_u (local.get $index) (global.get $CURSOR_STATIC_COUNT))
+      (then (return (i32.add (global.get $CURSOR_TABLE)
+        (i32.mul (local.get $index) (global.get $CURSOR_TABLE_STRIDE))))))
+    (local.set $ext (global.get $CURSOR_TABLE_EXT))
+    (if (i32.eqz (local.get $ext))
+      (then
+        (if (i32.eqz (local.get $create)) (then (return (i32.const 0))))
+        (local.set $bytes (i32.mul
+          (i32.sub (global.get $MAX_CURSORS) (global.get $CURSOR_STATIC_COUNT))
+          (global.get $CURSOR_TABLE_STRIDE)))
+        (local.set $ext (call $heap_alloc (local.get $bytes)))
+        (if (i32.eqz (local.get $ext)) (then (return (i32.const 0))))
+        (memory.fill (call $g2w (local.get $ext)) (i32.const 0) (local.get $bytes))
+        (global.set $CURSOR_TABLE_EXT (local.get $ext))))
+    (i32.add (call $g2w (local.get $ext))
+      (i32.mul (i32.sub (local.get $index) (global.get $CURSOR_STATIC_COUNT))
+        (global.get $CURSOR_TABLE_STRIDE))))
+
   ;; The live record behind a handle, or 0 for a handle we did not intern.
   (func $cursor_record (param $handle i32) (result i32)
     (local $slot i32) (local $p i32)
@@ -555,9 +577,9 @@
     (if (i32.or (i32.eqz (local.get $slot))
                 (i32.gt_u (local.get $slot) (global.get $MAX_CURSORS)))
       (then (return (i32.const 0))))
-    (local.set $p (i32.add (global.get $CURSOR_TABLE)
-      (i32.mul (i32.sub (local.get $slot) (i32.const 1))
-               (global.get $CURSOR_TABLE_STRIDE))))
+    (local.set $p (call $cursor_slot_record
+      (i32.sub (local.get $slot) (i32.const 1)) (i32.const 0)))
+    (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
     ;; A slot with no bitmaps is free, not an empty cursor.
     (if (i32.and (i32.eqz (i32.load offset=12 (local.get $p)))
                  (i32.eqz (i32.load offset=16 (local.get $p))))
@@ -569,8 +591,8 @@
     (local $i i32) (local $p i32)
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_CURSORS)))
-      (local.set $p (i32.add (global.get $CURSOR_TABLE)
-        (i32.mul (local.get $i) (global.get $CURSOR_TABLE_STRIDE))))
+      (local.set $p (call $cursor_slot_record (local.get $i) (i32.const 1)))
+      (br_if $done (i32.eqz (local.get $p)))
       (if (i32.and (i32.eqz (i32.load offset=12 (local.get $p)))
                    (i32.eqz (i32.load offset=16 (local.get $p))))
         (then

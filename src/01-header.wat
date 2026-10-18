@@ -2356,7 +2356,12 @@
   (global $CURSOR_TABLE i32 (region.addr $CURSOR_TABLE 0))
   (global $CURSOR_TABLE_SIZE i32 (region.size $CURSOR_TABLE))
   (global $CURSOR_TABLE_STRIDE i32 (i32.const 24))
-  (global $MAX_CURSORS i32 (i32.const 32))
+  ;; The first 32 records live in the fixed region. Icon-heavy clients keep
+  ;; their independent copies in a lazily allocated extension on the guest
+  ;; heap rather than consuming another fixed slice of the region map.
+  (global $CURSOR_STATIC_COUNT i32 (i32.const 32))
+  (global $CURSOR_TABLE_EXT (mut i32) (i32.const 0))
+  (global $MAX_CURSORS i32 (i32.const 512))
   (global $CURSOR_HANDLE_TAG i32 (i32.const 0x00CC0000))
   ;; Two private surface descriptors: compositing a cursor reads the mask and
   ;; the colour plane at once, and must not borrow the blit scratch.
