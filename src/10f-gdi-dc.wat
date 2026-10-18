@@ -1781,6 +1781,58 @@
     (select (local.get $bitmap_result) (i32.const 0)
       (i32.ge_s (local.get $bitmap_result) (i32.const 0))))
 
+  ;; The font rasterizer and host measurement work in device pixels. Win32
+  ;; returns extents and TEXTMETRIC sizes in the HDC's logical units, even in
+  ;; fixed physical modes such as MM_TWIPS. Convert spans without the origins;
+  ;; an upward Y axis still has a positive text height.
+  (func $gdi_text_span_logical_x (param $hdc i32) (param $pixels i32) (result i32)
+    (local $dc i32) (local $win i32) (local $vp i32)
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (local.get $pixels))))
+    (local.set $win (load.field.memarg GdiDcState window_ext_x (local.get $dc)))
+    (local.set $vp (load.field.memarg GdiDcState viewport_ext_x (local.get $dc)))
+    (if (i32.or (i32.eqz (local.get $win)) (i32.eqz (local.get $vp)))
+      (then (return (local.get $pixels))))
+    (if (i32.lt_s (local.get $win) (i32.const 0))
+      (then (local.set $win (i32.sub (i32.const 0) (local.get $win)))))
+    (if (i32.lt_s (local.get $vp) (i32.const 0))
+      (then (local.set $vp (i32.sub (i32.const 0) (local.get $vp)))))
+    (call $gdi_round_ratio
+      (i64.mul (i64.extend_i32_s (local.get $pixels)) (i64.extend_i32_s (local.get $win)))
+      (i64.extend_i32_s (local.get $vp))))
+
+  (func $gdi_text_span_logical_y (param $hdc i32) (param $pixels i32) (result i32)
+    (local $dc i32) (local $win i32) (local $vp i32)
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (local.get $pixels))))
+    (local.set $win (load.field.memarg GdiDcState window_ext_y (local.get $dc)))
+    (local.set $vp (load.field.memarg GdiDcState viewport_ext_y (local.get $dc)))
+    (if (i32.or (i32.eqz (local.get $win)) (i32.eqz (local.get $vp)))
+      (then (return (local.get $pixels))))
+    (if (i32.lt_s (local.get $win) (i32.const 0))
+      (then (local.set $win (i32.sub (i32.const 0) (local.get $win)))))
+    (if (i32.lt_s (local.get $vp) (i32.const 0))
+      (then (local.set $vp (i32.sub (i32.const 0) (local.get $vp)))))
+    (call $gdi_round_ratio
+      (i64.mul (i64.extend_i32_s (local.get $pixels)) (i64.extend_i32_s (local.get $win)))
+      (i64.extend_i32_s (local.get $vp))))
+
+  (func $gdi_text_metrics_to_logical (param $hdc i32) (param $out i32)
+    (local $offset i32)
+    (block $done (loop $vertical
+      (br_if $done (i32.ge_u (local.get $offset) (i32.const 20)))
+      (i32.store (i32.add (local.get $out) (local.get $offset))
+        (call $gdi_text_span_logical_y (local.get $hdc)
+          (i32.load (i32.add (local.get $out) (local.get $offset)))))
+      (local.set $offset (i32.add (local.get $offset) (i32.const 4)))
+      (br $vertical)))
+    (i32.store offset=20 (local.get $out)
+      (call $gdi_text_span_logical_x (local.get $hdc)
+        (i32.load offset=20 (local.get $out))))
+    (i32.store offset=24 (local.get $out)
+      (call $gdi_text_span_logical_x (local.get $hdc)
+        (i32.load offset=24 (local.get $out)))))
+
   ;; The selected WAT strike supplies glyph measurement. Prefix fitting and
   ;; Win32 output structures share the same state for ANSI and UTF-16 calls.
   (func $gdi_text_extent_ex (param $hdc i32) (param $text i32)

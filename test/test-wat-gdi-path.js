@@ -505,6 +505,29 @@ async function main() {
     assert.strictEqual(wat.test_call_DeleteObject(pen), 1);
   });
 
+  check('StrokePath accepts an upward-Y MM_TWIPS rectangle', () => {
+    const twips = makeDib(40, 40);
+    clearDib(twips);
+    assert.strictEqual(wat.test_call_SetMapMode(twips.hdc, 6), 1);
+    // Comic Chat's panel border uses a 120-twip CPen (8 device pixels at 96 DPI).
+    const pen = wat.test_call_CreatePen(0, 120, 0x000000ff) >>> 0;
+    assert(pen);
+    assert.notStrictEqual(wat.test_call_SelectObject(twips.hdc, pen) | 0, -1);
+    assert.strictEqual(wat.test_call_BeginPath(twips.hdc), 1);
+    assert.strictEqual(wat.test_call_MoveToEx(twips.hdc, 0, -450, 0), 1);
+    assert.strictEqual(wat.test_call_LineTo(twips.hdc, 0, 0), 1);
+    assert.strictEqual(wat.test_call_LineTo(twips.hdc, 450, 0), 1);
+    assert.strictEqual(wat.test_call_LineTo(twips.hdc, 450, -450), 1);
+    assert.strictEqual(wat.test_call_CloseFigure(twips.hdc), 1);
+    assert.strictEqual(wat.test_call_EndPath(twips.hdc), 1);
+    assert.strictEqual(wat.test_call_StrokePath(twips.hdc), 1);
+    assert.deepStrictEqual(pixel(twips, 1, 10), [0, 0, 255]);
+    assert.deepStrictEqual(pixel(twips, 15, 15), [255, 255, 255]);
+    assert.notStrictEqual(wat.test_call_SelectObject(twips.hdc, 0x30017) | 0, -1);
+    assert.strictEqual(wat.test_call_DeleteObject(pen), 1);
+    assert.strictEqual(wat.test_call_SetMapMode(twips.hdc, 1), 6);
+  });
+
   check('StrokeAndFillPath closes open figures, fills, strokes, and consumes', () => {
     setIdentityMap(dib.hdc);
     clearDib(dib);

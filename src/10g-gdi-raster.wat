@@ -1946,9 +1946,25 @@
         (i32.add (local.get $max_y) (i32.const 1)))))
     (i32.const 1))
 
-  (func $gdi_line_desc_can_raster (param $desc i32)
+  ;; CreatePen widths are logical units; a zero width is always one device
+  ;; pixel. Paths retain device-space vertices, so callers can supply the
+  ;; width mapped through the original DC even when their vertex descriptor
+  ;; has been reset to identity.
+  (func $gdi_pen_device_width (param $desc i32) (param $pen i32) (result i32)
+    (local $width i32) (local $mapped i32)
+    (local.set $width (call $gdi_object_width (local.get $pen)))
+    (if (i32.eqz (local.get $width)) (then (return (i32.const 1))))
+    (local.set $mapped (i32.sub
+      (call $gdi_line_map_x (local.get $desc) (local.get $width))
+      (call $gdi_line_map_x (local.get $desc) (i32.const 0))))
+    (if (i32.lt_s (local.get $mapped) (i32.const 0))
+      (then (local.set $mapped (i32.sub (i32.const 0) (local.get $mapped)))))
+    (select (local.get $mapped) (i32.const 1)
+      (i32.gt_s (local.get $mapped) (i32.const 0))))
+
+  (func $gdi_line_desc_can_raster_width (param $desc i32)
         (param $from_x i32) (param $from_y i32) (param $to_x i32) (param $to_y i32)
-        (param $pen i32) (param $rop2 i32) (result i32)
+        (param $pen i32) (param $rop2 i32) (param $device_width i32) (result i32)
     (local $x0 i32) (local $y0 i32) (local $x1 i32) (local $y1 i32)
     (local $dx i32) (local $dy i32) (local $span i32) (local $width i32)
     (local $record i32) (local $geometric i32)
@@ -1959,7 +1975,7 @@
       (then (return (i32.const 0))))
     (if (i32.gt_u (call $gdi_object_style (local.get $pen)) (i32.const 6))
       (then (return (i32.const 0))))
-    (local.set $width (call $gdi_object_width (local.get $pen)))
+    (local.set $width (local.get $device_width))
     (local.set $record (call $gdi_object_record (local.get $pen)))
     (if (local.get $record)
       (then (local.set $geometric (i32.and
@@ -1991,6 +2007,14 @@
           (i64.const 4000000))
       (then (return (i32.const 0))))
     (i32.const 1))
+
+  (func $gdi_line_desc_can_raster (param $desc i32)
+        (param $from_x i32) (param $from_y i32) (param $to_x i32) (param $to_y i32)
+        (param $pen i32) (param $rop2 i32) (result i32)
+    (call $gdi_line_desc_can_raster_width
+      (local.get $desc) (local.get $from_x) (local.get $from_y)
+      (local.get $to_x) (local.get $to_y) (local.get $pen) (local.get $rop2)
+      (call $gdi_pen_device_width (local.get $desc) (local.get $pen))))
 
   ;; Rasterize a PS_GEOMETRIC segment from its analytic device-space stroke.
   ;; Pixel centers are tested once, which gives diagonal widths and cap styles
@@ -2099,18 +2123,18 @@
 
   ;; Exact integer Bresenham walk. Like LineTo, the final endpoint is not
   ;; painted. Thick cosmetic pens use square integer stamps without Canvas.
-  (func $gdi_line_desc (param $hdc i32) (param $desc i32)
+  (func $gdi_line_desc_width (param $hdc i32) (param $desc i32)
         (param $from_x i32) (param $from_y i32) (param $to_x i32) (param $to_y i32)
-        (param $pen i32) (param $rop2 i32) (result i32)
+        (param $pen i32) (param $rop2 i32) (param $device_width i32) (result i32)
     (local $x0 i32) (local $y0 i32) (local $x1 i32) (local $y1 i32)
     (local $dx i32) (local $dy i32) (local $sx i32) (local $sy i32)
     (local $err i32) (local $e2 i32) (local $width i32) (local $style i32)
     (local $stamp_x i32) (local $stamp_y i32) (local $left i32) (local $top i32)
     (local $pixel_x i32) (local $pixel_y i32) (local $color i32) (local $wrote i32)
     (local $min_x i32) (local $min_y i32) (local $max_x i32) (local $max_y i32)
-    (if (i32.eqz (call $gdi_line_desc_can_raster (local.get $desc)
+    (if (i32.eqz (call $gdi_line_desc_can_raster_width (local.get $desc)
           (local.get $from_x) (local.get $from_y) (local.get $to_x) (local.get $to_y)
-          (local.get $pen) (local.get $rop2)))
+          (local.get $pen) (local.get $rop2) (local.get $device_width)))
       (then (return (i32.const 0))))
     (if (i32.eq (local.get $pen) (i32.const 0x30018)) (then (return (i32.const 1))))
     (local.set $x0 (call $gdi_line_map_x (local.get $desc) (local.get $from_x)))
@@ -2120,7 +2144,7 @@
     (if (i32.and (i32.eq (local.get $x0) (local.get $x1))
           (i32.eq (local.get $y0) (local.get $y1)))
       (then (return (i32.const 1))))
-    (local.set $width (call $gdi_object_width (local.get $pen)))
+    (local.set $width (local.get $device_width))
     (local.set $style (call $gdi_object_style (local.get $pen)))
     (local.set $color (call $gdi_dc_resolve_colorref (local.get $hdc)
       (call $gdi_object_color (local.get $pen))))
@@ -2210,6 +2234,15 @@
         (i32.add (local.get $max_x) (i32.const 1))
         (i32.add (local.get $max_y) (i32.const 1)))))
     (i32.const 1))
+
+  (func $gdi_line_desc (param $hdc i32) (param $desc i32)
+        (param $from_x i32) (param $from_y i32) (param $to_x i32) (param $to_y i32)
+        (param $pen i32) (param $rop2 i32) (result i32)
+    (call $gdi_line_desc_width
+      (local.get $hdc) (local.get $desc)
+      (local.get $from_x) (local.get $from_y) (local.get $to_x) (local.get $to_y)
+      (local.get $pen) (local.get $rop2)
+      (call $gdi_pen_device_width (local.get $desc) (local.get $pen))))
 
   (func (export "test_gdi_line_desc")
         (param i32) (param i32) (param i32) (param i32) (param i32)
@@ -7130,6 +7163,7 @@
         (param $sx i32) (param $sy i32) (param $sw i32) (param $sh i32)
         (param $bits i32) (param $bmi i32) (param $usage i32) (param $rop i32) (result i32)
     (local $dst i32) (local $src i32) (local $mdx i32) (local $mdy i32)
+    (local $mdw i32) (local $mdh i32)
     (local $msy i32) (local $pattern i32) (local $ok i32)
     (local $compression i32) (local $decoded i32)
     (if (i32.gt_u (local.get $usage) (i32.const 1)) (then (return (i32.const 0))))
@@ -7163,6 +7197,14 @@
         (return (i32.const 0))))
     (local.set $mdx (call $gdi_line_map_x (local.get $dst) (local.get $dx)))
     (local.set $mdy (call $gdi_line_map_y (local.get $dst) (local.get $dy)))
+    ;; The destination width and height are logical extents. Map both edges
+    ;; through the DC so anisotropic and upward-Y modes scale the DIB too.
+    (local.set $mdw (i32.sub
+      (call $gdi_line_map_x (local.get $dst) (i32.add (local.get $dx) (local.get $dw)))
+      (local.get $mdx)))
+    (local.set $mdh (i32.sub
+      (call $gdi_line_map_y (local.get $dst) (i32.add (local.get $dy) (local.get $dh)))
+      (local.get $mdy)))
     (local.set $msy (local.get $sy))
     ;; StretchDIBits measures ySrc upward from the DIB's lower-left corner,
     ;; and does so for a top-down DIB as well: biHeight's sign says which way
@@ -7185,7 +7227,7 @@
           (i32.load offset=8 (local.get $src)) (local.get $sy)))))
     (local.set $ok (call $gdi_raster_stretch_blt
       (local.get $hdc) (i32.const 0) (local.get $dst) (local.get $mdx) (local.get $mdy)
-      (local.get $dw) (local.get $dh) (local.get $src)
+      (local.get $mdw) (local.get $mdh) (local.get $src)
       (local.get $sx) (local.get $msy) (local.get $sw) (local.get $sh)
       (local.get $pattern) (local.get $rop)))
     (if (local.get $decoded)
@@ -7193,8 +7235,8 @@
     (if (i32.eqz (local.get $ok)) (then (return (i32.const 0))))
     (call $gdi_geometry_present (local.get $hdc) (local.get $dst)
       (local.get $mdx) (local.get $mdy)
-      (i32.add (local.get $mdx) (local.get $dw))
-      (i32.add (local.get $mdy) (local.get $dh)))
+      (i32.add (local.get $mdx) (local.get $mdw))
+      (i32.add (local.get $mdy) (local.get $mdh)))
     (local.get $sh))
 
   ;; SetDIBitsToDevice is a source decode plus SRCCOPY into the selected

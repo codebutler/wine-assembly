@@ -364,7 +364,8 @@
   (func $handle_BitBlt (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dst i32) (local $src i32) (local $src_hdc i32)
     (local $sx i32) (local $sy i32) (local $rop i32) (local $rop3 i32)
-    (local $dx i32) (local $dy i32) (local $pattern i32) (local $ok i32)
+    (local $dx i32) (local $dy i32) (local $dw i32) (local $dh i32)
+    (local $pattern i32) (local $ok i32)
     (local.set $dst (global.get $GDI_BLIT_DST_DESC))
     (local.set $src (global.get $GDI_BLIT_SRC_DESC))
     (local.set $src_hdc (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
@@ -376,6 +377,15 @@
       (then
         (local.set $dx (call $gdi_line_map_x (local.get $dst) (local.get $arg1)))
         (local.set $dy (call $gdi_line_map_y (local.get $dst) (local.get $arg2)))
+        ;; BitBlt dimensions are logical. Map both destination corners before
+        ;; handing a pixel extent to the rasterizer: an upward-Y mapping can
+        ;; turn a negative logical height into a positive device height.
+        (local.set $dw (i32.sub
+          (call $gdi_line_map_x (local.get $dst) (i32.add (local.get $arg1) (local.get $arg3)))
+          (local.get $dx)))
+        (local.set $dh (i32.sub
+          (call $gdi_line_map_y (local.get $dst) (i32.add (local.get $arg2) (local.get $arg4)))
+          (local.get $dy)))
         (if (local.get $src_hdc)
           (then
             (if (i32.eqz (call $gdi_surface_descriptor (local.get $src_hdc) (local.get $src)))
@@ -394,7 +404,7 @@
           (else
             (local.set $ok (call $gdi_raster_bitblt
               (local.get $arg0) (local.get $src_hdc) (local.get $dst) (local.get $dx) (local.get $dy)
-              (local.get $arg3) (local.get $arg4) (local.get $src)
+              (local.get $dw) (local.get $dh) (local.get $src)
               (local.get $sx) (local.get $sy) (local.get $pattern) (local.get $rop)))))
         (if (local.get $ok)
           (then
@@ -403,8 +413,8 @@
                 (local.get $arg0)))))
             (call $gdi_geometry_present (local.get $arg0) (local.get $dst)
               (local.get $dx) (local.get $dy)
-              (i32.add (local.get $dx) (local.get $arg3))
-              (i32.add (local.get $dy) (local.get $arg4))))))
+              (i32.add (local.get $dx) (local.get $dw))
+              (i32.add (local.get $dy) (local.get $dh))))))
       (else (local.set $ok (i32.const 0))))
     (i32.store offset=0 (global.get $reg_base) (local.get $ok))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40))) (return)
@@ -524,6 +534,7 @@
     (if (call $gdi_bitmap_text_metrics_write
           (local.get $arg0) (local.get $w) (i32.const 0))
       (then
+        (call $gdi_text_metrics_to_logical (local.get $arg0) (local.get $w))
         (call $guest_span_writeback (local.get $arg1) (local.get $w) (i32.const 56))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
@@ -548,6 +559,7 @@
     (i32.store8 (i32.add (local.get $w) (i32.const 51)) (i32.const 0x26))            ;; tmPitchAndFamily
     (i32.store8 (i32.add (local.get $w) (i32.const 52))
       (call $gdi_dc_text_charset (local.get $arg0)))                                 ;; tmCharSet
+    (call $gdi_text_metrics_to_logical (local.get $arg0) (local.get $w))
     (call $guest_span_writeback (local.get $arg1) (local.get $w) (i32.const 56))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
@@ -2298,10 +2310,12 @@
     (local $packed i32)
     (local.set $packed (call $host_get_text_metrics (local.get $arg0)))
     (call $gs32 (local.get $arg3)
-      (call $host_measure_text (local.get $arg0) (call $g2w (local.get $arg1))
-        (local.get $arg2) (i32.const 0)))
+      (call $gdi_text_span_logical_x (local.get $arg0)
+        (call $host_measure_text (local.get $arg0) (call $g2w (local.get $arg1))
+          (local.get $arg2) (i32.const 0))))
     (call $gs32 (i32.add (local.get $arg3) (i32.const 4))
-      (i32.and (local.get $packed) (i32.const 0xFFFF)))
+      (call $gdi_text_span_logical_y (local.get $arg0)
+        (i32.and (local.get $packed) (i32.const 0xFFFF))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
@@ -2326,6 +2340,7 @@
     (if (call $gdi_bitmap_text_metrics_write
           (local.get $arg0) (local.get $wa) (i32.const 1))
       (then
+        (call $gdi_text_metrics_to_logical (local.get $arg0) (local.get $wa))
         (call $guest_span_writeback (local.get $arg1) (local.get $wa) (i32.const 60))
         (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
@@ -2349,6 +2364,7 @@
     (i32.store8 offset=55 (local.get $wa) (i32.const 0x26)) ;; tmPitchAndFamily
     (i32.store8 offset=56 (local.get $wa)
       (call $gdi_dc_text_charset (local.get $arg0))) ;; tmCharSet
+    (call $gdi_text_metrics_to_logical (local.get $arg0) (local.get $wa))
     (call $guest_span_writeback (local.get $arg1) (local.get $wa) (i32.const 60))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
@@ -3823,10 +3839,12 @@
     (local $packed i32)
     (local.set $packed (call $host_get_text_metrics (local.get $arg0)))
     (call $gs32 (local.get $arg3)
-      (call $host_measure_text (local.get $arg0) (call $g2w (local.get $arg1))
-        (local.get $arg2) (i32.const 1)))
+      (call $gdi_text_span_logical_x (local.get $arg0)
+        (call $host_measure_text (local.get $arg0) (call $g2w (local.get $arg1))
+          (local.get $arg2) (i32.const 1))))
     (call $gs32 (i32.add (local.get $arg3) (i32.const 4))
-      (i32.and (local.get $packed) (i32.const 0xFFFF)))
+      (call $gdi_text_span_logical_y (local.get $arg0)
+        (i32.and (local.get $packed) (i32.const 0xFFFF))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )

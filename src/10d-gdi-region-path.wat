@@ -3344,16 +3344,17 @@
 
   (func $gdi_dc_path_stroke_segment (param $hdc i32) (param $desc i32)
         (param $from_x i32) (param $from_y i32) (param $to_x i32) (param $to_y i32)
-        (param $pen i32) (param $rop2 i32) (param $paint i32) (result i32)
+        (param $pen i32) (param $rop2 i32) (param $width i32)
+        (param $paint i32) (result i32)
     (if (result i32) (local.get $paint)
-      (then (call $gdi_line_desc
+      (then (call $gdi_line_desc_width
         (local.get $hdc) (local.get $desc)
         (local.get $from_x) (local.get $from_y) (local.get $to_x) (local.get $to_y)
-        (local.get $pen) (local.get $rop2)))
-      (else (call $gdi_line_desc_can_raster
+        (local.get $pen) (local.get $rop2) (local.get $width)))
+      (else (call $gdi_line_desc_can_raster_width
         (local.get $desc)
         (local.get $from_x) (local.get $from_y) (local.get $to_x) (local.get $to_y)
-        (local.get $pen) (local.get $rop2)))))
+        (local.get $pen) (local.get $rop2) (local.get $width)))))
 
   ;; Validate or paint a flattened path without consuming it. force_close is
   ;; used by StrokeAndFillPath, whose contract closes every open figure before
@@ -3361,7 +3362,7 @@
   (func $gdi_dc_path_stroke_internal (param $hdc i32) (param $entry i32)
         (param $force_close i32) (param $paint i32) (result i32)
     (local $flat_g i32) (local $buffer i32) (local $count i32)
-    (local $desc i32) (local $pen i32) (local $rop2 i32)
+    (local $desc i32) (local $pen i32) (local $rop2 i32) (local $width i32)
     (local $i i32) (local $point i32) (local $type i32) (local $kind i32)
     (local $from_x i32) (local $from_y i32) (local $start_x i32) (local $start_y i32)
     (local $x i32) (local $y i32) (local $has_current i32)
@@ -3370,10 +3371,11 @@
     (local.set $desc (global.get $GDI_LINE_DESC))
     (if (i32.eqz (call $gdi_surface_descriptor (local.get $hdc) (local.get $desc)))
       (then (call $heap_free (local.get $flat_g)) (return (i32.const 0))))
-    (call $gdi_path_desc_identity (local.get $desc))
     (local.set $pen
       (call $gdi_dc_get_field (local.get $hdc) (i32.const 4) (i32.const 0x30017)))
     (local.set $rop2 (call $gdi_dc_get_rop2 (local.get $hdc)))
+    (local.set $width (call $gdi_pen_device_width (local.get $desc) (local.get $pen)))
+    (call $gdi_path_desc_identity (local.get $desc))
     (local.set $buffer (call $g2w (local.get $flat_g)))
     (local.set $count (i32.load (local.get $buffer)))
     (block $done (loop $entries
@@ -3392,7 +3394,7 @@
                     (local.get $hdc) (local.get $desc)
                     (local.get $from_x) (local.get $from_y)
                     (local.get $start_x) (local.get $start_y)
-                    (local.get $pen) (local.get $rop2) (local.get $paint)))
+                    (local.get $pen) (local.get $rop2) (local.get $width) (local.get $paint)))
                 (then (call $heap_free (local.get $flat_g)) (return (i32.const 0))))))
           (local.set $start_x (local.get $x)) (local.set $start_y (local.get $y))
           (local.set $from_x (local.get $x)) (local.set $from_y (local.get $y))
@@ -3406,7 +3408,7 @@
           (if (i32.eqz (call $gdi_dc_path_stroke_segment
                 (local.get $hdc) (local.get $desc)
                 (local.get $from_x) (local.get $from_y) (local.get $x) (local.get $y)
-                (local.get $pen) (local.get $rop2) (local.get $paint)))
+                (local.get $pen) (local.get $rop2) (local.get $width) (local.get $paint)))
             (then (call $heap_free (local.get $flat_g)) (return (i32.const 0))))
           (local.set $from_x (local.get $x)) (local.set $from_y (local.get $y))
           (if (i32.ne (i32.and (local.get $type) (i32.const 1)) (i32.const 0))
@@ -3415,7 +3417,7 @@
                     (local.get $hdc) (local.get $desc)
                     (local.get $from_x) (local.get $from_y)
                     (local.get $start_x) (local.get $start_y)
-                    (local.get $pen) (local.get $rop2) (local.get $paint)))
+                    (local.get $pen) (local.get $rop2) (local.get $width) (local.get $paint)))
                 (then (call $heap_free (local.get $flat_g)) (return (i32.const 0))))
               (local.set $has_current (i32.const 0))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -3426,7 +3428,7 @@
               (local.get $hdc) (local.get $desc)
               (local.get $from_x) (local.get $from_y)
               (local.get $start_x) (local.get $start_y)
-              (local.get $pen) (local.get $rop2) (local.get $paint)))
+              (local.get $pen) (local.get $rop2) (local.get $width) (local.get $paint)))
           (then (call $heap_free (local.get $flat_g)) (return (i32.const 0))))))
     (call $heap_free (local.get $flat_g))
     (i32.const 1))
@@ -3759,9 +3761,8 @@
             (if (i32.gt_s (local.get $left) (local.get $right))
               (then (local.set $swap (local.get $left))
                 (local.set $left (local.get $right)) (local.set $right (local.get $swap))))
-            (if (i32.gt_s (local.get $top) (local.get $bottom))
-              (then (local.set $swap (local.get $top))
-                (local.set $top (local.get $bottom)) (local.set $bottom (local.get $swap))))
+            ;; Preserve the two mapped device corners. Mapping modes with an
+            ;; upward Y axis return a logical top greater than bottom.
             (i32.store (local.get $rect) (local.get $left))
             (i32.store offset=4 (local.get $rect) (local.get $top))
             (i32.store offset=8 (local.get $rect) (local.get $right))

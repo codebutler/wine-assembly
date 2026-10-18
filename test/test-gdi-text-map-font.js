@@ -8,16 +8,22 @@
 //
 // This used to check the JS font resolver, which applied the mapping while
 // building a CSS font string. There is no JS font resolver any more — the
-// mapping is applied in $gdi_bitmap_font_height when a strike is chosen — so
-// the same guarantee is now asserted through the public metrics API.
+// mapping is applied in $gdi_bitmap_font_height when a strike is chosen. The
+// public TEXTMETRIC result is in logical units, so inspect the internal device
+// cell height separately when verifying the rendered glyph size.
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 // $GUEST_BASE, from the map declared in src/00-regions.wat.
 const RegionMap = require('../lib/region-map.generated.js');
 
+const extraWat = String.raw`
+  (func (export "test_raw_text_height") (param i32) (result i32)
+    (i32.and (call $host_get_text_metrics (local.get 0)) (i32.const 0xffff)))
+`;
+
 (async () => {
-  const { exports: wat, memory } = await bootRenderHarness();
+  const { exports: wat, memory } = await bootRenderHarness({ extraWat });
   const bytes = new Uint8Array(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;
   const wa = guest => RegionMap.g2w(guest, imageBase);
@@ -54,21 +60,25 @@ const RegionMap = require('../lib/region-map.generated.js');
     assert.strictEqual(wat.test_call_GetTextMetricsA(hdc, tm), 1);
     return wat.guest_read32(tm) | 0;
   };
+  const deviceHeightOf = () => wat.test_raw_text_height(hdc) | 0;
 
   // 1:1 mapping first: the unscaled cell for a 13px request.
-  const unscaled = heightOf();
+  const unscaled = deviceHeightOf();
   assert(unscaled >= 8, `unscaled cell should be a usable size, got ${unscaled}`);
+  assert.strictEqual(heightOf(), unscaled, 'MM_TEXT metrics use device-pixel units');
 
   // MM_ANISOTROPIC with WordPad's 96/300 DPI window, applied to the Y extents
   // that $gdi_bitmap_font_height reads (DC offsets 52 and 68).
   assert.strictEqual(wat.test_call_SetMapMode(hdc, 8), 1);
   wat.test_gdi_dc_set_field(hdc, 52, 5242, 1);   // 16384 * 96 / 300
   wat.test_gdi_dc_set_field(hdc, 68, 1058, 1);
-  const scaled = heightOf();
+  const scaled = deviceHeightOf();
   assert(scaled > 0 && scaled < unscaled,
     `anisotropic mapping must shrink the device glyph: ${unscaled} -> ${scaled}`);
   assert(scaled <= 4,
     `a 13px logical font at 1058/5242 should land near 3px, got ${scaled}`);
+  assert(heightOf() >= scaled,
+    'the public metric converts the rasterized glyph back to logical units');
 
   console.log('PASS  anisotropic text mapping scales logical fonts into device pixels');
 })().catch(error => {

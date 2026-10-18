@@ -156,6 +156,7 @@ const UNIONS = {
       '$gdi_surface_descriptor':     'GdiPen',     // 10f:1842 DC+4, set only at
                                                    //   10f:548 under `type == 1`
       '$gdi_line_desc_can_raster':   'GdiPen',     // 10g:1687 gdi_object_type != 1
+      '$gdi_line_desc_can_raster_width': 'GdiPen', // 10g: type == 1 before reading flags
       '$gdi_geometric_line_desc':    'GdiPen',     // 10g:1740 sole caller gated by
                                                    //   $gdi_line_desc_can_raster
       '$gdi_polyline_try':           'GdiPen',     // 10g:3307 DC+4

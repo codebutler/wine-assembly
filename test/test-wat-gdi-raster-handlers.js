@@ -260,6 +260,20 @@ const drawDibLifetimeWat = String.raw`
     assert.strictEqual(canvasRgb(dst, 5, 2), 0x112233);
   });
 
+  check('BitBlt maps upward-Y MM_TWIPS extents before copying pixels', () => {
+    const source = makeDib(24, 24);
+    const target = makeDib(24, 24);
+    setPacked(source, 1, 1, 0x112233);
+    setPacked(source, 15, 15, 0x445566);
+    assert.strictEqual(wat.test_call_SetMapMode(source.hdc, 6), 1);
+    assert.strictEqual(wat.test_call_SetMapMode(target.hdc, 6), 1);
+    assert.strictEqual(wat.test_call_BitBlt(
+      target.hdc, 0, 0, 240, -240, source.hdc, 0, 0, 0x00CC0020), 1);
+    assert.strictEqual(packed(target, 1, 1), 0x112233);
+    assert.strictEqual(packed(target, 15, 15), 0x445566);
+    assert.strictEqual(packed(target, 16, 16), 0);
+  });
+
   check('overlapping drag buffers restore the board without sprite trails', () => {
     const board = makeDib(40, 24);
     const sprite = makeDib(7, 6);
