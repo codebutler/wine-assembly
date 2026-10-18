@@ -7,6 +7,8 @@ const { bootRenderHarness } = require('./render-helper');
 const EXTRA_WAT = `
   (func (export "test_native_override") (param $name_wa i32) (result i32)
     (call $native_override_export_api_id (local.get $name_wa)))
+  (func (export "test_lookup_api") (param $name_wa i32) (result i32)
+    (call $lookup_api_id (local.get $name_wa)))
   (func (export "test_ftol") (param $value f64) (param $cw i32) (result i64)
     (global.set $fpu_cw (local.get $cw))
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x07600000))
@@ -71,6 +73,9 @@ const EXTRA_WAT = `
   assert.ok(stricmpId >= 0, '_stricmp is in the API table');
   assert.strictEqual(e.test_native_override(nameWasm), stricmpId,
     'loaded MSVCRT _stricmp is bound to the native API thunk');
+  writeName('_strcmpi');
+  assert.strictEqual(e.test_lookup_api(nameWasm), stricmpId,
+    'historical MSVCRT _strcmpi resolves to the _stricmp handler');
   const a = e.guest_alloc(64) >>> 0, b = e.guest_alloc(64) >>> 0;
   const put = (g, s) => {
     const w = e.guest_to_wasm(g) >>> 0;

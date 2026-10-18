@@ -75,6 +75,9 @@
   ;; Lookup API ID from static hash table. Returns 0xFFFF if not found.
   (func $lookup_api_id (param $name_ptr i32) (result i32)
     (local $h i32) (local $i i32) (local $entry_addr i32)
+    ;; MSVCRT's historical _strcmpi export is an alias of _stricmp.
+    (if (call $str_eq (local.get $name_ptr) "_strcmpi")
+      (then (return (call $lookup_api_id "_stricmp"))))
     (local.set $h (call $hash_api_name (local.get $name_ptr)))
     (local.set $i (i32.const 0))
     (block $notfound (loop $scan
