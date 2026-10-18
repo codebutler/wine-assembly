@@ -1752,6 +1752,28 @@
         (global.set $eip (call $gl32 (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
         (return)))
 
+    ;; The alertable Ex wait can also yield after completing its stdcall frame.
+    ;; Inline CALL dispatch otherwise leaves EIP on the thunk, and the next
+    ;; slice resumes at that thunk instead of the caller's return address.
+    (if (i32.and
+          (i32.eq (local.get $api_id) (global.get $API_ID_MsgWaitForMultipleObjectsEx))
+          (i32.and (i32.eq (local.get $arg3) (i32.const 1279))
+            (i32.eq (local.get $arg4) (i32.const 2))))
+      (then
+        (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+        (call $handle_MsgWaitForMultipleObjectsEx
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+        (call $restore_win32_nonvolatile
+          (local.get $saved_ebx) (local.get $saved_esi)
+          (local.get $saved_edi) (local.get $saved_ebp))
+        (if (global.get $api_log_on) (then (call $host_log_api_exit)))
+        (if (i32.and (global.get $yield_flag)
+              (i32.eq (i32.load offset=16 (global.get $reg_base))
+                (i32.add (local.get $esp) (i32.const 24))))
+          (then (global.set $eip (call $gl32 (local.get $esp)))))
+        (return)))
+
     ;; _EH_prolog's job is to build the caller's frame: it leaves EBP pointing
     ;; at the slot where it saved the old EBP. Restoring EBP here undid that, so
     ;; every MSVC function that opens with it ran on its caller's frame and its

@@ -41,6 +41,10 @@ const extraWat=String.raw`
  }});
  const poll=(flags=6)=>e.mq_poll(0,0,255,flags);
  for(const flags of [4,5,6,7])assert.strictEqual(poll(flags),258,'empty immediate wait is a timeout');
+ assert.strictEqual(e.mq_poll(1,-1,1279,2),0,
+   'alertable all-input wait reports a signaled object');
+ assert.strictEqual(e.mq_poll(0,-1,1279,2),0,
+   'alertable all-input wait yields on an infinite message wait');
  e.mq_post();assert.strictEqual(poll(),0);assert.strictEqual(poll(),0);
  assert.strictEqual(e.mq_posts(),1,'INPUTAVAILABLE repeatedly observes unread post');e.mq_clear_posts();
  e.mq_paint(1);assert.strictEqual(poll(),0);e.mq_paint(0);assert.strictEqual(poll(),258);

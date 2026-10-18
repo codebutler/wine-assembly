@@ -67,6 +67,7 @@ const namedApiIds = [
   ['QueryPerformanceCounter', 'API_ID_QueryPerformanceCounter'],
   ['QueryPerformanceFrequency', 'API_ID_QueryPerformanceFrequency'],
   ['MsgWaitForMultipleObjects', 'API_ID_MsgWaitForMultipleObjects'],
+  ['MsgWaitForMultipleObjectsEx', 'API_ID_MsgWaitForMultipleObjectsEx'],
   ['PeekMessageA', 'API_ID_PeekMessageA'],
   ['PeekMessageW', 'API_ID_PeekMessageW'],
   ['_EH_prolog', 'API_ID__EH_prolog'],

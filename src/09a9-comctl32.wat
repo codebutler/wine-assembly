@@ -151,13 +151,13 @@
       (then
         (call $dib_free_wasm (local.get $bits))
         (return (i32.const 0))))
-    (local.set $candidate (call $heap_alloc (i32.const 36)))
+    (local.set $candidate (call $heap_alloc (i32.const 96)))
     (if (i32.eqz (local.get $candidate))
       (then
         (drop (call $gdi_object_delete_full (local.get $bitmap)))
         (return (i32.const 0))))
     (local.set $candidate_wa (call $g2w (local.get $candidate)))
-    (call $zero_memory (local.get $candidate_wa) (i32.const 36))
+    (call $zero_memory (local.get $candidate_wa) (i32.const 96))
     (i32.store          (local.get $candidate_wa) (local.get $size))
     (i32.store offset=4 (local.get $candidate_wa) (local.get $size))
     (i32.store offset=8 (local.get $candidate_wa) (i32.const -1)) ;; CLR_NONE
@@ -374,10 +374,11 @@
     (local $buf i32) (local $buf_wa i32)
     ;; ImageList struct:
     ;; +0 cx, +4 cy, +8 bk color, +12 count, +16 bitmap strip, +20 mask color,
-    ;; +24 icon-handle array, +28 icon-array capacity, +32 validity tag.
-    (local.set $buf (call $heap_alloc (i32.const 36)))
+    ;; +24 icon-handle array, +28 icon-array capacity, +32 validity tag,
+    ;; +36..+95 overlay slots 1..15 (stored as image index plus one).
+    (local.set $buf (call $heap_alloc (i32.const 96)))
     (local.set $buf_wa (call $g2w (local.get $buf)))
-    (call $zero_memory (local.get $buf_wa) (i32.const 36))
+    (call $zero_memory (local.get $buf_wa) (i32.const 96))
     (i32.store (local.get $buf_wa) (local.get $arg0))           ;; cx
     (i32.store offset=4 (local.get $buf_wa) (local.get $arg1))  ;; cy
     (i32.store offset=8 (local.get $buf_wa) (i32.const -1))     ;; CLR_NONE
@@ -406,6 +407,30 @@
               (i32.eq (i32.load offset=32 (local.get $sw)) (i32.const 0x4C4D4948)))
           (then (i32.store offset=0 (global.get $reg_base) (i32.load offset=12 (local.get $sw)))))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+  )
+
+  ;; ImageList_SetOverlayImage(himl, iImage, iOverlay) maps one image to an
+  ;; overlay slot. Slots are numbered 1..15; a zero stored index means unused.
+  (func $handle_ImageList_SetOverlayImage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sw i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (i32.and
+          (i32.and (i32.ge_s (local.get $arg1) (i32.const 0))
+            (i32.ge_u (local.get $arg2) (i32.const 1)))
+          (i32.le_u (local.get $arg2) (i32.const 15)))
+      (then
+        (local.set $sw (call $g2w_affine_span (local.get $arg0) (i32.const 96)))
+        (if (i32.and
+              (i32.ne (local.get $sw) (global.get $NULL_SENTINEL))
+              (i32.eq (i32.load offset=32 (local.get $sw)) (i32.const 0x4C4D4948)))
+          (then
+            (if (i32.lt_u (local.get $arg1) (i32.load offset=12 (local.get $sw)))
+              (then
+                (i32.store (i32.add (i32.add (local.get $sw) (i32.const 32))
+                    (i32.shl (local.get $arg2) (i32.const 2)))
+                  (i32.add (local.get $arg1) (i32.const 1)))
+                (i32.store offset=0 (global.get $reg_base) (i32.const 1))))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; ImageList_Destroy(himl) — 1 arg, returns BOOL
@@ -515,13 +540,13 @@
       (then (local.set $cx (local.get $bmp_w))))
     (local.set $count (i32.div_u (local.get $bmp_w) (local.get $cx)))
     (if (i32.eqz (local.get $count)) (then (local.set $count (i32.const 1))))
-    (local.set $buf (call $heap_alloc (i32.const 36)))
+    (local.set $buf (call $heap_alloc (i32.const 96)))
     (if (i32.eqz (local.get $buf))
       (then
         (drop (call $gdi_object_delete_full (local.get $bmp)))
         (return (i32.const 0))))
     (local.set $buf_wa (call $g2w (local.get $buf)))
-    (call $zero_memory (local.get $buf_wa) (i32.const 36))
+    (call $zero_memory (local.get $buf_wa) (i32.const 96))
     (i32.store (local.get $buf_wa) (local.get $cx))
     (i32.store offset=4 (local.get $buf_wa) (local.get $bmp_h))
     (i32.store offset=8 (local.get $buf_wa) (i32.const -1)) ;; CLR_NONE
@@ -993,7 +1018,7 @@
       (br_if $sized (i32.ge_u (local.get $capacity) (local.get $count)))
       (local.set $capacity (i32.shl (local.get $capacity) (i32.const 1)))
       (br $grow)))
-    (local.set $list (call $heap_alloc (i32.const 36)))
+    (local.set $list (call $heap_alloc (i32.const 96)))
     (local.set $icons (call $heap_alloc (i32.shl (local.get $capacity) (i32.const 2))))
     (block $fail_early
     (if (i32.or
@@ -1021,7 +1046,7 @@
     (drop (call $gdi_object_delete_full (local.get $color)))
     (if (local.get $mask) (then (drop (call $gdi_object_delete_full (local.get $mask)))))
     (local.set $list_wa (call $g2w (local.get $list)))
-    (call $zero_memory (local.get $list_wa) (i32.const 36))
+    (call $zero_memory (local.get $list_wa) (i32.const 96))
     (i32.store (local.get $list_wa) (local.get $cx))
     (i32.store offset=4 (local.get $list_wa) (local.get $cy))
     (i32.store offset=8 (local.get $list_wa) (i32.load offset=14 (local.get $head)))

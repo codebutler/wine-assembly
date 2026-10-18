@@ -115,12 +115,22 @@
     (global.set $yield_flag (i32.const 1))
     (global.set $steps (i32.const 0)))
 
-  ;; MsgWaitForMultipleObjectsEx: immediate all-input polling with no object
-  ;; handles and MWMO_INPUTAVAILABLE. This is a real non-consuming queue poll,
-  ;; not the legacy handler's synthetic INFINITE wake. Other modes still need
-  ;; masked queue/change-latch and scheduler support and remain fail-fast.
+  ;; MsgWaitForMultipleObjectsEx supports an alertable object/message wait as
+  ;; well as the immediate MWMO_INPUTAVAILABLE poll. The legacy wait handler
+  ;; has the same stdcall frame size and supplies the shared message and object
+  ;; readiness checks; alertable APCs are dispatched before entering it.
   (func $handle_MsgWaitForMultipleObjectsEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $packed i32)
+    (if (i32.and
+          (i32.eq (local.get $arg3) (i32.const 1279))
+          (i32.eq (local.get $arg4) (i32.const 2)))
+      (then
+        (if (call $incoming_send_yield) (then (return)))
+        (if (call $io_apc_start (i32.const 24)) (then (return)))
+        (call $handle_MsgWaitForMultipleObjects
+          (local.get $arg0) (local.get $arg1) (i32.const 0)
+          (local.get $arg2) (local.get $arg3) (local.get $name_ptr))
+        (return)))
     (if (i32.or (local.get $arg0) (i32.or (local.get $arg2)
       (i32.or (i32.eqz (i32.and (local.get $arg4) (i32.const 4)))
       (i32.or (i32.ne (i32.and (local.get $arg4) (i32.const -8)) (i32.const 0))

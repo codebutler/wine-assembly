@@ -39007,5 +39007,12 @@
     "test_call": true,
     "convention": "stdcall",
     "hash": 956716356
+  },
+  {
+    "id": 4588,
+    "name": "ImageList_SetOverlayImage",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4187758740
   }
 ]

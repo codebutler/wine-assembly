@@ -23,6 +23,16 @@ const { bootRenderHarness } = require('./render-helper');
     (func (export "test_imagelist_seed_count")
         (param $himl i32) (param $count i32)
       (call $gs32 (i32.add (local.get $himl) (i32.const 12)) (local.get $count)))
+    (func (export "test_imagelist_set_overlay")
+        (param $himl i32) (param $image i32) (param $slot i32) (result i32)
+      (call $handle_ImageList_SetOverlayImage
+        (local.get $himl) (local.get $image) (local.get $slot)
+        (i32.const 0) (i32.const 0) (i32.const 0))
+      (i32.load offset=0 (global.get $reg_base)))
+    (func (export "test_imagelist_overlay_slot")
+        (param $himl i32) (param $slot i32) (result i32)
+      (call $gl32 (i32.add (local.get $himl)
+        (i32.add (i32.const 32) (i32.shl (local.get $slot) (i32.const 2))))))
     (func (export "test_imagelist_destroy") (param $himl i32) (result i32)
       (call $handle_ImageList_Destroy
         (local.get $himl) (i32.const 0) (i32.const 0)
@@ -42,6 +52,19 @@ const { bootRenderHarness } = require('./render-helper');
   e.test_imagelist_seed_count(list, 7);
   assert.strictEqual(e.test_imagelist_count(list), 7,
     'count comes from the canonical HIML logical-count field');
+  e.set_esp(0x700100);
+  assert.strictEqual(e.test_imagelist_set_overlay(list, 3, 1), 1);
+  assert.strictEqual(e.get_esp(), 0x700110, 'three-argument stdcall cleanup');
+  assert.strictEqual(e.test_imagelist_overlay_slot(list, 1), 4,
+    'overlay slot stores the image index plus one');
+  assert.strictEqual(e.test_imagelist_set_overlay(list, 6, 15), 1);
+  assert.strictEqual(e.test_imagelist_overlay_slot(list, 15), 7);
+  assert.strictEqual(e.test_imagelist_set_overlay(list, 7, 1), 0,
+    'image index outside the list is rejected');
+  assert.strictEqual(e.test_imagelist_set_overlay(list, 0, 0), 0,
+    'overlay slot zero is invalid');
+  assert.strictEqual(e.test_imagelist_set_overlay(list, 0, 16), 0,
+    'overlay slot sixteen is invalid');
 
   assert.strictEqual(e.test_imagelist_count(0x1234), 0,
     'an untagged handle does not expose sentinel memory as a list');
