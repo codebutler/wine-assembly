@@ -79,11 +79,11 @@ async function run() {
     }
     if(reply.t==='dllLookup'){
       lookups.push(reply);
-      queueMicrotask(()=>sandbox.onmessage({data:{t:'dllLookupResult',lookup:reply.lookup,bytes:files[String(reply.fileName).toLowerCase()]||null}}));
+      queueMicrotask(()=>sandbox.onmessage({data:{t:'dllLookupResult',endpointIdentity:reply.endpointIdentity,lookup:reply.lookup,bytes:files[String(reply.fileName).toLowerCase()]||null}}));
     }
   };
   sandbox={URL,importScripts(){},location:{href:'https://example.invalid/lib/guest-worker.js?v=fixture'},
-    postMessage:send,DllLoader:loader,processBoot:boot,fixtureInstance:instance,fixtureMemory:memory,setTimeout,clearTimeout,performance};
+    postMessage:send,DllLoader:loader,processBoot:boot,ThreadSendWaits:require('../lib/thread-send-waits'),fixtureInstance:instance,fixtureMemory:memory,setTimeout,clearTimeout,performance};
   sandbox.self=sandbox;
   const context=vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(require.resolve('../lib/guest-worker'),'utf8'),context);

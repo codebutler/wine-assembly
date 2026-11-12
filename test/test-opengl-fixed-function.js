@@ -71,8 +71,9 @@ gl.bindTexture(7);
 gl.texImage(0, 4, 2, 2, 0, GL.RGBA, GL.UNSIGNED_BYTE,
   new Uint8Array(16));
 assert.strictEqual(backend.uploads.length, 1);
-assert.strictEqual(backend.uploads[0].alignment, 4,
-  'guest texture rows begin with the desktop OpenGL default alignment');
+assert.strictEqual(gl.unpackAlignment,4,'desktop client alignment retains its default');
+assert.strictEqual(backend.uploads[0].alignment, 1,
+  'converted backend pixels use a tight layout independent of client unpack state');
 gl.texImage(0, 4, 1, 1, 0, GL.BGRA, GL.UNSIGNED_BYTE,
   new Uint8Array([0x11, 0x22, 0x33, 0x44]));
 assert.strictEqual(backend.uploads.at(-1).format, GL.RGBA,
@@ -174,10 +175,56 @@ bridgeView.setUint32(stack + 28, 0x200, true);
 new Uint8Array(bridgeMemory, 0x200, 12).fill(0x7f);
 assert.strictEqual(bridge.call(CALL_INDEX.gluBuild2DMipmaps, stack, 0), 0,
   'gluBuild2DMipmaps returns GLU_NO_ERROR');
-assert.strictEqual(matrixFrontend.backend.uploads.at(-1).level, 0,
+assert.strictEqual(matrixFrontend.backend.uploads.find(x=>x.level===0).level, 0,
   'gluBuild2DMipmaps uploads the source image as level zero');
 assert.strictEqual(matrixFrontend.backend.mipmapTextures.length, 1,
   'gluBuild2DMipmaps asks the GPU backend to derive the mip chain');
+{
+  const backend = new FakeBackend(), f = new FixedFunctionGL(backend);
+  // The original Tux Racer tree is 256x255 RGBA. Its alpha must survive the
+  // GLU resize rather than becoming an incomplete WebGL1 texture.
+  f.unpackAlignment = 8;
+  const pixels = new Uint8Array(256 * 255 * 4);
+  for (let i = 0; i < pixels.length; i += 4) pixels.set([20, 90, 30, 128], i);
+  f.build2DMipmaps(4, 256, 255, GL.RGBA, GL.UNSIGNED_BYTE, pixels);
+  const image = backend.uploads.findLast(x=>x.level===0);
+  assert.deepStrictEqual([image.width, image.height, image.alignment], [256, 256, 1]);
+  assert.strictEqual(f.unpackAlignment, 8, 'internal resize restores guest unpack alignment');
+  assert.strictEqual(image.pixels.length, 256 * 256 * 4);
+  for (let i = 0; i < image.pixels.length; i += 4)
+    assert.deepStrictEqual(Array.from(image.pixels.subarray(i, i + 4)), [20, 90, 30, 128]);
+  assert.strictEqual(f._textureState().levels.get(8).width, 1);
+  assert(f._textureComplete(f._textureState()), 'resized chain is complete');
+  assert.strictEqual(pixels.length, 256 * 255 * 4, 'client image is untouched');
+
+  // Nearest-power rounding: 5 rounds down to 4, 6 ties upward to 8. RGB
+  // rows include padding which must never enter the resampling footprint.
+  const rgb = new Uint8Array(16 * 6).fill(0xee);
+  for (let y = 0; y < 6; y++) for (let x = 0; x < 5; x++)
+    rgb.set([50, 100, 150], y * 16 + x * 3);
+  f.build2DMipmaps(3, 5, 6, GL.RGB, GL.UNSIGNED_BYTE, rgb);
+  const rounded = backend.uploads.findLast(x=>x.level===0);
+  assert.deepStrictEqual([rounded.width, rounded.height], [4, 8]);
+  assert.deepStrictEqual(Array.from(rounded.pixels), Array.from({length: 32}, () => [50, 100, 150,255]).flat());
+
+  // A black/white 3x1 image enlarges with GLU's periodic box filter,
+  // rather than a nearest-neighbour copy or zeroed edge alpha.
+  f.unpackAlignment = 1;
+  f.build2DMipmaps(1, 3, 1, GL.LUMINANCE, GL.UNSIGNED_BYTE, new Uint8Array([0, 100, 200]));
+  assert.deepStrictEqual(Array.from(backend.uploads.findLast(x=>x.level===0).pixels), [25,25,25,255,63,63,63,255,138,138,138,255,175,175,175,255]);
+  backend.getParameter = pname => { assert.strictEqual(pname, GL.MAX_TEXTURE_SIZE); return 2; };
+  f.build2DMipmaps(1, 4, 1, GL.LUMINANCE, GL.UNSIGNED_BYTE, new Uint8Array([0, 100, 100, 200]));
+  assert.deepStrictEqual(Array.from(backend.uploads.findLast(x=>x.level===0).pixels), [50,50,50,255,150,150,150,255], 'maximum size clamps and averages');
+
+  f.unpackAlignment = 8;
+  backend.uploadTexture2D = () => { throw new Error('upload failed'); };
+  assert.throws(() => f.build2DMipmaps(4, 3, 1, GL.RGBA, GL.UNSIGNED_BYTE, new Uint8Array(12)), /upload failed/);
+  assert.strictEqual(f.unpackAlignment, 8, 'failed upload also restores unpack alignment');
+  for (const size of [0, -1, NaN, Infinity, 0xffffffff]) {
+    assert.strictEqual(f.build2DMipmaps(4, size, 1, GL.RGBA, GL.UNSIGNED_BYTE, pixels), 100901);
+    assert.strictEqual(f.build2DMipmaps(4, 1, size, GL.RGBA, GL.UNSIGNED_BYTE, pixels), 100901);
+  }
+}
 matrixFrontend.matrixMode = GL.PROJECTION;
 matrixFrontend._replaceMatrix(require('../lib/gl-compat').identity());
 [0, 640, 0, 480].forEach((value, index) =>
@@ -274,7 +321,7 @@ assert.strictEqual(lifecycleWin._gpuFrameLayer, null,
   assert.strictEqual(b.parameters.length, count, 'invalid filter cannot touch hardware');
   assert.deepStrictEqual(f.getTexParameter(GL.TEXTURE_MAG_FILTER), [GL.LINEAR]);
   f.lastError = 0;
-  assert.strictEqual(f.texBorderColor([0, 0, 0, 0], 0xDE0), false);
+  assert.strictEqual(f.texBorderColor([0, 0, 0, 0], 0xDE2), false);
   assert.strictEqual(f.lastError, GL.INVALID_ENUM);
   assert.deepStrictEqual(Array.from(f.getTexParameter(GL.TEXTURE_BORDER_COLOR)), [0, 0.25, 1, 0.5]);
   f.lastError = 0;
@@ -301,7 +348,7 @@ assert.strictEqual(lifecycleWin._gpuFrameLayer, null,
   call('glTexParameterfv',GL.TEXTURE_2D,GL.TEXTURE_PRIORITY,256);
   call('glGetTexParameterfv',GL.TEXTURE_2D,GL.TEXTURE_PRIORITY,320);
   assert.strictEqual(dv.getFloat32(320,true),0.375);
-  call('glTexParameterfv',0xDE0,GL.TEXTURE_BORDER_COLOR,0xFFFFFFF0);
+  call('glTexParameterfv',0xDE2,GL.TEXTURE_BORDER_COLOR,0xFFFFFFF0);
   assert.strictEqual(call('glGetError'),GL.INVALID_ENUM);
   assert.strictEqual(call('glGetError'),0,'frontend error is cleared when consumed');
   dv.setUint32(320,0xDEADBEEF,true);
@@ -344,6 +391,19 @@ assert.strictEqual(lifecycleWin._gpuFrameLayer, null,
   dv.setUint32(4,GL.TEXTURE_2D,true);dv.setUint32(8,GL.TEXTURE_BORDER_COLOR,true);dv.setUint32(12,256,true);
   host.call(CALL_INDEX.glTexParameterfv,0,0x505);
   assert.strictEqual(call('glGetError'),0x505,'native allocation failure reaches guest error query');
+}
+
+// A scalar state update must not inspect unrelated light/projection state.
+// In particular z-trick projection folding is only needed when it is dirty.
+{
+  const b = new FakeBackend(), f = new FixedFunctionGL(b);
+  f.uniformDirty.clear();
+  f.uniformDirty.add('uAlphaRef'); f.alphaRef = 0.375;
+  Object.defineProperty(f, 'lights', { get() { throw new Error('unrelated lights evaluated'); } });
+  f._uniformProjection = () => { throw new Error('unrelated projection evaluated'); };
+  f._applyUniforms();
+  assert.strictEqual(b.uniforms.get('uAlphaRef'), 0.375);
+  assert.strictEqual(b.uniformCalls, 1);
 }
 
 console.log('PASS OpenGL packed fixed-function rendering (state, matrix, texture)');

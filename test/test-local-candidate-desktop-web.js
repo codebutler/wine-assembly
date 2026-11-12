@@ -451,6 +451,7 @@ async function main() {
   const launchUrl = (() => {
     const raw = BASE_URL || `http://127.0.0.1:${port}/index.html`;
     const url = new URL(raw);
+    url.searchParams.set('candidates', '');
     url.searchParams.set('candidate-web', String(Date.now()));
     for (const [k, v] of new URLSearchParams(EXTRA_QUERY)) url.searchParams.set(k, v);
     return url.href;

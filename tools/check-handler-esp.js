@@ -112,9 +112,12 @@ for (const file of SRC) {
     if (/call \$(dispatch_|crash_unimplemented|host_exit|raise_exception|d3dim_|wnd_send_message|com_|handle_|sub_|com_call_method|dx_handle_method|modal_begin|enter_modal|seh_raise|cpp_operator_)/.test(code)) {
       delegates = true;
     }
-    // _cexit retains its return word across guest callbacks; the continuation
-    // consumes it. Real nested/repeated x86 calls are covered by the CRT test.
-    if (/call \$crt_cexit_run_next\b/.test(code)) delegates = true;
+    // CRT init/exit retains the caller return word privately. The shared
+    // entry/continuation owns the cdecl pop for these three front doors.
+    if (['exit', '_cexit', '_initterm'].includes(funcName) &&
+        /call \$crt_callback_begin\b/.test(code)) delegates = true;
+    // Beep's retained continuation owns the stdcall pop across alertable waits.
+    if (funcName === 'Beep' && /call \$beep_begin\b/.test(code)) delegates = true;
     // Three spellings of "esp += N": the historical wasm-global form, the
     // per-thread register-file form where esp is slot +16 of $reg_base, and
     // `(call $amstream_finish RESULT (i32.const N))` or

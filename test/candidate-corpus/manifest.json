@@ -3,6 +3,187 @@
   "assetRoot": "test/binaries/candidates",
   "candidates": [
     {
+      "id": "airstrike-pre6a",
+      "name": "Airstrike (original pre6a)",
+      "kind": "game",
+      "version": "Original icculus Win32 pre6a preview (2004), not a modern same-name game",
+      "executables": [
+        "game/airstrike-pre6a.exe"
+      ],
+      "sourcePage": "https://icculus.org/airstrike/",
+      "license": "Original LICENSE: program and most data GPL; COPYING is GPL v2. Some sounds only believed public domain by the release author. Support DLLs have separate licenses. Local use only; no redistribution prepared.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Use tools/verify-airstrike-pre6a.js --prepare ORIGINAL ZLIB CRT DEST with retained original release and authentic support files. No download required. See docs/re-notes/airstrike-pre6a-local-registration-20261024.md. Normal local selector/CLI app: airstrike_pre6a.",
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/airstrike-pre6a.exe"
+      },
+      "cli": {
+        "exeGuestPath": "C:\\airstrike-pre6a.exe",
+        "cwd": "C:\\",
+        "dlls": [
+          "game/SDL.dll",
+          "game/SDL_image.dll",
+          "game/SDL_mixer.dll",
+          "game/jpeg.dll",
+          "game/libpng1.dll",
+          "game/msvcr70.dll",
+          "game/msvcrt.dll",
+          "game/zlib.dll"
+        ],
+        "vfsInclude": [
+          "**/*"
+        ],
+        "maxBatches": 4500,
+        "batchSize": 20000,
+        "timeoutMs": 60000
+      },
+      "notes": "Exact 89-file 4072418-byte game closure pinned from independently accepted historical gameplay/recovery evidence at main 9b263cea. Original config/media and authentic zlib preserved. Static registration tests only; registered-path runtime, browser, audio and full-game qualification remain separately assigned. Historical movement/fire evidence remains scoped to source b41a7c5 and module 8fac3993; no current-main gameplay claim."
+    },
+    {
+      "id": "madbomber",
+      "name": "Mad Bomber (original)",
+      "kind": "game",
+      "version": "Original Win32 release; closure pinned in accepted 2026-10-20 report",
+      "executables": [
+        "original/madbomber.exe"
+      ],
+      "localOnly": true,
+      "packages": [],
+      "manual": "Recover original/ and dependencies/msvcrt.dll under test/binaries/candidates/madbomber/ using docs/re-notes/madbomber-corpus-launch-20261020.md; compare all original/support pins before use. Launch --app=madbomber with the recorded CLI flags.",
+      "notes": "Private launch registration, assets not bundled. Accepted report aaf85992: original menu, ordinary Enter to One Player and mouse bucket movement observed in two bounded 10-second CLI runs. Scoring, sustained gameplay, audio, FPS and browser execution unqualified. Availability is checked against actual local files; prior remote assets may expire. Evidence: docs/re-notes/madbomber-after-midi-original-20261020.md. Recovery and launch recipe: docs/re-notes/madbomber-corpus-launch-20261020.md."
+    },
+    {
+      "id": "barrage-105",
+      "name": "LGames Barrage 1.0.5",
+      "kind": "game",
+      "version": "Original Win32 1.0.5 release",
+      "executables": [
+        "game/BARRAGE/barrage.exe"
+      ],
+      "sourcePage": "https://sourceforge.net/projects/lgames/files/barrage/",
+      "license": "Original COPYING.txt is GNU GPL version 2; local compatibility fixture, no distribution prepared.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Recover the pinned official ZIP and use tools/verify-barrage-105.js --prepare as documented in docs/barrage-registration.md. Authentic corpus MSVCRT is required. Launch --app=barrage_105 to preserve cwd, guest paths, original -w argument and all DLL seeds.",
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/BARRAGE/barrage.exe"
+      },
+      "notes": "ZIP SHA256 bc4f43d1bc67c7e0db8168083d5b901a6123bbc5ccc9c9346852e68c3dcbd080, 1455807 bytes; 45 original files. Exact C:\\BARRAGE cwd, original -w argument, eleven original DLL seeds plus authentic MSVCRT. Direct passive main menu reviewed in 20261018-barrage-passive-startup; registration is source-verified only. Gameplay, controls, browser, audio and FPS unqualified. Generic candidate smoke does not preserve this route."
+    },
+    {
+      "id": "ltris-128",
+      "name": "LGames LTris 1.2.8",
+      "kind": "game",
+      "version": "Original Win32 1.2.8 release",
+      "executables": [
+        "game/LTRIS/ltris.exe"
+      ],
+      "sourcePage": "https://sourceforge.net/projects/lgames/files/ltris/",
+      "license": "Original COPYING.txt is GNU GPL version 2; local compatibility fixture, no distribution prepared.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Recover the pinned official ZIP and use tools/verify-ltris-128.js --prepare as documented in docs/ltris-registration.md. Authentic corpus MSVCRT is required. Launch --app=ltris_128 to preserve cwd, guest paths, original -w argument and all DLL seeds.",
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/LTRIS/ltris.exe"
+      },
+      "notes": "ZIP SHA256 b64a817fd4031e5f3e0b31bad546b0876ac62ef6c6384eae396b2de127718622, 2379795 bytes; 40 original files. Exact C:\\LTRIS cwd, original -w argument, eleven original DLL seeds plus authentic MSVCRT. Direct passive main menu reviewed in 20261018-ltris-passive-startup; registration is source-verified only. Gameplay, controls, browser, audio and FPS unqualified. Generic candidate smoke does not preserve this route."
+    },
+    {
+      "id": "lmarbles-108",
+      "name": "LGames LMarbles 1.0.8",
+      "kind": "game",
+      "version": "Original Win32 1.0.8 release",
+      "executables": [
+        "game/LMARBLES/lmarbles.exe"
+      ],
+      "sourcePage": "https://sourceforge.net/projects/lgames/files/lmarbles/",
+      "license": "Original COPYING.txt is GNU GPL version 2; local compatibility fixture, no distribution prepared.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Recover the pinned official ZIP and use tools/verify-lmarbles-108.js --prepare as documented in docs/lmarbles-registration.md. Authentic corpus MSVCRT is required. Launch --app=lmarbles_108 to preserve cwd, guest paths and all DLL seeds.",
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/LMARBLES/lmarbles.exe"
+      },
+      "notes": "Distinct from public Microsoft Plus 98 Marbles. ZIP SHA256 5520b52e17373c75325fbcd058a128c0a8264f5178aa9d721a6d0c824307376f, 1753947 bytes; 86 original files. Exact C:\\LMARBLES cwd, empty arguments, eleven original DLL seeds plus authentic MSVCRT. Direct passive main menu reviewed in 20261018-lmarbles-passive-startup; registration is source-verified only. Gameplay, controls, browser, audio and FPS unqualified. Generic candidate smoke does not preserve this route."
+    },
+    {
+      "id": "lbreakout2-251",
+      "name": "LBreakout2 2.5.1",
+      "kind": "game",
+      "version": "Original Win32 2.5.1 release",
+      "executables": ["game/LBREAKOUT/lbreakout2.exe"],
+      "sourcePage": "https://sourceforge.net/projects/lgames/files/lbreakout2/2.5/",
+      "license": "Original COPYING is GNU GPL version 2; local compatibility fixture, no distribution prepared.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Recover the pinned official ZIP and use tools/verify-lbreakout2-251.js --prepare as documented in docs/lbreakout2-registration.md. Authentic corpus MSVCRT is required. Launch --app=lbreakout2_251 to preserve the exact cwd, guest paths and DLL seeds.",
+      "browser": {"fileRoot": "game", "exe": "game/LBREAKOUT/lbreakout2.exe"},
+      "notes": "ZIP SHA256 a152c0867abf9bc39563db932ebcd0797ed3e35d20f21c2dca2a81e321313675, 3322804 bytes; 230 original files, 220 client files. Exact C:\\LBREAKOUT cwd, empty arguments, five original DLL seeds plus authentic MSVCRT. Direct-route passive main menu reviewed in 20261018-lbreakout2-passive-startup; registration is source-verified only. Gameplay, controls, browser, audio and FPS unqualified. Generic candidate smoke does not preserve this route."
+    },
+    {
+      "id": "outlaws-demo",
+      "name": "Outlaws Original Demo",
+      "kind": "game",
+      "version": "Original outdemo_v2.exe Windows demo",
+      "executables": ["game/OUTDEMO/oldemo.exe"],
+      "sourcePage": "https://archive.org/details/outdemo_v2",
+      "license": "Proprietary original demo; local compatibility fixture, no public redistribution established.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Recover using tools/acquire-outlaws-demo.js and tools/extract-outlaws-demo.js; prepare and verify with tools/verify-outlaws-demo.js as documented in docs/outlaws-demo-registration.md. Use --app=outlaws_demo for the exact registered guest paths and cwd.",
+      "browser": {"fileRoot": "game", "exe": "game/OUTDEMO/oldemo.exe"},
+      "notes": "Archive SHA256 501f37aa475b6c27c87ce04e30b5207f91b81603cb376aaa9ffde1647a40e7b3, 14186356 bytes. 31 original records map to 30 unique Windows names; identical wdirnop.com alias deduplicated. C:\\OUTDEMO\\oldemo.exe, cwd C:\\OUTDEMO, empty arguments, no registry or replacement DLL. Original direct-route main menu reviewed in 20261018-outlaws-original-fixed-lifecycle-observation on canonical a4a4bc6a; registration is source-verified only. Gameplay, controls, browser, audio and FPS unqualified. Generic candidate smoke does not preserve this route."
+    },
+    {
+      "id": "supertux-013",
+      "name": "SuperTux 0.1.3",
+      "kind": "game",
+      "version": "Original Windows release 0.1.3",
+      "executables": ["game/supertux.exe"],
+      "sourcePage": "https://github.com/SuperTux/supertux/releases/tag/v0.1.3",
+      "license": "Original doc/COPYING is GPL version 2; local compatibility fixture, no distribution prepared.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Extract the pinned official Inno installer without execution, verify the original 787-file inventory, stage extracted/app as game, and run --id=supertux-013 --prepare. See docs/re-notes/supertux-013.md. Authentic corpus MSVCRT is also required.",
+      "browser": {"fileRoot": "game", "exe": "game/supertux.exe"},
+      "cli": {
+        "args": "--sdl --datadir data",
+        "dlls": ["game/SDL.dll", "game/SDL_image.dll", "game/SDL_mixer.dll", "game/jpeg.dll", "game/libpng1.dll", "game/zlib.dll"],
+        "vfsInclude": ["**/*"],
+        "maxBatches": 100000,
+        "batchSize": 200000,
+        "timeoutMs": 85000
+      },
+      "notes": "Official supertux-0.1.3-setup.exe SHA256 bc4893dbb84a02beb8958dab1c922a7f715aa08ed463d2a0efa6bc58d79c9a9b, 7623968 bytes. Original first-level left/right response reviewed in 20261018-supertux-gameplay. Registered route is source-verified only; browser, jump, audio, FPS and sustained control timing remain unqualified. Requires test/binaries/dlls/msvcrt.dll SHA256 887eb5ce93edb7192ca3e9220f07f9ca0f94db02af5862ebcbdfcb852db99fd1."
+    },
+    {
+      "id": "lords2-demo",
+      "name": "Lords of the Realm II Playable Windows Demo",
+      "kind": "game",
+      "version": "Original Sierra pre-release demo 1.0 (1996)",
+      "executables": ["original/SETUP.EXE", "original/FILES/LORDS2.EXE"],
+      "sourcePage": "https://archive.org/details/LordsoftheRealmII_1020",
+      "license": "Proprietary original demo; private compatibility fixture, no public redistribution established.",
+      "localOnly": true,
+      "packages": [{
+        "url": "https://archive.org/download/LordsoftheRealmII_1020/lorddemo.zip",
+        "sha1": "6c5ef78db77389da8ec4a0d54a576a0eb0526a48",
+        "type": "archive",
+        "into": "payload"
+      }],
+      "postExtract": [
+        {"type": "extractArchive", "archive": "payload/lorddemo.exe", "into": "installer"},
+        {"type": "extractArchive", "archive": "installer/L2DEMO.EXE", "into": "original"}
+      ],
+      "browser": {"fileRoot": "original", "exe": "original/SETUP.EXE"},
+      "notes": "181 original files verified on remote bx_9ef2wdsw. Setup is NE; LORDS2.EXE is PE32/i386. This is the playable demo, not lords2tr trailer. Registered lords2_demo_setup is an unexecuted original setup route; no install, licence answer or gameplay yet. See docs/re-notes/lords2-demo.md."
+    },
+    {
       "id": "nox-demo",
       "name": "Nox Multiplayer Demo",
       "kind": "game",
@@ -265,15 +446,44 @@
       "kind": "game",
       "version": "Original Windows single-player demo installer",
       "executables": [
-        "AVP2.exe",
-        "lithtech.exe"
+        "game/AVP2.exe",
+        "game/lithtech.exe"
       ],
-      "sourcePage": null,
+      "sourcePage": "https://archive.org/details/Aliens_Versus_Predator_2_Demo_20th_Century_Fox_2001",
       "license": "Proprietary demo; local compatibility fixture only, no redistribution grant recorded",
       "localOnly": true,
-      "packages": [],
-      "manual": "Original installer: test/binaries/win98-games-a-d/alien vs predator 2-sp demo-D3D.exe, 165836576 bytes, SHA256 e335063b508f5b4bc8c8235787d839567f16ce13eb63b74a96ccb5a839d3fbe3. Extract the complete AVP2_Demo_Files payload into test/binaries/candidates/avp2-demo. Run original AVP2.exe to generate avp2cmds.txt and launch lithtech.exe -cmdfile avp2cmds.txt. See docs/re-notes/avp2-demo.md. Installed files remain on the temporary test box; the local corpus directory is absent.",
-      "notes": "Reviewed original Marine mission movement and texture repair: runs/20261011T0836Z-avp2-bltfast-gameplay. The capture used retained source plus the BltFast repair, subsequently merged as6613fe863; it is not a new current-main run. Logical FPS and audio remain unverified. No registered dashboard launch route or public desktop release yet. AVP1 Alien/Marine demos are different titles."
+      "packages": [
+        {
+          "url": "https://archive.org/download/Aliens_Versus_Predator_2_Demo_20th_Century_Fox_2001/Aliens_Versus_Predator_2_Demo_20th_Century_Fox_2001.iso",
+          "sha1": "0527a9c9ab662b0747ed0ca764b58fcf6376ebc2",
+          "type": "archive",
+          "into": "source-cd"
+        }
+      ],
+      "manual": "Original 18-file cabinet payload recovery verified from the pinned ISO; requires unshield for the IS6 cabinet. Run original game/AVP2.exe to generate avp2cmds.txt and capture its actual lithtech.exe child launch. Generated command file/launcher export are not synthesized by acquisition. See docs/re-notes/avp2-demo.md.",
+      "notes": "Reviewed original Marine mission movement and texture repair: runs/20261011T0836Z-avp2-bltfast-gameplay. The capture used retained source plus the BltFast repair, subsequently merged as6613fe863; it is not a new current-main run. Logical FPS and audio remain unverified. Original launcher registered as avp2_demo for local corpus use; current-main launch remains unvalidated, no public desktop release. AVP1 Alien/Marine demos are different titles.",
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/AVP2.exe"
+      },
+      "postExtract": [
+        {
+          "type": "extractArchive",
+          "archive": "source-cd/avp2spdemo.exe",
+          "into": "cabinet"
+        },
+        {
+          "type": "unshield",
+          "cab": "cabinet/Disk1/data1.cab",
+          "into": "extracted",
+          "group": "AVP2 Demo Files"
+        },
+        {
+          "type": "copyTree",
+          "from": "extracted/AVP2_Demo_Files",
+          "into": "game"
+        }
+      ]
     },
     {
       "id": "turok2-demo",
@@ -545,7 +755,8 @@
           "into": "cd"
         }
       ],
-      "notes": "Full original (non-SE) release, same NFSW.EXE name as the nfs2_demo payload. The CD root carries NFS2.ICO, the icon EA shipped for it; nfsw.exe has no icon resource. No app entry yet: reference/source fixture only."
+      "manual": "Source CD only, not an accepted installed game. The original README documents AUTORUN.EXE > INSTALL and SETUP/ENGLISH/SETUP.EXE is the original NE installer bootstrap with its adjacent setup bundle. NFSW.EXE checks the working drive and has an install-first error for CD-ROM execution. Qualify the original installer and its resulting INSTALL.WIN/file layout before registering a game route; a copied fixed-drive tree has not been accepted. See docs/re-notes/need-for-speed-2-retail.md.",
+      "notes": "Full original (non-SE) release, same NFSW.EXE name as the nfs2_demo payload. Original CD recovered and hash-verified on 2026-10-28: 549926912 ISO bytes, 1123 extracted files. The CD root carries NFS2.ICO. No app entry or browser launch manifest: reference/source fixture only, with installation/direct-launch qualification still pending. Do not substitute the demo or SE."
     },
     {
       "id": "need-for-speed-2-se-full",
@@ -573,7 +784,7 @@
           "into": "cd"
         }
       ],
-      "notes": "Full Special Edition: NFS2SEA.EXE (3Dfx Glide), NFS2SEN.EXE, with NFS2SEA/SEN/SER.ICO at the CD root. No app entry yet: reference/source fixture only."
+      "notes": "Original Special Edition retail CD: NFS2SEA.EXE is the Glide variant; NFS2SEN.EXE is the software variant. Recovery verified 2026-10-28 against the pinned ISO SHA-1: 1543 files, including original INSTALL.NFS but no INSTALL.WIN. NFS2SEN.EXE checks INSTALL.WIN during startup; SETUP/ENGLISH/SETUP.INS names both INSTALL.NFS and INSTALL.WIN. Installation is a prerequisite: preserve the original CD fixture and capture the original installer's output before adding an app/browser/CLI route. No direct-launch registration or gameplay qualification. See docs/re-notes/nfs2se-retail-recovery-20261028.md."
     },
     {
       "id": "dxball",
@@ -2748,6 +2959,14 @@
           "type": "archive"
         }
       ],
+      "postExtract": [
+        {
+          "type": "innoextract",
+          "installer": "setup_shadow_warrior_complete_2.0.0.7.exe",
+          "into": "installed",
+          "language": "GOGCustom"
+        }
+      ],
       "cli": {
         "maxBatches": 100,
         "batchSize": 10000
@@ -2768,6 +2987,14 @@
           "url": "https://archive.org/download/gog_collection/the.elder.scrolls.1.arena.rar",
           "sha1": "aa8f357433ea5c07a9ebda4c6dd062b53348f57b",
           "type": "archive"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "innoextract",
+          "installer": "setup_the_elder_scrolls_arena_1.07_(28043).exe",
+          "into": "installed",
+          "language": "en-US"
         }
       ],
       "cli": {
@@ -2792,6 +3019,14 @@
           "type": "archive"
         }
       ],
+      "postExtract": [
+        {
+          "type": "innoextract",
+          "installer": "setup_the_elder_scrolls_ii_daggerfall_1.07_(28043).exe",
+          "into": "installed",
+          "language": "en-US"
+        }
+      ],
       "cli": {
         "maxBatches": 100,
         "batchSize": 10000
@@ -2812,6 +3047,14 @@
           "url": "https://archive.org/download/gog_collection/ultima.4.quest.of.the.avatar.rar",
           "sha1": "a75b5a57226650c47fe8f8cdb0872c8289da1cf7",
           "type": "archive"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "innoextract",
+          "installer": "setup_ultima_iv_-_quest_of_the_avatar_1.0_cs_(28045).exe",
+          "into": "installed",
+          "language": "en-US"
         }
       ],
       "cli": {
@@ -3823,12 +4066,47 @@
       "sourcePage": "https://archive.org/details/gallinelle-xxl",
       "license": "proprietary retail release; keep as a local ignored candidate fixture",
       "localOnly": true,
-      "packages": [],
-      "manual": "Download https://archive.org/download/gallinelle-xxl/GALLINELLE_XXL.zip (74287372 bytes, SHA-1 374449d553941dfd75301b09ba3fa0507c934029). It holds a raw MODE2/2352 BIN/CUE: keep bytes 24..2071 of each 2352-byte sector to get a 2048-byte ISO, then unshield SETUP/DATA1.CAB. Copy its Game group (Gallinelle.exe a6203f4aa18a931f1e6b08cf18c374c65f75b3a6, not the moorhuhn candidate build, plus Gallinelle.dat d8fda093d174e1a7bdff8c4d8193761e92e070c9) to Game/ and its Bonus group (two plain Flash Player 6 projectors) to Bonus/.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gallinelle-xxl/GALLINELLE_XXL.zip",
+          "sha1": "374449d553941dfd75301b09ba3fa0507c934029",
+          "type": "archive",
+          "into": "original"
+        }
+      ],
       "cli": {
         "maxBatches": 700,
         "batchSize": 100000
-      }
+      },
+      "postExtract": [
+        {
+          "type": "extractRawMode2Cd",
+          "image": "original/GALLINELLE_XXL.bin",
+          "into": "cd"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/SETUP/DATA1.CAB",
+          "into": "extracted",
+          "group": "Game"
+        },
+        {
+          "type": "copyTree",
+          "from": "extracted/Game",
+          "into": "Game"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/SETUP/DATA1.CAB",
+          "into": "extracted",
+          "group": "Bonus"
+        },
+        {
+          "type": "copyTree",
+          "from": "extracted/Bonus",
+          "into": "Bonus"
+        }
+      ]
     },
     {
       "id": "reflexive-ricochet-xtreme",
@@ -4017,29 +4295,109 @@
       "name": "Baldur's Gate II: Shadows of Amn Demo",
       "kind": "game",
       "version": "Original split Wise / InstallShield playable demo",
-      "executables": ["BGMain.exe"],
+      "executables": [
+        "BGMain.exe"
+      ],
       "sourcePage": "https://archive.org/details/win-98-games-a-d.-7z",
       "license": "Proprietary publisher demo; local compatibility fixture, redistribution rights not verified",
       "localOnly": true,
-      "packages": [],
-      "manual": "Concatenate original bg2demogs.EXE and W02-W07 in order, extract with REWise, then unshield the inner cabinet. Assemble hd0 groups and case-insensitive Extra demo overrides as documented in docs/re-notes/baldurs-gate2-demo.md. Preserve original CD2 tree. BGMain.exe SHA256 944db091d82c6144db8c9a21c085e4504bdc549fca8003c31e309646567bb98b. Generate the complete browser manifest, including audio resources.",
-      "browser": { "fileRoot": ".", "exe": "BGMain.exe" },
-      "cli": { "maxBatches": 1000, "batchSize": 100000, "timeoutMs": 90000, "vfsInclude": ["**/*"] },
-      "notes": "Native ordinary character creation, dialogue and player movement verified in run20261009T2236Z-bg2-player-movement on main module527004d9. Browser gameplay, audio and FPS remain unverified. No public release."
+      "packages": [
+        {
+          "url": "https://archive.org/download/win-98-games-a-d.-7z/Win98_Games-A-D.7z/Baldurs-Gate-2_demo-SW-OpenGL%2Fbg2demogs.EXE",
+          "sha1": "b5e8e77c5481982e91ca864255a865085f6e3b08",
+          "type": "file",
+          "destination": "source/bg2demogs.EXE"
+        },
+        {
+          "url": "https://archive.org/download/win-98-games-a-d.-7z/Win98_Games-A-D.7z/Baldurs-Gate-2_demo-SW-OpenGL%2Fbg2demogs.W02",
+          "sha1": "030242aaaf308b9589a75c38421f3672632e46da",
+          "type": "file",
+          "destination": "source/bg2demogs.W02"
+        },
+        {
+          "url": "https://archive.org/download/win-98-games-a-d.-7z/Win98_Games-A-D.7z/Baldurs-Gate-2_demo-SW-OpenGL%2Fbg2demogs.W03",
+          "sha1": "533a5f541dfe75996234859aa37bd32ce85388c6",
+          "type": "file",
+          "destination": "source/bg2demogs.W03"
+        },
+        {
+          "url": "https://archive.org/download/win-98-games-a-d.-7z/Win98_Games-A-D.7z/Baldurs-Gate-2_demo-SW-OpenGL%2Fbg2demogs.W04",
+          "sha1": "0cb2670fd95a8ff413267533be98517e796957c6",
+          "type": "file",
+          "destination": "source/bg2demogs.W04"
+        },
+        {
+          "url": "https://archive.org/download/win-98-games-a-d.-7z/Win98_Games-A-D.7z/Baldurs-Gate-2_demo-SW-OpenGL%2Fbg2demogs.W05",
+          "sha1": "d96b41c176fc8747ea0f1efb2d4fdbc3e758248a",
+          "type": "file",
+          "destination": "source/bg2demogs.W05"
+        },
+        {
+          "url": "https://archive.org/download/win-98-games-a-d.-7z/Win98_Games-A-D.7z/Baldurs-Gate-2_demo-SW-OpenGL%2Fbg2demogs.W06",
+          "sha1": "461a445170fa4a3617af54156228f2962237c7af",
+          "type": "file",
+          "destination": "source/bg2demogs.W06"
+        },
+        {
+          "url": "https://archive.org/download/win-98-games-a-d.-7z/Win98_Games-A-D.7z/Baldurs-Gate-2_demo-SW-OpenGL%2Fbg2demogs.W07",
+          "sha1": "ff17ea80a443a2fd55ba6b9c9a1cfc213a644e52",
+          "type": "file",
+          "destination": "source/bg2demogs.W07"
+        }
+      ],
+      "manual": "Pinned original seven-part Wise demo, REWise c3d3b68903a90ec53ff7b0a4ae704adc6302814b and unshield1.5.1-1. Requires git, gcc, zlib headers and the pinned unshield binary. Recovery retains sources/receipts in a sibling .bg2-recovery-* directory, assembles installer-backed groups and case-insensitive Extra overrides, and compares all645 original installed files before publication. See docs/re-notes/baldurs-gate2-demo.md; no gameplay qualification from recovery.",
+      "browser": {
+        "fileRoot": ".",
+        "exe": "BGMain.exe"
+      },
+      "cli": {
+        "maxBatches": 1000,
+        "batchSize": 100000,
+        "timeoutMs": 90000,
+        "vfsInclude": [
+          "**/*"
+        ]
+      },
+      "notes": "Native ordinary character creation, dialogue and player movement verified in run20261009T2236Z-bg2-player-movement on main module527004d9. Browser gameplay, audio and FPS remain unverified. No public release.",
+      "postExtract": [
+        {
+          "type": "installBaldursGate2Demo",
+          "source": "source"
+        }
+      ]
     },
     {
       "id": "return-fire-demo",
       "name": "Return Fire Demo",
       "kind": "game",
       "version": "Original Windows demo; DEMO.EXE dated 1995-11-06",
-      "executables": ["RFIRE/DEMO.EXE"],
+      "executables": [
+        "RFIRE/DEMO.EXE"
+      ],
       "sourcePage": "https://archive.org/details/Rfire",
       "license": "Proprietary publisher demo; local compatibility fixture, redistribution rights not verified",
       "localOnly": true,
-      "packages": [],
+      "packages": [
+        {
+          "url": "https://archive.org/download/Rfire/RFIRE.zip",
+          "sha1": "d0adc4af348f0e255d60d59c8ba24b760d3cb729",
+          "type": "archive",
+          "into": "."
+        }
+      ],
       "manual": "Extract https://archive.org/download/Rfire/RFIRE.zip unchanged. ZIP 942701 bytes, SHA256 8e55e2761753d1773cbf52d86eb30900a977f7b281ccc920ffb80fbb5b5e56be. Preserve RFIRE/ tree and prepare browser manifest. DEMO.EXE SHA256 b3407ec82d5e8d181116d2bb7a4998ff180773f3b6f91e98e7156979f3859a63.",
-      "browser": { "fileRoot": "RFIRE", "exe": "RFIRE/DEMO.EXE" },
-      "cli": { "maxBatches": 1000, "batchSize": 100000, "timeoutMs": 90000, "vfsInclude": ["**/*"] },
+      "browser": {
+        "fileRoot": "RFIRE",
+        "exe": "RFIRE/DEMO.EXE"
+      },
+      "cli": {
+        "maxBatches": 1000,
+        "batchSize": 100000,
+        "timeoutMs": 90000,
+        "vfsInclude": [
+          "**/*"
+        ]
+      },
       "notes": "User priority 2026-10-09. Registered local app return_fire_demo uses real desktopColorDepth8. Correct windowed palette and ordinary H deployment/W movement verified natively and in default browser Worker/WebGL, runs20261009T2046Z-return-fire-realized-native and20261009T2050Z-return-fire-realized-browser. Secondary depth warning removed. Audio and logical gameplay FPS unverified; no public release."
     },
     {
@@ -4239,9 +4597,21 @@
       "sourcePage": "https://archive.org/details/GSCDA1998",
       "license": "Proprietary demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Obtain ROMDEMO.EXE from DEMOS/ROM on GSCDA1998/1998-10/GS1098.ISO (ISO SHA-1 cc199d8dc56fc2636843d625a724f9e21467f483). Put the 42111946-byte installer, SHA-1 46b0dbb02e6eafa6eaf9c334c635f9744546f094, at archive/ROMDEMO.EXE, then run --id=rage-of-mages-demo --prepare. Archive entry-download URLs return empty files; the verified installer is at ISO sector 197989. See docs/re-notes/rage-of-mages-demo.md. Do not use the damaged RageofMages_1020 multipart ZIP.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/GSCDA1998/1998-10/GS1098.ISO",
+          "sha1": "cc199d8dc56fc2636843d625a724f9e21467f483",
+          "type": "archive",
+          "into": "disc"
+        }
+      ],
+      "manual": "Obtain ROMDEMO.EXE from DEMOS/ROM on GSCDA1998/1998-10/GS1098.ISO (ISO SHA-1 cc199d8dc56fc2636843d625a724f9e21467f483). Put the 42111946-byte installer, SHA-1 46b0dbb02e6eafa6eaf9c334c635f9744546f094, at archive/ROMDEMO.EXE, then run --id=rage-of-mages-demo --prepare. Archive entry-download URLs return empty files; the verified installer is at ISO sector 197989. See docs/re-notes/rage-of-mages-demo.md. Do not use the damaged RageofMages_1020 multipart ZIP. Automated recovery verifies the full original ISO, copies its exact Joliet DEMOS/Rom/ROMDEMO.EXE path, and extracts the original ZIP SFX. No guest installer execution needed.",
       "postExtract": [
+        {
+          "type": "copyFile",
+          "from": "disc/DEMOS/Rom/ROMDEMO.EXE",
+          "into": "archive/ROMDEMO.EXE"
+        },
         {
           "type": "extractArchive",
           "archive": "archive/ROMDEMO.EXE",
@@ -4271,8 +4641,15 @@
       "sourcePage": "https://archive.org/details/gsscda1999",
       "license": "Proprietary evaluation demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Copy the game files from DEMOS/RAGE2 on gsscda1999/1999-09/GS0999.iso (Archive metadata SHA-1 74d2f13d0ccb0e0a4091606b0771bb07ddf7bc44) into game/, preserving ROM2.EXE, SCENARIO.DLL, SMACKW32.DLL and all RES/DAT/SAV files. ROM2.EXE must have SHA-256 c163964fca7f15958c53c29cef2fe4db4add639a95a3936453f87ccda874ae4b. Run --id=rage-of-mages2-demo --prepare. See docs/re-notes/rage-of-mages2-demo.md; the separate RageofMagesIINecromancer_1020 nested installer is damaged.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gsscda1999/1999-09/GS0999.iso",
+          "sha1": "74d2f13d0ccb0e0a4091606b0771bb07ddf7bc44",
+          "type": "archive",
+          "into": "disc"
+        }
+      ],
+      "manual": "Copy the game files from DEMOS/RAGE2 on gsscda1999/1999-09/GS0999.iso (Archive metadata SHA-1 74d2f13d0ccb0e0a4091606b0771bb07ddf7bc44) into game/, preserving ROM2.EXE, SCENARIO.DLL, SMACKW32.DLL and all RES/DAT/SAV files. ROM2.EXE must have SHA-256 c163964fca7f15958c53c29cef2fe4db4add639a95a3936453f87ccda874ae4b. Run --id=rage-of-mages2-demo --prepare. See docs/re-notes/rage-of-mages2-demo.md; the separate RageofMagesIINecromancer_1020 nested installer is damaged. Automated recovery downloads and verifies the complete ISO, extracts its Joliet paths, and copies original game bytes with uppercase aliases required by existing registration. No configuration synthesis.",
       "browser": {
         "fileRoot": "game",
         "exe": "game/ROM2.EXE"
@@ -4283,7 +4660,29 @@
         "vfsInclude": [
           "**/*"
         ]
-      }
+      },
+      "postExtract": [
+        {
+          "type": "copyTree",
+          "from": "disc/Demos/Rage2",
+          "into": "game"
+        },
+        {
+          "type": "copyFile",
+          "from": "disc/Demos/Rage2/rom2.exe",
+          "into": "game/ROM2.EXE"
+        },
+        {
+          "type": "copyFile",
+          "from": "disc/Demos/Rage2/Scenario.dll",
+          "into": "game/SCENARIO.DLL"
+        },
+        {
+          "type": "copyFile",
+          "from": "disc/Demos/Rage2/smackw32.dll",
+          "into": "game/SMACKW32.DLL"
+        }
+      ]
     },
     {
       "id": "outcast-demo",
@@ -4297,8 +4696,15 @@
       "sourcePage": "https://archive.org/details/gsscda1999",
       "license": "Proprietary evaluation demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Copy the contents of DEMOS/OUTCAST/EXE and DEMOS/OUTCAST/PAK from gsscda1999/1999-09/GS0999.iso into game/ as one flat directory, retaining every file. OC2.EXE SHA-256 must be d5513a94c2aff8ed54598c60fbf28bdf5845848a5eef74ff326037ec1a54f8a1. Run --id=outcast-demo --prepare. See docs/re-notes/outcast-demo.md for source extents, hashes and launcher-selected OC2.EXE game route.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gsscda1999/1999-09/GS0999.iso",
+          "sha1": "74d2f13d0ccb0e0a4091606b0771bb07ddf7bc44",
+          "type": "archive",
+          "into": "disc"
+        }
+      ],
+      "manual": "Copy the contents of DEMOS/OUTCAST/EXE and DEMOS/OUTCAST/PAK from gsscda1999/1999-09/GS0999.iso into game/ as one flat directory, retaining every file. OC2.EXE SHA-256 must be d5513a94c2aff8ed54598c60fbf28bdf5845848a5eef74ff326037ec1a54f8a1. Run --id=outcast-demo --prepare. See docs/re-notes/outcast-demo.md for source extents, hashes and launcher-selected OC2.EXE game route. Automated recovery downloads and verifies the complete ISO, extracts its Joliet paths, and copies original game bytes with uppercase aliases required by existing registration. No configuration synthesis.",
       "browser": {
         "fileRoot": "game",
         "exe": "game/OC2.EXE"
@@ -4310,7 +4716,24 @@
         "vfsInclude": [
           "**/*"
         ]
-      }
+      },
+      "postExtract": [
+        {
+          "type": "copyTree",
+          "from": "disc/Demos/Outcast/exe",
+          "into": "game"
+        },
+        {
+          "type": "copyTree",
+          "from": "disc/Demos/Outcast/pak",
+          "into": "game"
+        },
+        {
+          "type": "copyFile",
+          "from": "disc/Demos/Outcast/exe/Oc2.exe",
+          "into": "game/OC2.EXE"
+        }
+      ]
     },
     {
       "id": "urban-chaos-demo",
@@ -4323,8 +4746,15 @@
       "sourcePage": "https://archive.org/details/urbanchaos",
       "license": "Proprietary evaluation demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Verify urbanchaos.zip (26328920 bytes, SHA-1 ba06b6ca040359ac07dd60ca75d680c9f2b5d15c); extract Demo.exe with 7z and installer/data1.cab with unshield. Flatten Global_Media, Local_Media_-_English and Program_Files into game/, preserving relative paths. Copy installer clumps, data and talk2 directories into game/ and copy PE Fallen.ex_ unchanged as Fallen.exe (SHA-256 8cc73044e19b423ef0f13858d8cb3bb3025ca023114cf87ff46c57838f4b2229). Reconstruct config.ini exactly as documented in docs/re-notes/urban-chaos-demo.md, then run --id=urban-chaos-demo --prepare.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/urbanchaos/urbanchaos.zip",
+          "sha1": "ba06b6ca040359ac07dd60ca75d680c9f2b5d15c",
+          "type": "archive",
+          "into": "archive"
+        }
+      ],
+      "manual": "Verify urbanchaos.zip (26328920 bytes, SHA-1 ba06b6ca040359ac07dd60ca75d680c9f2b5d15c); extract Demo.exe with 7z and installer/data1.cab with unshield. Flatten Global_Media, Local_Media_-_English and Program_Files into game/, preserving relative paths. Copy installer clumps, data and talk2 directories into game/ and copy PE Fallen.ex_ unchanged as Fallen.exe (SHA-256 8cc73044e19b423ef0f13858d8cb3bb3025ca023114cf87ff46c57838f4b2229). Reconstruct config.ini exactly as documented in docs/re-notes/urban-chaos-demo.md, then run --id=urban-chaos-demo --prepare. Automated recovery now reproduces the documented layout and reconstructed local-install INI; run --id=urban-chaos-demo. The INI is reconstructed from installer semantics, not captured installer output.",
       "browser": {
         "fileRoot": "game",
         "exe": "game/Fallen.exe"
@@ -4335,7 +4765,72 @@
         "vfsInclude": [
           "**/*"
         ]
-      }
+      },
+      "postExtract": [
+        {
+          "type": "extractArchive",
+          "archive": "archive/Demo.exe",
+          "into": "installer"
+        },
+        {
+          "type": "unshield",
+          "cab": "installer/data1.cab",
+          "group": "Global Media",
+          "into": "unpacked"
+        },
+        {
+          "type": "unshield",
+          "cab": "installer/data1.cab",
+          "group": "Local Media - English",
+          "into": "unpacked"
+        },
+        {
+          "type": "unshield",
+          "cab": "installer/data1.cab",
+          "group": "Program Files",
+          "into": "unpacked"
+        },
+        {
+          "type": "copyTree",
+          "from": "unpacked/Global_Media",
+          "into": "game"
+        },
+        {
+          "type": "copyTree",
+          "from": "unpacked/Local_Media_-_English",
+          "into": "game"
+        },
+        {
+          "type": "copyTree",
+          "from": "unpacked/Program_Files",
+          "into": "game"
+        },
+        {
+          "type": "copyTree",
+          "from": "installer/clumps",
+          "into": "game/clumps"
+        },
+        {
+          "type": "copyTree",
+          "from": "installer/data",
+          "into": "game/data"
+        },
+        {
+          "type": "copyTree",
+          "from": "installer/talk2",
+          "into": "game/talk2"
+        },
+        {
+          "type": "copyFile",
+          "from": "installer/Fallen.ex_",
+          "into": "game/Fallen.exe"
+        },
+        {
+          "type": "writeText",
+          "file": "game/config.ini",
+          "text": "[Game]\nlanguage=text\\lang_english.txt\n[LocalInstall]\ntextures=1\nsfx=1\nspeech=1\nmovies=1\n[TextureClumps]\nenable_clumps=1\n"
+        }
+      ]
     },
     {
       "id": "thief2-demo",
@@ -4348,8 +4843,15 @@
       "sourcePage": "https://archive.org/details/ThiefIiTheMetalAgeDemo",
       "license": "Proprietary evaluation demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Verify thief2.exe (136880529 bytes, SHA-1 e812b6d8a41c7755f87e1e17bf8e7ef11a57de5a), extract with 7z and copy thf2demo/ contents into game/. thf2demo.exe SHA-256: 5e5f831ba549081c35e592afaa540f336f76c828a996b4fcb74edef46beba942. Reconstruct installer DARKINST.CFG with install_path, resname_base, load_path and script_module_path each C:\\; movie_path C:\\MOVIES; language english (one setting per line). These keys and language appear in original SETUP.ins. Run --id=thief2-demo --prepare. No executable patch. Registered CLI reaches 3D mission; Chromium walking/turning reviewed. Mobile navigation/touch, audio and FPS validation pending. See docs/re-notes/thief2-demo.md.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/ThiefIiTheMetalAgeDemo/thief2.exe",
+          "sha1": "e812b6d8a41c7755f87e1e17bf8e7ef11a57de5a",
+          "type": "archive",
+          "into": "archive"
+        }
+      ],
+      "manual": "Verify thief2.exe (136880529 bytes, SHA-1 e812b6d8a41c7755f87e1e17bf8e7ef11a57de5a), extract with 7z and copy thf2demo/ contents into game/. thf2demo.exe SHA-256: 5e5f831ba549081c35e592afaa540f336f76c828a996b4fcb74edef46beba942. Reconstruct installer DARKINST.CFG with install_path, resname_base, load_path and script_module_path each C:\\; movie_path C:\\MOVIES; language english (one setting per line). These keys and language appear in original SETUP.ins. The automated recipe performs this layout; run --id=thief2-demo. No executable patch. Registered CLI reaches 3D mission; Chromium walking/turning reviewed. Mobile navigation/touch, audio and FPS validation pending. See docs/re-notes/thief2-demo.md.",
       "browser": {
         "fileRoot": "game",
         "exe": "game/thf2demo.exe"
@@ -4360,7 +4862,19 @@
         "vfsInclude": [
           "**/*"
         ]
-      }
+      },
+      "postExtract": [
+        {
+          "type": "copyTree",
+          "from": "archive/thf2demo",
+          "into": "game"
+        },
+        {
+          "type": "writeText",
+          "file": "game/DARKINST.CFG",
+          "text": "install_path C:\\\nresname_base C:\\\nload_path C:\\\nscript_module_path C:\\\nmovie_path C:\\MOVIES\nlanguage english\n"
+        }
+      ]
     },
     {
       "id": "messiah-demo",
@@ -4373,8 +4887,15 @@
       "sourcePage": "https://archive.org/details/messiahdemo",
       "license": "Proprietary evaluation demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Verify messiahdemo.exe (104219648 bytes, SHA-1 4b03de968e89c68ed2f34f856cc2190a63f9836b). Extract the WinZip SFX with 7z, then data1.cab with unshield. Copy Program_Executable_Files contents into game/, retaining pc/ and all 300 files. MessiahD3D.exe SHA-256 must be 1f622eca30b2554b61a41aa2ef33f07d42a1fd10493b754fbfc51ded5e4500a3. Run --id=messiah-demo --prepare. Requires Z16 format correction3a4fcf883; documented +! menu workaround prevents white menu after device reset. Initial MCI warning requires ordinary OK. CLI and Chromium keyboard/touch gameplay reviewed; audio/FPS/device testing remains open. See docs/re-notes/messiah-demo.md.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/messiahdemo/messiahdemo.exe",
+          "sha1": "4b03de968e89c68ed2f34f856cc2190a63f9836b",
+          "type": "archive",
+          "into": "archive"
+        }
+      ],
+      "manual": "Verify messiahdemo.exe (104219648 bytes, SHA-1 4b03de968e89c68ed2f34f856cc2190a63f9836b). Extract the WinZip SFX with 7z, then data1.cab with unshield. Copy Program_Executable_Files contents into game/, retaining pc/ and all 300 files. MessiahD3D.exe SHA-256 must be 1f622eca30b2554b61a41aa2ef33f07d42a1fd10493b754fbfc51ded5e4500a3. The automated recipe performs this layout; run --id=messiah-demo. Requires Z16 format correction3a4fcf883; documented +! menu workaround prevents white menu after device reset. Initial MCI warning requires ordinary OK. CLI and Chromium keyboard/touch gameplay reviewed; audio/FPS/device testing remains open. See docs/re-notes/messiah-demo.md.",
       "browser": {
         "fileRoot": "game",
         "exe": "game/MessiahD3D.exe"
@@ -4386,7 +4907,20 @@
         "vfsInclude": [
           "**/*"
         ]
-      }
+      },
+      "postExtract": [
+        {
+          "type": "unshield",
+          "cab": "archive/data1.cab",
+          "group": "Program Executable Files",
+          "into": "unpacked"
+        },
+        {
+          "type": "copyTree",
+          "from": "unpacked/Program_Executable_Files",
+          "into": "game"
+        }
+      ]
     },
     {
       "id": "sanity-demo",
@@ -4399,8 +4933,15 @@
       "sourcePage": "https://archive.org/details/sanitydemosetup",
       "license": "Proprietary evaluation demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Verify sanitydemosetup.exe (64250880 bytes, SHA-1 000cd1c36262a1a883fd6d6b67d6629e732d5b9d), extract with 7z, copy Game/ contents into game/ preserving LITHTECH/, then copy Data/SANITY.REZ into game/SANITY.REZ. Run --id=sanity-demo --prepare. The original launcher invokes executable PE client.dll with the registered -rez arguments and C:\\LITHTECH working directory. Requires FMUL PC24 fix462848051. Ordinary CLI and registered Chromium tutorial dismissal/right-button movement reviewed. Touch controls provided; touch/audio/FPS validation pending. See docs/re-notes/sanity-demo.md.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/sanitydemosetup/sanitydemosetup.exe",
+          "sha1": "000cd1c36262a1a883fd6d6b67d6629e732d5b9d",
+          "type": "archive",
+          "into": "archive"
+        }
+      ],
+      "manual": "Verify sanitydemosetup.exe (64250880 bytes, SHA-1 000cd1c36262a1a883fd6d6b67d6629e732d5b9d), extract with 7z, copy Game/ contents into game/ preserving LITHTECH/, then copy Data/SANITY.REZ into game/SANITY.REZ. The automated recipe now performs this layout; run --id=sanity-demo. The original launcher invokes executable PE client.dll with the registered -rez arguments and C:\\LITHTECH working directory. Requires FMUL PC24 fix462848051. Ordinary CLI and registered Chromium tutorial dismissal/right-button movement reviewed. Touch controls provided; touch/audio/FPS validation pending. See docs/re-notes/sanity-demo.md.",
       "browser": {
         "fileRoot": "game",
         "exe": "game/LITHTECH/client.dll"
@@ -4412,7 +4953,19 @@
         "vfsInclude": [
           "**/*"
         ]
-      }
+      },
+      "postExtract": [
+        {
+          "type": "copyTree",
+          "from": "archive/Game",
+          "into": "game"
+        },
+        {
+          "type": "copyFile",
+          "from": "archive/Data/SANITY.REZ",
+          "into": "game/SANITY.REZ"
+        }
+      ]
     },
     {
       "id": "nocturne-demo",
@@ -4425,8 +4978,15 @@
       "sourcePage": "https://archive.org/details/NocturneDemo",
       "license": "Proprietary evaluation demo; private compatibility fixture only. No public redistribution grant established.",
       "localOnly": true,
-      "packages": [],
-      "manual": "Verify NocturneDemo.zip (84965751 bytes, SHA-1 b56df8ca1a91a21803482897748c46d6678a5866), unpack and extract installer with unshield. Copy Program_Executable_Files contents into game/, then copy System_Files contents into game/ preserving system/nocturne.ini and system/RENDER.INI. Run --id=nocturne-demo --prepare. Keep original startup/calibration: Space clears intro and swap warning; choose Volume 3 Windy City Massacre, Chapter 6 Crescent Theater. CLI and registered Chrome keyboard walking/firing verified. Use ordinary held menu keys; near-instant automation presses may not be sampled. Touch, brightness, audio and FPS validation pending. See docs/re-notes/nocturne-demo.md.",
+      "packages": [
+        {
+          "url": "https://archive.org/download/NocturneDemo/NocturneDemo.zip",
+          "sha1": "b56df8ca1a91a21803482897748c46d6678a5866",
+          "type": "archive",
+          "into": "archive"
+        }
+      ],
+      "manual": "Verify NocturneDemo.zip (84965751 bytes, SHA-1 b56df8ca1a91a21803482897748c46d6678a5866), unpack and extract installer with unshield. Copy Program_Executable_Files contents into game/, then copy System_Files contents into game/ preserving system/nocturne.ini and system/RENDER.INI. The automated recipe performs this layout; run --id=nocturne-demo. Keep original startup/calibration: Space clears intro and swap warning; choose Volume 3 Windy City Massacre, Chapter 6 Crescent Theater. CLI and registered Chrome keyboard walking/firing verified. Use ordinary held menu keys; near-instant automation presses may not be sampled. Touch, brightness, audio and FPS validation pending. See docs/re-notes/nocturne-demo.md.",
       "browser": {
         "fileRoot": "game",
         "exe": "game/nocturne.exe"
@@ -4437,7 +4997,200 @@
         "vfsInclude": [
           "**/*"
         ]
+      },
+      "postExtract": [
+        {
+          "type": "unshield",
+          "cab": "archive/data1.cab",
+          "group": "Program Executable Files",
+          "into": "unpacked"
+        },
+        {
+          "type": "unshield",
+          "cab": "archive/data1.cab",
+          "group": "System Files",
+          "into": "unpacked"
+        },
+        {
+          "type": "copyTree",
+          "from": "unpacked/Program_Executable_Files",
+          "into": "game"
+        },
+        {
+          "type": "copyTree",
+          "from": "unpacked/System_Files",
+          "into": "game"
+        }
+      ]
+    },
+    {
+      "id": "kkrieger-beta",
+      "name": ".kkrieger Chapter I Beta",
+      "kind": "game",
+      "version": "Breakpoint 2004 beta (scene.org archive)",
+      "executables": [
+        "game/pno0001.exe"
+      ],
+      "sourcePage": "https://files.scene.org/view/parties/2004/breakpoint04/96kgame/kkrieger-beta.zip",
+      "license": "Freeware. Original readme permits spreading the original unmodified archive without a fee for the game, with credit to .theprodukkt; preserve archive and notices. No public deployment performed.",
+      "packages": [
+        {
+          "url": "https://files.scene.org/get:fi-https/parties/2004/breakpoint04/96kgame/kkrieger-beta.zip",
+          "sha1": "f46b0fd0e777c33c79e16cb5453db8b0b4bfb91b",
+          "type": "archive",
+          "into": "game"
+        }
+      ],
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/pno0001.exe"
+      },
+      "cli": {
+        "maxBatches": 10000,
+        "batchSize": 100000,
+        "vfsInclude": [
+          "**/*"
+        ]
       }
+    },
+    {
+      "id": "silver-demo",
+      "name": "Silver Demo",
+      "kind": "game",
+      "version": "Original Infogrames Windows demo (1999)",
+      "executables": [
+        "game/SILVER/silver.exe"
+      ],
+      "sourcePage": "https://archive.org/details/SilverDemo",
+      "license": "Proprietary original demo; private compatibility fixture only, no redistribution permission established.",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/SilverDemo/SilverDemo.zip",
+          "sha1": "a6af4d96fdc74b9649b1d96b513c416f8c65650b",
+          "type": "file",
+          "destination": "source/SilverDemo.zip"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "extractArchive",
+          "archive": "source/SilverDemo.zip",
+          "into": "game/SILVER"
+        },
+        {
+          "type": "is5Extract",
+          "cab": "game/SILVER/data1.cab",
+          "into": "game/SILVER"
+        }
+      ],
+      "cli": {
+        "exeGuestPath": "C:/SILVER/silver.exe",
+        "cwd": "C:/SILVER",
+        "vfsTrees": ["game"],
+        "zipMounts": [
+          {
+            "file": "source/SilverDemo.zip",
+            "root": "D:/SILVER/"
+          }
+        ]
+      },
+      "manual": "Automated acquisition retains original source/SilverDemo.zip and extracts all original media plus cabinet payload under game/SILVER. Original runtime needs C:/SILVER plus the untouched ZIP mounted at D:/SILVER with CD-ROM semantics. The generic corpus CLI does not yet describe this dual mount; use the documented original harness route. No browser/desktop registration or gameplay qualification from recovery. See docs/re-notes/silver-demo.md.",
+      "notes": "Recovery-first candidate: full original bytes, no installer or licence prompt executed. The dual-mount CLI launch is the only valid corpus execution of this original CD-search demo; do not treat a bare single-directory launch as original CD configuration or a compatibility verdict."
+    },
+    {
+      "id": "hock-a-loogie-1995",
+      "appIds": ["hock_a_loogie"],
+      "name": "Hock-A-Loogie (1995)",
+      "kind": "game",
+      "version": "Original Viacom New Media Windows mini game, 1.00 (fixed file version 1.0.1.0)",
+      "executables": [
+        "game/BBLOOGIE.EXE"
+      ],
+      "sourcePage": "https://archive.org/details/Hock-A-Loogie-1995",
+      "license": "Proprietary original; local compatibility fixture only. No public redistribution or deployment permission established.",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/Hock-A-Loogie-1995/beavislg.zip",
+          "sha1": "68be591b75813f81409314ad1944d64927835be5",
+          "sha256": "e10d150131258641af11609249ac7f1c430e67e4138943d175b0365ba64be00b",
+          "type": "archive",
+          "into": "distribution"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "extractArchive",
+          "archive": "distribution/BEAVISLG.ZIP",
+          "into": "game"
+        }
+      ],
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/BBLOOGIE.EXE"
+      },
+      "cli": {
+        "maxBatches": 3000,
+        "batchSize": 1000,
+        "vfsInclude": [
+          "**/*"
+        ]
+      },
+      "notes": "LOCAL ONLY candidate recipe. Preserve all 38 companions: BBLOOGIE.000, SOS9502.DLL and 36 AIF files. Guest executable C:\\BBLOOGIE.EXE, working directory C:\\, companion VFS paths C:\\<filename>. No registry seeds or DLL substitutions. Archive is retained in scratch/runs/20261020-hock-loogie-original-intake-oct20; do not redownload for registration. Separate explicit-EXE gameplay/scoring evidence is accepted; this candidate route and app-selector gameplay are not runtime qualified. See docs/re-notes/hock-a-loogie.md for hashes, tests, corpus-runner acceptance blocker and remaining gaps."
+    },
+    {
+      "id": "penguin-command-1611",
+      "appIds": [
+        "penguin_command_1611"
+      ],
+      "name": "Penguin Command 1.6.11 (original, local only)",
+      "kind": "game",
+      "version": "1.6.11 original Windows release",
+      "executables": [
+        "game/penguin-command.exe"
+      ],
+      "localOnly": true,
+      "license": "Original local compatibility fixture only; no payload redistribution or public deployment authorized.",
+      "packages": [],
+      "browser": {
+        "fileRoot": "game",
+        "exe": "game/penguin-command.exe"
+      },
+      "cli": {
+        "exeGuestPath": "C:/penguin-command.exe",
+        "cwd": "C:/",
+        "args": "--windowed --nosound",
+        "dlls": [
+          "game/msvcrt.dll",
+          "game/SDL.dll",
+          "game/zlib1.dll",
+          "game/libpng12-0.dll",
+          "game/jpeg.dll",
+          "game/SDL_image.dll",
+          "game/SDL_mixer.dll"
+        ],
+        "vfsInclude": [
+          "**/*"
+        ],
+        "maxBatches": 200000,
+        "batchSize": 1000
+      },
+      "manual": "Use tools/verify-penguin-command.js --prepare ORIGINAL CRT FRESH_DEST to prepare the exact accepted recovery game subset, including standing authentic msvcrt.dll. No acquisition packages, installer, executable patching or replacement libraries. See test/candidate-corpus/penguin-command-README.md.",
+      "notes": "91 original runtime game files / 1778442 bytes. Historical b41a7c5 module/runner evidence: Normal Game, score 160 to 240 and Wave 2, Hiscores/menu; no isolated projectile causality, audio or current-main runtime qualification. Local selector/corpus route is filesystem tested only; ordinary loading depends on the shared manifest boundary adapter."
+    },
+    {
+      "id": "tzar-the-burden-of-the-crown",
+      "name": "Tzar: The Burden of the Crown",
+      "kind": "game",
+      "version": "Windows (2000); owner-requested title, release package not yet verified",
+      "executables": [],
+      "sourcePage": "https://x.com/oldyzach/status/2115839577156161544",
+      "license": "Proprietary title; no acquisition or redistribution permission established by the linked post.",
+      "localOnly": true,
+      "packages": [],
+      "manual": "Requested via Telegram inbox 135 on 2026-10-30. Locate an authorized original demo or owner-supplied installation and record source, hashes, executable and complete assets before adding a launch route.",
+      "notes": "Requested, untested catalog entry. No executable or game assets acquired; no runtime or gameplay qualification. See docs/re-notes/tzar-the-burden-of-the-crown.md."
     }
   ]
 }

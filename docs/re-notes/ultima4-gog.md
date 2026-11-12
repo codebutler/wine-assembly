@@ -10,6 +10,27 @@ installer is `setup_ultima_iv_-_quest_of_the_avatar_1.0_cs_(28045).exe`,
 verified, but the package remains proprietary and gitignored. Nothing here
 grants redistribution rights for the installer or extracted game.
 
+### Reproducible installed payload (2026-10-14)
+
+`node tools/fetch-candidate-corpus.js --id=gog-free-ultima-iv --force` now
+recovers both the pinned original installer and its `installed/` tree through
+the existing staged publication path. Requires `innoextract` (validated with
+1.9). The package language is **en-US**, not `english`: the latter extracts
+unconditional support files but silently omits the game payload. The recipe
+selects en-US and excludes installer temporary files.
+
+`test/candidate-corpus/gog-free-ultima-iv-files.json` pins all 175 extracted files. Run
+`node test/test-ultima4-recovery.js` against pristine recovered output. A fresh
+recipe fetch was compared with an independent extraction and the restored
+fixture; every file matched byte-for-byte. This includes DOSBOX, configuration,
+and the four original `__support/save/` templates used by the ToyVM mapping.
+No generated character/save state or new gameplay qualification is included.
+The existing runtime entry and original-file mapping remain unchanged.
+
+Evidence and an original installer copy are retained under
+`scratch/runs/20261014-ultima4-recovery/`. As with other forced recoveries,
+preserve local saves separately before using `--force`.
+
 ## Direct installer path
 
 The original PE32 Inno wrapper was executed directly in Wine-Assembly, without

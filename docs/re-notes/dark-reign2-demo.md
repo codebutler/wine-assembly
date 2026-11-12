@@ -586,3 +586,345 @@ not a played mission; ordinary input and gameplay remain to validate.
 shell32.dll is still absent from the test checkout (logged warning).
 Evidence: scratch/runs/20261012T0045Z-dark-reign2-socket-attribute/.
 Built module SHA256: 9e835f75dfe5d2fcfb91f592641e945f91baadcd20f6751460777f4dba888cd6.
+
+### Accepted-main native mission check (2026-11-01)
+
+Current registration is `dark_reign2_demo`, corpus candidate `dark-reign2-demo`,
+with local root `test/binaries/candidates/dark-reign2-demo/extracted/Files`.
+The registry's CLI gameplay comment has historical support beyond the shell-only
+record above: commits `e7a031da3` and `fe71f8d83` report Demo Mission 1, box
+selection and left-button movement against a right-button cancellation control.
+Later commits also report browser/mixed-touch results. Those commits are outside
+this tested main's ancestry; their referenced October 12 run and PNG/log artifacts
+are absent locally. Their text is retained in this run as historical reports,
+not newly reviewed gameplay evidence. No later accepted local result was found.
+
+The named predecessor `20261101-redline-upload-internal-cause` had fresh final
+records and the 06:01:14 UTC runtime/source/build release before this launch.
+Tested main: `149286afdd9607776d8611d066164a72253f14e6`. All 4,389 accepted
+source inputs, the prior 126 actual-read identities, region-map mirror and
+module matched the predecessor's final repaired build; its locked build was
+reused. Actual loaded module SHA-256:
+`330b120d64cfd4aebdd945c99a95022dbd97db7ee6962d7ec534c24da466011b`.
+
+Pinned original `dr2.exe` SHA-256:
+`6aa93ded56537ff9ceb6f47d0bbe2de74b5b2b83c6932d61eb98e69d797756ed`.
+Local file-manifest SHA-256:
+`a01d2d77518bb1627077f474ee6ee99731df4dce404a2bb8be92a1b4b97d2e7a`.
+All 29 local original/manifest files were hashed before and after; all 27
+manifest entries exist with their declared sizes. Originals/configs are unchanged.
+No installer or new licence acceptance was performed.
+
+One ordinary local CLI invocation used `--app=dark_reign2_demo --no-build
+--wasm=build/wine-assembly.wasm --batch-size=100000 --control-stdin --frozen`,
+with quiet logging, VFS log export and a final PNG. Exact arguments are in
+`command.json`. After ping, a request to step 550 batches ended at batch 10:
+the guest exited with code `-536870910` (`0xe0000002`); the Node harness itself
+returned zero. This is a guest failure, not a successful 550-batch replay.
+
+**First concrete blocker:** `dr2.log`, `vid_enumdx:1164`, rejects both Direct3D
+HAL and RGB Emulation with "doesn't support mip mapping." It then reports no
+hardware D3D devices and raises "Can't start hardware accelerated DirectX 7.0."
+The reviewed `final.png` is a solid teal 640x480 frame, with no menu or mission.
+The missing-shell32/symbol warning is separate from that explicit device rejection.
+No menu input, mission transition, selection or movement was reached. No second
+invocation, capability inflation, generic repair or alternate backend was tried.
+
+Identity-only observation passed actual synchronous/asynchronous WASM execution,
+shared 512 MB whole-memory read-only comparison and bounded retention through
+10,001 late records before the original. All 124 actual-read identities and the
+actual compiled-module receipt match after execution. Runtime took 4.714 seconds;
+minimum sampled free disk was 2,306,859,008 bytes, above the required floor.
+Evidence: `scratch/runs/20261101-dark-reign2-native-mission/` (compressed runtime
+log, saved guest log, capture, command, identities and verification).
+
+Next bounded action: review this exact mipmapping capability rejection against
+the supported native renderer contract before authorizing any implementation or
+backend change. No played mission, current control response, FPS, audio or
+backend parity is qualified by this run. No test box was acquired.
+
+### Exact native mipmapping contract (2026-11-01)
+
+The rejection is an intentional capability boundary reflecting missing sampling
+implementation. It is not fixed by the accepted DD4/DD7 surface-identity repair
+`149286afd`, nor by the existing mip-chain allocation and upload code.
+
+For the pinned original above, the D3D7 enumeration callback starts at
+`0x00472860`. At `0x00472885` it loads its third argument, the 236-byte
+`D3DDEVICEDESC7`, into ESI. It passes that descriptor to `0x00471cd0`, which
+copies it to the candidate record at `this+0x54`. After checking
+`D3DDEVCAPS_DRAWPRIMTLVERTEX` and `D3DDEVCAPS_FLOATTLVERTEX`, the constructor
+executes `test byte [edx+0x60], 0x3c` at `0x00471d1a`. A zero result takes
+`0x00471d24` and sets the unsuitable-device flag in bit 0 of `this+0x154`.
+The callback checks this flag at `0x004728e1` and branches to its rejection
+diagnostics, skipping the accepted-device count increment at `0x00472a00`.
+
+The diagnostic repeats `test byte [esi+0x60], 0x3c` at `0x00472adc`.
+Nonzero jumps to `0x00472b0f`; zero logs source line `0x48c` (1164) and
+`"d3d : ! doesn't support mip mapping."` at `0x00472afd`. Offset `0x60`
+is exactly `D3DDEVICEDESC7.dpcTriCaps` (+60) plus
+`D3DPRIMCAPS.dwTextureFilterCaps` (+36). Mask `0x3c` accepts **any** of
+`MIPNEAREST` (0x04), `MIPLINEAR` (0x08), `LINEARMIPNEAREST` (0x10), or
+`LINEARMIPLINEAR` (0x20). It does not query `DDSCAPS_MIPMAP`,
+`dwTextureCaps`, or the DX7 stage-filter MIPF bits.
+
+Both HAL and RGB enumeration use `$d3dim_fill_device_desc7`; GetCaps7 shares
+that builder. `$fill_primcaps` supplies `0xc3`, then the D3D7 builder adds
+`MINFPOINT|MINFLINEAR|MAGFPOINT|MAGFLINEAR` (`0x03000300`). The resulting
+triangle filter mask is `0x030003c3`, whose intersection with `0x3c` is zero.
+HAL/RGB identity and device-cap differences do not change this filter field.
+
+The resource and sampling contracts differ:
+
+- `$dx_create_mip_chain` in `09a8-handlers-directx.wat` creates successively
+  halved surface levels, linked through `DxObject.misc0`, to 1x1 or the
+  declared count. GetAttachedSurface exposes those levels for Lock/upload.
+- `$d3dim_device7_load_chain` in `09aa-handlers-d3dim.wat` copies matching
+  levels up to the shorter chain, with a bounded walk. The rectangular Load
+  path prevalidates the chains and scales the copy rectangle per level.
+- `$d3dim_set_texture` stores one stage-zero surface slot. The native
+  `$d3dim_draw_tl_triangle_textured` selects MAGFILTER (16), MINFILTER (17),
+  then legacy TEXTUREMAG/MIN; only value 2 enables within-image bilinear
+  filtering. It does not read MIPFILTER (18) to select a level. The span
+  sampler loads width/height/pitch/DIB from that single entry and samples
+  that image; it has no automatic chain traversal or footprint-based LOD.
+- The GPU descriptor also exposes a single image and linear flag;
+  `lib/d3dim-gpu.js` lowers its sampler with `mip: 0`. This is source review,
+  not a GPU execution or parity claim. GL and D3D8/9 mip paths do not establish
+  the native D3D7 contract.
+
+A coherent generic implementation needs footprint-based level selection from
+screen-space texture gradients (including perspective), correct stage/legacy
+filter lowering, bounded chain handling and per-level sampling metadata.
+Tests must use visibly distinct levels and verify actual rendered pixels under
+minification and magnification before any corresponding capability is enabled.
+This spans drawing paths and is outside this bounded diagnostic task. No
+capability bit, renderer state, guest file, assertion or source was changed.
+Startup remains blocked; no current mission, gameplay, FPS or audio is qualified.
+
+Evidence: `scratch/runs/20261101-dark-reign2-mipmap-contract/`, including
+aligned guest disassembly, string references, reviewed source identities and
+contract findings. The preceding native-mission run supplies the original
+capture/log/module receipt; its solid teal frame and mipmapping fatal log were
+reviewed again. This task makes no new original-execution claim.
+
+The gate opened only after Redline's fresh final records and 06:16:10 UTC
+runtime/source/build release. No tests or note edits preceded that gate.
+Existing `test-legacy-texture-filter-caps.js` passed 90 descriptor fields,
+36 extracted sampling cases and six mutation negatives;
+`test-legacy-final-mip-bits.js` passed 90 fields, 36 sampling cases and ten
+mutation negatives. These execute extracted production WAT, not the full
+shipped module. `test-legacy-mip-support.js` completed its 36 backend cases
+but then failed an unrelated stale texture-operation assertion: expected
+`0x3ff`, actual `0x0f` at line 124. That test is unchanged; no assertion was
+weakened. No full-module regression or new mip implementation is claimed.
+
+All 4,389 predecessor source identities, all 29 pinned originals/configs,
+module `330b120d…` and region mirror matched before review. This documentation
+change needs no new build and runs no original or installed callback observer.
+No runtime PID/group, temporary runtime directory or test box was acquired;
+box ID/state/expiry are N/A.
+
+### Native mip sampling implementation (2026-11-01)
+
+The generic native D3D triangle path now selects and blends mip levels from the
+screen-space texture footprint. `d3dim_draw_tl_triangle_textured` lowers stage
+MIN/MAG/MIP and legacy TEXTUREMIN/MAG separately. The rasterizer builds planes
+for U=u*rhw, V=v*rhw and Q=rhw, then evaluates quotient-rule derivatives at each
+fragment. Its isotropic footprint is the larger of the two texel-space gradient
+lengths; LOD is log2 of that footprint. Lookup coordinates retain the existing
+perspective-correct edge/span interpolation, including level-zero rounding.
+No guest state, fixture configuration or backend selection is forced.
+
+Legacy filters 3/5 choose the nearest mip, 4/6 blend adjacent mips, and 5/6 use
+bilinear filtering within each image. Stage MIPFILTER selects NONE/POINT/LINEAR
+independently of MINFILTER and MAGFILTER. An explicitly set NONE overrides a
+legacy mip request, including when MINFILTER itself is unset. Magnification
+uses MAGFILTER; minification uses MINFILTER even with mip selection disabled.
+
+Mip successors must be live owned surface wrappers with successively halved
+width/height, valid storage and a sufficient pitch. Traversal is bounded to
+16 levels, stops at 1x1, and clamps to the last valid available image on a
+truncated, missing or malformed chain. Each sampled level supplies its own
+size, pitch, pixel format and palette metadata. Existing allocation and Device7
+Load implementations are unchanged. Keyed mip filtering retains an explicit
+named unsupported error; cross-level color-key coverage is not implemented.
+Ordinary level-zero keying remains on its existing path. Endpoint reset clears
+the new draw-scoped sampler guard even after an unsupported draw aborts.
+
+Only the native **D3D7 triangle** filter descriptor gains the four legacy mip
+bits plus MIPFPOINT/MIPFLINEAR: `0x030303ff`. HAL/RGB enumeration and GetCaps7
+share that builder. With the GPU renderer selected, its triangle mask stays
+`0x030003c3`, consistent with the unchanged single-image `mip: 0` descriptor.
+Line and older device descriptors remain conservative. No GPU execution or
+parity is claimed.
+
+`flock /tmp/wine-build.lock bash tools/build.sh` passed. The new
+`test/test-d3dim-native-mip.js` compiles the complete production closure with
+boundary adapters, without substituting the draw or sampling implementation.
+It passed 38 distinguishable pixel observations: magnification/minification,
+nearest and blended levels, spatially varying perspective gradients, vertical
+footprints, all four legacy mip filters, stage precedence, declared/partial/
+malformed chains, invalid wrappers, per-level padded RGB565 storage, and native
+versus GPU descriptor bounds. Complete checker-image comparisons preserve
+level-zero point/bilinear pixels. Unsupported keyed mip requests and endpoint
+cleanup have explicit negative assertions. `pixels.json` and the reviewed
+`pixels.png` contact sheet preserve the rendered evidence.
+
+Existing indexed-texture rendering, Device7 Load and software GL mip tests
+passed. Device enumeration passed 16 nested version pairs, 96 allocation-balanced
+cycles and 32 actual x86 callback cases; only the two assertions for the new
+native triangle mask were updated. The extracted legacy tests now explicitly
+cover the GPU single-image boundary; point/linear assertions and mutation
+negatives remain. Filter-caps and final-mip-bits tests passed. The MIPLINEAR test
+passed its 36 GPU sampling cases, then retained the pre-existing unrelated
+texture-operation assertion failure (`0x3ff` expected, `0x0f` actual). That
+assertion was not weakened.
+
+The predecessor's fresh final/result and explicit runtime/source/build release
+opened the initial gate; the implementation baseline was main `36983f7ec`.
+Two bounded local CLI startups used the pinned originals without game input.
+The second followed a proven endpoint-reset defect (a failing transient-state
+assertion before the fix) and loaded the final 2,026,995-byte production module,
+SHA-256 `dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+It exited normally after 550 batches in 17.800 seconds. The reviewed 640x480
+capture shows the rendered mission-selection menu with Demo Mission 1, Normal
+difficulty and Load Mission. The guest log accepts Direct3D HAL and reports
+mipmap/mipfilter support; the exact mipmapping rejection is absent. No later
+fatal startup rejection appeared within this bound. No mission was launched;
+this establishes startup progress, without gameplay, audio, FPS or full-suite
+qualification.
+
+Evidence is in `scratch/runs/20261101-dark-reign2-native-mip-implementation/`.
+The validated read-only observer exercised actual synchronous/asynchronous
+module execution, preserved the entire shared 512 MiB memory and clock
+identities, and bounded late-event retention. The actual loaded module, 141
+runtime source reads, 4,392 source/build/test identities, all 29 pinned originals
+and the 27-entry fixture manifest matched. Both startup processes/groups have
+exited; no watcher, temporary runtime directory or test box remains owned.
+The final run's minimum free disk was 2,436,890,624 bytes. Runtime/source/build
+ownership is released with the final evidence and publication record.
+
+### Native mission gameplay and ordinary selection (2026-11-01)
+
+One bounded local CLI run now reaches **Demo Mission 1 gameplay** and responds
+to ordinary mouse selection. The reviewed batch-1677 capture shows terrain,
+soldiers, the objective “Eliminate Rumblers and Sky Sweeper tower,” 10,000
+resources, command bar and minimap. This follows actual mission loading and
+the opening cinematic; neither of those earlier stages is counted as gameplay.
+The guest log independently records
+`PreOpenMission: [missions\demo][Demo Mission 1]`, then SimInit and Sim.
+
+The mission-selection menu was confirmed at batch 550. The first absolute
+mouse move established the native DirectInput reference point without moving
+the game's own cursor, so the first balanced click opened the difficulty list.
+A normal relative mouse movement of (-8,+72) visibly placed the cursor on
+Load Mission. The next ordinary button down/up was dispatched at batches
+717/727 and started loading. Normal difficulty stayed selected. Reviewed
+neutral checkpoints show Generating Environment (877), Populating World
+(977), a black transition (1077), the cockpit/base cinematic (1177–1577),
+then the mission HUD (1677). No guest state, configuration or backend was forced.
+
+Right-arrow down/up reached DispatchMessageA at 1677/1718; the captures at
+1677/1717/1757 show changed camera framing. Since the intro may still have
+been settling, this run does **not** isolate camera causality. Instead, an
+ordinary mouse drag supplies explicit mission input proof. Its native
+down/move/up dispatches occurred at 1759/1761/1766. The before (1757), held
+(1766), released (1771), and settled released (1796) captures show the drag
+rectangle followed by selection brackets and health bars on five soldiers
+and one vehicle, plus Guard/Explore commands. All observed scheduled, pending,
+cross-thread and renderer queues were empty after consumption. The final PNG
+was also reviewed and preserves that selected-unit view. No unit movement,
+mission completion, audio, FPS, GPU parity or full-suite claim is made.
+
+The initial scratch-only gate opened after Redline worker `01a19602-3826`
+produced fresh final/result records and its 07:57:36 UTC explicit
+runtime/source/build release. Actual current-main baseline was
+`0da33e84b1cd2f26cd49d89e29e36cb4943e5185`. All 4,392 accepted inputs,
+141 predecessor runtime reads, module and region mirror matched the accepted
+`d86935e82` build, so that complete build was reused. The actual loaded
+2,026,995-byte module was
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+Post-run verification matched 142 actual runtime reads, every source/build
+identity, all 29 pinned original/manifest files and all 27 fixture entries.
+The read-only observer passed actual synchronous/asynchronous execution,
+whole shared 512 MiB memory comparison, clock identity and emitted late-10,001
+retention validation before the original ran. No source or test was changed.
+
+Evidence: `scratch/runs/20261101-dark-reign2-native-mission-input/`, including
+the exact command, normal control stream and supplemental ordinary stdin
+controls, reviewed captures, input-consumption records, saved guest log,
+identities and verification. The single CLI process exited zero after requested
+quit at batch 1796 and 327.256 seconds; no second original was needed. Startup
+free disk was 2,417,684,480 bytes and minimum sampled free disk was
+2,347,634,688 bytes.
+Owned runtime/driver/observer/watcher PIDs and the runtime process group are
+absent; no new runtime temporary directory or test box remains (box ID,
+state and expiry N/A). Native rendering only; GPU mip support remains absent.
+
+### Ordinary selected-unit movement order (2026-11-01)
+
+One further original Demo Mission 1 run demonstrates **selected-unit movement
+following an ordinary movement order**. It reproduces the accepted menu,
+loading, HUD and six-unit selection setup, then keeps the camera controls
+released throughout the comparison. The bundled `readme.rtf` documents
+Shift-M as Move. Shift and M down reach DispatchMessageA at batch 1901;
+both releases reach it at 1906. With the game's cursor visibly on open tiled
+terrain near screen (200,260), ordinary left-button down/up at canvas
+(192,332) dispatch at 1911/1921. The canvas/game-cursor offset is confirmed
+visually, not inferred from coordinates alone. All observed scheduled,
+pending, cross-thread and renderer queues are empty after consumption;
+guest post-queue and button-state coverage remain unknown.
+
+The matched **no-order interval** is 1801–1901, with captures at offsets
+0/10/15/40/100. The selected five soldiers and vehicle remain in their
+original arrangement near the center. The order comparison preserves before
+(1901), command-ready (1911), held (1921), released (1926), settled released
+(1951), and interval-end (2011) PNGs. Its click interval uses the same
+0/10/15/40/100 checkpoints. Held/released frames still show the original
+positions; by 1951 the selected group is visibly displaced left over the
+ground tiles, and by 2011 the vehicle and several soldiers have moved farther.
+For example, the selected vehicle moves from approximately (352,288) to
+(278,239), then (180,225). This is translation of the rendered unit and its
+selection marks, not merely the appearance of selection brackets.
+
+The overhead pipe, pillar, crates, right-hand ridge and unselected foreground
+soldier preserve their screen locations. A bounded ±3-pixel registration of
+pillar/ridge/crate patches finds its best match at (0,0) for the neutral end,
+settled movement and movement end; mean absolute byte differences are
+0.123/0.204/0.252, versus at least 3.74 for the next-best translation. Small
+lighting/animation differences remain, so the images are not byte-identical.
+The stationary neutral interval, consumed command/click, subsequent selected
+group displacement and fixed world landmarks distinguish the response from
+camera motion, selection effects and the prior uncommanded behavior. This
+qualifies attributable movement, without asserting exact path length or
+arrival of all six units. Later released captures at 2071/2171 retain the
+view; 2171 also displays “Guardian has been destroyed.” No hostile impact,
+combat outcome, mission completion, audio, FPS, GPU parity or full-suite
+qualification is inferred from that message.
+
+Evidence: `scratch/runs/20261101-dark-reign2-unit-movement/`. The original
+Outcast launcher's interruption required the coordinator's explicit gate
+rebind to recovery worker `01a196f6-9bc8`. Its fresh launcher final/result and
+12:07:46 UTC runtime/source/build release opened the gate at 12:08:22.
+Actual gate/prelaunch baseline was main
+`84358006a197266af7bb1f17ebf80de605d5d736`. All 4,392 accepted build inputs and
+141 predecessor reads matched, allowing reuse of the accepted complete build.
+The actual loaded module remains
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+All 4,444 current source/build/test identities, 29 original/manifest pins,
+the complete 28-file extracted tree, 27 manifest entries and recovery manifest
+match after the run; all 142 observed runtime reads match their files.
+
+The exact observer passed actual synchronous/asynchronous execution, whole
+shared 512 MiB memory comparison, native/host clock identity and emitted
+late-10,001 retention validation. Coverage is synchronous readFileSync and
+complete closed descriptor reads up to 24 MiB; asynchronous, streaming,
+incomplete/open and oversized descriptor reads are not covered. Records flush
+at normal exit; runtime WebAssembly compilation identity is not evidence of
+compiler-source reads. Twenty PNGs pass chunk CRC and full IDAT/row decoding.
+The sole original exited zero at batch 2171 after 216.184 seconds; sampled
+runtime free disk stayed above 2,240,622,592 bytes. No second original, tracked
+source/helper/test/config/registration/backend edit, synthetic state or test
+box was used. Owned processes/groups and new runtime temporary directories
+are checked in the run cleanup record; local box ID/state/expiry are N/A.

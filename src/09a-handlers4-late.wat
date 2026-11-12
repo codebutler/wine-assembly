@@ -362,9 +362,51 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
-  ;; IsDBCSLeadByteEx(codePage, testChar)
+  ;; IsDBCSLeadByteEx(CodePage, BYTE TestChar). Classification only: no trail
+  ;; byte or character conversion. Reuse the same ranges as the MBCS helpers.
   (func $handle_IsDBCSLeadByteEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $is_dbcs_lead_byte_for_cp (local.get $arg0) (local.get $arg1)))
+    (local $cp i32) (local $locale i32)
+    (local.set $cp (local.get $arg0))
+    (if (i32.eqz (local.get $cp))
+      (then (local.set $cp (global.get $ansi_code_page))))
+    ;; Match GetOEMCP's system default, independent of console output state.
+    (if (i32.eq (local.get $cp) (i32.const 1))
+      (then (local.set $cp (i32.const 437))))
+    ;; CP_THREAD_ACP follows the caller's retained LCID, not the process ACP.
+    ;; Only the concrete locales below are implemented; unknown locales fail
+    ;; through the page validator instead of silently claiming ANSI behavior.
+    (if (i32.eq (local.get $cp) (i32.const 3))
+      (then
+        (local.set $locale (i32.and
+          (call $host_get_thread_locale (global.get $current_thread_id)) (i32.const 0xFFFF)))
+        (local.set $cp (i32.const -1))
+        (if (i32.eq (local.get $locale) (i32.const 0x0409))
+          (then (local.set $cp (i32.const 1252))))
+        (if (i32.eq (local.get $locale) (i32.const 0x0411))
+          (then (local.set $cp (i32.const 932))))
+        (if (i32.eq (local.get $locale) (i32.const 0x0412))
+          (then (local.set $cp (i32.const 949))))
+        (if (i32.or (i32.eq (local.get $locale) (i32.const 0x0804))
+                    (i32.eq (local.get $locale) (i32.const 0x1004)))
+          (then (local.set $cp (i32.const 936))))
+        (if (i32.or (i32.eq (local.get $locale) (i32.const 0x0404))
+              (i32.or (i32.eq (local.get $locale) (i32.const 0x0C04))
+                      (i32.eq (local.get $locale) (i32.const 0x1404))))
+          (then (local.set $cp (i32.const 950))))))
+    ;; CP_MACCP uses the default US Macintosh page (10000) in this runtime.
+    (if (i32.eq (local.get $cp) (i32.const 2))
+      (then (local.set $cp (i32.const 10000))))
+    (if (i32.or
+          (call $is_supported_code_page (local.get $cp))
+          (i32.or (i32.eq (local.get $cp) (i32.const 10000))
+            (i32.or (i32.eq (local.get $cp) (i32.const 65000))
+                    (i32.eq (local.get $cp) (i32.const 65001)))))
+      (then
+        (i32.store offset=0 (global.get $reg_base)
+          (call $is_dbcs_lead_byte_for_cp (local.get $cp) (local.get $arg1))))
+      (else
+        (global.set $last_error (i32.const 87)) ;; unsupported/invalid code page
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
@@ -398,38 +440,6 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
-
-ctl32 can route an ANSI status-bar string through ExtTextOutW
-  ;; as packed byte pairs. Recognize only a printable byte string terminated
-  ;; within the supplied UTF-16 span; ordinary UTF-16 ASCII has zero high
-  ;; bytes and cannot match. The count can extend past the ANSI terminator
-  ;; because the control obtained it by running lstrlenW over the byte buffer.
-  (func $gdi_ext_text_out_w_packed_ansi_len (param $text i32) (param $count i32) (result i32)
-    (local $i i32) (local $limit i32) (local $ch i32)
-    (if (i32.or (i32.eqz (local.get $text))
-          (i32.or (i32.le_s (local.get $count) (i32.const 0))
-            (i32.gt_u (local.get $count) (i32.const 0x7FFF))))
-      (then (return (i32.const 0))))
-    (if (i32.eqz (i32.load8_u offset=1 (local.get $text)))
-      (then (return (i32.const 0))))
-    (local.set $limit (i32.shl (local.get $count) (i32.const 1)))
-    (block $done (loop $scan
-      (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
-      (local.set $ch (i32.load8_u (i32.add (local.get $text) (local.get $i))))
-      (if (i32.eqz (local.get $ch))
-        (then (return (local.get $i))))
-      (if (i32.and
-            (i32.or (i32.lt_u (local.get $ch) (i32.const 0x20))
-              (i32.gt_u (local.get $ch) (i32.const 0x7E)))
-            (i32.and (i32.ne (local.get $ch) (i32.const 9))
-              (i32.and (i32.ne (local.get $ch) (i32.const 10))
-                (i32.ne (local.get $ch) (i32.const 13)))))
-        (then (return (i32.const 0))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $scan)))
-    (if (i32.eqz (i32.load8_u (i32.add (local.get $text) (local.get $limit))))
-      (then (return (local.get $limit))))
-    (i32.const 0))
 
 rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
   (func $handle_SetBrushOrgEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1123,11 +1133,13 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
   ;; 396: WinHelpW — normalize UTF-16 and share the WinHelpA engine
   (func $handle_WinHelpW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $accepted i32)
+    (local $old_public i32)
+    (local.set $old_public (global.get $help_macro_public_entry))
+    (global.set $help_macro_public_entry (i32.const 1))
     (local.set $accepted (call $help_dispatch_api_w
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (call $help_present_dispatch (local.get $accepted) (local.get $arg2))
-    (i32.store offset=0 (global.get $reg_base) (local.get $accepted))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (global.set $help_macro_public_entry (local.get $old_public))
+    (call $dispatch_winhelp_finish (local.get $accepted) (local.get $arg2))
   )
 
   ;; 397: GetCapture — capture window associated with the current thread.
@@ -1772,6 +1784,20 @@ SetColorAdjustment — validate and copy complete per-DC state.
   (func $handle_ImmIsIME (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+  )
+
+  ;; ImmGetProperty(hKL, dwIndex) queries the IME associated with a layout.
+  ;; Only the plain en-US layout is installed (GetKeyboardLayout/List and
+  ;; ImmIsIME above). No HKL therefore has IME properties, capabilities or an
+  ;; IME version: return zero, including for unknown HKLs/indices. Do not
+  ;; advertise IMEVER_0400 merely because the emulated OS is Win98.
+  ;; https://learn.microsoft.com/en-us/windows/win32/api/imm/nf-imm-immgetproperty
+  (func $handle_ImmGetProperty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; Share the two-argument no-IME result and stack cleanup. Neither query
+    ;; nor attempted opening can create an IME in this machine configuration.
+    (call $handle_ImmSetOpenStatus
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; ImmReleaseContext(hWnd, hIMC) balances a successful ImmGetContext call.

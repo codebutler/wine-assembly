@@ -143,7 +143,7 @@ game's transition, not a blit bug. By ~4300 the round is clean.
 ```
 node test/run.js --app=moorhuhn_3 --quiet-api --no-close --batch-size=200000 --max-batches=4301 \
   --input=2600:mousedown:320:240,2603:mouseup:320:240,2850:mousedown:320:240,2853:mouseup:320:240,3050:keydown:32,3053:keyup:32 \
-  --png=/tmp/mh3.png
+  --png=mh3.png
 ```
 
 Unpacked code is only in memory, so read it with
@@ -179,7 +179,7 @@ The board is up by about batch 700 of 500000, and dragging a piece works (hover,
 
 ```
 node test/run.js --app=moorhuhn_3_puzzle_fisch --quiet-api --no-close \
-  --batch-size=500000 --max-batches=900 --png=/tmp/fisch.png
+  --batch-size=500000 --max-batches=900 --png=fisch.png
 ```
 
 **All three variants and the frame counter (claude:202b4b39, 2026-10-10).**
@@ -262,7 +262,7 @@ Each of the three is a Delphi **Jester** wrapper:
 - **Getting the projector out**: neither `--save-vfs` nor `--capture-launch` works, because the files are deleted and there is no launch. Export them mid-run instead:
 
   ```
-  --batch-size=5000 --input=300:vfs-export:\WINDOWS\TEMP\Jgl_Rt\spiel1.exe:/tmp/x/300.exe,...
+  --batch-size=5000 --input=300:vfs-export:\WINDOWS\TEMP\Jgl_Rt\spiel1.exe:300.exe,...
   ```
 
   Keep the last full-size export.
@@ -370,3 +370,38 @@ at the art, not the box: a 30x20 bird's opaque pixels are columns ~12-24 and
 rows ~5-15, so `(x+2, y-6)` from the object's x/y is a body pixel. A ctl
 eval that lists live birds is saved with the run
 (`chicken-list.eval.js`).
+
+## Gallinelle original recovery recipe (2026-10-14)
+
+`node tools/fetch-candidate-corpus.js --id=gallinelle-xxl --force` now
+reconstructs the original Game and Bonus directories from the pinned
+74,287,372-byte ZIP (SHA1 374449d553941dfd75301b09ba3fa0507c934029).
+All 33,997 raw sectors are MODE2 Form1 with matching XA subheaders. The
+converter validates these fields and sync bytes before passing the cooked ISO
+to archive extraction; Form2 and mixed modes fail explicitly. Cabinet groups
+require unshield (tested 1.5.1); the older IS5 fallback correctly refuses this
+newer cabinet. Install with `sudo apt-get install unshield` if absent.
+
+The four original payload files are pinned in
+`test/candidate-corpus/gallinelle-xxl-files.json`; verify with
+`node test/test-gallinelle-recovery.js`. Fresh recovery is independently compared
+with an original sector-slice extraction and unshield group extraction. Original
+archive and receipts: `scratch/runs/20261014-gallinelle-recovery/`. No payload
+patches or new runtime/gameplay/public-distribution claims. Forced recovery
+replaces the fixture tree; preserve local player files elsewhere first.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## Mixed-island follow-up (2026-09-30)
+
+The frozen census counted4,777,604 mixed entries absorbing11,166,124 integer
+operations, while408,437,190 operations in pure islands also paid the
+prototype's integer check. The long61-op multiply/accumulate island at
+`0x43030b` is separated by SUB ESP,4 from a short FP/ADD/ADD/FP island;
+`0x432c76` is a sum/difference loop over float arrays. Block-executor
+eligibility was not the cause: that executor was disabled. Split-evaluator
+parity and final pixels matched; CPU −0.31% versus baseline and −1.23%
+versus the original prototype remained within variation. See
+[mixed-island-census.md](../mixed-island-census.md).

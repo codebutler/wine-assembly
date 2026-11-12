@@ -15,6 +15,29 @@ extracted `app` tree is 400,345,582 bytes; notable files are the 136,829,952-byt
 `GAME.GOG`, 2,323,389-byte `Sw.exe`, and 3,727,360-byte
 `DOSBOX/DOSBox.exe`.
 
+## Reproducible installed payload (2026-10-14)
+
+`node tools/fetch-candidate-corpus.js --id=gog-free-shadow-warrior-classic --force`
+now reconstructs `installed/app/` from the existing pinned package using
+innoextract1.9, installer language `GOGCustom`, excluding temporary files.
+The181 original files total400,345,582 bytes, matching the previously recorded
+app-tree size. `test/candidate-corpus/gog-free-shadow-warrior-classic-files.json` pins every
+output; `node test/test-shadow-warrior-recovery.js` verifies pristine recovery.
+Fresh recipe output was byte-compared with an independent original extraction.
+The former restored installation was absent locally, so no restored-tree
+comparison or gameplay retest is claimed.
+
+Keep **both** `GAME.DAT` and `GAME.GOG` unchanged: the1017-byte GAME.DAT is a
+cue sheet naming GAME.GOG as MODE2/2352 and separate Ogg audio tracks, not an
+ISO sector payload. Existing ToyVM entry metadata names GAME.DAT; native CD
+support must interpret that original cue/media layout, not treat its text as
+disc sectors or rename it into an ISO. This recipe preserves the original
+configuration, data and expansion directories without changing runtime code.
+
+Original installer and evidence: `scratch/runs/20261014-shadow-warrior-recovery/`.
+Forced recovery replaces the fixture tree; preserve local saves separately.
+No public redistribution or deployment is implied.
+
 ## Installer investigation
 
 The outer installer was run directly in Wine-Assembly, without host Wine. It

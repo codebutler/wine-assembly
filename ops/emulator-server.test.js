@@ -2,6 +2,105 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const {createEmulatorHandler,buildCatalog,privateIndex,rangeFor,launchFor,LOCAL_DESKTOP}=require('./emulator-server');
+test('Hock original browser association requires its EXE and all generated companions', async () => {
+ const {APPS,LOCAL_CANDIDATE_APPS,DESKTOP_APPS}=require('../lib/apps');
+ const candidate=require('../test/candidate-corpus/manifest.json').candidates.find(c=>c.id==='hock-a-loogie-1995');
+ const app=APPS.hock_a_loogie, base='test/binaries/candidates/hock-a-loogie-1995/';
+ assert.deepEqual(candidate.appIds,['hock_a_loogie']);
+ assert.equal(app.exe,base+candidate.browser.exe);
+ assert.equal(app.exe,base+'game/BBLOOGIE.EXE');
+ assert.equal(app.localFileManifest,base+'.wine-assembly-browser.json');
+ assert.equal(app.requiredFiles,true);
+ assert.deepEqual(app.files,[]);
+ assert(LOCAL_CANDIDATE_APPS.some(([id])=>id==='hock_a_loogie'));
+ assert(!DESKTOP_APPS.some(([id])=>id==='hock_a_loogie'));
+ const entry=await fs.readFile(path.join(__dirname,'../index.html'),'utf8');
+ assert.match(entry,/<option value="hock_a_loogie">Hock-A-Loogie \(1995, original\)<\/option>/);
+ const names=['BBLOOGIE.000','SOS9502.DLL','69.AIF','BING.AIF','HOCKER1.AIF',
+  ...Array.from({length:27},(_,i)=>`LOOG${i+1}.AIF`),
+  'MEGALOOG.AIF','MEGASPIT.AIF','MEGHOKER.AIF','ROCKTUNE.AIF','SPIT1.AIF','YES.AIF'];
+ assert.equal(names.length,38);
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'hock-browser-route-'));
+ const put=async(name,value)=>{await fs.mkdir(path.dirname(path.join(root,name)),{recursive:true});await fs.writeFile(path.join(root,name),value);};
+ let server;
+ try {
+  await put('lib/apps.js','module.exports='+JSON.stringify({APPS:{hock_a_loogie:app},LOCAL_CANDIDATE_APPS}));
+  await put('index.html','<html>\n'+LOCAL_DESKTOP+'\n</html>');
+  await put(app.exe,'synthetic metadata fixture, not original runtime evidence');
+  assert.equal((await buildCatalog(root)).routes[0].available,false);
+  const files=names.map(name=>({url:'game/'+name,vfsPath:'c:\\'+name,size:7}));
+  await put(app.localFileManifest,JSON.stringify({files}));
+  for(const file of files) await put(base+file.url,'fixture');
+  const catalog=await buildCatalog(root), launch=launchFor(candidate,catalog,null,null);
+  assert.equal(launch.routes.length,1);
+  assert.equal(launch.routes[0].url,'/emulator/?debug&app=hock_a_loogie');
+  assert.equal(launch.routes[0].available,true);
+  assert.deepEqual(launch.productionRoutes,[]);
+  for(const name of [app.exe,...files.map(file=>base+file.url)]) {
+   const bytes=await fs.readFile(path.join(root,name));await fs.unlink(path.join(root,name));
+   const missing=await buildCatalog(root);
+   assert.equal(missing.routes[0].available,false,name);
+   assert.equal(launchFor(candidate,missing,null,null).routes[0].url,null);
+   assert(missing.routes[0].missingPaths.includes(name));await put(name,bytes);
+  }
+  await put(base+'game/private.txt','private');await put('scratch/secret.txt','private');
+  const serve=createEmulatorHandler(root);
+  server=http.createServer(async(req,res)=>{if(!await serve(req,res)){res.writeHead(404);res.end();}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port=server.address().port;
+  assert.equal((await request(port,launch.routes[0].url)).status,200);
+  for(const name of [app.exe,...files.map(file=>base+file.url)]) assert.equal((await request(port,'/emulator/'+name)).status,200,name);
+  for(const name of [base+'game/private.txt','scratch/secret.txt','../messageboard.txt']) assert.notEqual((await request(port,'/emulator/'+name)).status,200,name);
+  await fs.unlink(path.join(root,base+files[0].url));
+  await fs.symlink(path.join(root,'scratch/secret.txt'),path.join(root,base+files[0].url));
+  assert.equal((await buildCatalog(root)).routes[0].available,false);
+  assert.notEqual((await request(port,'/emulator/'+base+files[0].url)).status,200);
+ } finally {
+  if(server) await new Promise(resolve=>server.close(resolve));
+  await fs.rm(root,{recursive:true,force:true});
+ }
+});
+test('kkrieger registered candidate joins corpus and requires the complete local manifest',async()=>{
+ const {APPS,DESKTOP_APPS,LOCAL_CANDIDATE_APPS}=require('../lib/apps');
+
+const kkrieger = APPS.kkrieger_beta;
+const kkriegerCandidate = require('../test/candidate-corpus/manifest.json').candidates
+  .find(candidate => candidate.id === 'kkrieger-beta');
+assert.strictEqual(kkrieger.exe,
+  'test/binaries/candidates/kkrieger-beta/' + kkriegerCandidate.browser.exe);
+assert.strictEqual(kkrieger.localFileManifest,
+  'test/binaries/candidates/kkrieger-beta/.wine-assembly-browser.json');
+assert.strictEqual(kkrieger.requiredFiles, true);
+assert.strictEqual(kkrieger.bigMemory, true);
+assert(LOCAL_CANDIDATE_APPS.some(([id]) => id === 'kkrieger_beta'));
+assert(!DESKTOP_APPS.some(([id]) => id === 'kkrieger_beta'));
+const kkriegerInventory = require('../ops/corpus-inventory').inventory(
+  { candidates: [kkriegerCandidate] }, { kkrieger_beta: kkrieger });
+assert.strictEqual(kkriegerInventory.length, 1,
+  'dashboard must join the registered executable to the existing candidate');
+assert.deepStrictEqual(kkriegerInventory[0].appIds, ['kkrieger_beta']);
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'kkrieger-route-'));
+ const put=async(name,value)=>{await fs.mkdir(path.dirname(path.join(root,name)),{recursive:true});await fs.writeFile(path.join(root,name),value);};
+ try{
+  await put('lib/apps.js','module.exports='+JSON.stringify({APPS:{kkrieger_beta:kkrieger},LOCAL_CANDIDATE_APPS}));
+  await put(kkrieger.exe,'synthetic metadata fixture, not a playable PE');
+  let catalog=await buildCatalog(root);
+  assert.equal(catalog.routes[0].available,false);
+  assert(catalog.routes[0].missingPaths.includes(kkrieger.localFileManifest));
+  await put(kkrieger.localFileManifest,JSON.stringify({files:[{url:'game/pno0001.exe'},{url:'game/readme.txt'},{url:'game/scene.org.txt'}]}));
+  const base=path.posix.dirname(kkrieger.localFileManifest);
+  await put(base+'/game/readme.txt','synthetic notice fixture');
+  catalog=await buildCatalog(root);
+  assert.equal(catalog.routes[0].available,false);
+  assert(catalog.routes[0].missingPaths.includes(base+'/game/scene.org.txt'));
+  await put(base+'/game/scene.org.txt','synthetic notice fixture');
+  catalog=await buildCatalog(root);
+  assert.equal(catalog.routes[0].available,true);
+  assert.equal(catalog.routes[0].url,'/emulator/?debug&app=kkrieger_beta');
+  assert(catalog.allowed.has(base+'/game/readme.txt'));
+  assert(catalog.allowed.has(base+'/game/scene.org.txt'));
+ }finally{await fs.rm(root,{recursive:true,force:true});}
+});
 async function fixture(){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'emulator-server-'));
  const files={'index.html':'<html>\n'+LOCAL_DESKTOP+'\n<script src="lib/apps.js"></script></html>','lib/apps.js':"module.exports={APPS:{game:{exe:'test/binaries/game/game.exe',localFileManifest:'test/binaries/game/files.json'},missing:{exe:'test/binaries/no.exe'}},DESKTOP_APPS:[['game','Game']]};",'lib/dll-registry.js':"module.exports={DLL_PATHS:{'msvcrt.dll':'test/binaries/msvcrt.dll'}};",'lib/guest-worker.js':'worker','host.js':'host','fonts/System.fon':'font','lib/host-import-sigs.generated.json':'{}','src/api_table.json':'[]','build/wine-assembly.wasm':'wasm','test/binaries/game/game.exe':'executable','test/binaries/game/files.json':JSON.stringify({files:[{url:'data.bin'}]}),'test/binaries/game/data.bin':'0123456789','test/binaries/msvcrt.dll':'crt','scratch/secret.txt':'secret','ops/access.json':'secret'};
@@ -217,4 +316,13 @@ test('launch links pin the served wasm; a changed module or missing files refuse
   const changed=await request(port,route[0].url);assert.equal(changed.status,409);assert.match(changed.body,/Served build changed/);assert.match(changed.body,new RegExp(sha.slice(0,12)));
   await fs.unlink(path.join(root,'build/wine-assembly.wasm'));assert.match((await readBuildIdentity(root)).reason,/missing/);
  }finally{await new Promise(r=>server.close(r));await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('private launch anchor matches the real shipped entry page', async()=>{
+ const original=await fs.readFile(path.join(__dirname,'../index.html'));
+ const result=privateIndex(original).toString('utf8');
+ assert.match(result,/window\.WINE_HTTP_RANGES = true/);
+ assert(result.includes('const LOCAL_DESKTOP = true; // Authenticated private emulator only.'));
+ assert.equal(result.includes(LOCAL_DESKTOP),false);
+ assert.equal(original.toString('utf8').split(LOCAL_DESKTOP).length,2);
 });

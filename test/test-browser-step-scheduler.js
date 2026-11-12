@@ -206,3 +206,66 @@ function makeWine(loop) {
 }
 
 console.log('PASS  parked slices wake through the port: no nested-timer clamp, long parks/wake/stop/freeze intact');
+
+// Agent stepping may advance farther than performance.now(). A negative
+// wall origin is then valid, and audio deadlines must not run on the wall
+// while GetTickCount remains frozen.
+for (const startup of [false, true]) {
+  const w = new context.WineAssembly();
+  let now = 0;
+  w._audioSchedulerNow = () => now;
+  w.guestTickPollStride = 1;
+  if (startup) w._startupClock = require('../lib/startup-clock').createStartupClock({ factor: 0.5, maxMs: 1000000 });
+  w._beginGuestTickBatch();
+  now = 100;
+  assert.strictEqual(w._guestContinuousMs(), startup ? 50 : 100,
+    'zero is a valid initialized wall origin');
+  w.setFrozen(true);
+  const frozenAt = w.frozenGuestMs();
+  now += 20000;
+  assert.strictEqual(w._guestContinuousMs(), frozenAt, 'agent think time does not advance audio waits');
+  w._advanceGuestTickMs(100000);
+  const stepped = w.frozenGuestMs();
+  const deadline = w._guestContinuousMs() + 10;
+  now += 30000;
+  assert.strictEqual(w._guestContinuousMs(), stepped);
+  assert.strictEqual(w.setFrozen(false).guestMs, stepped, 'resume preserves stepped time');
+  assert(w._guestTickState().wallStartMs < 0, 'test exercises a negative origin');
+  w._beginGuestTickBatch();
+  assert.strictEqual(w._guestTickMs(), stepped);
+  now += startup ? 20 : 10;
+  w._beginGuestTickBatch();
+  assert.strictEqual(w._guestTickMs(), deadline, 'the pending deadline expires after ten guest ms, without catch-up');
+  assert.strictEqual(w._guestContinuousMs(), deadline);
+  w.setFrozen(true);
+  now += 20000;
+  assert.strictEqual(w.frozenGuestMs(), deadline, 'repeat freeze retains continuity');
+}
+console.log('PASS  frozen/live clocks preserve zero and negative origins and pending deadlines');
+
+{
+  const { ThreadManager } = require('../lib/thread-manager');
+  const w = new context.WineAssembly();
+  let now = 1000;
+  w._audioSchedulerNow = () => now;
+  w._beginGuestTickBatch();
+  const tm = Object.create(ThreadManager.prototype);
+  Object.assign(tm, { threads: new Map(), workerBackend: null, deadlineClock: true, _dcNow: 0 });
+  tm._waitNow = () => tm.deadlineNow(w._guestContinuousMs());
+  w.threadManager = tm;
+  now += 1000;
+  assert.strictEqual(w._guestAudioClockMs(), 1000);
+  assert.strictEqual(w._guestTickState().batchMs, 0, 'audio can be ahead of last batch');
+  w.setFrozen(true);
+  assert.strictEqual(w._guestTickState().batchMs, 1000, 'freeze latches the time already observed by audio');
+  now += 1000000;
+  assert.strictEqual(tm._waitNow(), 1000, 'deadline clock stops during agent think time');
+  w._advanceGuestTickMs(100);
+  const waitStartedAt = tm._waitNow();
+  assert.strictEqual(waitStartedAt, 1100);
+  w.setFrozen(false);
+  assert.strictEqual(tm._waitNow(), waitStartedAt, 'resume does not strand existing wait timestamps in the future');
+  now += 25;
+  assert.strictEqual(tm._waitNow() - waitStartedAt, 25);
+}
+console.log('PASS  deadline/audio clock remains in the same epoch across frozen preparation');

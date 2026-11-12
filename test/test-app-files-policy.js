@@ -14,6 +14,15 @@ const {
 } = require('../lib/app-files');
 
 const MB = 1024 * 1024;
+const controllerFiles = [
+  { url: 'game/UI/CONTROL.CTL', size: 2108 },
+  { url: 'game/UI/PRESET.CTL', size: 2108 },
+  { url: 'game/data.pak', size: 40 * MB },
+];
+const controllers = normalizeLazyFiles({}, controllerFiles).files;
+assert.strictEqual(controllers[0], controllerFiles[0], 'synchronous controller-profile reads need resident bytes');
+assert.strictEqual(controllers[1], controllerFiles[1], 'preset controller profiles also load eagerly');
+assert.strictEqual(controllers[2].httpRange, true, 'controller profiles do not disable media streaming');
 const files = [
   { url: 'game/data/levels.pak', vfsPath: 'c:\\data\\levels.pak', size: 40 * MB },
   { url: 'game/movies/intro.smk', vfsPath: 'c:\\movies\\intro.smk', size: 12 * MB },
@@ -26,6 +35,22 @@ const files = [
   { url: 'game/pinned.bin', vfsPath: 'c:\\pinned.bin', size: 9 * MB, eager: true },
 ];
 const app = { persistFiles: ['c:\\save\\*.sav'] };
+
+// Synchronous page-side fault filters cannot yield a lazy read to the host.
+// Explicit ranges/background declarations must not evade this requirement.
+const faultFiles = [...files, { url: 'background.dat', size: 4 * MB, loadMode: 'background' }];
+const originalFaultFiles = JSON.stringify(faultFiles);
+const residentFault = normalizeLazyFiles(app, faultFiles, { synchronousFaultReads: true });
+assert.strictEqual(residentFault.summary.lazyFiles, 0);
+assert.strictEqual(residentFault.summary.policy, 'eager: synchronous fault reads');
+for (const file of residentFault.files) {
+  assert.strictEqual(file.loadMode, 'required');
+  assert.strictEqual(file.httpRange, false);
+  assert.strictEqual(file.preloadRanges, undefined);
+}
+assert.strictEqual(JSON.stringify(faultFiles), originalFaultFiles, 'do not mutate shared app declarations');
+assert(normalizeLazyFiles(app, faultFiles, { synchronousFaultReads: false }).summary.lazyFiles > 0,
+  'Worker-backed and ordinary reads retain streaming');
 
 const { files: out, summary } = normalizeLazyFiles(app, files);
 const byUrl = new Map(out.map(f => [f.url, f]));

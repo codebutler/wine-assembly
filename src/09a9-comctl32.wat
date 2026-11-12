@@ -1942,6 +1942,7 @@
   (func $propsheet_page_callback
       (param $page i32) (param $psp_w i32) (param $message i32) (result i32)
     (local $callback i32) (local $result i32) (local $rounds i32)
+    (local $expected_child i64) (local $expected_root i64) (local $expected_depth i32)
     (local $old_eip i32) (local $old_esp i32) (local $old_eax i32)
     (local $old_ecx i32) (local $old_edx i32) (local $old_ebx i32)
     (local $old_esi i32) (local $old_edi i32) (local $old_ebp i32)
@@ -1965,6 +1966,12 @@
     (local.set $old_steps (global.get $steps))
     (local.set $old_yield_reason (global.get $yield_reason))
     (local.set $old_yield_flag (global.get $yield_flag))
+    ;; Retain this call's owner before modifying the guest frame. Nested page
+    ;; callbacks have separate WAT locals, including across run slices.
+    (call $sync_depth_enter)
+    (local.set $expected_child (call $invocation_current))
+    (local.set $expected_root (global.get $invocation_root))
+    (local.set $expected_depth (global.get $sync_msg_depth))
     ;; Push right-to-left: ppsp, PSPCB_*, NULL hwnd, return thunk.
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $page))
@@ -1978,13 +1985,25 @@
     (global.set $steps (i32.const 0))
     (global.set $yield_reason (i32.const 0))
     (global.set $yield_flag (i32.const 0))
-    (call $sync_depth_enter)
     (block $done (loop $run_callback
       (call $run (i32.const 1000000))
       (br_if $done (i32.eqz (global.get $eip)))
       (local.set $rounds (i32.add (local.get $rounds) (i32.const 1)))
       (br_if $done (i32.ge_u (local.get $rounds) (i32.const 64)))
       (br $run_callback)))
+    ;; Reject abandoned children and same-depth sibling replacement before
+    ;; popping or restoring the interrupted context. Reset owns trap recovery.
+    (if (i64.ne (local.get $expected_child) (call $invocation_current))
+      (then (unreachable)))
+    (if (i64.ne (local.get $expected_root) (global.get $invocation_root))
+      (then (unreachable)))
+    (if (i32.ne (local.get $expected_depth) (global.get $sync_msg_depth))
+      (then (unreachable)))
+    ;; A successful three-argument stdcall consumes all sixteen frame bytes.
+    ;; Preserve the existing bounded incomplete-call result (zero).
+    (if (i32.and (i32.eqz (global.get $eip))
+          (i32.ne (local.get $old_esp) (i32.load offset=16 (global.get $reg_base))))
+      (then (unreachable)))
     (call $sync_depth_leave)
     ;; A callback that fails to reach the return thunk cannot safely approve a
     ;; page. PSPCB_RELEASE ignores the result, but uses the same bounded call.

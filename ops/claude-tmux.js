@@ -2,16 +2,20 @@
 'use strict';
 // Persistent interactive Claude: preserve its transcript, and register the
 // actual tmux pane identity only after it exists. Never resume over a live run.
-const fs=require('node:fs/promises'),path=require('node:path');
+// --new starts a fresh conversation (claude --session-id UUID, generated when
+// omitted) instead of resuming; --prompt FILE becomes its first message.
+const fs=require('node:fs/promises'),path=require('node:path'),{randomUUID}=require('node:crypto');
 const {execFile}=require('node:child_process');
 const exec=require('node:util').promisify(execFile);
 const root=path.resolve(__dirname,'..');
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
 function options(args){
   const get=k=>{const n=args.indexOf(k);return n<0?null:args[n+1];};
-  const sessionId=get('--session-id'),id=get('--id'),session=get('--tmux');
-  if(!/^[a-f0-9-]{36}$/.test(sessionId||'')||! /^[a-z0-9-]{1,60}$/.test(id||'')||! /^[a-zA-Z0-9_-]{1,80}$/.test(session||''))throw Error('Required: --session-id UUID --id terminal-id --tmux session');
-  return {sessionId,id,session,label:get('--label')||'Claude',bypass:args.includes('--dangerously-skip-permissions'),wait:args.includes('--wait')};
+  const fresh=args.includes('--new'),prompt=get('--prompt');
+  const sessionId=get('--session-id')||(fresh?randomUUID():null),id=get('--id'),session=get('--tmux');
+  if(prompt!==null&&!fresh)throw Error('--prompt requires --new (a resumed session keeps its own history)');
+  if(!/^[a-f0-9-]{36}$/.test(sessionId||'')||! /^[a-z0-9-]{1,60}$/.test(id||'')||! /^[a-zA-Z0-9_-]{1,80}$/.test(session||''))throw Error('Required: --session-id UUID (optional with --new) --id terminal-id --tmux session');
+  return {sessionId,id,session,fresh,prompt,label:get('--label')||'Claude',bypass:args.includes('--dangerously-skip-permissions'),wait:args.includes('--wait')};
 }
 async function liveSession(id){
   if(process.platform!=='linux')throw Error('This launcher currently verifies Linux process identity only');
@@ -25,8 +29,14 @@ async function liveSession(id){
   }
   return pids;
 }
+function claudeArgs(o,promptText){
+  return ['claude',...(o.fresh?['--session-id']:['--resume']),o.sessionId,...(o.bypass?['--dangerously-skip-permissions']:[]),...(promptText?[promptText]:[])];
+}
 async function main(){
-  const o=options(process.argv.slice(2));const end=Date.now()+30*60*1000;
+  const o=options(process.argv.slice(2));
+  const promptText=o.prompt===null?null:await fs.readFile(path.resolve(o.prompt),'utf8');
+  if(promptText!==null&&!promptText.trim())throw Error('--prompt file is empty: '+o.prompt);
+  const end=Date.now()+30*60*1000;
   for(;;){const pids=await liveSession(o.sessionId);if(!pids.length)break;
     if(!o.wait||Date.now()>end)throw Error('Session still running: '+pids.join(','));
     console.log('Waiting for existing Claude run to finish:',pids.join(','));await new Promise(r=>setTimeout(r,15000));
@@ -35,7 +45,7 @@ async function main(){
   const lock=path.join(root,'scratch/ops-terminal-write.lock');await fs.mkdir(lock);
   try{
     const file=path.join(root,'ops/terminals.json'),source=await fs.readFile(file,'utf8'),config=JSON.parse(source);
-    const args=['claude','--resume',o.sessionId,...(o.bypass?['--dangerously-skip-permissions']:[])];
+    const args=claudeArgs(o,promptText);
     await exec('tmux',['new-session','-d','-s',o.session,'-x','160','-y','45','-c',root,'exec '+args.map(quote).join(' ')]);
     await exec('tmux',['set-window-option','-t',o.session+':0','remain-on-exit','on']);
     const {stdout}=await exec('tmux',['list-panes','-t','='+o.session,'-F','#{pane_id} #{pane_pid}']);
@@ -48,4 +58,4 @@ async function main(){
   }finally{await fs.rmdir(lock);}
 }
 if(require.main===module)main().catch(e=>{console.error(e.message);process.exitCode=1});
-module.exports={options};
+module.exports={options,claudeArgs};

@@ -325,11 +325,13 @@
   ;; The pushed word is IP, so the linear address comes back from the current
   ;; CS base. A near RET cannot change segment.
   (func $th_ret16 (param $op i32)
+    (call $pending_gap)
     (global.set $eip (i32.add (global.get $seg_base_cs) (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $cs_pop))
 
   (func $th_ret16_imm (param $op i32)
+    (call $pending_gap)
     (global.set $eip (i32.add (global.get $seg_base_cs) (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.add (i32.const 2) (local.get $op))))
     (call $cs_pop))
@@ -340,6 +342,7 @@
   ;; pointed every IMPORTORDINAL fixup there, so this is the single place a
   ;; Win16 API call is recognised, exactly as the thunk zone is for Win32.
   (func $win16_far_transfer (param $sel i32) (param $off i32) (param $ret_lin i32) (param $is_call i32)
+    (call $pending_gap)
     (if (i32.eq (local.get $sel) (global.get $WIN16_THUNK_SEL))
       (then
         (if (i32.eqz (local.get $is_call))
@@ -374,9 +377,9 @@
     ;; wild jump and must not be reported as one.
     (if (i32.and (i32.ne (global.get $eip) (i32.const 0))
         (i32.or
-          (i32.lt_u (global.get $eip) (global.get $WIN16_ARENA))
+          (i32.lt_u (global.get $eip) (call $win16_arena_base))
           (i32.ge_u (global.get $eip)
-            (i32.add (global.get $WIN16_ARENA)
+            (i32.add (call $win16_arena_base)
               (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))))
       (then
         (call $host_log_i32 (i32.const 0xCA165E22))
@@ -400,12 +403,46 @@
     (local.set $sel (read-thread-word))
     (call $win16_far_transfer (local.get $sel) (local.get $off) (i32.const 0) (i32.const 0)))
 
+  ;; Failure-only indirect far-call evidence. Emit before pushing the return
+  ;; frame or changing CS, while the operand and its owners still describe the
+  ;; faulting instruction. CA165E23 is followed by 21 words; the browser retains
+  ;; the live selector/module tables synchronously through log_i32. The normal
+  ;; win16_set_sreg validity check remains responsible for rejecting the target.
+  (func $win16_log_far_fault (param $addr i32) (param $off i32) (param $sel i32) (param $ret i32)
+    (call $host_log_i32 (i32.const 0xCA165E23))
+    (call $host_log_i32 (local.get $addr))
+    (call $host_log_i32 (local.get $off))
+    (call $host_log_i32 (local.get $sel))
+    (call $host_log_i32 (local.get $ret))
+    (call $host_log_i32 (global.get $eip))
+    (call $host_log_i32 (global.get $sreg_cs))
+    (call $host_log_i32 (global.get $seg_base_cs))
+    (call $host_log_i32 (global.get $sreg_ss))
+    (call $host_log_i32 (global.get $seg_base_ss))
+    (call $host_log_i32 (i32.load offset=16 (global.get $reg_base)))
+    (call $host_log_i32 (global.get $sreg_ds))
+    (call $host_log_i32 (global.get $seg_base_ds))
+    (call $host_log_i32 (global.get $sreg_es))
+    (call $host_log_i32 (global.get $seg_base_es))
+    (call $host_log_i32 (global.get $WIN16_SEG_TABLE))
+    (call $host_log_i32 (global.get $WIN16_SEL_MAX))
+    (call $host_log_i32 (call $win16_dll_rec (i32.const 1)))
+    (call $host_log_i32 (i32.sub
+      (i32.add (global.get $WIN16_DYNAMIC_BASE) (global.get $WIN16_DYNAMIC_MODULES)) (i32.const 1)))
+    (call $host_log_i32 (global.get $win16_ne_off))
+    (call $host_log_i32 (global.get $win16_seg_count))
+    (call $host_log_i32 (global.get $PE_STAGING)))
+
   ;; 369: CALL FAR m16:16 — op = linear return address, address in next word
   (func $th_call_far_mem (param $op i32)
     (local $addr i32) (local $off i32) (local $sel i32)
     (local.set $addr (call $read_addr))
     (local.set $off (call $gl16 (local.get $addr)))
     (local.set $sel (call $gl16 (i32.add (local.get $addr) (i32.const 2))))
+    (if (i32.and (i32.ne (local.get $sel) (global.get $WIN16_THUNK_SEL))
+          (i32.eqz (call $win16_seg_base (call $win16_sel_to_index (local.get $sel)))))
+      (then (call $win16_log_far_fault
+        (local.get $addr) (local.get $off) (local.get $sel) (local.get $op))))
     (call $win16_push_far_ret (local.get $op))
     (call $win16_far_transfer (local.get $sel) (local.get $off) (local.get $op) (i32.const 1)))
 
@@ -420,6 +457,7 @@
   ;; 371: RETF — pop IP then CS
   (func $th_retf16 (param $op i32)
     (local $ip i32) (local $sel i32)
+    (call $pending_gap)
     (local.set $ip (call $gl16 (i32.load offset=16 (global.get $reg_base))))
     (local.set $sel (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.add (i32.const 4) (local.get $op))))
@@ -514,6 +552,7 @@
   ;; 379: CALL r/m16 (register form) — op = linear return address, reg next
   (func $th_call_near16_r (param $op i32)
     (local $target i32)
+    (call $pending_gap)
     (local.set $target (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (read-thread-word) (i32.const 2)))) (i32.const 0xFFFF)))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF)))
@@ -523,6 +562,7 @@
   ;; 380: CALL r/m16 (memory form) — op = linear return address, address next
   (func $th_call_near16_m (param $op i32)
     (local $target i32)
+    (call $pending_gap)
     (local.set $target (call $gl16 (call $read_addr)))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF)))
@@ -574,6 +614,7 @@
     (local.get $v))
 
   (func $x32_far (param $sel i32) (param $off i32) (param $ret i32) (param $is_call i32)
+    (call $pending_gap)
     (if (i32.eq (local.get $sel) (global.get $WIN16_THUNK_SEL))
       (then
         (call $host_log_i32 (i32.const 0xCA163201)) ;; 16:32 far transfer into the API thunks
@@ -590,6 +631,7 @@
     (call $win16_assert_eip (i32.const 0x32)))
 
   (func $x32_call_near (param $ret i32) (param $off i32)
+    (call $pending_gap)
     (call $io_apc_push (i32.sub (local.get $ret) (global.get $seg_base_cs)))
     (call $cs_push (local.get $ret))
     (global.set $eip (i32.add (global.get $seg_base_cs) (local.get $off))))

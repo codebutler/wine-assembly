@@ -191,3 +191,228 @@ source; another runtime requires a new coordinated grant.
 Run `20261014T0000Z-silver-escape-back` retained the same source/module and original fixture. At the dock, one ordinary Escape initially left the same image; 100 further batches exposed Load/Options/Quit Game/Back. Relative pointer motion placed the cursor on Back at (320,450); its reviewed left click returned to the dock. Another 200 batches still showed the dock. No second Escape or guest-state change was used, and no player control was established. All 3,147 post-run original hashes matched; the driver quit normally and all three PIDs/process groups were absent at 00:04:35.516. All 67 transferred artifacts (6,803,478 bytes) were individually hash-checked; evidence is `scratch/runs/20261014T0000Z-silver-escape-back/investigation.json`.
 
 A source-only follow-up checked original installer metadata: the Silver Demo shortcut invokes Silver.exe without extra arguments, so a missing documented command-line switch is not supported by that file. Original `sound/fugeapt1.wav` and `fugeapt2.wav` are format17 stereo44.1kHz with fact-chunk durations19.608s and58.788s; the B variants are15.734s and42.478s. These durations do not establish which clip currently gates the script. Before another replay, correlate actual loaded speech, mixer completion and script progress using existing bounded tracing; do not infer a broken audio API merely from a long animated sequence.
+
+## Automated original-media recovery, 2026-10-14
+
+Run `node tools/fetch-candidate-corpus.js --id=silver-demo`. Fresh acquisition verified the previously recorded ZIP SHA1/SHA256, preserves source/SilverDemo.zip unchanged, extracts its3123 files under game/SILVER, then extracts the24 original data1.cab files into the same directory. Both sets have no overlapping filenames and no content changes. Canonical silver.exe matches the prior recorded SHA256. Complete3147-file hashes are in test/candidate-corpus/silver-demo-files.json; `node test/test-silver-demo-recovery.js` verifies pristine output. Source media and cabinet outputs were independently extracted and byte-compared.
+
+This adds a recovery candidate only. Original launch still requires C:/SILVER and unchanged source/SilverDemo.zip mounted at D:/SILVER/ with CD semantics, as documented above. Generic candidate CLI does not yet encode that dual mount; do not use its default single-directory execution as a compatibility verdict. No browser/desktop registration, installer/licence prompt, new player-control validation, audio/FPS claim or public deployment.
+
+## Offline browser-evidence recovery, 2026-10-14
+
+Run `scratch/runs/20261014-silver-history-recovery` recovers retained Boat
+command outputs without restarting the old sandbox or executing the game.
+`boat --json info bx_yqnspudj` reports `stopped`, with a verified snapshot at
+02:54:21.026Z. `boat --json exec bx_yqnspudj -- ls -ld
+/home/user/scratch/runs` returns HTTP409 `machine_not_running`. This is a
+stopped-machine observation, not proof that the disk artifacts were deleted.
+No SSH, resume, replacement job, browser, build or guest execution was used.
+
+`boat history bx_yqnspudj COMMAND_ID` remains readable. Its response is JSON
+with a `data` string; decode that string before interpreting base64. Fifteen
+retained archive-chunk outputs reconstruct the complete 02:22 archive:
+5,622,000 bytes, SHA256
+`7fc9ad29807389c214c8af0efd60648012fa1f91b3c643aef210d6215e8cba23`.
+The stored packaging output `cmd_r2ytupol81dk` independently records that
+hash. All 96 extracted files match the original artifact manifest. The
+archive and extracted files are inside the recovery run (about 14 MiB total).
+The committed `docs/silver-history-recovery-20261014.json` retains chunk
+command IDs/offsets and the checks needed to repeat this recovery. Read only
+those stored commands; do not execute the historical command strings.
+
+The 02:22 archive contains both runs, drivers, input commands, logs, module
+responses, and pre/postflight manifests. Its actual module response is
+1,796,313 bytes, SHA256
+`02f7ed397f92fb8e4ed81798b0e2ba3405b27115b9887ce5a52ee4c82c2936d6`;
+recorded source HEAD is `56dc827cc64241cf763fff0d821c6a3fbd195a25`.
+Do not replace this with today's HEAD: preflight includes the actual source
+closure hashes. Browser is Chrome/151.0.7922.108, headless, 1000x800,
+`--enable-unsafe-swiftshader`; the reviewed UI shows Software GPU and Threads
+enabled. The route creates a temporary `silver_probe` app, mounts all original
+files at C:/silver and the unchanged ZIP at D:/SILVER, and uses native
+Mss32.dll/Smackw32.dll. It is not a registered `lib/apps.js` Silver route.
+
+The newly reviewed `run-two/pointer-two.png` shows the menu with the pointer
+on Start. The 02:22 driver lacks `relative:true` and holds the button only
+80ms, so it is not the later corrected input replay. Historical command
+`cmd_bpoch8nvo8sg` records adding `relative:true` and replacing that hold with
+500ms, a passive snapshot, then another 500ms. Packaging commands preserve
+the later ordinary-input sequence and summaries, not the complete later runs.
+
+Stored output `cmd_m2cwqpgklgjx` recovers a JPEG derived from the 02:31
+`run-three/final.png`. Newly reviewed: the original outdoor house/stairs/
+bridge scene is visible. This is a lossy derivative, not the original PNG,
+and a single image does not prove player control. Its local filename is
+`cmd_m2cwqpgklgjx.jpg`. The 02:31 complete archive remains unavailable locally
+(recorded SHA256 `405e36702214669c7d580a91aecbd28da362b96cdac8b78257e108e949b4d050`).
+The final 02:36 archive remains unavailable locally (8,911,631 bytes, SHA256
+`93fc85c1f5b6fc5de897fc96499c337b239bc8c090a2b7bbf387a8233ac240ec`).
+Nine requested image histories return empty `data`, `done:true`, with
+`offset == size` despite nonzero original output sizes; exact responses are
+retained in `history-receipts.json`. Do not describe these missing images as
+visually reviewed. Historical summaries report native completion status2 and
+ring segments0/1; those later raw timing files were not recovered here.
+
+The retained original ZIP was freshly rehashed against the pin above.
+`/tmp/silver-source` matches 3,123 inventory files, with zero mismatches;
+all 24 cabinet payload files, including silver.exe and native DLLs, are absent
+from that particular tree. Do not launch it as a complete fixture. The
+existing corpus extraction recipe can restore the cabinet files from the
+retained media when disk/runtime coordination permits; no download is needed.
+
+### Next bounded ordinary-input comparison (not executed)
+
+First restore/verify all 3,147 fixture hashes and both original mounts. Use
+the recovered browser driver as a route reference, explicitly correcting
+`relative:true` and the one-second Start hold as recorded above. Pin the
+actually served module/source, browser, GPU backend and worker settings;
+do not assert that a new build matches the 02:22 module. Obtain the sole
+runtime slot before launching. Bound each fresh browser session to 300s
+with retained logs and normal owned-process cleanup.
+
+Run a no-world-input control after the reviewed Start click. Capture the
+house scene against fixed scenery and observe whether movement/dialogue
+continues automatically. In a separate matched session, reach the same
+observable scene/readiness checkpoint, capture before input, then use normal
+relative pointer motion and a one-second left hold on one clear destination;
+release and capture at fixed intervals. Repeat at a distinct visible
+destination only if the first comparison is interpretable. Record host
+down/up and actual guest input consumption if existing diagnostics expose
+it. Stop at the deadline or unresolved dialogue/readiness; a changed portrait,
+continued script, host event, or animated scene is not movement acceptance.
+The original readmes describe house/chest/sword/training objectives but do
+not document the ground-click/selection contract. Do not assume that two
+clicks failing proves an input defect, or alter guest state to force control.
+
+Acceptance remains unfulfilled: establish repeatable input-caused hero
+displacement relative to fixed scenery, distinguished from the no-input
+control, and review the actual before/after images with source/input/backend
+identity. No new gameplay, audio, FPS, or engine-fix claim results from this
+offline recovery.
+
+## Complete local fixture restored, 2026-10-14
+
+Follow-up `scratch/runs/20261014-silver-cabinet-restore` restored exactly the
+24 missing cabinet files (39,027,302 bytes) directly into `/tmp/silver-source`
+using the existing `tools/is5-extract.js` and original `data1.cab`. It did not
+re-extract the ZIP, download media, execute the installer, or launch a guest.
+Before extraction, all 3,123 existing files matched the pinned inventory; the
+cabinet catalog matched the 24 absent paths and sizes exactly. Extraction
+was refused for any existing destination, mismatch, or projected free space
+below 2 GiB plus 8 MiB metadata margin. After extraction all 3,147 original
+SHA256 values match `test/candidate-corpus/silver-demo-files.json`, including
+the previously pinned silver.exe. The original 3,123 files remain unchanged.
+
+The source-preparation script, preflight, extraction log and validation are
+retained in that run. `docs/silver-cabinet-restore-20261014.json` preserves
+the command, extractor/inventory/media hashes, resulting disk space, and
+exact mounts. The earlier missing-cabinet finding above describes the
+pre-restoration state and is now resolved for this tree only.
+
+For the next separately coordinated browser run, serve `/tmp/silver-source`
+as the complete C:/silver tree and launch C:/silver/silver.exe with original
+Mss32.dll and Smackw32.dll. Serve the existing unchanged
+`scratch/runs/20261014-silver-recovery/SilverDemo.zip` as `/SilverDemo.zip`,
+then use `HttpRangeProvider.open('/SilverDemo.zip')` and
+`ZipMount.mountZip(wine._helpCtx.vfs, provider, {zipPath:'SilverDemo.zip',
+root:'D:/SILVER/'})` in the recovered route's `beforeRun` hook. Preserve
+D-drive CD-ROM semantics. This is fixture readiness only: no new browser,
+build, game, input comparison, or player-control result has been produced.
+
+## Bounded idle/input attempt, 2026-10-15
+
+Evidence: `scratch/runs/20261015-silver-idle-input`. Both authorized300s
+sessions used source9449e6c0d, identical fingerprint
+`dc29bc7dc19724ea78671352de90649b6e6dbc1adaf9339c5850de733d16d50a`,
+Chrome151.0.7922.108 headless1000x800, Software backend and isolated guest
+main Worker. Both actual browser module responses matched70c6d329d51eee5db553715f53ffc47f3e6e2491b54ae5327f1b8b012427d655.
+Pre/postflight941source and3147original fixture hashes passed. No guest file,
+clock, save or runtime state was patched.
+
+Idle131122 ran00:15:17.793–00:20:28.992Z; input134433 ran00:21:11.543–00:26:14.916Z.
+Both controllers closed at their300s deadlines and supervisors exited0 with
+no survivors, postflightPassed:true and errors:[]. The deadline includes
+launch, original media mounting, image review and cinematic progression;
+supervisor completion includes cleanup. Each run executed only the same
+reviewed relative(0,+112) Start positioning and one-second normal left hold.
+Held snapshots record hostMouseButtons:1 and later release0. This proves
+host delivery, not actual guest input consumption by itself. Actual menu
+departure and natural dock progression were visually reviewed.
+
+Idle naturally reached the house by00:19:55.351Z. The world marker was
+processed00:20:07.162Z; idle0/2/5/10-second captures were retained, but no20s
+capture fits the deadline. They show David beside Granddad while the portrait
+disappears, without world input. Control readiness remains unproven. A brief
+read-only attachment to the same browser during startup used
+defaultViewport:null, preserved1000x800, saved passive-observation.json and
+disconnected; it showed the apparent DLL-loading pause had progressed.
+
+The second run reached the house by00:25:28.062Z; house-ready-check at
+00:25:54.468Z shows the portrait gone. Its camera/character placement has a
+small offset from the idle image, so do not claim exact scene alignment.
+Crucially, controller shutdown was00:26:12.877Z. The attempted mark-world
+request8 and relative ground request9 were written only at00:26:21.118Z and
+00:26:21.590Z, after shutdown. They are retained with timestamps in
+input/late-unexecuted-requests.json; executed commands.json ends at7. Neither
+world request executed, no ground hold was sent, and no movement response
+was tested. A missing after-command-9 capture is therefore expected. This is
+an incomplete comparison due to the observation/input window, not evidence
+of rejected game input or a game bug.
+
+The runtime slot was released after terminal cleanup confirmation; no restart
+or extension was attempted. The two complete artifact inventories comprise
+61idle files/8771557bytes and48input files/5942831bytes, independently
+byte/SHA256-verified on transfer. Representative reviewed images are
+idle/pointer-settled.png, idle/idle-10s.png, input/house-ready-check.png and
+input/final.png. No gameplay qualification results from this attempt.
+
+Next execution needs a separately coordinated budget with enough time after
+natural house arrival for image review, a settled pointer capture, a normal
+hold and matched observations. Base that budget on the measured startup/
+cinematic times above; preserve an explicit hard wall-clock limit. Do not
+silently convert the two late request files into completed input evidence,
+force readiness or call the stationary pictures proof that control works.
+
+## 2026-10-15: paired ordinary movement verified
+
+The revised 600-second pair establishes narrowly scoped player-controlled
+movement in the original demo. Evidence is self-contained under
+`scratch/runs/20261015-silver-600-comparison/{idle-600,input-600}`.
+Remote controller source was `77e0380e3fdca6a44f2b31088760285b91192ddb`,
+with the unchanged original C:/silver fixture and original ZIP D:/SILVER
+mount. Both loaded WASM SHA256
+`70c6d329d51eee5db553715f53ffc47f3e6e2491b54ae5327f1b8b012427d655`.
+The identical source/module/fixture fingerprint was
+`c4a60b4f0954f01a9eb9f56ec206d34a736b6fc78001c4cbcfcccbe67133cbf7`.
+Chrome151.0.7922.108 used Software rendering, isolated guest main Worker,
+and the unchanged1000x800 viewport. All941 source and3147 original fixture
+files passed pre/post integrity; no guest state or clocks were modified.
+
+Idle148910 started00:39:27.392Z and exited cleanly00:45:03.351Z. After normal
+Start and natural cinematic progression, reviewed portrait-free house
+captures idle-0s through idle-20s show David stationary beside Granddad;
+Granddad's animation alone does not establish control. Input152857 started
+00:45:14.550Z and exited early00:54:12.009Z, within its600s deadline.
+Its portrait-free forecourt matched the idle scene with a small camera
+offset, so comparison uses the doorway, bridge and character relationships
+rather than claiming pixel-identical scene alignment.
+
+Input commands.json records every command0..14 executed. Command10 held
+the ordinary left button1000ms at guest(410,330), after relative(+90,-32)
+and inspection of ground-pointer-settled.png. David moved right toward
+Granddad, visible in ground-1-20s.png. Command13 held1000ms at(260,355),
+after relative(-150,+25) and inspection of bridge-pointer-settled.png.
+ground-2-20s.png shows David on the left stone bridge, reversing the first
+displacement while the fixed house scenery remains unchanged. Both holds
+have held-button receipts and complete0/2/5/10/20-second observations.
+This directional response to two ordinary destinations, against the
+stationary20-second idle baseline, establishes player movement for this
+route. It does not establish combat, saving, completion, audio quality,
+performance or broad playability. The controller's conservative automatic
+playerControlVerified:false field remains unchanged; visual review supplies
+the scoped movement assessment in the run result.
+
+Both supervisors returned code0, postflightPassed:true and survivors:[];
+both errors.json files are empty. Runtime was released immediately after
+cleanup. The earlier300s failed-to-execute comparison remains preserved
+unchanged. Work pauses after this evidence checkpoint at the user's request.

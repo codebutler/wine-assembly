@@ -7,8 +7,8 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function fixture() {
-  const memory = new ArrayBuffer(4096), calls = [], endpoints = [], copies = [];
+function fixture(memoryBytes = 4096) {
+  const memory = new ArrayBuffer(memoryBytes), calls = [], endpoints = [], copies = [];
   const view = new DataView(memory);
   [7, 2, 2, 0, 0].forEach((v, i) => view.setUint32(i * 4, v, true));
   const win = {}, renderer = { windows: { 7: win }, scheduleRepaint() {} };
@@ -22,9 +22,11 @@ function fixture() {
       const endpoint = { ready: Promise.resolve(), listener: null, gate: null, terminated: false,
         addEventListener(type, listener) { assert.strictEqual(type, 'message'); this.listener = listener; },
         request(message) {
-          calls.push({ ...message, bytes: message.bytes.slice() });
+          calls.push({ ...message, rawBytes: message.bytes, bytes: message.bytes.slice() });
           if (message.op === 9) {
-            const bytes = message.bytes.slice(); bytes.fill(0xa7, 20);
+            // The actual consumer returns the same view, including SAB-backed
+            // packets. Readback must finish before its lease can be recycled.
+            const bytes = message.bytes; bytes.fill(0xa7, 20);
             return Promise.resolve({ result: 1, bytes });
           }
           if (message.op === 0 && this.gate) return this.gate.promise;
@@ -55,6 +57,8 @@ function fixture() {
   await new Promise(resolve => setImmediate(resolve));
   assert.deepStrictEqual(f.calls.map(c => c.op), [1, 0]);
   assert.deepStrictEqual(Array.from(f.calls[1].bytes), [11, 22, 33, 44]);
+  assert(f.calls[1].rawBytes.buffer instanceof SharedArrayBuffer,
+    'draw packets share pooled storage across the worker boundary');
   assert.strictEqual(endpoint.terminated, false);
   endpoint.gate.resolve({ result: 1 });
   assert.strictEqual(await command, 1); await closing;
@@ -98,15 +102,71 @@ function fixture() {
   assert.strictEqual(await second, 1);
   await piped.bridge.close();
 
+  // Admission reserves before snapshot: a fourth packet waits while three
+  // immutable snapshots occupy the pool, even though only one reached the port.
+  const bounded = fixture(); await bounded.bridge.submit(1, 0, 20);
+  const boundedEndpoint = bounded.endpoints[0], source = new Uint8Array(bounded.memory);
+  boundedEndpoint.gate = deferred(); const gate = boundedEndpoint.gate;
+  const firstPool = bounded.bridge.workerPacketBuffer;
+  for (let i = 0; i < 3; i++) {
+    source.fill(i + 1, 100 + i * 4, 104 + i * 4);
+    assert.strictEqual(bounded.bridge.submit(i === 2 ? 10 : 0, 100 + i * 4, 4), 1);
+    source.fill(99, 100 + i * 4, 104 + i * 4);
+  }
+  source.fill(4, 112, 116);
+  let admitted = false;
+  const fourth = bounded.bridge.submit(0, 112, 4).then(value => { admitted = true; return value; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(admitted, false);
+  assert.strictEqual(bounded.bridge.workerPacketFree.length, 0);
+  assert.strictEqual(bounded.bridge.workerSubmissions.waiters.length, 1);
+  assert.strictEqual(bounded.calls.length, 2, 'only open and first serialized draw reached the endpoint');
+  assert.deepStrictEqual(Array.from(bounded.calls[1].rawBytes), [1, 1, 1, 1]);
+  const drain = bounded.bridge.close();
+  assert.throws(() => bounded.bridge.submit(0, 112, 4), /without an open context|closing/);
+  boundedEndpoint.gate = null; gate.resolve({ result: 1 });
+  assert.strictEqual(await fourth, 1);
+  await drain;
+  assert.deepStrictEqual(bounded.calls.map(c => c.op), [1, 0, 0, 10, 0, 2], 'close drains waiting admissions before destruction');
+  assert.deepStrictEqual(bounded.calls.slice(1, 5).map(c => Array.from(c.bytes)),
+    [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]]);
+  await bounded.bridge.submit(1, 0, 20);
+  assert.notStrictEqual(bounded.bridge.workerPacketBuffer, firstPool, 'new context gets a fresh canonical SAB owner');
+  await bounded.bridge.close();
+
+  // Oversized LFB data cannot build a second unbounded queue. It reserves all
+  // credits and acknowledges only after execution, keeping its own bytes alive.
+  const large = fixture(2 * 1024 * 1024); await large.bridge.submit(1, 0, 20);
+  const largeEndpoint = large.endpoints[0]; largeEndpoint.gate = deferred();
+  const largeGate = largeEndpoint.gate, length = 1024 * 1024 + 4;
+  new Uint8Array(large.memory, 100, length).fill(0x37);
+  let largeDone = false;
+  const largeCall = large.bridge.submit(0, 100, length).then(value => { largeDone = true; return value; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(largeDone, false);
+  assert.strictEqual(large.bridge.workerPacketFree.length, 0);
+  assert(large.calls[1].rawBytes.buffer instanceof ArrayBuffer, 'oversized fallback is an owned synchronous packet');
+  new Uint8Array(large.memory, 100, length).fill(0x99);
+  assert(large.calls[1].rawBytes.every(value => value === 0x37));
+  largeEndpoint.gate = null; largeGate.resolve({ result: 1 });
+  assert.strictEqual(await largeCall, 1);
+  await large.bridge.close();
+
   // A pipelined batch that fails poisons the context: the next call and the
   // close both raise it.
   const failed = fixture(); await failed.bridge.submit(1, 0, 20);
   failed.endpoints[0].gate = deferred();
   assert.strictEqual(failed.bridge.submit(0, 100, 4), 1);
+  assert.strictEqual(failed.bridge.submit(0, 104, 4), 1);
+  assert.strictEqual(failed.bridge.submit(0, 108, 4), 1);
+  const rejectedAdmission = assert.rejects(failed.bridge.submit(0, 112, 4), /native raster failure/);
   failed.endpoints[0].gate.reject(new Error('native raster failure'));
+  await rejectedAdmission;
   await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(failed.bridge.workerPacketFree.length, 0, 'failed consumers quarantine every reserved slot');
   assert.throws(() => failed.bridge.submit(0, 100, 4), /native raster failure/);
   await assert.rejects(failed.bridge.close(), /native raster failure/);
   assert.strictEqual(failed.endpoints[0].terminated, true);
+  assert.strictEqual(failed.bridge.workerPacketPool, null, 'quarantine retires only after endpoint termination');
   console.log('PASS Glide shared render endpoint ownership, ordering, readback and teardown');
 })().catch(error => { console.error(error); process.exitCode = 1; });

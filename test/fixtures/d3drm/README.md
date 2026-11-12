@@ -5,8 +5,8 @@ Two hand-authored DirectX `.x` files in text format (`xof 0303txt 0032`), each a
 (8 verts, 12 faces).
 
 They exist because the DX SDK sample `viewer.exe` opens `camera.x`, `mslogo.x`
-and `sphere2.x` by name, and **our extract of the SDK contains none of those
-files** — every `.x` it ships is a `pm_*.x` ProgressiveMesh. On 2026-04-30 those
+and `sphere2.x` by name, and the earlier local SDK extract lacked those files.
+On 2026-04-30 those
 three names were fabricated locally by copying `pm_cam.x`, `pm_mslog.x` and
 `pm_sph2.x`, which is what produced the long-standing
 `D3DRMERR_NOTFOUND (0x88760311)` on `IDirect3DRMMeshBuilder::Load`.
@@ -17,5 +17,10 @@ filter, so a PM top-level object is refused — a ProgressiveMesh is loaded
 through `IDirect3DRMProgressiveMesh::Load`, not through a MeshBuilder. Feeding
 `viewer.exe` a real plain-Mesh file loads and renders it.
 
-`test/test-all-exes.js` VFS-imports these over the three fabricated names rather
-than replacing the files on disk, so the SDK directory stays as extracted.
+`test/test-all-exes.js` and `test/test-d3dim-viewer-selection.js` VFS-import
+these explicit synthetic fixtures for their small CLI scenes. The browser
+registration uses the original SDK Mesh
+assets recovered on 2026-10-31, not these fixtures. See
+`docs/re-notes/dx-sdk-d3drm-samples.md` for the pinned recovery recipe and the
+original-scene browser evidence. Do not infer original-scene coverage from a
+fixture smoke pass.

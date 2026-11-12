@@ -44,12 +44,39 @@ forward custom screen or input settings.
 
 ## Observations
 
+Collapse browser follow-up (2026-11-11): the original `Collapse3.exe` reaches
+the ordinary mode menu and Crunch level 1 (Normal), removes a highlighted
+green group with a native balanced click, and displays score **0 → 1,095**.
+The shipped high-score panel confirms `MODE: CRUNCH`, level 1, `NORMAL`, 1,095.
+The timed round subsequently failed while evidence was being reviewed; no
+round clear is claimed. Full before/after boards and the later retry prompt
+are retained in `scratch/runs/20261111-collapse3-usable-desktop-gameplay-0830/`.
+
+The preceding 0810 run's `Display Settings Too Small` was a launcher geometry
+failure: a 1024×768 debug viewport exposed only a 684×570 desktop. Collapse
+checks `SystemParametersInfoA(SPI_GETWORKAREA)` for at least 800×600, excluding
+the 28px taskbar. Its existing `singleAppMinDesktop` applied only to phones.
+The registry now also supplies `minDesktop`, which the ordinary shell applies
+before the first guest slice; simultaneous apps retain the largest requested
+minimum, and exclusive guest display modes keep their own dimensions.
+
+For the live run, a normal launcher with app autolaunch off in a 1440×1000
+viewport measured an actual 1100×834 guest desktop. A harmless compiled call
+to the real `spi_core` returned work RECT `(0,0,1100,806)` before each original
+entry. The first browser reached the menu but omitted the module-identity
+recording flag required by the input guard; it received no gameplay input
+and was closed normally, with independent process/profile/port absence
+verified. A corrected browser within the same fixed allocation recorded
+module `75ecda57…` and produced the gameplay evidence. No guest state was
+edited. The successful game exited through its own EXIT button with
+`ExitProcess code: 0`. This run did not perform an FPS benchmark.
+
 | Title | Furthest observed / blocker |
 | --- | --- |
 | Ricochet Xtreme | CLI and browser Worker/WebGL Round 1-1 gameplay verified: paddle movement, ball launch, brick destruction and score. Requires bundled IFC22.dll. Earlier splash captures ended during active asset decompression; a longer run reaches the menu without runtime changes. Local fixture includes 351 verified guest-generated cache files. See [Ricochet notes](ricochet-xtreme.md). |
 | Zuma Deluxe 1.0 | Plays (2026-10-10, CLI): title at ~180k batches -> click 318,452 -> New User, type a name, OK 240,243 -> Adventure 522,102 -> Play 590,460 -> Instructions OK 556,452 -> Level 1-1 at 210k. Aim follows the cursor; a shot needs press, gap, release (`mousedown`, ~20 batches, `mouseup`) -- a same-tick click only aims, and the first click after the intro starts play. A/B: aimed greens pop for +40, no input leaves score 0. One Blt + Flip per frame, ~146 batches per frame at both 200 and 20 ms ticks, so headless frame rate is interpreter-bound. Evidence `scratch/runs/20261010T0710Z-zuma_deluxe-control-frames-w6`. |
 | Crimsonland | Displays `DirectX8.1 or newer not detected`. Explicitly seeding grim/vorbis/vorbisfile/ogg DLLs does not resolve it. A per-run registry override of DirectX `Version` to `4.09.00.0904` also did not resolve it; the exact detection path remains untraced. Screenshot `crimsonland-dx9.png`. |
-| Collapse! Crunch | Default 640×480 is rejected. `--screen=800x600` renders the game's loading screen and starts guest threads. Initial 35-second run reaches batch 310 without an API trap (`collapse-800.png`). A longer run then reports a guest call through NULL at batch 317, ends after 41.836 seconds, and captures a black client area (`collapse-long.png`). Scheduled input starts at batch 500 and never fires. No gameplay confirmed. |
+| Collapse! Crunch | Browser Workers: Crunch level 1, Normal, native group removal and score 0→1,095 verified 2026-11-11 (follow-up above). Requires an actual usable guest desktop ≥800×600; the ordinary launcher now honors its explicit desktop minimum. The round later failed; no round clear claim. Historical CLI loading/NULL-call failures remain in `collapse-800.png` / `collapse-long.png`. |
 | Alien Shooter | Main menu verified with native WebGL and software rendering after implementing DirectSoundCreate8 and fixing the backbuffer owner's device identity. Mission 01, character/camera movement and aiming verified in a fresh software CLI run with `--tick-ms-per-batch=5`. Combat and browser gameplay remain unverified. See [Alien Shooter notes](alien-shooter.md). |
 
 Collapse performance follow-up: a real-GPU, headful browser with Threads enabled
@@ -1726,6 +1753,41 @@ variants experimental rather than enabling them globally. Native inspection
 and counters establish surviving work and coverage; identifying the cost
 responsible for the net regression requires a separate profile/control
 experiment, not an inference from instruction counts alone.
+
+### Collapse game loop, blend math and expression-fusion verdict (2026-10-01)
+
+(Recovered from branch `archive/shared-tree-presync-20261011`, Oct 2026.)
+
+- **Gameplay route.** Crunch plays in CLI and browser once `timeSetEvent`
+  honours `TIME_CALLBACK_EVENT_SET/_PULSE` (93c573595). CLI needs
+  `--screen=800x600` or larger and `--tick-ms-per-batch=1` (5 also starts, but
+  the board fills fast).
+- **Loop.** Game constructor `0x429eb0` sets a 36 ms period (~27.8 updates/s).
+  Loop `0x42df2c` skips up to two draws when at least 40 ms late; draw
+  `0x42d6ca` checks dirty state first. So presents/s understates update rate.
+  Hot guest code: sprite compositor `0x4095f2`, 8x8 particle renderer `0x4285e0`
+  (pixel path `0x4287ef`, MMX alpha blend + EMMS per pixel).
+- **Blend formula.** Normal `0x40961b..0x409650` and particle
+  `0x4287ef..0x428821` share, per 16-bit lane:
+  `delta=wrap16(S-D); prod=signed16(wrap16(delta*w)); out=clampU8(signed16(wrap16((prod>>7)+D)))`.
+  For byte channels and w in 0..127 this is exactly `D + floor((S-D)*w/128)`
+  (quantized, not /255). Normal w = source alpha >> 1, particle w = low alpha
+  word >> 1. Normal stores alpha forced to 255 while mm2 keeps the computed
+  alpha; both leave mm3 = broadcast weight, mm5 = 0, mm7 = expanded dest live,
+  so a pixel-only helper cannot replace the span.
+- **Other games' MMX shapes differ.** Unreal's sample unpack is
+  `PUNPCKLBW(zero, sample)` (byte<<8), the opposite of Collapse; its shading is
+  `clampU8(signed16(wrap16(mulhi(light,palette)+bias))>>4)`. Jazz2's
+  dot/normalize uses PMADDWD, whose all-0x8000 corner wraps negative, so an
+  unbounded dot-product replacement is wrong.
+- **Ruled out: a generic PMULLW/PSRAW/PADDW/PACKUSWB fused handler.** In the
+  full experimental emulator it cut Collapse particle CPU only 1.24% (kernel
+  -18%), and it never fires elsewhere: zero hits in Unreal flyby and Jazz2
+  routes, and no such contiguous sequence in the Ricochet, Zuma or Alien
+  Shooter EXEs. Collapse is its only beneficiary.
+- **HUD caveat.** The browser phase legend's `paint` share is
+  `phaseMs.present / sum(phaseMs)`, not a share of CPU or wall time; 38-54%
+  "paint" coexisted with ~2% of wall time in `_presentNow`.
 
 ### EMMS lowering and compile-time MMX forwarding (2026-10-10)
 

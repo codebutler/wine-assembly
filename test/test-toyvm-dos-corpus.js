@@ -62,6 +62,15 @@ const ids = (list) => list.map((b) => b.id);
 const real = { name: 'GAME.EXE', mode: 'real', extender: null };
 const pm = { name: 'GAME.EXE', mode: 'protected (DOS extender)', extender: { id: 'causeway', binding: 'bound' } };
 
+check('browser mouse assessment states polling scope without claiming gameplay', () => {
+  assert.strictEqual(TOYVM_FACTS['no-browser-mouse'], undefined);
+  const a = assess(title(), [file('GAME.EXE')], { entry: real, others: [] });
+  const caution = a.cautions.find(c => c.id === 'browser-mouse-limits');
+  assert.deepStrictEqual(caution.facts, ['browser-mouse-limits']);
+  assert.match(TOYVM_FACTS[caution.facts[0]].text, /No pointer lock\/relative input, wheel, custom INT 33h ranges or callback interrupts/);
+  assert.strictEqual(a.status, 'untested');
+});
+
 check('flat real-mode program with no device needs: untested, never "works"', () => {
   const a = assess(title(), [file('GAME.EXE'), file('DATA.DAT')], { entry: real, others: [] });
   assert.strictEqual(a.status, 'untested'); assert.deepStrictEqual(ids(a.blockers), []);

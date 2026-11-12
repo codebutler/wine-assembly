@@ -47,6 +47,8 @@ function startIsolatedServer() {
     mimeTypes: MIME,
     cacheControl: 'no-cache',
     crossOriginIsolated: true,
+    allowedRealRoots: ['binaries', 'test/binaries', 'fonts']
+      .map(dir => path.join(ROOT, dir)).filter(dir => fs.existsSync(dir)),
   });
 }
 
@@ -370,10 +372,42 @@ async function guestThreadsProbe(browser, port) {
   return { peak, problems };
 }
 
-// Launch notepad in worker mode, then exercise the comLoadDll round trip on the
-// live worker. msvcrt is the probe DLL: notepad does not load it, so the count
-// has to move, and the emulator already runs its DllMain for MFC apps — so a
-// failure here is the message path, not the DLL.
+// A room member must not retain the main worker's default host address.
+async function vlanAddressProbe(browser, port) {
+  const page = await browser.newPage();
+  try {
+    await page.goto(`http://127.0.0.1:${port}/index.html?threads`, { waitUntil: 'load' });
+    await page.waitForFunction('typeof launchApp === "function"');
+    await page.evaluate(() => {
+      // Model a room selected before launch, without needing a signaling peer.
+      const init = WineAssembly.prototype.init;
+      WineAssembly.prototype.init = function(...args) {
+        this.joinVlan(null, '10.0.0.2');
+        this.vlanNagleMs = 17;
+        return init.apply(this, args);
+      };
+      document.getElementById('app-select').value = 'notepad';
+      launchApp();
+    });
+    await page.waitForFunction(() => runningApps[0]?.wine?.guestWorker && runningApps[0].wine.running,
+      { timeout: 60000 });
+    const result = await page.evaluate(async () => {
+      const w = runningApps[0].wine;
+      const startup = await w.guestWorker.readExports(['get_vlan_local_ip', 'get_vlan_nagle_ms']);
+      // Model the socket-time room picker after the guest worker exists.
+      w.joinVlan(null, '10.0.0.3');
+      const joined = await w.guestWorker.callExport('get_vlan_local_ip');
+      return { startup, joined, mirror: w.instance.exports.get_vlan_local_ip() };
+    });
+    assert.strictEqual(result.startup.get_vlan_local_ip, 0x0a000002);
+    assert.strictEqual(result.startup.get_vlan_nagle_ms, 17);
+    assert.strictEqual(result.joined, 0x0a000003);
+    assert.strictEqual(result.mirror, result.joined);
+    console.log('PASS worker LAN address at startup and late join, plus LAN pacing', JSON.stringify(result));
+  } finally { await page.close(); }
+}
+
+// Exercise the COM loader round trip using a DLL not already in Notepad.
 async function comLoadDllProbe(browser, port) {
   const page = await browser.newPage();
   await page.evaluateOnNewDocument(() => localStorage.setItem('wine-assembly.threads', '1'));
@@ -427,6 +461,8 @@ async function comLoadDllProbe(browser, port) {
   };
 
   try {
+    await vlanAddressProbe(browser, port);
+    if (process.env.WORKER_VLAN_ONLY === '1') return;
     for (const app of ['notepad', 'calc']) {
       const worker = await launch(browser, port, app, { threaded: true });
       const single = await launch(browser, port, app, { threaded: false });

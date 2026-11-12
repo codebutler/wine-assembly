@@ -66,7 +66,27 @@ function watxIndirectTypeForms(form) {
 // Resolve include order and retain only source ranges. Pass 1 parses function
 // headers and nested type annotations only; pass 2 reparses one complete body
 // at a time when it is emitted.
-function prepareStreamingModule(source, vfs) {
+// A caller-owned build scope retains successful lexical ranges only. Exact
+// text keys distinguish transformed sources; errors are rescanned with their
+// current filename. ASTs, locations and semantic state are never shared.
+function createFrontendReuse() {
+  const byText = new Map();
+  let scans = 0, hits = 0, codeUnits = 0;
+  return Object.freeze({
+    index(source, filename) {
+      if (byText.has(source)) { hits++; return byText.get(source); }
+      scans++;
+      codeUnits += source.length;
+      const ranges = Object.freeze(scanWatxTopLevelForms(source, filename).map(range =>
+        Object.freeze({ ...range, head: watxTopLevelHead(source, range.start, range.end) })));
+      byText.set(source, ranges);
+      return ranges;
+    },
+    stats() { return Object.freeze({ scans, hits, codeUnits, entries: byText.size }); },
+  });
+}
+
+function prepareStreamingModule(source, vfs, frontendReuse) {
   const descriptors = [];
   const included = new Set();
   let headerContext = createParseContext();
@@ -77,8 +97,10 @@ function prepareStreamingModule(source, vfs) {
   const bodyContext = createParseContext({ internValues: false, internSymbols: true, reuseLists: true });
 
   function indexSource(text, filename) {
-    for (const range of scanWatxTopLevelForms(text, filename)) {
-      const head = watxTopLevelHead(text, range.start, range.end);
+    const ranges = frontendReuse ? frontendReuse.index(text, filename)
+      : scanWatxTopLevelForms(text, filename);
+    for (const range of ranges) {
+      const head = range.head ?? watxTopLevelHead(text, range.start, range.end);
       const descriptor = { source: text, filename, start: range.start, end: range.end, head };
       if (head !== 'include') {
         descriptors.push(descriptor);
@@ -261,7 +283,7 @@ function* compileSteps(source, vfs = new Map(), options = {}) {
     let streamingModule = null;
     if (streaming) {
       currentStage = 'PARSE';
-      streamingModule = prepareStreamingModule(source, vfs);
+      streamingModule = prepareStreamingModule(source, vfs, options.frontendReuse);
       stages.push({ name: 'PARSE', success: true });
       stages.push({ name: 'INCLUDE', success: true });
       stages.push({ name: 'EXPAND', success: true });

@@ -1,0 +1,2 @@
+changed producer lib/apps.js:host-file (sha256); review its lifetime
+changed producer lib/browser-shell.js:host-file (sha256); review its lifetime

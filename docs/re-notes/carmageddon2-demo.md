@@ -1,5 +1,22 @@
 # Carmageddon II: Carpocalypse Now demo (SCi / Stainless, 1998)
 
+## October 31 bounded startup sweep
+
+Run `20261031T0353Z-carma2-race` replays the registered original app using
+the cooperative CLI scheduler and the documented 50,000-block batch size.
+The 60-second guard stops it at batch 1,086 (59.906 seconds, 236,615 API
+calls), before the planned clock change at 2,250 and keypad input at
+2,700/3,200. Those inputs were **not delivered**. The inspected final frame
+is uniformly pale; it does not show the title, controls screen, or race.
+No trap was observed, and no rendering defect or gameplay acceptance is
+established by this short run.
+
+Before/after hashes of the installed manifest inputs and local runtime
+files are retained in the run. Module `7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`
+has unknown compiled source identity. The runner exited normally; no
+browser, server, or Boat was created. A longer route belongs on a separate
+Boat; preserve this result rather than repeating an unreachable batch schedule.
+
 `lib/apps.js` id **`carmageddon2_demo`** (localhost-only), exe
 `test/binaries/win98-games-a-d/Carmageddon2Demo-D3D-Glide/installed/carma2_d3d.exe`
 with `smackw32.dll`. Argonaut BRender 1.3 engine; Direct3D (IDirect3DDevice2 +

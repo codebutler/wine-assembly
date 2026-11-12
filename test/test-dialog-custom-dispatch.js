@@ -10,6 +10,26 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_end_owned_dialog") (param $visible i32) (result i32)
+    (local $owner i32) (local $popup i32) (local $sp i32)
+    (local.set $owner (i32.const 0x10100))
+    (local.set $popup (i32.const 0x10101))
+    (call $wnd_table_set (local.get $owner) (global.get $WNDPROC_DIALOG))
+    (call $wnd_table_set (local.get $popup) (global.get $WNDPROC_DIALOG))
+    (drop (call $wnd_set_style (local.get $owner) (i32.const 0x90000000)))
+    (drop (call $wnd_set_style (local.get $popup)
+      (i32.or (i32.const 0x80000000) (i32.shl (local.get $visible) (i32.const 28)))))
+    (call $wnd_set_owner (local.get $popup) (local.get $owner))
+    (call $ctrl_geom_set (call $wnd_table_find (local.get $popup))
+      (i32.const 0) (i32.const 0) (i32.const 32) (i32.const 24))
+    (call $update_clear_hwnd (local.get $owner))
+    (call $nc_flags_clear (local.get $owner) (i32.const 2))
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_EndDialog (local.get $popup) (i32.const 2)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.or (call $update_get_rect (local.get $owner) (i32.const 0))
+      (i32.and (call $nc_flags_test (local.get $owner)) (i32.const 2))))
   (func (export "test_dispatch_dialog_custom")
     (param $hwnd i32) (param $proc i32) (param $msg i32) (param $wparam i32)
     (result i32)
@@ -124,7 +144,7 @@ const extraWat = String.raw`
   // WM_LBUTTONDOWN, and through the bounded sender that loop was cut off
   // ("Unable to create game"). Client mouse and plain key messages have no
   // DefDlgProc default work, so they take the same tail path.
-  for (const msg of [0x0201, 0x0202, 0x0200, 0x0203, 0x020A, 0x0100, 0x0101, 0x0102]) {
+  for (const msg of [0x0110, 0x0201, 0x0202, 0x0200, 0x0203, 0x020A, 0x0100, 0x0101, 0x0102]) {
     assert.strictEqual(wat.test_defdlg_custom_tail(stormHwnd, proc, msg) >>> 0, proc,
       `DefDlgProc tail-dispatches message 0x${msg.toString(16)} to the DLGPROC`);
     assert.strictEqual(wat.get_esp() >>> 0, 0x00520000 - 20,
@@ -133,6 +153,10 @@ const extraWat = String.raw`
       `the preserved frame carries message 0x${msg.toString(16)}`);
   }
   console.log('PASS  custom dialog dispatch preserves the native modal stack');
+  assert.strictEqual(wat.test_end_owned_dialog(0), 0,
+    'ending a hidden modeless dialog exposes no owner pixels');
+  assert.strictEqual(wat.test_end_owned_dialog(1), 3,
+    'ending a visible owned dialog requests both owner repaint and background erase');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

@@ -55,6 +55,11 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
   device.reset({width:8,height:8,depthAttachment:null});
   assert.strictEqual(device.bytes,base,'reset drops resident levels');
   assert.throws(()=>device.draw(snapshot({width:1,height:1,key:'t2'})),/texture not resident/);
+  for(const format of [63,62,63]) {
+    device.clear([0,0,0,1],3);
+    device.draw(snapshot({width:1,height:1,key:'signed',format,pixels:new Uint8Array([128,127,64,64])}));
+    assert.deepStrictEqual(pixel(),format===63?[129,255,0,129]:[64,255,0,255],'signed cached bytes retain per-draw decoding');
+  }
   device.draw(snapshot(blue));device.destroy();
   assert.strictEqual(device.bytes,0,'destroy returns every resident byte');
 

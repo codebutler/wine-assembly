@@ -6,8 +6,8 @@ Latest AoE campaign gameplay profile:
 
 - Scenario: Bronze Age Art of War campaign, 10 seconds in-game.
 - Actions: box-select starting units, issue three move orders, keep mouse active.
-- Profile output: `/private/tmp/aoe-web-profile.json`.
-- Raw CPU profile, when enabled: `/private/tmp/aoe-cpu-profile.json`.
+- Profile output: `aoe-web-profile.json`.
+- Raw CPU profile, when enabled: `aoe-cpu-profile.json`.
 - Use `HANDLER_HIST=0` for production-style timing after using the histogram to pick candidates.
 
 Timing from the gameplay window:
@@ -28,7 +28,7 @@ Repeat timing command:
 LABEL=baseline RUNS=3 HANDLER_HIST=0 node tools/profile-aoe-repeat.js
 ```
 
-This writes `/private/tmp/aoe-repeat-<label>-{1,2,3}.json` plus a summary JSON
+This writes `aoe-repeat-<label>-{1,2,3}.json` plus a summary JSON
 and prints mean/min/max/stddev. Use the histogram profiles to choose candidates,
 then use this repeated no-hist timing before keeping a small optimization.
 
@@ -70,13 +70,13 @@ Single-run Chrome campaign profiles are noisy, but the direction has been consis
 
 ```text
 experiment                         profile file                                           main.runSlice   delta vs baseline
-baseline                           /private/tmp/aoe-web-profile.json                          6580.6 ms      0.0%
-Jcc specialized                    /private/tmp/aoe-web-profile-jcc-specialized.json          6571.9 ms     -0.1%
-Jcc + push/pop specialized         /private/tmp/aoe-web-profile-jcc-pushpop.json              6562.3 ms     -0.3%
-Jcc + push/pop + base load/store   /private/tmp/aoe-web-profile-jcc-pushpop-loadstorebase.json 6524.4 ms     -0.9%
-br_table register helpers          /private/tmp/aoe-web-profile-reg-brtable.json              6618.1 ms     +0.6%
-broad SIB fused handlers           /private/tmp/aoe-web-profile-sib-fused.json                6593.9 ms     +0.2%
-direct stack load/store handlers   /private/tmp/aoe-web-profile-stackfast.json                6571.6 ms     -0.1%
+baseline                           aoe-web-profile.json                          6580.6 ms      0.0%
+Jcc specialized                    aoe-web-profile-jcc-specialized.json          6571.9 ms     -0.1%
+Jcc + push/pop specialized         aoe-web-profile-jcc-pushpop.json              6562.3 ms     -0.3%
+Jcc + push/pop + base load/store   aoe-web-profile-jcc-pushpop-loadstorebase.json 6524.4 ms     -0.9%
+br_table register helpers          aoe-web-profile-reg-brtable.json              6618.1 ms     +0.6%
+broad SIB fused handlers           aoe-web-profile-sib-fused.json                6593.9 ms     +0.2%
+direct stack load/store handlers   aoe-web-profile-stackfast.json                6571.6 ms     -0.1%
 ```
 
 Disposition:
@@ -179,8 +179,8 @@ state, memory stores, lazy flags, EIP, and counters.
 
 ```text
 profile                                  runSlice mean   guest mean   present fps   packet hits
-/private/tmp/aoe-repeat-baseline-10s      6253.8 ms      5881.5 ms       22.98              0
-/private/tmp/aoe-repeat-stack-packet-10s  6294.7 ms      5927.1 ms       21.73        498,890
+aoe-repeat-baseline-10s      6253.8 ms      5881.5 ms       22.98              0
+aoe-repeat-stack-packet-10s  6294.7 ms      5927.1 ms       21.73        498,890
 
 delta: +40.9 ms runSlice (+0.65%), +45.6 ms guest (+0.78%)
 ```
@@ -197,8 +197,8 @@ trace where local-state savings are big enough to measure.
 
 ```text
 profile                                      runSlice mean   guest mean   present fps   packet hits
-/private/tmp/aoe-repeat-span-baseline-10s      6239.7 ms      5824.6 ms       27.91              0
-/private/tmp/aoe-repeat-span-trace-10s         6437.8 ms      6036.4 ms       24.06        939,706
+aoe-repeat-span-baseline-10s      6239.7 ms      5824.6 ms       27.91              0
+aoe-repeat-span-trace-10s         6437.8 ms      6036.4 ms       24.06        939,706
 
 delta: +198.1 ms runSlice (+3.18%), +211.8 ms guest (+3.64%)
 ```
@@ -244,7 +244,7 @@ append-inline:
 Fresh current-build baseline for the same harness was noisy:
 
 ```text
-/private/tmp/aoe-repeat-span-baseline-current-10s:
+aoe-repeat-span-baseline-current-10s:
   6374.8 ms runSlice, 5887.6 ms guest
 ```
 
@@ -310,7 +310,7 @@ Categories overlap because a handler can be both ALU and RO, or load/store and R
 
 ## Branch Operand Histogram
 
-Profile output: `/private/tmp/aoe-web-profile-branch-operands.json`.
+Profile output: `aoe-web-profile-branch-operands.json`.
 
 The branch operand histogram records producer operands only when the next threaded handler is a Jcc. This is more useful for choosing fusions than raw handler-pair counts.
 
@@ -358,8 +358,8 @@ Top `alu_r_m32_ro -> Jcc` shapes are all CMP forms:
 Implication:
 
 - The next fusion should target branch producers, not generic SIB or stack paths.
-- A generic runtime `producer -> Jcc` fusion was tested in `/private/tmp/aoe-web-profile-branch-fused.json` and was effectively flat: `6539.2 ms` -> `6539.4 ms` in the hist-enabled profile.
-- A narrower runtime `test r,r -> jz/jnz` fusion was tested in `/private/tmp/aoe-web-profile-test-jznz-fused.json` and regressed: `6539.2 ms` -> `6563.0 ms`.
+- A generic runtime `producer -> Jcc` fusion was tested in `aoe-web-profile-branch-fused.json` and was effectively flat: `6539.2 ms` -> `6539.4 ms` in the hist-enabled profile.
+- A narrower runtime `test r,r -> jz/jnz` fusion was tested in `aoe-web-profile-test-jznz-fused.json` and regressed: `6539.2 ms` -> `6563.0 ms`.
 - The likely issue is that runtime helpers still add hot-path peeking and generic condition work; they do not get the codegen benefit of purpose-built fused handlers.
 - Next branch work should specialize only proven flag-dead operand shapes, but
   the later selector/prototype shows standalone branch peepholes are too marginal
@@ -371,19 +371,19 @@ Several `test r,r -> jz/jnz` fusion variants were tried after the operand histog
 
 ```text
 hist-enabled profile                                         main.runSlice   result
-/private/tmp/aoe-web-profile-branch-operands.json              6539.2 ms     baseline
-/private/tmp/aoe-web-profile-branch-fused.json                 6539.4 ms     flat
-/private/tmp/aoe-web-profile-test-jznz-fused.json              6563.0 ms     slower by 23.8 ms
-/private/tmp/aoe-web-profile-test-jcc-decode-fused.json        6621.9 ms     slower by 82.7 ms
-/private/tmp/aoe-web-profile-test-jcc-specialized-fused.json   6592.3 ms     slower by 53.1 ms
+aoe-web-profile-branch-operands.json              6539.2 ms     baseline
+aoe-web-profile-branch-fused.json                 6539.4 ms     flat
+aoe-web-profile-test-jznz-fused.json              6563.0 ms     slower by 23.8 ms
+aoe-web-profile-test-jcc-decode-fused.json        6621.9 ms     slower by 82.7 ms
+aoe-web-profile-test-jcc-specialized-fused.json   6592.3 ms     slower by 53.1 ms
 ```
 
 Production-style no-hist timing was slightly more favorable for the shape-specific decode fusion, but too small to justify the code complexity without repeated-run confirmation:
 
 ```text
 profile                                                       main.runSlice   guest/unwrapped
-/private/tmp/aoe-web-profile-baseline-nohist.json               6241.8 ms       5865.6 ms
-/private/tmp/aoe-web-profile-test-jcc-specialized-fused-nohist.json
+aoe-web-profile-baseline-nohist.json               6241.8 ms       5865.6 ms
+aoe-web-profile-test-jcc-specialized-fused-nohist.json
                                                                  6222.6 ms       5842.6 ms
 ```
 
@@ -401,7 +401,7 @@ cmp r,[base+disp] + signed Jcc fused       6575.3 ms      36.8 ms     6159.4 ms
 Profile files:
 
 ```text
-/private/tmp/aoe-repeat-cmpmem-jcc-{1,2,3}.json
+aoe-repeat-cmpmem-jcc-{1,2,3}.json
 ```
 
 Conclusion:
@@ -419,7 +419,7 @@ Tool:
 
 ```sh
 node tools/aoe-branch-fusion-candidates.js \
-  --profile=/private/tmp/aoe-web-profile-hot-blocks-32k.json \
+  --profile=aoe-web-profile-hot-blocks-32k.json \
   --hot-limit=160 \
   --top-rows=8
 ```
@@ -503,8 +503,8 @@ delta                                         -20.1 ms                    -6.9 m
 Profile files:
 
 ```text
-/private/tmp/aoe-repeat-blocklocal-disabled-control-{1,2,3}.json
-/private/tmp/aoe-repeat-blocklocal-mov-add-dec-cmp-jcc-{1,2,3}.json
+aoe-repeat-blocklocal-disabled-control-{1,2,3}.json
+aoe-repeat-blocklocal-mov-add-dec-cmp-jcc-{1,2,3}.json
 ```
 
 Conclusion:
@@ -665,7 +665,7 @@ Toy estimator command:
 
 ```sh
 node tools/aoe-reg-liveness-estimate.js \
-  --profile=/private/tmp/aoe-web-profile-hot-blocks-32k.json \
+  --profile=aoe-web-profile-hot-blocks-32k.json \
   --hot-limit=120
 ```
 
@@ -723,7 +723,7 @@ Toy block compiler printer:
 
 ```sh
 node tools/aoe-block-compiler-printer.js \
-  --profile=/private/tmp/aoe-web-profile-hot-blocks-32k.json \
+  --profile=aoe-web-profile-hot-blocks-32k.json \
   --addr=0x00535e08
 ```
 
@@ -735,7 +735,7 @@ Stack-packet compiler printer:
 
 ```sh
 node tools/aoe-stack-packet-compiler.js \
-  --profile=/private/tmp/aoe-web-profile-hot-blocks-32k.json \
+  --profile=aoe-web-profile-hot-blocks-32k.json \
   --top=20 \
   --details=5
 ```
@@ -822,7 +822,7 @@ Block-shape classifier:
 
 ```sh
 node tools/aoe-block-shape-census.js \
-  --profile=/private/tmp/aoe-web-profile-hot-blocks-32k.json \
+  --profile=aoe-web-profile-hot-blocks-32k.json \
   --hot-limit=120 \
   --top-rows=10 \
   --page-size=4096
@@ -1034,8 +1034,8 @@ g2w page cache                6598.9 ms     6208.8 ms   slower by 355.0 ms
 Profile files:
 
 ```text
-/private/tmp/aoe-repeat-g2w-page-cache-{1,2,3}.json
-/private/tmp/aoe-repeat-g2w-page-cache-summary.json
+aoe-repeat-g2w-page-cache-{1,2,3}.json
+aoe-repeat-g2w-page-cache-summary.json
 ```
 
 Conclusion:
@@ -1088,12 +1088,12 @@ loadpair dispatch-only        6248.0 ms     5869.0 ms   neutral, +4.1 ms runSlic
 Profile files:
 
 ```text
-/private/tmp/aoe-repeat-loadpair-1.json
-/private/tmp/aoe-repeat-loadpair-direct-{1,2,3}.json
-/private/tmp/aoe-repeat-loadpair-direct-summary.json
-/private/tmp/aoe-repeat-loadpair-dispatch-{1,2,3}.json
-/private/tmp/aoe-repeat-loadpair-dispatch-summary.json
-/private/tmp/aoe-web-profile-loadpair-hist-smoke.json
+aoe-repeat-loadpair-1.json
+aoe-repeat-loadpair-direct-{1,2,3}.json
+aoe-repeat-loadpair-direct-summary.json
+aoe-repeat-loadpair-dispatch-{1,2,3}.json
+aoe-repeat-loadpair-dispatch-summary.json
+aoe-web-profile-loadpair-hist-smoke.json
 ```
 
 Histogram confirmation:
@@ -1129,7 +1129,7 @@ The report command now supports optional hot-block weighting:
 
 ```sh
 node tools/superinstruction-census.js \
-  --profile=/private/tmp/aoe-web-profile-hot-blocks-32k.json \
+  --profile=aoe-web-profile-hot-blocks-32k.json \
   --hot-limit=120 \
   test/binaries/shareware/aoe/aoe_ex/Empires.exe
 ```
@@ -1198,8 +1198,8 @@ The handler histogram now also records guest block-entry EIPs and the concrete c
 Profile outputs:
 
 ```text
-/private/tmp/aoe-web-profile-hot-blocks-32k.json   10s hot-block exploration
-/private/tmp/aoe-web-profile-sib-fixed3.json       1s SIB consumer validation
+aoe-web-profile-hot-blocks-32k.json   10s hot-block exploration
+aoe-web-profile-sib-fixed3.json       1s SIB consumer validation
 ```
 
 Hot-block 32K table result:
@@ -1251,7 +1251,7 @@ Top SIB consumer shapes:
 Hot-loop split from the 10s hot-block run:
 
 ```text
-profile:              /private/tmp/aoe-web-profile-hot-blocks-32k.json
+profile:              aoe-web-profile-hot-blocks-32k.json
 elapsed:              10019 ms
 main.runSlice:         6559.7 ms
 wrapped host imports:   333.7 ms
@@ -1497,7 +1497,7 @@ An exact handler for the hottest SIB shape was tested:
 
 ```text
 candidate: jmp [disp+eax*4]
-profile:   /private/tmp/aoe-web-profile-jmp-sib-eax4-1s.json
+profile:   aoe-web-profile-jmp-sib-eax4-1s.json
 ```
 
 The handler worked mechanically. In the 1s hist-enabled profile it ran 167,340
@@ -1523,9 +1523,9 @@ jmp + load SIB       6242.0 ms       1.3 ms     5874.6 ms          23.08
 Profile files:
 
 ```text
-/private/tmp/aoe-repeat-baseline-{1,2,3}.json
-/private/tmp/aoe-repeat-jmp-sib-eax4-{1,2,3}.json
-/private/tmp/aoe-repeat-jmp-load-sib-{1,2,3}.json
+aoe-repeat-baseline-{1,2,3}.json
+aoe-repeat-jmp-sib-eax4-{1,2,3}.json
+aoe-repeat-jmp-load-sib-{1,2,3}.json
 ```
 
 Conclusion:
@@ -1910,3 +1910,465 @@ Practical implication for this project:
 5. Revisit SIB only as shape-specific handlers after operand/addressing histograms identify exact forms.
 6. Revisit stack only as batch prolog/epilog or call/ret forms, not as generic direct stack load/store replacement.
 7. Explore triple histograms once pair-driven wins flatten out.
+
+## Recovered historical findings (2026-08-13)
+
+These are dated measurements or experiments, not a new current-main validation.
+
+### Manual Recompile POC: AoE Blitter Dispatch
+
+Target block:
+
+```text
+0x00535c20:
+  mov [0x775050], esi
+  xor eax,eax
+  mov [0x775054], edi
+  mov al,[esi]
+  sub edi,[0x775020]
+  mov ecx,eax
+  inc esi
+  and eax,0xf
+  mov ebx,[0x77503c]
+  jmp [0x534400+eax*4]
+```
+
+This block is part of AoE's software blitter command decoder. It was a useful
+manual recompile target because the offline stack-packet prototype rejected it
+for partial-width state (`mov al,[esi]`) and an indirect jump-table exit, while
+the runtime decoder can still execute it today through many generic handlers.
+
+The POC adds one disabled-by-default handler selected only when
+`AOE_RECOMPILE=1` / `set_aoe_recompile_enabled(1)` is active. It emits a single
+threaded word for `0x00535c20`, performs the same register/memory/flag updates,
+and sets `EIP` from the jump table.
+
+Verification:
+
+```text
+node tools/build-compile-wat.js
+node tools/check-handler-count.js
+node test/test-aoe-recompile-535c20.js
+```
+
+Headless AoE reachability:
+
+```text
+AOE_RECOMPILE=1 node test/run.js ... --count=0x00535c20
+Hit counts:
+  0x00535c20 = 1686419
+[aoe-recompile] entries=1686419 0x00535c20=1686419
+```
+
+Corrected same-input headless timing was only a small full-scenario signal:
+
+```text
+baseline:          real 10.82  hits=1686419
+compiled handler:  real 10.69  hits=1686419
+```
+
+The isolated WAT loop shows the important local result:
+
+```text
+node tools/bench-aoe-recompile-535c20.js
+generic cached threaded: 263.16ms 7599.9 blocks/ms
+compiled handler:         51.81ms 38599.0 blocks/ms
+speedup: 5.079x (2000000 blocks)
+```
+
+Conclusion:
+
+```text
+Manual WAT recompilation can be much faster for a hot AoE block.
+One small command-dispatch block is not enough to move whole-game timing much.
+The real compiler should promote larger hot blocks/traces and combine wins:
+  register virtualization, flag-local branches, EA/g2w reuse, and jump exits.
+Keep the cold interpreter as fallback; use an allowlist/counter path first.
+```
+
+Follow-up multi-block loop POC:
+
+```text
+allowlist:
+  0x00535b4d  span cmp-left
+  0x00535b56  span cmp-right
+  0x00535b5b  next linked span
+  0x00535b66  overlap cmp-left
+  0x00535b6b  overlap cmp-right
+  0x00535b70  unclipped command dispatcher setup
+  0x00535b8b  clipped command dispatcher setup
+  0x00535bc0  linked-span test
+  0x00535bdc  linked-span command dispatch
+  0x00535c20  primary command dispatch
+  0x00535e00  high-nibble run length
+  0x00535e05  byte run length + run-end cmp
+  0x00535e08  run-end cmp
+  0x00535e12  span-right cmp
+  0x00535e17  span-left cmp
+  0x00535e1e  left clip adjust
+  0x00535e25  right clip cmp
+  0x00535e2f  right clip adjust
+  0x00535e40  clipped pixel dispatch
+  0x00535e7c  skip clipped run
+  0x00535e8a  advance linked span
+  0x005360a0  alternate command dispatch
+  0x005362e0  row advance cmp
+  0x005362f4  row epilogue
+  0x00536420  alternate command dispatch
+  0x00536528  alternate pixel dispatch
+```
+
+`0x00535aa0` was intentionally left out of the active decoder allowlist after
+initial implementation because it needs to be split around its internal
+branches. Keeping it monolithic would hide real block entries and distort
+counter/profiling behavior.
+
+Verification:
+
+```text
+node test/test-aoe-recompile-loop.js
+PASS  AoE compiled blitter loop blocks match generic decoder
+```
+
+Headless AoE reachability with 16 sampled block counters:
+
+```text
+[aoe-recompile] entries=9396084 0x00535c20=1688120
+sampled hits included:
+  0x00535c20 = 1688120
+  0x005360a0 = 1131066
+  0x00535e00 = 1664872
+  0x00535e08 = 1653513
+  0x00535e7c = 1413630
+```
+
+Clean no-count headless timing on the same 260100-batch input:
+
+```text
+baseline:          real 12.16
+compiled allowlist: real 11.54
+```
+
+Three-tier four-block loop microbenchmark:
+
+The proposed general forms of these tiers are specified in
+[`wasm-stack-threaded-code.md`](wasm-stack-threaded-code.md) and
+[`x86-to-wasm-compiler.md`](x86-to-wasm-compiler.md).
+
+```text
+cycle:
+  0x00535c20 command dispatch
+  0x00535e00 run-length decode
+  0x00535e08 span-bound comparison
+  0x00535e7c clipped-run advance
+  -> 0x00535c20
+
+command:
+  BLOCKS=2000000 WARMUP_BLOCKS=2000000 TRIALS=15 \
+    node tools/bench-aoe-recompile-loop.js
+
+variant          median ms   blocks/ms   vs x86-threaded
+x86 threaded        150.36     13301.4        1.000x
+WAT threaded         68.49     29201.3        2.195x
+WAT optimized        44.92     44523.6        3.347x
+
+WAT optimized vs WAT threaded: 1.525x
+```
+
+`x86 threaded` is the current decoded generic-handler stream. `WAT threaded`
+is a prototype normalized micro-op packet interpreted inside one static WAT
+handler, with guest registers held in WAT locals until block exit. `WAT
+optimized` is the straight-line hand-written block implementation. Setup,
+initial decode, and counters are outside the timed region. Each variant runs
+500,000 identical four-block cycles, and every measured trial verifies the same
+final registers, lazy flags, selected memory, and EIP. This is an isolated hot
+loop result, not a whole-game speedup. It shows that a packet backend can retain
+most of the gain from crossing the per-x86-handler boundary, while specialized
+straight-line lowering still has another ~52% throughput advantage over packet
+dispatch on this shape.
+
+Full Chrome browser profile, same scripted 10s Bronze Age Art of War gameplay.
+Default harness mode uses `--headless=new`:
+
+```text
+baseline:
+  main.runSlice total 7364.5 ms
+  guest/unwrapped     6877.7 ms
+  avg runSlice          14.054 ms
+  present FPS           15.855
+  repaint FPS           52.041
+
+compiled allowlist:
+  main.runSlice total 6921.0 ms
+  guest/unwrapped     6471.9 ms
+  avg runSlice          11.056 ms
+  present FPS           19.170
+  repaint FPS           57.736
+  recompile entries  6954138
+  0x00535c20 entries  771686
+
+delta:
+  main.runSlice total -6.0%   / 1.064x
+  guest/unwrapped     -5.9%   / 1.063x
+  avg runSlice        -21.3%  / 1.271x
+  present FPS         +20.9%  / 1.209x
+  repaint FPS         +10.9%  / 1.109x
+```
+
+20s gameplay-only rerun with explicit launch/profile split:
+
+```text
+baseline:
+  launch->gameplay    51001.7 ms
+  main.runSlice total 12909.5 ms
+  guest/unwrapped     12087.0 ms
+  avg runSlice            9.188 ms
+  present FPS            25.238
+  repaint FPS            59.738
+
+compiled allowlist:
+  launch->gameplay    51640.7 ms
+  main.runSlice total 12454.9 ms
+  guest/unwrapped     11634.5 ms
+  avg runSlice            8.359 ms
+  present FPS            26.729
+  repaint FPS            59.913
+  recompile entries  14558151
+  0x00535c20 entries 1575794
+
+delta:
+  main.runSlice total -3.5%   / 1.036x
+  guest/unwrapped     -3.7%   / 1.039x
+  avg runSlice         -9.0%  / 1.099x
+  present FPS          +5.9%  / 1.059x
+  repaint FPS          +0.3%  / 1.003x
+```
+
+Visible Chrome (`HEADLESS=0`) single-run check:
+
+```text
+baseline:
+  main.runSlice total 6494.3 ms
+  guest/unwrapped     6113.7 ms
+  avg runSlice           9.134 ms
+  present FPS           22.228
+  repaint FPS           59.588
+
+compiled allowlist:
+  main.runSlice total 6537.4 ms
+  guest/unwrapped     6129.9 ms
+  avg runSlice           9.586 ms
+  present FPS           21.396
+  repaint FPS           59.877
+  recompile entries  7384214
+  0x00535c20 entries  780248
+
+delta:
+  main.runSlice total +0.7%   / 0.993x
+  guest/unwrapped     +0.3%   / 0.997x
+  avg runSlice         +5.0%  / 0.953x
+  present FPS          -3.7%  / 0.963x
+  repaint FPS          +0.5%  / 1.005x
+```
+
+The browser numbers are single runs and need repetition because AoE startup,
+Chrome mode, and scripted interaction timing can shift the exact game state.
+The 20s visible rerun was not comparable: CDP input delivery stalled for
+seconds after gameplay start, leaving the gameplay window mostly idle
+(`main.runSlice` only 26.3 ms and no present/repaint events). Use the default
+headless-Chrome browser harness for this 20s comparison until the visible input
+path is made deterministic.
+The POC clearly executes millions of promoted blocks in the browser; the
+headless-Chrome CPU signal is positive, while the visible-Chrome run is
+effectively within noise/slightly negative. This is still materially better
+than the one-block POC for proving the mechanism, and it confirms the next
+direction: promote connected hot-loop blocks, not isolated peepholes, then
+measure with repeated browser trials.
+
+### Production Cached Hot-Subset Checkpoint
+
+The guarded `br_table` prototype now classifies the final decoded packet at
+cache insertion rather than rescanning it on every execution. Each of the eight
+thread caches has a parallel 4096-bit eligibility map. Cache collision,
+`clear_cache`, generated-code page invalidation, thread initialization, and
+feature toggles keep the bit synchronized with the ordinary cache entry.
+
+The main loop retains its existing cache lookup. A hot bit routes the already
+looked-up packet pointer into the generated generic `br_table` executor; a cold
+bit continues into the ordinary `$next` path. The classifier and executor also
+recognize the four AoE exact-form IDs, so the existing direct-register
+specialization remains enabled.
+
+```mermaid
+flowchart LR
+    A[x86 EIP] --> B[ordinary cache lookup]
+    B -->|miss| C[decode packet]
+    C --> D[classify once at cache_store]
+    D --> E[(packet + hot bit)]
+    B -->|hit| E
+    E -->|HOT| F[generated br_table packet executor]
+    E -->|COLD| G[existing call_indirect / next]
+    F --> A
+    G --> A
+```
+
+The real `run` entry point retained a 1.998x paired speedup in the 31-trial,
+two-million-block all-hot fixture (147.31 ms x86 median versus 73.59 ms cached
+subset). This measures the real cache and selector integration, but remains a
+focused kernel result.
+
+One matched 30-second full-browser AoE gameplay pair was also positive:
+
+```text
+metric                    baseline     cached subset       delta
+main.runSlice total      19820.7 ms      19238.7 ms        -2.94%
+guest/unwrapped          17094.0 ms      16428.8 ms        -3.89%
+completed slices          1998           2112              +5.71%
+present FPS                 16.285          17.355          +6.57%
+repaint FPS                 58.652          59.415          +1.30%
+hot block coverage                           29.1%
+```
+
+The candidate completed real campaign gameplay and recorded 61.5M hot entries
+and 149.7M cold entries.
+
+#### RCT Corpus Expansion
+
+RCT's stable runtime loop was initially a 0%-hot control. Its handler census
+showed that a small generic expansion could cover it without encoding any RCT
+algorithm: 32-bit absolute/SIB memory ALU, `CMPSB`, base-plus-displacement
+32-bit and 8-bit memory ALU, SIB effective-address calculation, and `POP EDX` /
+`POP EBX`. Existing exact-form specialization already converts the loop's three
+dominant byte-ADD forms into direct handler IDs.
+
+The packet is longer than one interpreter slice. The ordinary `$next` loop
+starts with a budget of 1000 and stops after 999 non-terminal handlers, so the
+generated classifier and executor use that same boundary. Classifying only a
+fully terminated packet, or executing through its eventual branch, would leave
+RCT cold or change guest scheduling respectively.
+
+```mermaid
+flowchart LR
+    A[decoded RCT packet] --> B{first 999 handlers supported?}
+    B -->|no| C[ordinary call_indirect fallback]
+    B -->|yes| D[cache hot bit]
+    D --> E[generated br_table executor]
+    E --> F[execute at most 999 handlers]
+    F --> G[return at normal slice boundary]
+```
+
+With 30 seconds of warmup and a matched 10-second measurement, the expanded
+subset covered every measured block entry:
+
+```text
+metric                    baseline     expanded subset       delta
+median runSlice            2134.0 ms       745.0 ms          -65.1% / 2.864x
+average runSlice           2153.1 ms       742.6 ms          -65.5% / 2.899x
+completed slices                 5              14            2.80x throughput
+hot block entries                              1,400,000      100% coverage
+fallback entries                                      0
+```
+
+This browser run displays an RCT window, but it remains a deterministic,
+instruction-heavy loop at `EIP=0x00850000`, not interactive rendered park
+gameplay. The result establishes the benefit for that loop and motivates a
+proper park-state harness; it is not an RCT frame-rate claim. A differential
+test exercises all observed families, exact forms, memory/register/flag state,
+SIB addressing, and the 999-handler cutoff. Keep the feature disabled by
+default pending repeated full-app pairs and interactive RCT validation.
+
+```text
+scratch/runs/<run-id>/aoe-prod-subset-baseline-30s.json
+scratch/runs/<run-id>/aoe-expanded-rct-subset-candidate-30s.json
+scratch/runs/<run-id>/aoe-expanded-rct-subset-candidate-30s.png
+scratch/runs/<run-id>/rct-expanded-subset-baseline-10s.json
+scratch/runs/<run-id>/rct-expanded-subset-candidate-fixed-10s.json
+scratch/runs/<run-id>/rct-expanded-subset-candidate-fixed-10s.png
+```
+
+### Fully Automatic 385-Handler `br_table` Control
+
+To measure whether converting the entire threaded table is worthwhile, the
+build now reuses the local WAT S-expression parser to inventory and clone all
+385 canonical `$th_*` function bodies into one generated dispatcher. This is a
+control-flow transformation rather than a second x86 implementation:
+
+```mermaid
+flowchart LR
+    A[existing th_* WAT] --> B[parse and classify exits]
+    B --> C[rename locals / labels]
+    C --> D[return_call next becomes dispatch branch]
+    D --> E[generated 385-case br_table]
+    E --> F[X86_FULL_BRTABLE runtime toggle]
+```
+
+The 31-trial two-million-block comparison provides a direct architectural
+control:
+
+```text
+variant                             median       paired vs x86
+x86 call_indirect                  223.78 ms          1.000x
+automatic 385-case br_table        161.06 ms          1.362x
+compact cached corpus subset       104.66 ms          2.204x
+```
+
+The generated source is 279,880 bytes and adds 29,205 bytes (7.6%) to the
+primary Wasm binary. A real 30-second AoE campaign pair routed 200.3M blocks
+through the whole-table function: guest/unwrapped time fell 3.09%, but total
+`main.runSlice` rose 0.78% and present FPS fell 1.46%. RCT's parked warm loop
+improved 1.839x by median slice, versus 2.864x for its compact subset.
+
+Thus complete automatic conversion is feasible and useful as a benchmark
+control, but the current monolithic function is not the preferred production
+layout. Generate compact hot tables, multiple family tables, or a hot-table
+front end with whole-table fallback, and retain this toggle for periodic
+end-to-end comparisons.
+
+```text
+scratch/runs/<run-id>/aoe-full-brtable-candidate-30s.json
+scratch/runs/<run-id>/aoe-full-brtable-candidate-30s.png
+scratch/runs/<run-id>/rct-full-brtable-candidate-10s.json
+scratch/runs/<run-id>/rct-full-brtable-candidate-10s.png
+```
+
+### Further August 2026 dispatch experiments (recovered)
+
+(Recovered from branch commit `a7d19467`, Aug 2026. Fixture = the four-block
+AoE blitter cycle from the POC above; none of this is a whole-game number unless
+stated. The packet prototypes themselves are summarised in
+[wasm-stack-threaded-code.md](wasm-stack-threaded-code.md#prototype-results-august-2026).)
+
+**What the 4x `br_table` microbench win is made of.** Same decoded thread words,
+101 interleaved 500k-block trials, cumulative speedup over `call_indirect`:
+A current handlers 1.000x; B one-function `br_table` + generic helpers 2.036x;
+C + thread IP in a local 2.190x (+7.5%); D + direct register access 3.593x
+(+64%); E + specialised ALU/branch semantics 4.248x (+18%); F + *all*
+architectural state in locals 4.263x (+0.4%, noise). So the win is dispatch
+collapse plus removing dynamic `get_reg`/`set_reg` selection; persistent
+register locals on top are worth nothing. Stage B is a 16-handler upper bound
+(bodies in one function, cold/debug paths omitted), so it prices collapse and
+inlining together, not the `call_indirect` opcode alone.
+
+**Specialising inside the existing `call_indirect` shape.** Promoting handler
+IDs only (same packet, same dispatch count): register-form handlers were
+consistently 16-29% faster (paired ~1.2x); ALU/branch-only specialisation was
+neutral-to-slower (0.87-1.05x) and added nothing on top of register forms.
+Conclusion: emit direct handler IDs for census-backed register *forms*; do not
+add ALU-only variants.
+
+**Full-app exact forms.** Seven forms (AoE: `mov ecx,eax`, `mov edx,edi`,
+`add edx,ecx`, `add edi,ecx`; RCT: `add byte [eax+disp],al`,
+`add byte [ecx+disp],al`, `add dl,dh` — the RCT three were 68.3% of its
+dispatched handlers) gave AoE runSlice -8.7% / present FPS +7.4% and RCT
+runSlice -5.9% over three headless-Chrome runs each. RCT was still in its
+`EIP=0x00850000` loop, not a park. (Toggle was `HOTFORM_SPECIALIZE` /
+`set_hotform_specialization_enabled`; not present in current `src/`.)
+
+**Dormant debug/profiling checks cost nothing measurable.** A build with the
+handler-hist, watch/break, hit-counter, EIP/ESP trace, `dbg_prev_eip` and
+shadow-call-stack checks compiled out was 0.09% faster on fixed-work 2M-block
+runs (140.70 vs 140.58 ms). Full-browser pairs swung -30%..+15% *with run
+order*, i.e. browser warmup, not the change. 26 `logToUI` calls cost 5.5 ms per
+10 s window; no-op `log_i32` imports ~4-6 ns each. The stripped build was not
+kept. Keep `HANDLER_HIST=0` explicit when timing: the harness enables the
+histogram by default.

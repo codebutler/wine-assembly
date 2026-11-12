@@ -1,0 +1,7 @@
+# Qualified D3D fixture integration, 2026-10-23
+
+Historical source last updated, 2026-10-23. Runtime and implementation claims below describe that dated source; see current app notes and source for subsequent changes.
+
+Fresh strict trusted SSH refs matched main `5406777ecbcef9cf9b03b40d592d722bb0086de0` and candidate `332e978c7d92364054dd4ccaef17a16080bd6620`. Candidate ancestry and the empty production `src/`, `lib/` and arena-reuse test diff passed. Actual compaction fixture SHA-256 is `01b47b380da7c3d134175b0d7d1e666e2b0bad1f29d093ad85cedd0ebd148543`; candidate and accepted `09dc88de08907d362eef2ac5dbbaad0080147358` fixture Git blobs matched. The actual fixture was read: streaming asserts mode selection, injects third-create failure, compares pixels against a separately executed two-batch prefix differing from cleared pixels, and checks unpublished samples, baseline bytes and empty live/pending contexts. Retained mode restores budget, proves non-streaming selection and preserves its pixel/sample atomicity oracle and context cleanup.
+
+The retained report, native wrapper, four successful phase receipts, cross-extraWat/missing-artifact control summary, cleanup and coordinator acceptance receipt were inspected. Earlier native compaction26 and unchanged arenaReuse2 are reused evidence only: zero compile/native reruns here. Independent full current-input/module/manifest/extraWat hash binding and complete candidate documentation/secret review were not completed; cheap Node syntax was never reached. Reported counts alone are not an integration acceptance.

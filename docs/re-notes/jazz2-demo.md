@@ -441,3 +441,59 @@ SimCity 2000 Net.
 
 Evidence: `scratch/runs/20261010T2000Z-jazz2-client-parse-stall` and
 `scratch/runs/20261010T1640Z-jazz2-join-timing`.
+
+
+## 2026-10-31 original browser level and controls
+
+Run `scratch/runs/20261031T0150Z-jazz2-original-browser/` starts the unchanged
+registered `jazz2_demo` with `Share1.j2l -nonetwork`. Native Escape skips the
+original logos; native Enter walks Single Player, Shareware Demo, Jazz and
+Medium into **Darn Ratz**. This is live play without the attract-mode DEMO
+banner. Personally inspected `level-start.png` shows score zero, five hearts
+and three lives. Held Right/Control and then Right/Space/Control scroll the
+level and move Jazz. `jump-fire.png` shows a projectile and score 100;
+`level-progress.png` shows score **710**, **one gem**, two remaining hearts
+and three lives. These captures establish responsive original gameplay and
+scoring; they do not establish a level finish or a particular enemy kill.
+
+Chrome 151.0.7922.108 ran with threads disabled and production slice 1000.
+The game uses GDI/DDraw presentation with no owning window GPU layer; the
+WebGL URL selector is not proof of GPU rendering for this game. The retained
+compiled module is `573e235db16e351668289f49e2f279ff48bcad56e7ca533167cb94cd6f4ec3fc`,
+from the Globe `2606d6173` build. Its source manifest is retained separately
+from the actual concurrent browser-host response snapshots; no whole-current-main
+source identity or fresh build is claimed. Verification passed all 44 original
+file pins, 168 served-response snapshots and the actual loaded module hash.
+All 41 recorded browser input events were trusted, with keys released. No
+page errors were recorded. The first response-file write failed after a
+successful native Enter request because the output path was doubled; its
+level screenshot survived and subsequent request paths were corrected.
+
+Original files and guest state were not patched. Audio, performance, native
+Windows parity and level completion remain unqualified. Explicit shutdown
+returned controller exit zero; the browser was absent, all three ports closed
+and its private profile removed. No Boat or test box was used. `recovery.txt`
+records the replay route; no resumable game save was exported.
+
+
+## 2026-10-31 bounded Darn Ratz finish attempt
+
+Run `scratch/runs/20261031T0225Z-jazz2-level-finish/` replayed the same
+original Medium/Jazz route with the retained module above. Native Space
+fires and Control jumps. After losing one life, the next attempt climbed
+the upper ledge (`upper-ledge.png`, score 650), collected **two coins**
+(`bridge-approach.png`, score 1,450), and reached the spike pit below the
+rope bridge (`bridge-jump.png`, **score 1,650**). A second death returned Jazz
+to the opening area. The inspected final capture shows score 1,650, one
+remaining life and five hearts. **The level was not completed**; no resumable
+save was exported and no emulator defect was established. The nearby spring
+was not successfully tested before that death.
+
+Verification passed 44 original file pins, 165 served-response snapshots,
+the actual loaded module hash and all 117 trusted input events, with no keys
+held and no recorded page errors. No source or asset changed and no new build
+was made. GDI/DDraw presentation and the prior source-identity limitations
+still apply. The browser PID disappeared before explicit shutdown for an
+unknown reason; the subsequent explicit quit returned controller exit zero.
+Cleanup verified the browser absent, three ports closed and private profile
+removed. No Boat was used. `recovery.txt` and `actions.jsonl` retain the route.

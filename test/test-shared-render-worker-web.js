@@ -24,7 +24,8 @@ const {startStaticServer,closeServer}=require('./static-server');
     page.on('pageerror',error=>console.error('pageerror:',error.message));
     page.on('console',message=>{if(message.type()==='error')console.error('browser console:',message.text());});
     await page.goto(`http://127.0.0.1:${server.address().port}/shared-render-test`);
-    for(const file of ['region-map.generated','render-worker','d3d-command-stream','gl-command-stream','gpu-backend','mem-utils','gl-compat'])
+    for(const file of ['region-map.generated','render-worker','d3d-command-stream','gl-command-stream','gpu-backend','mem-utils','gl-compat',
+      'glide-backend','glide-software','glide-host'])
       await page.addScriptTag({url:`/lib/${file}.js`});
     const result=await page.evaluate(async()=>{
       if(!crossOriginIsolated)throw new Error('shared-memory test requires isolated document');
@@ -56,6 +57,66 @@ const {startStaticServer,closeServer}=require('./static-server');
         await issue(OP.RESOURCE_CREATE,{kind:'device',backend,width:16,height:16,quadBudget:1});
         return {port,queue,issue};
       }
+      async function glidePool(backend){
+        const pointer=e.guest_to_wasm(e.guest_alloc(4096))>>>0;
+        const view=new DataView(memory.buffer,pointer,4096),packets=[],presented=[];
+        let readbacks=0;
+        const renderer={windows:{7:{}},scheduleRepaint(){}};
+        const bridge=new GlideHost.Bridge({backend,getMemory:()=>memory,getExports:()=>e,renderer,
+          createRenderEndpoint(options){
+            const port=manager.createEndpoint(options),request=port.request.bind(port);
+            port.request=async message=>{
+              if(message.bytes?.buffer instanceof SharedArrayBuffer)
+                packets.push({buffer:message.bytes.buffer,offset:message.bytes.byteOffset,op:message.op});
+              const reply=await request(message);
+              if(message.op===9){
+                if(!(reply.bytes?.buffer instanceof SharedArrayBuffer))throw new Error('Glide readback lost shared packet');
+                readbacks++;
+              }
+              return reply;
+            };
+            return port;
+          },
+          onPresent(layer){presented.push([...layer.canvas.getContext('2d').getImageData(2,2,1,1).data]);}});
+        const words=values=>values.forEach((value,i)=>view.setUint32(i*4,value,true));
+        const barrier=()=>bridge.submit(19,pointer,0);
+        const read=async expected=>{
+          words([0,0,0,16,16]);await bridge.submit(9,pointer,20+16*16*2);
+          same(view.getUint16(20+(2*16+2)*2,true),expected,backend+' Glide RGB565 readback');
+        };
+        try{
+          words([7,16,16,0,0,1]);same(await bridge.submit(1,pointer,24),1,backend+' Glide open');
+          if(backend==='webgl'&&!bridge.device.glRenderer)throw new Error('Glide GPU unexpectedly fell back to software');
+          // No await between three early ACKs: all slots must stay leased even
+          // before the first actual worker request starts. Poison reused input.
+          for(const color of [0xff0000,0x00ff00,0x0000ff]){
+            words([3,12,color,255,65535]);same(bridge.submit(0,pointer,20),1,'Glide snapshot early ACK');
+            words([0xffffffff,0xffffffff,0,0,0]);
+          }
+          words([3,12,0xffffff,255,65535]);
+          const blocked=bridge.submit(0,pointer,20);
+          if(!(blocked instanceof Promise)||bridge.workerSubmissions.waiters.length!==1)
+            throw new Error('Glide fourth packet did not wait for bounded pool credit');
+          await blocked;words([0xffffffff,0xffffffff,0,0,0]);await barrier();
+          await read(0xffff);
+          await bridge.submit(4,pointer,0);await barrier();
+          same(presented.at(-1),[255,255,255,255],backend+' Glide white presentation');
+          words([0,0,0,16,16]);
+          for(let i=0;i<16*16;i++)view.setUint16(20+i*2,0x07e0,true);
+          same(bridge.submit(10,pointer,20+16*16*2),1,'Glide LFB write early ACK');
+          new Uint8Array(memory.buffer,pointer+20,16*16*2).fill(0);
+          await barrier();await read(0x07e0);
+          await bridge.submit(4,pointer,0);await barrier();
+          same(presented.at(-1),[0,255,0,255],backend+' Glide copied green LFB presentation');
+          const offsets=new Set(packets.map(packet=>packet.offset));
+          if(offsets.size!==3||packets.length<=3||packets.some(packet=>packet.buffer!==packets[0].buffer))
+            throw new Error('Glide packets did not wrap one canonical three-slot SAB');
+          await bridge.close();
+          if(bridge.workerPacketPool||renderer.windows[7]._gpuFrameLayer||adoptions||terminations)
+            throw new Error('Glide close failed pool/window retirement or retired peer endpoints');
+          return {backend,packets:packets.length,slots:offsets.size,readbacks,presents:presented.length};
+        }finally{await bridge.close();}
+      }
       try{
         await manager.ready;
         const gl=manager.createEndpoint({api:'gl',backend:'webgl'});await gl.ready;
@@ -80,7 +141,8 @@ const {startStaticServer,closeServer}=require('./static-server');
         }
         const created=await glBatch([{name:'wglCreateContext',aux:1}]);
         if(!created.value)throw new Error('real worker WGL creation failed');
-        await glBatch([{name:'wglMakeCurrent',args:[1,created.value]},
+        // Native WGL records carry the resolved drawable in aux, apart from HDC.
+        await glBatch([{name:'wglMakeCurrent',aux:1,args:[1,created.value]},
           {name:'glViewport',args:[0,0,16,16]},
           {name:'glClearColor',args:[float(1),0,0,float(1)]},
           {name:'glClear',args:[0x4000]},{name:'gpuPresent'}]);
@@ -178,7 +240,7 @@ const {startStaticServer,closeServer}=require('./static-server');
         frontView.setUint16(front+16,32,true);frontView.setUint16(front+18,12,true); // padded rows
         frontView.setUint32(front+20,bits,true);
         raw.set([3,5,7,0,11,13,17,0,99,99,99,99,19,23,29,0,31,37,41,0,88,88,88,88]);
-        await glBatch([{name:'wglMakeCurrent',args:[1,swContext.value]},{name:'gpuPresent'}],glSoftware,{softwareFront:front});
+        await glBatch([{name:'wglMakeCurrent',aux:1,args:[1,swContext.value]},{name:'gpuPresent'}],glSoftware,{softwareFront:front});
         if(softwareFrames.length!==1)throw new Error('software GL did not publish its guest front');
         const expectedSoftware=[7,5,3,255,17,13,11,255,29,23,19,255,41,37,31,255];
         same([softwareFrames[0].width,softwareFrames[0].height],[2,2],'guest front dimensions');
@@ -191,6 +253,7 @@ const {startStaticServer,closeServer}=require('./static-server');
         await glSoftware.terminate();
         checkGuestState('software endpoint retirement');guestState.set(savedGuestState);
         if(adoptions!==0||terminations!==0)throw new Error('software GL close retired its peers');
+        const glide=[await glidePool('webgl'),await glidePool('software')];
         await software.issue(OP.CLEAR,{color:[1,0,1,1],flags:1});
         const survivor=await software.issue(OP.PRESENT);same([...survivor.pixels.slice(0,4)],[255,0,255,255],'surviving software device');
         await glBatch([{name:'glGetIntegerv',args:[0x0d33,query]}]);
@@ -198,12 +261,13 @@ const {startStaticServer,closeServer}=require('./static-server');
         const stopped=await manager.stop();await manager.stop();
         if(workers!==1||terminations!==1||adoptions!==1)throw new Error('physical worker/heap lifecycle counts '+[workers,terminations,adoptions]);
         return {workers,terminations,adoptions,maxTexture,frames:frames.length,softwareGlFrames:softwareFrames.length,gpuTexturedDraws:2,
-          heapHead:stopped.heapHead,heapAdopted:stopped.heapAdopted};
+          glide,heapHead:stopped.heapHead,heapAdopted:stopped.heapAdopted};
       }finally{for(const bitmap of bitmaps)bitmap?.close();await manager.stop();}
     });
     assert.strictEqual(result.workers,1);assert.strictEqual(result.adoptions,1);assert.strictEqual(result.frames,2);
     assert.strictEqual(result.softwareGlFrames,2);
     assert.strictEqual(result.gpuTexturedDraws,2);
-    console.log('PASS actual shared worker GL + D3D9 WebGL/native software:',JSON.stringify(result));
+    assert.deepStrictEqual(result.glide.map(run=>[run.backend,run.slots,run.readbacks]),[['webgl',3,2],['software',3,2]]);
+    console.log('PASS actual shared worker GL + D3D9 + Glide WebGL/native software:',JSON.stringify(result));
   }finally{if(browser)await browser.close();await closeServer(server);}
 })().catch(error=>{console.error(error);process.exitCode=1;});

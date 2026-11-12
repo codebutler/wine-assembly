@@ -24,6 +24,8 @@ const RegionMap = require('../lib/region-map.generated');
 let passed = 0, failed = 0;
 const async_tests = [];
 function test(name, fn) {
+  const filter = process.argv.find(arg => arg.startsWith('--filter='));
+  if (filter && !new RegExp(filter.slice(9)).test(name)) return;
   try {
     const r = fn();
     if (r && typeof r.then === 'function') {
@@ -526,9 +528,43 @@ test('retry history survives cached prefixes but isolates ranges and file identi
   assert.strictEqual(vfs.readFile(reused, buf, 16).pending.attempts, 1);
 });
 
+// Exercise the current frame/epoch-owned callback protocol through the real
+// local endpoint, rather than constructing a manager without its registry.
+let ioFrameModule;
+async function scopedIoContext(vfs, threadId) {
+  const { fixture, args } = require('./test-thread-send-frame-ownership');
+  const { ThreadManager } = require('../lib/thread-manager');
+  const { GuestThreadHost } = require('../lib/guest-thread-host');
+  ioFrameModule ||= fixture();
+  const module = await ioFrameModule;
+  const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
+  const instance = await WebAssembly.instantiate(module);
+  // Supply the current constructor options explicitly; the older repro helper
+  // predates that interface and never reached either test's I/O assertions.
+  const manager = new ThreadManager(module, memory, instance, null, {});
+  const host = new GuestThreadHost({ localMainExports: () => instance.exports });
+  manager.workerBackend = host;
+  const c = { manager, link: host._localLink, close: () => host.stop() };
+  c.manager._getVfs = () => vfs;
+  if (threadId !== 1) {
+    // The local endpoint represents a registered receiving thread here. The
+    // driver's tid below deliberately differs: ownership comes from the link.
+    c.manager.workerBackend = null;
+    c.manager.threads.set(0xe1001, { tid: threadId - 1, state: 'active', link: c.link });
+  }
+  let frame = 0;
+  c.resolveIo = async () => {
+    const pending = await c.link.dispatchThreadSend(args(++frame, 12));
+    assert.strictEqual(pending.yield, 12);
+    assert.strictEqual(await c.manager.resolveThreadSendYield(c.link, pending,
+      { tid: 1 }, new Set([c.link])), 'resume');
+    assert((await c.link.resumeThreadSendDispatch(undefined, pending.frameToken, pending.waitEpoch)).done);
+  };
+  return c;
+}
+
 test('scheduler retries without provider fills cannot exhaust the read budget', async () => {
   const { createFilesystemImports } = require('../lib/filesystem');
-  const { ThreadManager } = require('../lib/thread-manager');
   const vfs = new VirtualFS();
   let fills = 0, ready = false;
   vfs.setProviderFile(GUEST, { provider: { size: 16,
@@ -540,29 +576,28 @@ test('scheduler retries without provider fills cannot exhaust the read budget', 
     exports: { get_image_base: () => 0x400000 } });
   const h = vfs.createFile(GUEST, 0x80000000, 3);
   const peer = vfs.createFile(GUEST, 0x80000000, 3);
-  const manager = Object.create(ThreadManager.prototype);
-  manager._getVfs = () => vfs;
-  const link = { callExport: async name => assert.strictEqual(name, 'clear_yield') };
-  let pending;
-  for (let i = 0; i < 8; i++) {
-    assert.strictEqual(imports.fs_read_file_result(h, 0x400000, 16, 0), 997);
-    pending = vfs.pendingRead;
-    // Simulate lost selection explicitly; this test must remain useful once
-    // production request selection is made thread-owned.
-    vfs.pendingRead = null;
-    assert.strictEqual(imports.fs_read_file_result(peer, 0x400100, 0, 0), 0);
-    await manager.resolveThreadSendYield(link, { yield: 12 }, { tid: 1 }, new Set());
-  }
-  assert.strictEqual(fills, 0);
-  assert.strictEqual(pending.attempts, 1);
-  assert.strictEqual(await vfs.fillPendingRead(pending), true);
-  assert.strictEqual(imports.fs_read_file_result(h, 0x400000, 16, 0), 0);
-  assert.strictEqual(fills, 1);
+  const callback = await scopedIoContext(vfs, 1);
+  try {
+    let pending;
+    for (let i = 0; i < 8; i++) {
+      assert.strictEqual(imports.fs_read_file_result(h, 0x400000, 16, 0), 997);
+      pending = vfs.pendingRead;
+      // Simulate lost selection explicitly; this test must remain useful once
+      // production request selection is made thread-owned.
+      vfs.pendingRead = null;
+      assert.strictEqual(imports.fs_read_file_result(peer, 0x400100, 0, 0), 0);
+      await callback.resolveIo();
+    }
+    assert.strictEqual(fills, 0);
+    assert.strictEqual(pending.attempts, 1);
+    assert.strictEqual(await vfs.fillPendingRead(pending), true);
+    assert.strictEqual(imports.fs_read_file_result(h, 0x400000, 16, 0), 0);
+    assert.strictEqual(fills, 1);
+  } finally { await callback.close(); }
 });
 
 test('thread-owned reads isolate pending selection, faults and same-handle positional retries', async () => {
   const { createFilesystemImports } = require('../lib/filesystem');
-  const { ThreadManager } = require('../lib/thread-manager');
   const vfs = new VirtualFS(), ready = new Set();
   let rejectZero = false;
   vfs.setProviderFile(GUEST, { provider: { size: 32,
@@ -580,35 +615,35 @@ test('thread-owned reads isolate pending selection, faults and same-handle posit
   assert.strictEqual(imports.fs_read_pending(2), 1, 'peer success cannot erase legacy status');
   assert.strictEqual(imports.fs_read_pending(3), 0);
   assert.strictEqual(vfs.pendingRead, null, 'main thread has no borrowed pending request');
-  const manager = Object.create(ThreadManager.prototype);
-  manager._getVfs = () => vfs;
-  const link = { callExport: async name => assert.strictEqual(name, 'clear_yield') };
-  await manager.resolveThreadSendYield(link, { yield: 12 }, { tid: 1 }, new Set());
-  assert.strictEqual(imports.fs_read_file_result(h, 0x400000, 8, 0, 2), 0);
-  ready.clear(); rejectZero = true;
-  assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 0, 0, 2), 997);
-  assert.strictEqual(imports.fs_read_file_at(h, 0x400100, 8, 0, 8, 0, 3), 997);
-  const pa = vfs.getPendingRead(2), pb = vfs.getPendingRead(3);
-  assert.notStrictEqual(pa, pb);
-  assert.strictEqual(await vfs.fillPendingRead(pa), false);
-  assert.strictEqual(vfs.getPendingRead(3), pb);
-  assert.strictEqual(await vfs.fillPendingRead(pb), true);
-  assert.strictEqual(imports.fs_read_file_at(h, 0x400100, 8, 0, 8, 0, 3), 0);
-  assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 0, 0, 2), 30);
-  assert.strictEqual(imports.fs_read_pending(3), 0);
-  assert.strictEqual(imports.fs_read_pending(2), 2);
-  assert.strictEqual(vfs.getOpenFile(h).pos, 8, 'positional calls preserve shared cursor');
-  assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 16, 0, 2), 997);
-  const retired = vfs.getPendingRead(2);
-  vfs.releaseIoState(2);
-  assert.strictEqual(await vfs.fillPendingRead(retired), false);
-  assert.strictEqual(vfs.getPendingRead(2), null);
-  assert.strictEqual(imports.fs_read_pending(2), 0, 'new thread state has no retired fault');
-  assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 16, 0, 2), 997);
-  assert.strictEqual(imports.fs_read_file_at(h, 0x400100, 8, 0, 24, 0, 3), 997);
-  vfs.closeHandle(h);
-  assert.strictEqual(vfs.getPendingRead(2), null);
-  assert.strictEqual(vfs.getPendingRead(3), null);
+  const callback = await scopedIoContext(vfs, 2);
+  try {
+    await callback.resolveIo();
+    assert.strictEqual(imports.fs_read_file_result(h, 0x400000, 8, 0, 2), 0);
+    ready.clear(); rejectZero = true;
+    assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 0, 0, 2), 997);
+    assert.strictEqual(imports.fs_read_file_at(h, 0x400100, 8, 0, 8, 0, 3), 997);
+    const pa = vfs.getPendingRead(2), pb = vfs.getPendingRead(3);
+    assert.notStrictEqual(pa, pb);
+    assert.strictEqual(await vfs.fillPendingRead(pa), false);
+    assert.strictEqual(vfs.getPendingRead(3), pb);
+    assert.strictEqual(await vfs.fillPendingRead(pb), true);
+    assert.strictEqual(imports.fs_read_file_at(h, 0x400100, 8, 0, 8, 0, 3), 0);
+    assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 0, 0, 2), 30);
+    assert.strictEqual(imports.fs_read_pending(3), 0);
+    assert.strictEqual(imports.fs_read_pending(2), 2);
+    assert.strictEqual(vfs.getOpenFile(h).pos, 8, 'positional calls preserve shared cursor');
+    assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 16, 0, 2), 997);
+    const retired = vfs.getPendingRead(2);
+    vfs.releaseIoState(2);
+    assert.strictEqual(await vfs.fillPendingRead(retired), false);
+    assert.strictEqual(vfs.getPendingRead(2), null);
+    assert.strictEqual(imports.fs_read_pending(2), 0, 'new thread state has no retired fault');
+    assert.strictEqual(imports.fs_read_file_at(h, 0x400000, 8, 0, 16, 0, 2), 997);
+    assert.strictEqual(imports.fs_read_file_at(h, 0x400100, 8, 0, 24, 0, 3), 997);
+    vfs.closeHandle(h);
+    assert.strictEqual(vfs.getPendingRead(2), null);
+    assert.strictEqual(vfs.getPendingRead(3), null);
+  } finally { await callback.close(); }
 });
 
 test('two real Workers preserve I/O ownership through compiled adapters and the shared RPC table', async () => {
@@ -960,7 +995,7 @@ test('the pending record names the handle and position it belongs to', () => {
   assert.strictEqual(rb.pending.pos, 700000);
 });
 
-test('late file fills cannot publish faults after close, reuse, or entry replacement', async () => {
+test('late file fills reject closed/reused handles but retain the opened entry', async () => {
   for (const mutation of ['close', 'reuse', 'replace']) {
     const vfs = new VirtualFS();
     let rejectFill;
@@ -991,9 +1026,16 @@ test('late file fills cannot publish faults after close, reuse, or entry replace
     }
     rejectFill(new Error('old provider failed late'));
     assert.strictEqual(await filling, false);
-    assert.strictEqual(vfs.readFaults.has(handle), false, `${mutation}: no stale fault publication`);
+    assert.strictEqual(vfs.readFaults.has(handle), mutation === 'replace',
+      `${mutation}: only a still-open original entry retains its fault`);
     if (mutation === 'close') {
       assert.strictEqual(vfs.readFile(handle, new Uint8Array(4), 4).error, 6);
+    } else if (mutation === 'replace') {
+      assert.strictEqual(vfs.readFile(handle, new Uint8Array(4), 4).error, 30);
+      const fresh = vfs.createFile(GUEST, 0x80000000, 3);
+      const bytes = new Uint8Array(4);
+      assert.strictEqual(vfs.readFile(fresh, bytes, 4).ok, true);
+      assert.deepStrictEqual([...bytes], [0x55, 0x55, 0x55, 0x55]);
     } else {
       const bytes = new Uint8Array(4);
       assert.strictEqual(vfs.readFile(handle, bytes, 4).ok, true);
@@ -1030,7 +1072,7 @@ test('closed pending reads skip fills and late success preserves a peer pending 
   assert.strictEqual(vfs.getOpenFile(b).pos, 0);
 });
 
-test('a latched fault is discarded when its file entry is replaced', async () => {
+test('a latched fault belongs to the opened entry after path replacement', async () => {
   const vfs = new VirtualFS();
   vfs.setProviderFile(GUEST, { provider: {
     size: 16, tryRead: () => null, fill: () => Promise.reject(new Error('read fault')),
@@ -1042,8 +1084,10 @@ test('a latched fault is discarded when its file entry is replaced', async () =>
   vfs.setProviderFile(GUEST, { provider: {
     size: 16, tryRead: (off, len) => new Uint8Array(len), fill: () => Promise.resolve(),
   } });
-  assert.strictEqual(vfs.readFile(handle, new Uint8Array(4), 4).ok, true);
+  assert.strictEqual(vfs.readFile(handle, new Uint8Array(4), 4).error, 30);
   assert.strictEqual(vfs.readFaults.has(handle), false);
+  const fresh = vfs.createFile(GUEST, 0x80000000, 3);
+  assert.strictEqual(vfs.readFile(fresh, new Uint8Array(4), 4).ok, true);
 });
 
 test('an immediate provider exception uses the same guarded failure completion', async () => {
@@ -1185,50 +1229,22 @@ test('vfs.materialize streams files larger than the ChunkCache LRU bound',
 
 // ---- chunk cache unit checks --------------------------------------------
 
-test('HttpRangeProvider enforces its HEAD and byte-range contract', async () => {
+test('HTTP provider uses whole decoded bodies and rejects partial responses', async () => {
   const calls = [];
-  const headers = values => ({
-    get(name) { return values[String(name).toLowerCase()] ?? null; },
-  });
   const fetch = async (url, init) => {
-    calls.push({ url, init });
-    if (init && init.method === 'HEAD') {
-      return {
-        ok: true,
-        status: 200,
-        headers: headers({ 'accept-ranges': 'bytes', 'content-length': '8' }),
-      };
-    }
-    assert.strictEqual(init.headers.Range, 'bytes=2-4');
-    const bytes = Uint8Array.from([2, 3, 4]);
-    return { status: 206, arrayBuffer: async () => bytes.buffer };
+    calls.push({url, init});
+    assert.ok(!init.method && !init.headers?.Range);
+    return {status: 200, headers: {get: () => '3'},
+      arrayBuffer: async () => Uint8Array.from([0,1,2,3,4,5,6,7]).buffer};
   };
-  const provider = await bp.HttpRangeProvider.open('https://example.test/disc.iso', { fetch });
-  assert.strictEqual(provider.size, 8);
-  assert.strictEqual(provider.name, 'disc.iso');
-  assert.deepStrictEqual(Array.from(await provider.readRange(2, 3)), [2, 3, 4]);
-  assert.strictEqual(calls[0].init.method, 'HEAD');
-  assert.strictEqual(calls.length, 2);
-
-  await assert.rejects(
-    bp.HttpRangeProvider.open('https://example.test/no-range', {
-      fetch: async () => ({
-        ok: true,
-        status: 200,
-        headers: headers({ 'content-length': '8' }),
-      }),
-    }),
-    /does not advertise Accept-Ranges/);
-
-  const ignored = new bp.HttpRangeProvider('https://example.test/ignored', 8, {
-    fetch: async () => ({ status: 200, arrayBuffer: async () => new ArrayBuffer(8) }),
+  const provider = await bp.HttpRangeProvider.open('https://example.test/disc.iso', {fetch});
+  assert.strictEqual(provider.size, 8, 'ignore encoded Content-Length');
+  assert.deepStrictEqual([...await provider.readRange(2, 3)], [2,3,4]);
+  assert.strictEqual(calls.length, 1);
+  const partial = new bp.HttpRangeProvider('partial', 8, {
+    fetch: async () => ({status: 206, arrayBuffer: async () => new ArrayBuffer(3)}),
   });
-  await assert.rejects(ignored.readRange(0, 4), /answered 200, expected 206/);
-
-  const truncated = new bp.HttpRangeProvider('https://example.test/short', 8, {
-    fetch: async () => ({ status: 206, arrayBuffer: async () => new ArrayBuffer(3) }),
-  });
-  await assert.rejects(truncated.readRange(0, 4), /returned 3 bytes for @0\+4/);
+  await assert.rejects(partial.readRange(0,4), /206/);
 });
 
 test('ChunkCache refuses a short synchronous provider chunk', () => {

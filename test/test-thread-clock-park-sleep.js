@@ -60,6 +60,8 @@ function manager(opts) {
 }
 
 const thread = (tid, m) => ({ tid, state: 'active', sleepCount: 0, sleepUntil: 0, waitPolls: 0,
+  // These are already-started spinners/sleepers, past DLL_THREAD_ATTACH.
+  _dllAttachNotified: true,
   instance: { exports: m.ex } });
 
 // The spinner: every slice ends in a clock park on the millisecond it read.

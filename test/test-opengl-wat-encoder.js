@@ -18,7 +18,7 @@ const STREAM_CALL = 0x10001;
 const sectionArg = process.argv.find(arg => arg.startsWith('--section='));
 const SECTION = sectionArg ? sectionArg.slice('--section='.length) : 'all';
 const SECTIONS = new Set(['all', 'primitive', 'state', 'arrays', 'generic',
-  'pressure', 'context', 'isolation', 'hardening', 'errors', 'boundary']);
+  'pressure', 'context', 'isolation', 'hardening', 'errors', 'boundary', 'pool']);
 if (!SECTIONS.has(SECTION)) throw new Error(`unknown parity section: ${SECTION}`);
 const sectionEnabled = name => SECTION === 'all' || SECTION === name;
 
@@ -72,6 +72,7 @@ function writeArgs(memory, args, stackWa = STACK) {
 
 function jsRunner(memory, capacity, submissions, guestToWasm) {
   const encoder = new Stream.Encoder({
+    exactColors: true,
     getMemory: () => memory.buffer,
     guestToWasm,
     shared: false,
@@ -141,8 +142,50 @@ function compareSubmissions(label, expected, actual) {
   }
 }
 
+// Pressure tests retain the independent 2 MiB oracle. Compare complete
+// records across packet boundaries, rebasing only the packet-relative payload.
+function orderedRecords(submissions) {
+  return submissions.flatMap(bytes => {
+    const records = [];
+    for (let at = 0; at < bytes.length;) {
+      const length = bytes.readUInt32LE(at);
+      assert(length >= Stream.HEADER_BYTES && at + length <= bytes.length);
+      const record = Buffer.from(bytes.subarray(at, at + length));
+      const pointer = record.readUInt32LE(24);
+      if (pointer) {
+        assert(pointer >= at + Stream.HEADER_BYTES && pointer < at + length);
+        record.writeUInt32LE(pointer - at, 24);
+      }
+      records.push(record);
+      at += length;
+    }
+    return records;
+  });
+}
+
 async function main() {
   const binary = compileSrcWasm((file, source) => {
+    if (file === '09a8c-gl-encoder.wat') {
+      // Fault only an allocation call, not allocator internals: exercise the
+      // production rollback path after either extra affine buffer fails.
+      return source.replaceAll('(call $gl_alloc_affine', '(call $test_gl_pool_alloc')
+        .replaceAll('(call $heap_free', '(call $test_gl_pool_free') + `
+        (global $test_pool_allocs (mut i32) (i32.const 0))
+        (global $test_pool_fail (mut i32) (i32.const 0))
+        (global $test_pool_frees (mut i32) (i32.const 0))
+        (func $test_gl_pool_alloc (param $bytes i32) (result i32)
+          (global.set $test_pool_allocs (i32.add (global.get $test_pool_allocs) (i32.const 1)))
+          (if (i32.eq (global.get $test_pool_allocs) (global.get $test_pool_fail))
+            (then (return (i32.const 0))))
+          (call $gl_alloc_affine (local.get $bytes)))
+        (func $test_gl_pool_free (param $guest i32)
+          (global.set $test_pool_frees (i32.add (global.get $test_pool_frees) (i32.const 1)))
+          (call $heap_free (local.get $guest)))
+        (func (export "test_pool_fail_at") (param i32) (global.set $test_pool_fail (local.get 0)))
+        (func (export "test_pool_alloc_count") (result i32) (global.get $test_pool_allocs))
+        (func (export "test_pool_free_count") (result i32) (global.get $test_pool_frees))
+      `;
+    }
     if (file !== '09a8e-gl-state.wat') return source;
     // Test-only translator sentinels place vector inputs at the actual end of
     // linear memory. The production state functions remain otherwise exact;
@@ -226,13 +269,27 @@ async function main() {
     const native = watRunner(memory, a);
     sequence(native, memory);
     native.flush();
-    compareSubmissions(label, expected, activeSubmissions);
+    if (section === 'pressure') {
+      assert.deepStrictEqual(orderedRecords(activeSubmissions), orderedRecords(expected),
+        `${label}: smaller batches preserve every complete record in order`);
+      if (!label.includes('partially occupied tail')) {
+        assert(activeSubmissions.length > expected.length, 'dispatch starts before capacity');
+        assert(Math.abs(activeSubmissions[0].length - 512 * 1024) < 300,
+          'small generic/packed records submit at the 512 KiB watermark');
+      }
+    } else compareSubmissions(label, expected, activeSubmissions);
     console.log(`PASS ${label}`);
   }
 
   const primitiveNames = ['points', 'lines', 'line-loop', 'line-strip', 'triangles',
     'triangle-strip', 'triangle-fan', 'quads', 'quad-strip', 'polygon'];
   const primitiveCounts = [3, 4, 4, 4, 6, 5, 5, 8, 6, 5];
+  parity('generic: clip plane owns four binary64 coefficients', (gl,mem)=>{
+    const view=new DataView(mem.buffer),wa=translateGuest(DATA);
+    [1.0000000000000002,-16777217,0.125,-0.75].forEach((v,i)=>view.setFloat64(wa+8*i,v,true));
+    gl.call(148,[0x3005,DATA]);
+    new Uint8Array(mem.buffer,wa,32).fill(0x5a);
+  });
   parity('generic: texture vector copies survive mutation and query is a barrier', (gl,mem)=>{
     const view=new DataView(mem.buffer),wa=translateGuest(DATA),out=translateGuest(DATA+64);
     [0.25,0.5,0.75,1].forEach((v,i)=>view.setFloat32(wa+i*4,v,true));
@@ -241,7 +298,14 @@ async function main() {
     view.setFloat32(wa,0x2900,true);
     gl.call(112,[0x0DE1,0x2802,DATA]);
     view.setFloat32(wa,0,true);
-    gl.call(112,[0x0DE0,0x1004,0xFFFFFFF0]);
+    gl.call(112,[0x0DE0,0x1004,DATA]);
+    gl.call(147,[0x2300,0x2201,DATA]);
+    new Float32Array(mem.buffer,translateGuest(DATA),4).set([0x1e01,9,8,7]);
+    gl.call(147,[0x2300,0x2200,DATA]);
+    new Float32Array(mem.buffer,translateGuest(DATA),4).fill(0.75);
+    gl.call(147,[0x2300,0xDEADBEEF,0xFFFFFFF0]);
+    gl.call(147,[0x0DE1,0x2201,0xFFFFFFF0]);
+    gl.call(112,[0x0DE2,0x1004,0xFFFFFFF0]);
     gl.call(112,[0x0DE1,0xDEADBEEF,0xFFFFFFF0]);
     view.setFloat32(out,-1,true);
     gl.call(113,[0x0DE1,0x1004,DATA+64]);
@@ -421,6 +485,69 @@ async function main() {
     assert.strictEqual(view.getUint32(translateGuest(DATA + 0x80), true), 0xAABBCCDD,
       'query output is visible before its barrier returns');
   });
+
+  parity('generic: canonical 2D float snapshots and raw read barrier', (gl,mem)=>{
+    const pointer=DATA+0x1000,pixels=new Float32Array(mem.buffer,translateGuest(pointer),32);
+    for(let i=0;i<pixels.length;i++)pixels[i]=(i-4)/8;
+    gl.call(158,[0x0DE1,0,0x1908,2,2,0,0x1908,0x1406,pointer]);
+    pixels.fill(.75);
+    gl.call(159,[0x0DE1,0,1,0,1,2,0x1908,0x1406,pointer]);
+    pixels.fill(.25);
+    gl.call(160,[2,3,2,1,DATA+0x2000]);
+    gl.call(11);
+  });
+
+  parity('generic: small texture snapshots survive mutation and remain ordered', (gl,mem)=>{
+    const pixels=new Uint8Array(mem.buffer,translateGuest(DATA+0x1000),65536);
+    for(const [w,h,format] of [[16,16,0x1908],[128,128,0x80E1],[3,1,0x1908]]){
+      pixels.fill(0x37);
+      gl.call(47,[0x0DE1,0,0,0,w,h,format,0x1401,DATA+0x1000]);
+      pixels.fill(0xA9);
+      gl.call(10,[0x0BE2]);
+    }
+    for(const alignment of [1,2,4,8]){
+      gl.call(73,[0x0CF5,alignment]);
+      gl.call(47,[0x0DE1,0,0,0,16,16,0x1908,0x1401,DATA+0x1000]);
+    }
+    gl.call(73,[0x0CF5,4]);
+    gl.call(47,[0x0DE1,0,0,0,0,16,0x1908,0x1401,DATA+0x1000]);
+    gl.call(47,[0x0DE1,0,0,0,16,16,0x1908,0x1401,0]);
+    gl.call(11);
+  });
+
+  if(sectionEnabled('generic')){
+    a.gl_wat_encoder_reset();activeSubmissions=[];
+    const native=watRunner(memory,a),pointer=DATA+0x1000;
+    new Uint8Array(memory.buffer,translateGuest(pointer),65536).fill(0x37);
+    for(let i=0;i<22;i++)native.call(47,[0x0DE1,0,0,0,16,16,0x1908,0x1401,pointer]);
+    assert.strictEqual(activeSubmissions.length,0,'22 small uploads do not force 22 RPC submissions');
+    new Uint8Array(memory.buffer,translateGuest(pointer),1024).fill(0xA9);
+    native.call(11);
+    assert.strictEqual(activeSubmissions.length,1,'explicit finish submits all small uploads together');
+    let updates=0;
+    Stream.replay({buffer:activeSubmissions[0].buffer,byteOffset:activeSubmissions[0].byteOffset,
+      bytes:activeSubmissions[0].length},(opcode,aux,capture)=>{
+      if(opcode===47){
+        updates++;assert(!capture.pointerBorrowed);
+        assert.strictEqual(capture.pointerLength,1024);
+        assert(new Uint8Array(capture.buffer,capture.pointerOffset,1024).every(v=>v===0x37),
+          'upload snapshot retains bytes from call time');
+      }
+      return 0;
+    });
+    assert.strictEqual(updates,22);
+    for(const [w,h,format,type] of [[128,128,0x1908,0x1401],[3,1,0x80E1,0x1401]]){
+      activeSubmissions=[];native.call(47,[0x0DE1,0,0,0,w,h,format,type,pointer]);
+      assert.strictEqual(activeSubmissions.length,0,'threshold/single-row updates copy');
+      native.call(11);
+    }
+    for(const [w,h,format,type] of [[128,129,0x1908,0x1401],[3,2,0x1908,0x1401],
+      [16,16,0x1907,0x1401],[16,16,0x1908,0x8033]]){
+      activeSubmissions=[];native.call(47,[0x0DE1,0,0,0,w,h,format,type,pointer]);
+      assert.strictEqual(activeSubmissions.length,1,'large/padded/unsupported uploads remain synchronous');
+    }
+    console.log('PASS small texture upload ownership, threshold and submission-count regressions');
+  }
 
   parity('pressure: generic capacity preserves complete ordered records', gl => {
     const records = Math.floor(capacity / 40) + 17;
@@ -608,6 +735,70 @@ async function main() {
   activeSubmissions = []; emitDefaultPoint(resetNative);
   compareSubmissions('reset restores default isolated state', resetExpected, activeSubmissions);
   console.log('PASS reset plus shared-memory instance isolation');
+  }
+  if (sectionEnabled('pool')) {
+    for (const failAt of [0, 3, 4, -1]) {
+      const poolMemory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
+      const published = [], poolImports = { host: { ...imports.host, memory: poolMemory } };
+      let rejectNext = false;
+      poolImports.host.gpu_gl_call = (opcode, base, length) => {
+        assert.strictEqual(opcode, STREAM_CALL);
+        if (rejectNext) { rejectNext = false; throw new Error('test rejected publication'); }
+        published.push({ base, length, bytes: Buffer.from(new Uint8Array(poolMemory.buffer, base, length)) });
+        return 700 + published.length;
+      };
+      const e = new WebAssembly.Instance(module_, poolImports).exports;
+      e.init_thread(0, 0x400000, 0, 0, 0, 0, 0); e.heap_init(0x420000);
+      assert.strictEqual(e.gl_wat_stream_pool_version(), 1);
+      assert.strictEqual(e.gl_wat_stream_pool_enable(2), 0);
+      assert.strictEqual(e.gl_wat_stream_pool_enable(-1), 0);
+      assert.strictEqual(e.gl_wat_stream_pool_base(0), 0);
+      assert.strictEqual(e.gl_wat_stream_pool_base(3), 0);
+      assert.strictEqual(e.gl_wat_stream_pool_base(-1), 0);
+      if (failAt !== -1) assert.strictEqual(e.gl_wat_stream_pool_enable(1), 1);
+      e.test_pool_fail_at(Math.max(0, failAt));
+      const gl = watRunner(poolMemory, e);
+      gl.call(10, [0x0BE2]);
+      const bases = [0, 1, 2].map(i => e.gl_wat_stream_pool_base(i) >>> 0);
+      const pooled = failAt === 0;
+      assert(bases[0]);
+      assert.strictEqual(new Set(bases.filter(Boolean)).size, pooled ? 3 : 1);
+      assert.strictEqual(e.gl_wat_stream_pool_enable(0), 0, 'cannot disable a live pool');
+      assert.strictEqual(e.gl_wat_stream_pool_enable(1), 0, 'cannot reconfigure after allocation');
+      if (pooled) {
+        const sorted = bases.slice().sort((x, y) => x - y);
+        for (let i = 1; i < sorted.length; i++) assert(sorted[i - 1] + capacity <= sorted[i], 'pool buffers disjoint');
+      } else assert.deepStrictEqual(bases.slice(1), [0, 0], 'partial pool is never published');
+      const allocations = e.test_pool_alloc_count();
+      assert.strictEqual(allocations, failAt === -1 ? 2 : failAt || 4);
+      assert.strictEqual(e.test_pool_free_count(), failAt === 4 ? 1 : 0, 'failed second extra frees the first');
+      for (let i = 0; i < 4; i++) {
+        if (i) gl.call(10, [0x0BE2 + i]);
+        if (pooled && i === 2) {
+          for (const previous of published) assert.deepStrictEqual(
+            Buffer.from(new Uint8Array(poolMemory.buffer, previous.base, previous.length)), previous.bytes,
+            'two published buffers remain intact while writing the third');
+        }
+        assert.strictEqual(gl.flush(), 701 + i, 'flush preserves host result');
+        assert.strictEqual(published[i].base, bases[pooled ? i % 3 : 0]);
+        assert.strictEqual(e.gl_wat_stream_base() >>> 0, bases[pooled ? (i + 1) % 3 : 0]);
+        const next = e.gl_wat_stream_base();
+        assert.strictEqual(gl.flush(), 0, 'empty flush does not publish or rotate');
+        assert.strictEqual(e.gl_wat_stream_base(), next);
+      }
+      const next = e.gl_wat_stream_base();
+      e.gl_wat_encoder_reset();
+      assert.strictEqual(e.gl_wat_stream_base(), next, 'reset does not rewind to a possibly leased buffer');
+      assert.deepStrictEqual([0, 1, 2].map(i => e.gl_wat_stream_pool_base(i) >>> 0), bases);
+      gl.call(10, [0x0B71]); rejectNext = true;
+      assert.throws(() => gl.flush(), /rejected publication/);
+      assert.strictEqual(e.gl_wat_stream_base(), next, 'failed publication does not rotate');
+      assert(e.gl_wat_stream_used() > 0, 'failed publication retains pending bytes');
+      gl.flush();
+      assert.strictEqual(e.test_pool_alloc_count(), allocations, 'OOM fallback and reset do not retry allocations');
+      assert.strictEqual(e.test_pool_free_count(), failAt === 4 ? 1 : 0, 'published allocations are not freed');
+    }
+    console.log('PASS triple stream pool rotation, retained bytes, strict configuration, OOM rollback, reset and rejected publication');
   }
 }
 

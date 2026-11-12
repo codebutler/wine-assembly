@@ -374,7 +374,7 @@
     (br_if $done (i32.ne (local.get $format) (i32.load offset=8 (local.get $d))))
     (local.set $block (call $d3d9_texture_block_bytes (local.get $format)))
     (br_if $done (i32.and (i32.eqz (local.get $block))
-      (i32.and (i32.ne (local.get $format) (i32.const 62))
+      (i32.and (i32.and (i32.ne (local.get $format) (i32.const 62)) (i32.ne (local.get $format) (i32.const 63)))
         (i32.eqz (call $d3d9_color_target_format (local.get $format))))))
     (local.set $w (i32.load (local.get $s))) (local.set $h (i32.load offset=4 (local.get $s)))
     (if (local.get $rect) (then

@@ -186,3 +186,11 @@ node tools/bench-mw3-mixed-native.js decode build/lazy-games/mixed-new/candidate
 
 Use `capture-chrome` with `DISPLAY`/`CHROME` on the x86 box, then decode with
 GNU objdump (`OBJDUMP` override). Capture directories must be fresh.
+
+## Recovered historical findings (2026-10-11)
+
+These are dated measurements or experiments, not a new current-main validation.
+
+The [four-game follow-up](mixed-island-corpus.md) checks Heroes II/III,
+Quake II and Moorhuhn 3: matching final frames, no established broad speedup,
+and a possible small Moorhuhn regression in the reversed-order repeat.

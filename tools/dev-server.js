@@ -15,6 +15,7 @@
 //
 //   node tools/dev-server.js                 # http://127.0.0.1:8080
 //   node tools/dev-server.js --port=9000
+//   node tools/dev-server.js --prod         # public desktop for release previews
 //   node tools/dev-server.js --host=0.0.0.0  # other devices on your LAN
 //   node tools/dev-server.js --require-login
 //       # answer 401 until the browser signs in at /api/auth/login, the way
@@ -1081,6 +1082,16 @@ function createServer(opts) {
       return sendJson(res, 400, { error: 'malformed request target' });
     }
 
+    // Release previews use the public desktop even on localhost. Preserve
+    // app/debug parameters when adding the shell's existing production flag.
+    if (opts && opts.prod && (url.pathname === '/' || url.pathname === '/index.html')
+        && !url.searchParams.has('prod')) {
+      url.searchParams.set('prod', '');
+      res.writeHead(302, { Location: url.pathname + url.search, 'Cache-Control': 'no-store' });
+      res.end();
+      return;
+    }
+
     // Perf batches arrive ~1/sec and would bury the signaling log, so they
     // are routed before it and print their own one-line summary instead.
     if (url.pathname === '/api/perf') {
@@ -1199,6 +1210,7 @@ function main() {
   // localhost requires the token on every agent route.
   const agentToken = host === '127.0.0.1' ? null : crypto.randomBytes(8).toString('hex');
   const server = createServer({
+    prod: process.argv.includes('--prod'),
     quiet: process.argv.includes('--quiet'),
     verbose: process.argv.includes('--verbose'),
     perfLog,

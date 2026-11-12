@@ -33,6 +33,8 @@ const extra = String.raw`
     (call $handle_GetMessageA (local.get 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
+  ;; A host WM_CHAR reaches only a thread that has called TranslateMessage.
+  (func (export "test_translates") (global.set $thread_translates (i32.const 1)))
   (func (export "test_purge") (param i32) (call $post_queue_purge_hwnd (local.get 0)))
   (func (export "test_lock_identity") (result i32)
     (local $owner i32)
@@ -232,6 +234,7 @@ assert.strictEqual(b.test_post(0, 0x800, 0, 0), 1, 'other thread still has capac
 // A filtered hardware event can join an already-grown queue and remains
 // discoverable behind older, nonmatching posts.
 for (let i = 0; i < 96; i++) assert.strictEqual(a.test_post(0, 0x700 + i, i, i), 1);
+a.test_translates();
 hardware.push(0x000D0102);
 assert.strictEqual(a.test_peek(0x900, 0x900, 1), 0);
 assert.strictEqual(a.test_peek(0x102, 0x102, 1), 1);
@@ -268,7 +271,16 @@ a.guest_free(small);
 // Revalidate headers after a freed block is corrupted, before splitting it.
 b.guest_write32(small - 4, 0x100000);
 assert.notStrictEqual(a.guest_alloc(64) >>> 0, small);
-assert.strictEqual(a.get_free_list(), 0);
+// Invalid size-bin entries are discarded independently. Other free blocks can
+// still supply (and be split by) this allocation; the whole list need not empty.
+const freeBlocksAfterMalformed = new Set();
+for (let p = a.get_free_list() >>> 0; p; p = a.guest_read32(p + 4) >>> 0) {
+  assert.notStrictEqual(p, small - 4, 'corrupted block is no longer reusable');
+  assert(!freeBlocksAfterMalformed.has(p), 'remaining free list is acyclic');
+  freeBlocksAfterMalformed.add(p);
+  const size = a.guest_read32(p) >>> 0;
+  assert(size >= 16 && size % 8 === 0, 'remaining free blocks have valid sizes');
+}
 console.log('PASS cross-thread low frees/reuse and malformed/reserved-tail protections');
 
 a.test_sparse_only();

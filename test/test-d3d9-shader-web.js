@@ -14,7 +14,7 @@ const { bootRenderHarness } = require('./render-helper');
     args: ['--no-first-run', '--no-default-browser-check'] });
   try {
     const page = await browser.newPage();
-    for (const file of ['gpu-backend.js', 'd3d-shader-ir.js', 'd3d9-shader.js', 'd3d9-fixed.js', 'd3d9-backend.js'])
+    for (const file of ['gpu-backend.js', 'd3d-shader-ir.js', 'd3d9-shader.js', 'd3d9-fixed.js', 'render-clear.js','d3d9-backend.js'])
       await page.addScriptTag({ path: path.join(__dirname, '../lib', file) });
     const webglVersion = Number(process.env.D3D9_WEBGL_VERSION || 2);
     assert([1,2].includes(webglVersion), 'D3D9_WEBGL_VERSION must be 1 or 2');
@@ -459,7 +459,9 @@ const { bootRenderHarness } = require('./render-helper');
     for(const address of [1,2,3,4])for(const coord of [0,1,-.125,1.125])
       mipCases.push({lambda:-1,min:1,mag:2,address,coord});
     mipCases.push({lambda:1.5,bias:.25,min:2,mag:2,signed:true},{lambda:1.75,bias:.25,min:2,mag:2,levels:2});
-    const signedMipLevels=mipLevels.map((level,i)=>({...level,pixels:level.pixels.map((v,c)=>c%4===0?[129,127,0][i]:c%4===1?[0,127,128][i]:c%4===2?[255,0,128][i]:13)}));
+    for(const lambda of [-1,.5,1.5,2])for(const min of [1,2])
+      mipCases.push({lambda,bias:.125,min,mag:2,signed:true,format:63});
+    const signedMipLevels=mipLevels.map((level,i)=>({...level,pixels:level.pixels.map((v,c)=>c%4===0?[129,127,0][i]:c%4===1?[0,127,128][i]:c%4===2?[255,0,128][i]:[128,127,64][i])}));
     new Uint8Array(native.memory.buffer,sourcePointer,mipPS.nativeBytes.length).set(mipPS.nativeBytes);
     const mipProgram=wasm.d3d_shader_vm_compile(sourcePointer),mipContext=wasm.d3d_shader_vm_context(mipProgram,15);
     const wa=n=>wasm.guest_to_wasm(wasm.guest_alloc(n))>>>0,table=wa(48),descriptor=wa(64);
@@ -468,7 +470,7 @@ const { bootRenderHarness } = require('./render-helper');
       const base=c.base||0,count=c.levels||3;
       (c.signed?signedMipLevels:mipLevels).forEach((level,i)=>new Uint8Array(native.memory.buffer,nativeLevels[i][0],level.pixels.length).set(level.pixels));
       new Uint32Array(native.memory.buffer,table,12).set(nativeLevels.slice(base,count).flat());
-      new Uint32Array(native.memory.buffer,descriptor,16).set([1,count-base,table,c.signed?62:0,c.address||3,c.address||3,0xff4080bf,c.min,c.mag,c.mode===undefined?2:c.mode,0,c.max||0,base,4,4,0]);
+      new Uint32Array(native.memory.buffer,descriptor,16).set([1,count-base,table,c.signed?(c.format||62):0,c.address||3,c.address||3,0xff4080bf,c.min,c.mag,c.mode===undefined?2:c.mode,0,c.max||0,base,4,4,0]);
       new Float32Array(native.memory.buffer,descriptor+40,1)[0]=c.bias||0;
       assert.strictEqual(wasm.d3d_shader_vm_bind_texture_mips(mipContext,0,descriptor),1);
       return[0,1,2,3].map(channel=>Math.round(Math.max(0,Math.min(1,wasm.d3d_shader_vm_sample_lod(mipContext,0,c.coord??.55,c.coord??.55,c.lambda,channel)))*255));
@@ -486,9 +488,10 @@ const { bootRenderHarness } = require('./render-helper');
         const delta=2**c.lambda/4,offsetX=(c.coord??.55)-2*delta,offsetY=(c.coord??.55)-3*delta;
         draw.vertices=new Uint8Array(new Float32Array([-1,-1,.5,1,offsetX,offsetY,0,1,
           3,-1,.5,1,offsetX+8*delta,offsetY,0,1,-1,3,.5,1,offsetX,offsetY+8*delta,0,1]).buffer);
-        const resident=(c.signed?signedLevels:levels).slice(c.base||0,c.levels||3).map(level=>({...level,pixels:new Uint8Array(level.pixels)}));
+        const resident=(c.signed?signedLevels:levels).slice(c.base||0,c.levels||3).map(level=>({...level,
+          ...(c.signed?{key:`signed-mip-${level.width}`} : {}),pixels:new Uint8Array(level.pixels)}));
         draw.textures=[{...resident[0],levels:resident,originalWidth:4,originalHeight:4,baseLOD:c.base||0,
-          ...(c.signed?{format:62}:{}),sampler:{addressU:c.address||3,addressV:c.address||3,borderColor:0xff4080bf,min:c.min,mag:c.mag,mip:c.mode===undefined?2:c.mode,lodBias:c.bias||0,maxMipLevel:c.max||0}}];
+          ...(c.signed?{format:c.format||62}:{}),sampler:{addressU:c.address||3,addressV:c.address||3,borderColor:0xff4080bf,min:c.min,mag:c.mag,mip:c.mode===undefined?2:c.mode,lodBias:c.bias||0,maxMipLevel:c.max||0}}];
         device.draw(draw);results.push(Array.from(g.readPixels(2,2,1,1,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4))));sizes.push(device.programs.size);
       }
       const errors=[];

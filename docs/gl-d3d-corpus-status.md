@@ -1,4 +1,2798 @@
-# OpenGL / Direct3D corpus status, reconciled 2026-10-09
+# OpenGL / Direct3D corpus status, reconciled 2026-11-08
+
+## November 12 current original-game progress
+
+| App | Software | WebGL | Native outcome | Evidence |
+| --- | --- | --- | --- | --- |
+| GLTron | Moving trails and round outcome | Moving trails | Browser gameplay on module `1165f15c…`. Cooperative and actual Worker CLI gameplay also works with `--real-ticks`. | [Current scenes](re-notes/gltron-current-device-scenes-20261112.md), run `20261112-gltron-current-device-scene-repair-0015` |
+| Forsaken | Actual Worker movement and firing | Actual Worker movement and firing | Entered the corridor, PULS 2000→1996, enemy visible. Commit `199cf5b4e` fixes optional broker writer hooks during standalone Worker start and termination. | [Threaded scenes and fix](re-notes/forsaken-current-threaded-scenes-20261112.md), run `20261112-forsaken-current-threaded-scenes-0048` |
+| Darkstone | Actual Worker locomotion and combat | Actual Worker locomotion and combat | Victories 9→10→11, native Save/normal Load alive. The newest tested character/map pair restores LIFE 9/35. | [Current gameplay and saves](re-notes/darkstone-current-worker-gameplay-20261112.md), run `20261112-darkstone-current-worker-gameplay-0119` |
+| Quake III demo | Actual Worker arena movement and firing | Actual Worker arena movement and firing | Native Arena Gate through Single Player menus; ammo 100→98 software and 100→96 WebGL. Enemy defeat remains open. | [Current native arena](re-notes/quake3-current-native-arena-20261112.md), run `20261112-quake3-current-native-arena-0204` |
+
+The GLTron software proof binds its actual GL software owner and completed
+raster work, with a legacy D3D WebGL transport. Its default cooperative CLI
+still has a black scene and zero draws under the abstract CPU/device service
+model. The real-ticks results preserve that remaining limitation. Forsaken's
+later look capture shows a respawn, so controlled turning and enemy defeat
+remain unverified. Darkstone's newest tested save has low health. The preserved
+four-file continuation union was assembled but has no separate replay claim.
+
+The coordinator reviewed the full scenes and checked all raw artifact hashes
+for these four runs. The Forsaken repair has a failing old-source regression,
+passing focused lifecycle/publication/parity tests and a locked build. These
+app outcomes advance the corpus. Historical 27-app membership, remaining backend
+cells, reference parity, FPS and audio remain open.
+
+
+## November 10: current-source paired Twist scene motion
+
+The registered original `dx_twist` now has personally reviewed software D3D
+and WebGL guest-Worker scenes from current main `e2063597c7`, built under the
+lock and observed on live module `79f0842e…`. All six full 15/30/45-second
+captures show substantial textured-body orientation and silhouette changes.
+Actual guest/backend and render-Worker ownership, compiled bytecode and served
+source bodies are pinned. This closes the current paired software/source
+motion gap left by November 7; no renderer defect was demonstrated. Complete
+scene correctness, reference parity, measured FPS and historical27 completion
+remain unqualified. [Scenes, controls and recovery](re-notes/twist-current-paired-scene-motion-20261110.md).
+
+## November 8: qualified consequences remain separate from route attempts
+
+Published `19d2fb24a` ends Quake II local route qualification without a shot,
+box or new consequence. Closer captures correct flame/wall-feature guard
+identifications; the corpse predates input. The coordinator inspected the
+closer view and verified472 files/18,289,946 bytes. Twenty-one ACKs,18 independent
+releases, currentcc438 owning WebGL1, PNG/pin checks and local drain pass;
+physical GPU and an absent numeric fallback counter remain unknown. Fresh
+Drakan poll/flight work replaces this slot.
+[Corrected route observations](re-notes/quake2-guard-door-progress-20261108.md).
+
+Published `1e2bdf191` exposes Recoil's uphill gated ramp but the tank dies before
+power-control identification. No objective increment, access or restart is
+claimed. The coordinator inspected ramp/death frames, verified307 references,
+26,957,532 bytes, and independently checked108 fixture/manifest pins totaling
+76,019,820 bytes against staged pins. The empty-file fixture report is withdrawn;
+its nonempty manifest replacement and negative checks pass. Normal archived
+stop/full drain pass. A fresh worker tests native menu-assisted review against
+the mission clock and uses justified defense while pursuing the objective.
+Software/Canvas2D is explicit; toolbar WebGL supplies no GL coverage.
+[Death boundary, corrected closure and source pins](re-notes/recoil-forcefield-objective-20261108.md).
+
+The protocol remains active uncommitted work. Positive production-path tests
+and the receiver-preservation fix still require final regression/build review;
+no live pacing, FPS, full27, parity or audio completion follows from them.
+
+## November 8: Asghan same-plane contact; outgoing consequence open
+
+Published `6b38c6987` establishes broad same-ground frontal preparation and
+actual Ctrl+Up/Ctrl+Left consumption with independent release. The orc remains
+standing; the shorter hero health bar does not prove outgoing damage. The
+coordinator inspected frontal/swipe captures and verified198 references,
+14,737,528 bytes. Fifteen exact ACKs, zero UNKNOWN, currentcc438 module,
+software/Canvas2D and normal archived stop/settled drain pass. No emulator
+cause, outgoing hit/pickup or GL acceptance. Fresh Recoil force-field objective
+work replaces this lane; Quake II guard/door work and protocol implementation
+remain active. Full27, parity, audio and FPS stay open.
+[Same-plane evidence and remaining attribution](re-notes/asghan-frontal-target-20261108.md).
+
+## November 8: qualification limits and active replacements
+
+Published `2ea85dd91` fixes NFS3 local staging/attachment but the full native
+route aborts at INITTIMER. A debugger-order variation also aborts, then ends
+UNKNOWN. No box, control trace or emulator-cause acceptance. The coordinator
+verified391 files/13,438,371 bytes. Exact timer predicate/API-return evidence
+and a matched observer-off control remain required; per-case helper recovery
+and changed-case game-module qualification are explicitly limited. Fresh
+Quake II guard/door progress replaces this gameplay lane.
+[Local timer boundary](re-notes/nfs3-rehearsed-consumption-20261108.md).
+
+Published `707b0f5da` finds no Forsaken latency remedy: serial21.839s and
+fresh-byte overlap21.373s both hit UNKNOWN under an optimistic original timing
+prefix. No original/box followed. The coordinator verified165 files/9,310,497
+bytes. Negative identity/replacement/release tests pass; the local module differs
+from the original, and Evaluate575's internal wait remains unattributed. Fresh
+Asghan frontal-target work takes the slot. Existing movement/ammo proof stands;
+look/navigation and rates remain unproved.
+[Exact requests and failed comparison](re-notes/forsaken-owner-observation-latency-20261108.md).
+
+The second protocol handoff remains **uncommitted WIP**. It implements exact
+queued request/owed-present/RPC transfer and optional free-run/shared-render
+writer exclusion, tested with real parallel WAT stores. The coordinator
+verified64 hashes/154,472 bytes. Build and14 focused suites pass; two failures
+reproduce baseline. A fresh worker continues complete writer coverage,
+per-surface canonical versions, canvas provenance, production Join and discard
+accounting. No installed association, live pacing or FPS is qualified.
+[Protocol implementation and remaining boundaries](re-notes/d3dim-canonical-version-protocol-20261108.md).
+
+## November 8: fresh control attempts stop on harness boundaries
+
+Published `17d96f983` adds static NFS3 binding/packet/queue/simulation/car
+boundaries but obtains no live consumption trace. An absolute observer path
+was staged at the wrong location; attachment failed before releasing the guest,
+then startup timed out UNKNOWN. Corrected path tests pass locally; a fresh
+worker must rehearse the exact staged attachment before allocation. The
+coordinator verified27 artifact references/6,659,010 bytes. Normal archived
+stop passes; settled drain stdout is retained, standalone JSON was not fetched.
+[Exact staging failure and next trace](re-notes/nfs3-control-consumption-20261108.md).
+
+Published `4ec60dbc0` obtains no Forsaken player HUD or look. Menu command5
+stops UNKNOWN during owning-guest capture-before identity: admission took8.085s,
+then that read remained pending9.092s at deadline. Enter independently released
+at2s. A fresh worker investigates this measured observation path before another
+original. The coordinator verified103 references/10,223,468 bytes. Normal
+archived stop/full drain pass; an initial supervision gap remains recorded,
+with replacement delegates retaining the original deadline. Earlier current
+movement/ammo acceptance stands. No emulator defect, navigation, rates or
+full27 completion follows from these attempts.
+[Observation timing and lifecycle limitation](re-notes/forsaken-early-look-navigation-20261108.md).
+
+## November 8: race rendering, corridor progress and protocol WIP
+
+Published `14827978c` reaches an ordinary NFS3 cockpit race through native D3D
+selection and numeric renderer binding. Actual7ec49 WebGL2 reports122742 draws,
+zero errors/fallbacks. Up reaches the guest scan array and clears after release;
+acceleration, steering and input-caused road displacement remain unproved.
+The coordinator viewed the cockpit and verified328 references/18,759,648 bytes.
+Normal archived stop and settled drain pass. A fresh worker connects active
+bindings and simulation consumption before another control claim.
+[Race and key-array evidence](re-notes/nfs3-numeric-endpoint-race-20261108.md).
+
+Published `9ef46f315` verifies current Forsaken WebGL thrust into the initial
+corridor and PULS2000 to1998. Eleven thrust pulses left look too late; the reserve
+guard refused it before publication. No look or beyond-corridor acceptance.
+The coordinator viewed the corridor and verified271 references/16,930,434 bytes.
+Twenty exact ACKs, zero UNKNOWN, actual7ec49 owner/context and normal archived
+stop/full drain pass. A fresh worker tests turn/look earlier, then navigation.
+[Composition qualification and current progress](re-notes/forsaken-current-native-progress-20261108.md).
+
+The D3DIM protocol task leaves tested partial source/test WIP **uncommitted**.
+Completed-producer identity exists, but owed-present and stable consumed-version
+witnesses remain missing. Actual WAT/full composition regressions demonstrate
+front-DIB rebinding and in-place/ABA changes with unchanged upload version and
+pointer. Build and focused tests pass; the coordinator verified25 evidence
+files/71,686 bytes. No box, production join or pacing qualification. A fresh
+worker reclaims this WIP to finish the protocol; no completion-only commit is
+accepted. Full27, parity, audio and unmeasured FPS remain open.
+[Uncommitted implementation and exact missing boundary](re-notes/d3dim-producer-publication-identity-20261108.md).
+
+## November 8: presentation identity fails local qualification
+
+Published `6eb7a8f35` identifies the missing association between a completed
+owning Flip and the canonical surface version consumed by page publication.
+Production-boundary tests show duplicate notifications increase counters,
+delayed arrival changes receiving intervals, and repeated bytes receive new
+composition sequences. The tested Join contract is a model, not a production
+fix. The coordinator independently verified21 files/214,361 bytes. No box was
+allocated and no rates are reported. The296ns/call microbenchmark measures
+only telemetry-seam timestamp logging, not gameplay overhead.
+
+A fresh worker now implements the version-carried production association and
+adversarial regressions before a locked build and any live pacing task. Native
+TR2 controls remain accepted; logical FPS, physical scanout, observer slowdown,
+full27, parity and audio remain unproved.
+[Boundary evidence and concrete remedy](re-notes/tr2-frame-identity-rate-20261108.md).
+
+## November 8: current TR2 controls and TR3 WebGL translation verified
+
+Published `811bca5b6` qualifies native Enter/default-OK locally and remotely,
+then persistent Venice Up displacement and a separate Left heading change on
+actual owning WebGL2 module7ec49cbb. The demo enters Venice directly. The
+coordinator inspected paired terrain frames and verified106 references,
+9,641,848 bytes. Eight exact ACKs, zero UNKNOWN, full settled process drain
+and normal archived stop pass. Rates remain unmeasured; a fresh task qualifies
+frame identity and overhead before live pacing windows.
+[Native OK and current Venice controls](re-notes/tr2-default-ok-activation-20261108.md).
+
+Published `767dc5774` establishes current WebGL terrain-relative Jungle
+translation retained through twelve- and ten-second idle captures. The
+coordinator inspected the same rock/boulder landmarks and verified204
+references/14,528,997 bytes. Eighteen exact ACKs, zero UNKNOWN,48 actual
+module7ec49cbb checks,189 HTTP reads and normal archived stop/full drain pass.
+Together with `78df2e4d9`, bounded current translation and separate heading
+are verified on WebGL and Software. Firing, level completion, FPS, audio,
+parity and full27 remain open. Fresh Forsaken progress takes this slot.
+[WebGL translation](re-notes/tr3-webgl-terrain-translation-20261108.md).
+
+Published `369e2613b` loads NFS3 with the complete executable closure after
+native D3D selection and reload. The owning WebGL2 D3DIM endpoint records805
+draws and zero errors/fallbacks on7ec49cbb. Race input remains untested: the
+run-local helper incorrectly required a string endpoint rather than numeric1.
+The prepared correction passes local regression tests; a fresh worker now
+qualifies its production binding and race controls. The coordinator verified130
+references/9,155,030 bytes; the prior box is normally stopped and archived.
+[Native D3DIM consumption and helper boundary](re-notes/nfs3-complete-closure-race-20261108.md).
+
+## November 8: native NFS3 selection and current TR3 movement
+
+Published `4c1d0352a` qualifies both NFS3 thread-owner repairs through the
+native chooser and ordinary Direct3D Device 1 selection/OK. Native registry
+writes are observed. The game did not load: run preparation omitted its
+registered executable and returned HTTP404. The corrected complete closure
+passes the local HTTP/size/SHA regression but awaits fresh race execution.
+The coordinator verified115 artifact references/8,753,946 bytes and inspected
+the selected chooser. The box is normally stopped and archived.
+[Chooser, staging failure and corrected preparation](re-notes/nfs3-owner-repaired-chooser-race-20261108.md).
+
+Published `78df2e4d9` establishes current Software D3DIM persistent Jungle
+translation and separate turning; current WebGL turning also passes. WebGL
+translation remains ambiguous because camera follow confounds the captures.
+The coordinator verified415 references/25,865,913 bytes and inspected paired
+software movement captures.37 exact ACKs, zero UNKNOWN, actual module7ec49cbb,
+both backend owners and normal stopped-box cleanup are recorded. Firing,
+parity, FPS, audio and full27 remain open. Fresh work isolates WebGL translation.
+[Current movement and evidence limits](re-notes/tr3-current-movement-after-headroom-20261108.md).
+
+Published `c007b3b75` is another failed TR2 OK attempt: the worker misread the
+visible Graphics sheet and missed the activation window. No emulator defect
+is established. The coordinator verified62 references/7,090,612 bytes and
+personally confirmed the visible sheet; startup/fresh/refresh hashes match.
+The box stopped normally after settled process drain. A fresh worker first
+qualifies native default-OK activation locally before allocating another box.
+Current controls and presentation rates remain unqualified.
+[Corrected attempt](re-notes/tr2-native-ok-current-control-20261108.md).
+
+## November 8: TR2 controls/rates blocked; image assessment corrected
+
+Published `957b861cd` collects no original gameplay input or rates. A pixel-
+coordinate request was rejected locally before queue publication. The worker's
+persistent Graphics-absence assessment is withdrawn after coordinator raw
+review: startup, fresh-graphics and refresh-graphics have identicalee913bc1
+hashes and show the property sheet; only the final idle frame shows desktop.
+No renderer endpoint exists, and no compositor cause is established.
+The coordinator verified63 references/56 hashes/7,092,663 bytes. Four exact
+ACKs, module7ec49cbb/596pins/173HTTP checks and normal archived stop pass;
+controller PID remains in both prestop checks, so full prestop drain is unproved.
+Fresh work qualifies correct native OK and current controls before any collector.
+Queue/notification counter examples are not unique-frame or logical FPS proof.
+Full27, control/rate acceptance, parity and audio remain open.
+[Corrected raw-image assessment and collector gap](re-notes/tr2-current-control-presentation-rate-20261108.md).
+
+## November 8: NFS3 thread ownership fixes; chooser qualification pending
+
+Published `e6f4672ff` fixes two demonstrated wrong-thread dispatches. Shared
+NC retrieval delivered a main-window WM_NCPAINT to the secondary thread;
+DestroyWindow later promoted a foreign window and synchronously called its
+WM_SETFOCUS on the destroying thread. Both paths now restrict ownership.
+Failing-before/passing-after regressions, focused neighbors and locked build
+pass; an unrelated BUTTON expectation fails identically on baseline.
+The coordinator reviewed code and64 artifacts/8,947,608 bytes. Final native
+qualification of both fixes stopped on disk4.46GB, with no box allocated.
+A fresh worker now qualifies the chooser after headroom recovery. Race/context,
+three-renderer timing, full27, audio and parity remain open.
+[Wrong-context chains and regressions](re-notes/nfs3-setup-zero-eip-cause-20261108.md).
+
+## November 8: current TR3 WebGL Jungle and pistol draw
+
+Published `0a38cf484` reaches Jungle through ordinary native welcome/setup,
+then binds an actual owning WebGL2 producer using modulef5cfb1c6. Space2000
+shows raised pistols. Short Up/Left attempts do not prove persistent translation
+or heading. Disk4.48GB stops further input; software remains unexecuted.
+The coordinator inspected the armed frame and verified215 references/193 hashes,
+14,085,840 bytes.20 exact ACKs include three zero-effect stale refusals; no
+UNKNOWN.602 pins/189 HTTP reads/45 module references and normal archived stop
+pass. Intel is the reported provider string, not proved physical hardware.
+A fresh worker continues movement/turning after headroom restoration.
+Full27, parity, FPS, audio and level completion remain open.
+[Current route, actual owner and resource boundary](re-notes/tr3-current-native-gl-gameplay-20261108.md).
+
+## November 8: additional startup coverage stops at native dialogs
+
+Published `e6d667fa8` adds12 corrected browser cells across TR2, TR3 and
+Drakan, cooperative/threaded modes and Software/WebGL selectors. All complete
+without classified crash/deadline/UNKNOWN. TR2 remains in Graphics setup,
+TR3 at welcome and Drakan at its beta warning; no owning graphics backend
+is created. Three initial optional-type-library staging gaps remain separate.
+The15 executions are three titles, not15 or27 apps, and do not prove active
+backend rendering/gameplay/parity. Published78299/f965 runtime excludes peer WIP.
+
+The coordinator reviewed three four-cell sheets and verified521 references,
+424 hashes and38,459,391 bytes.15 PNGs,2327 served reads/53 loaded sources,
+serial cleanup and normal archived stop pass. Fresh TR3 gameplay work handles
+the ordinary dialogs before binding an actual WebGL producer.
+[Cells, staging correction and shutdown](re-notes/graphics-additional-browser-crash-sweep-20261108.md).
+
+## November 8: NFS3 loader repair reaches a null chooser-object boundary
+
+Published `0df0f1667` makes absent vendor LoadLibrary requests fail with NULL
+and error126 while retaining implemented builtins and native module identity.
+Failing-before regression, A/W/Ex checks, lifecycle neighbors and locked build
+pass. A clean production Worker using modulef5cfb1c6 now executes the native
+`d3da` suffix retry and export lookup. The chooser remains blank; its secondary
+thread reaches a null virtual call during WM_NCPAINT. The object-lookup cause
+is unproved. Mixed-module and exploratory observer runs are not acceptance.
+
+The coordinator reviewed the blank chooser and verified81 artifacts/9,051,214
+bytes and133 media hashes. No remote box or chosen-D3D/race/context proof.
+A fresh worker traces the first causal mismatch; earlier registry/bootstrap
+progress stands. Full27, benchmarks, parity and audio remain open.
+[Loader contract, clean retry and null-object failure](re-notes/nfs3-loadlibrary-missing-vendor-20261108.md).
+
+## November 8: NFS3 native device enumeration advances setup
+
+Published `b1b631f12` implements the live Win9x Config Manager registry tree
+for the existing virtual display and monitor. Focused failing-before/passing-
+after registry/display tests and the locked build pass. Native catalogue and
+initial software-default setup writes transfer through ordinary shared storage.
+The second setup loads `d3dtest.dll`, then an absent `d3d.dll` incorrectly yields
+the EXE handle, suppressing its authentic `d3da.dll` suffix retry. The chooser
+and actual D3D race remain unqualified; no box was allocated. A fresh worker
+owns the general loader mismatch. No alias, guest patch or forced choice.
+
+The coordinator verified57 artifacts/2,427,119 bytes and133 media hashes;
+executing module and260 served-source reads are retained. This is a platform
+repair, not a renderer/gameplay/FPS/parity or full27 acceptance.
+[Live tree, native bootstrap and loader boundary](re-notes/nfs3-win9x-device-enumeration-20261108.md).
+
+## November 8: Warcraft cause remains unproved; audio fixture passes
+
+Published `dc07cd57a`, run `20261108-warcraft3-renderer-process-loss`,
+finds no retained mapping between vanished OS PID11520 and Warcraft's page,
+and no original exit reason. Its matching production Worker/audio refresh
+fixture passes lazy fallback, promotion, loop2 refresh, notification, stop
+and replay. The coordinator independently parsed77682 raw records into38841
+balanced entry/return pairs and checked17 compressed hashes. No missing or
+unbalanced fixture call was found. Probes add182.5µs per refresh:25.48× in
+this synthetic burst, with original overhead unmeasured.
+
+A deliberate local Page.crash yields exact-target error134, native SIGABRT
+and crash artifacts; those explain only the control. Prelaunch PID mapping
+remains absent. No fresh original or box was launched, and no emulator fix
+is justified. Future original diagnostics need independent target-exit and
+process evidence with qualified remote service and explicit observer overhead.
+The current additional-title startup sweep proceeds separately. Player
+control, historical27, parity, FPS, audio and campaign remain open.
+[Raw-call checks, source path and mapping gap](re-notes/warcraft3-renderer-process-loss-20261108.md).
+
+## November 8: Quake II pickups on both actual GL paths
+
+Published `327e830da`, run `20261108-quake2-native-encounter-progress`,
+adds native HEALTH pickup consequences: WebGL100→104 and SoftwareGL100→102.
+Ordinary Game/Easy, original controls and media are unchanged. The owning
+WebGL context has software GL disabled; the owning SoftwareGL context has it
+enabled, independently of its WebGL presentation surface. This run reports
+SwiftShader and Chrome151.0.7922.71, unlike the predecessor's Intel report;
+no hardware acceleration or matched-renderer parity claim follows.
+
+The coordinator reviewed pickup pairs, delivered Telegram2301/2302/2305 and
+independently verified436 references/394 hashes.33 exact ACKs,27 independent
+releases,46 PNG checks,707 unchanged pins and359 served reads pass. Both
+browsers drained serially and the box stopped normally after retrieval.
+Guard defeat, door/onward transition, full27, FPS, audio and level completion
+remain open. No emulator repair was needed.
+[Native route, actual backends and shutdown](re-notes/quake2-native-encounter-progress-20261108.md).
+
+## November 8: Drakan native bootstrap and both current D3DIM worlds
+
+Published `ed993c025`, run `20261108-drakan-native-warning-gameplay`,
+qualifies ordinary native MessageBox/GDI Enter before renderer creation, then
+a one-way handoff to strict actual D3DIM ownership. Production software/WebGL
+triangle, native input and zero-input rejection controls pass. Both original
+arms reach the rainy dragon level through native New Game/Normal/story input.
+Software D3DIM and actual WebGL2 producer work and both owner modules are
+verified; WebGL reports Intel/Mesa ANGLE. Native relative mouse input changes
+terrain-relative heading. Sustained forward flight/altitude is unproved.
+
+Software primary/secondary attacks show no outgoing target consequence and
+incoming enemies drain health; WebGL does not establish a target engagement.
+The coordinator inspected both world/heading views and the software attack,
+independently verified459 references, and delivered Telegram2296.39 exact ACKs,
+zero UNKNOWN, unchanged681pins/454HTTP checks and normal archived stop pass.
+No emulator repair is claimed. Actual attack polling/timing needs local
+qualification before another original attack. Parity, FPS, audio, full game
+and full27 remain open; Asghan takes the released gameplay slot.
+[Bootstrap controls, action limits and cleanup](re-notes/drakan-native-warning-gameplay-20261108.md).
+
+## November 8: recorder repaired; renderer disappears after Prologue scene
+
+Published `14057deaa`, run `20261108-browser-journal-remote-service`,
+repairs diagnostic recorder overload. Corrected remote production controls
+pass with75ms maximum delivery lag, compared with56494ms in the baseline.
+Current SoftwareGL reaches a reviewed rendered Prologue scene. Final passive
+capture times out after the journal's nested `voice_play_ring` entry without
+return/error; page and observer emissions stop and a renderer PID vanishes
+from later browser samples. OS PID-to-Warcraft-target mapping was not retained,
+so the vanished process is not yet proved to own that page. No exit reason
+or inner audio boundary is captured; audio deadlock, OOM and emulator fault
+remain unproved.
+
+All32552 Node-admitted batches became durable. Earlier8528 lost observer
+slots remain explicit; the final218625-slot tail is contiguous. The coordinator
+reviewed the scene and independently verified340 artifacts/296 hashes plus
+the2,582,639,811-byte decompressed journal hash.15 original exact ACKs precede
+UNKNOWN; player control is unproved and WebGL unexecuted. The box stopped
+normally after retrieval. Fresh work qualifies full-load bursts and captures
+process/target exit and inner call evidence before another original. Full27,
+parity, FPS, audio quality and campaign completion remain open.
+[Transport comparison, final call and process evidence](re-notes/browser-journal-remote-service-20261108.md).
+
+## November 8: remote journal delivery fails before startup readiness
+
+Published `7fa820727`, run `20261108-browser-page-nonreturn-cause`,
+qualifies local production observer/busy-call controls. The fresh remote
+recorder receives idle journal batches with median33s/max53.7s lag; guest
+attachment is processed after Chrome exits. Seven page heartbeats after the
+readiness request exclude uninterrupted synchronous execution during that
+interval. No production call entry, startup owner proof, original input or
+image is recovered. This does not identify the historical stall or justify
+an emulator change. The coordinator independently verified32 references
+(4,787,418 bytes) and the normal archived shutdown. A fresh worker must qualify
+remote recorder service and attachment before launching the original.
+Thrall control, paired gameplay, full27, parity, FPS and audio remain open.
+[Diagnostic coverage and delivery failure](re-notes/browser-page-nonreturn-cause-20261108.md).
+
+## November 8: optional capture-state change does not resolve the page stall
+
+Published `a7581bcd5`, run `20261108-browser-page-capture-cause`, removes
+an avoidable supplemental-state dependency in controlled production Worker
+tests, retaining all strict identity/module/image/admission checks. It does
+not fix the fresh original. SoftwareGL reaches Prologue loading, then page
+heartbeats stop before the final owner evaluation is sent. No entry probe,
+stack or profile is recovered for that request before the unchanged deadline.
+Input closes on UNKNOWN; WebGL is skipped. No active operation or emulator
+defect is identified, and lost object probe payloads limit interpretation.
+
+The coordinator inspected the last loading frame and independently verified
+all208 artifact references. Both modules match f965;627pins/399HTTP checks,
+18 preceding ACKs and normal archived shutdown pass. New work qualifies an
+independently readable, durably streamed journal/trace before another run.
+The prior current-module cinematic remains valid; Thrall control/tutorial,
+paired gameplay, parity, FPS, audio, campaign completion and full27 are open.
+[Composition controls, original stall and diagnostic gaps](re-notes/browser-page-capture-cause-20261108.md).
+
+## November 8: Warcraft producer readiness and current Prologue introduction
+
+Published `9fd4b4a5c`, run `20261108-warcraft3-producer-ready-gameplay`,
+qualifies the actual software endpoint1→transport2 transition before binding,
+and rejects postbinding replacement/invalid producers with zero input.
+Production Worker controls pass on softwareGL/WebGL. The original software
+arm retains exact ownership through native profile, Campaign and Prologue
+loading, then renders two advancing introduction frames. Both owning modules
+match f965 and the actual context is SoftwareGL. These cinematic frames do
+not establish Thrall selection, displacement or tutorial progress.
+
+The final passive capture stalls20s in page-state Runtime.evaluate before
+the strict binding/screenshot stage; its ACK is absent/UNKNOWN, input closes
+and original WebGL is skipped. The coordinator reviewed the prompt/cinematic
+pair, independently verified231 references and delivered Telegram2293. The
+box normally stopped after retrieval. Its watchdog was armed after allocation
+but before browser launch; the lifecycle deviation is retained. Fresh work
+addresses this page-state boundary before another original attempt. Current
+paired gameplay, parity, FPS, audio, campaign completion and full27 stay open.
+[Controls, original route, UNKNOWN and lifecycle](re-notes/warcraft3-producer-ready-gameplay-20261108.md).
+
+## November 8: Drakan native warning precedes graphics creation
+
+Published `6b486344a`, run `20261108-drakan-current-browser-action`,
+reaches the reviewed beta-warning dialog with a running owning guest Worker,
+but no graphics endpoint, renderer Worker/context or D3D stats. The driver
+requires a graphics producer before admitting OK, so readiness exhausts with
+zero input/commands/ACKs. WebGL is unexecuted. This identifies a native-dialog
+bootstrap gap, not a D3D rendering failure or current gameplay result.
+
+The coordinator inspected the warning and independently verified all31
+artifact references. Focused T/G input/release controls pass through a real
+guest Worker. All64 current fixture files remain unchanged; unavailable
+historical per-file hashes are explicitly unknown. The box normally stopped
+after retrieval. Fresh work qualifies pre-graphics native-dialog input and
+then positive D3DIM producer readiness before another original route.
+Movement, flight, attack, actual backend coverage, parity, FPS, audio and
+full27 remain open.
+[Warning, exact gate, provenance and cleanup](re-notes/drakan-current-browser-action-20261108.md).
+
+## November 8: owning GL readiness corrected; Q3 actions remain open
+
+Published `c142f0785`, run `20261108-q3-gl-readiness-gameplay`, corrects
+the run-local observer with actual owning GL draws/presentation, context and
+module proofs, retaining software legacy-transport attachment. Both production
+Worker positive controls and all zero-input negative controls pass. The fresh
+original WebGL path opens input despite empty D3D statistics.
+
+Current SoftwareGL reaches Q3DM1 and a burning torch. Ammo remains100 and
+intervening deaths/respawns prevent movement/fire attribution. WebGL reaches
+level selection; a later Enter command releases independently, then its
+post-input page-owner capture exceeds the unchanged work deadline. Its final
+ACK is absent/UNKNOWN, with no replay. The coordinator inspected courtyard,
+torch and menu, and independently verified295 artifact references. Both actual
+owner modules match f965; this WebGL1 provider is Intel/Mesa ANGLE. The box
+normally stopped after retrieval. Further Q3 runtime needs a locally validated
+capture-latency remedy; paired gameplay/torch, parity, FPS, audio and full27
+remain open. Warcraft III producer-readiness work takes the coverage slot.
+[Controls, original actions, UNKNOWN and cleanup](re-notes/q3-gl-readiness-gameplay-20261108.md).
+
+## November 8: Warcraft III current-browser readiness blocker
+
+Published `02129c6b0`, run `20261108-warcraft3-current-browser-objective`,
+stops before player input. The SoftwareGL driver binds endpoint1 on a black
+startup frame with presentation writeSeq0. The next passive capture rejects
+endpoint2 after the software legacy transport attaches; read-only state then
+records 172,189 triangles and writeSeq27. This establishes premature driver
+binding, not an emulator crash or current gameplay. WebGL was skipped.
+
+The coordinator inspected the black startup capture and independently verified
+all42 artifact references. Both live modules match f965;624pins and400HTTP
+response checks pass. Four extracted-media hashes match historical notes;
+the other eight retain current pins without historical-hash equivalence.
+The box normally stopped after retrieval. Readiness must be qualified after
+actual presentation/transport attachment before another original attempt.
+October8 movement remains historical; current Prologue, objective/combat,
+paired gameplay, parity, FPS, audio and full27 remain open.
+[Observed ownership transition and cleanup](re-notes/warcraft3-current-browser-objective-20261108.md).
+
+## November 8: current Quake III world and GL observer boundary
+
+Published `702535909`, run `20261108-q3-current-browser-world`, resolves the
+earlier gray/white startup observation through natural loading: both actual
+GL backends reach the native menu, and SoftwareGL reaches textured Q3DM1.
+The coordinator reviewed the courtyard/HUD and WebGL menu and independently
+verified all 388 retained artifact references. The current f965 module is
+recorded; WebGL's completed per-owner binding remains absent.
+
+SoftwareGL's first mouse hold leaves ammo100, followed by death during a W
+hold; neither firing nor movement is established. A later respawn request was
+refused before queueing with zero effects. WebGL input never opens because
+the run observer requires `d3dStats.glTriangles` on a native GL endpoint whose
+`d3dStats` is empty despite advancing GL batches and presentation. This is a
+harness predicate mismatch, not an emulator startup defect. Its post-close
+observer timeout remains recorded. All browsers drained and the box normally
+stopped after verified retrieval. Fresh GL-readiness work tests that exact
+predicate before another original action attempt. Paired gameplay, torch,
+parity, FPS, audio and full27 remain open.
+[Exact route, identities, observer failure and cleanup](re-notes/q3-current-browser-world-20261108.md).
+
+## November 8: Forsaken initial world and capture-cost diagnostic
+
+Published `c1ab23eec`, run `20261108-forsaken-capture-composition-cause`,
+reaches the current browser's native Volcano loading screen and initial
+textured world/HUD: Lives 5, shield/hull 128, PULS 2000 and MUG 5. The
+coordinator inspected both frames and independently checked 143 artifact
+references. The actual owning legacy WebGL2 context and guest/render modules
+match the recorded f965 runtime. No movement, firing or combat was tested.
+
+The earlier command deadline did not recur: ten commands, including Start,
+received exact successful ACKs under unchanged budgets. The measured startup
+capture cost 16.472 seconds, dominated by owning-guest inspector evaluations
+up to 7.991 seconds; unrelated-thread reads and module transfers were short.
+The locally tested unrelated-thread-selection candidate was never enabled in
+the original because those timings do not support it. No causal repair was
+validated, and the previous failed Start remains failed with its exact pending
+await unknown. Normal shutdown followed verified retrieval.
+[Actual phase timings, controls, original frames and limits](re-notes/forsaken-capture-composition-cause-20261108.md).
+Full27, paired gameplay, FPS and audio remain open.
+
+## November 8: browser startup sweep after the COM boot repair
+
+Published `29027f029`, run `20261108-graphics-post-renderer-repair-sweep`,
+checks the actual browser boot changed by `37ce9588e`. Twenty-four intended
+cells cover six titles in cooperative/threaded mode and requested software/
+WebGL paths. Three additional Quake II controls make 27 executions, not 27 apps.
+The initial software-labelled Quake II cases actually used WebGL; corrected
+cases establish its software path. The twelve CLI cases were deliberately
+unexecuted because they bypass the changed browser sequence.
+
+| Original | Reviewed endpoint in all four intended cells |
+| --- | --- |
+| Quake II | Main menu with console text behind |
+| Quake III | Three gray frames and one white frame; menu unreached |
+| GLTron | Colored main menu |
+| Hexen II | Undismissed notice; GL startup untested |
+| Heretic II | Textured book menu |
+| Forsaken | Logo only; probes do not establish active WebGL drawing |
+
+Raw diagnostics record no classified escaped trap, unimplemented API, guest
+exit, setup failure or case deadline. Quake III's sampled EIPs progress;
+gray/white at the 20-second observation endpoint is not a crash diagnosis.
+Capture and diagnostic overhead have separate timestamps. The coordinator
+inspected all six contact sheets and independently checked all 816 artifact
+references. Twenty-seven module reads, 96 loaded-host reads and applicable COM
+registry observations match the staged runtime. Two launcher-143 interruptions
+and missing outer reports are preserved; the serial run and evidence survived.
+The box normally stopped after verified retrieval. No emulator repair was
+introduced by this sweep, and these startup windows establish no gameplay,
+parity, FPS, audio or full historical27 completion.
+[Exact cases, identities, failures, recovery and shutdown](re-notes/graphics-post-renderer-repair-sweep-20261108.md).
+
+## November 8: Tachyon browser flight controls on both backends
+
+Published `aba977513`, run `20261108-tachyon-current-browser-backends`,
+verifies original Single Player → pilot A → Play → base door 01 → Ship Bay →
+Launch through ordinary controls on serial browser sessions:
+
+| App | Software Direct3D | WebGL |
+| --- | --- | --- |
+| Original Tachyon demo | Owning legacy endpoint 1, positive software draw completions, no WebGL context or adapter. Textured cockpit, throttle changes, turning and blue laser bolts. | Owning legacy endpoint 1, actual WebGL2 context on Intel/Mesa ANGLE. Textured cockpit, throttle changes, turning and blue laser bolts. |
+
+The coordinator inspected both blue-laser cockpit frames and independently
+checked all 453 artifact references. Live CPU/render modules match
+`f9650607…`; the recorded host includes COM boot repair `37ce9588e`.
+All 15 original/manifest files remain unchanged. Thirty-nine exact ACKs complete
+without UNKNOWN, with independent key release. One software pilot-menu click
+preceded review of its immediately preceding capture; this review-order limit
+is preserved. Flight captures were reviewed before dependent control requests.
+Both browsers and their controller processes drained before normal nonforced
+box shutdown after verified retrieval.
+
+Gate animations and changed instructions do not establish a completed jump:
+the final recorded objective remains Jumps 2 / Head to Luna. No target hit,
+Luna arrival, mission completion, parity, FPS, audio or full playability is
+claimed. Cinematic-band artifacts remain disclosed.
+[Originals, backend identities, controls, captures and limits](re-notes/tachyon-current-browser-backends-20261108.md).
+Full historical27 and remaining per-app coverage remain open.
+
+## November 8: Redline browser texture and HUD repair
+
+Published `37ce9588e`, run `20261108-redline-texture-realization`, fixes
+browser boot initializing the shared DirectX COM registry twice: once on the
+owning guest Worker, then on the idle page instance. Later guest threads read
+the replacement registry and misidentify the original DirectDraw4 creator,
+returning Surface2 interfaces that correctly reject its 124-byte descriptors.
+The repair preserves the owner's registry; local boot still initializes it.
+The actual owner/page/later-thread regression fails before and passes after,
+with strict descriptor checks and the locked build passing.
+
+The unchanged original Stadium City route now completes all 467 gameplay
+texture realizations. The coordinator inspected retained before/after captures:
+flat surfaces and HUD blocks become textured scenery and weapon, with readable
+ammo 200 and health 100. The owning legacy renderer is WebGL2 on Intel/Mesa,
+with matching exports/memory, 204 cached textures and 374 uploads. The WAT module
+remains `f9650607…`; the host boot code changed. Twenty-six commands complete
+with exact ACKs and no UNKNOWN. A single Control action produces no demonstrated
+ammo decrement or distinct shot consequence, so firing and vehicle entry remain
+open. This run does not establish software-backend coverage, parity, FPS, audio
+or full playability. Evidence was verified before normal nonforced shutdown.
+[Cause, regression, original captures and cleanup](re-notes/redline-texture-realization-20261108.md).
+The prepared follow-up crash sweep must exercise actual browser Worker boot;
+a CLI-only run would bypass the repaired sequence. Full historical27 and
+remaining per-app coverage remain open.
+
+Subsequent original verification `56d1ede3a`, run
+`20261108-redline-ready-firstperson-action`, establishes firing: visible muzzle/
+projectile effects and ammo 200→150 persisting after independent Control release.
+The coordinator inspected those frames and checked all 211 artifact references.
+The requested held capture completed after key-up, so no sampled-held or input
+polling claim follows. This later run used actual legacy WebGL2 SwiftShader;
+it is not hardware-GPU or paired-backend proof. Vehicle entry, mission progress,
+FPS and audio remain open.
+[Firing, readiness correction, interrupted custody and shutdown](re-notes/redline-ready-firstperson-action-20261108.md).
+
+## November 8: Tux Racer completes current browser races on both backends
+
+Published `d58dffae2`, run `20261108-tuxracer-current-browser-backends`,
+completes original Practice → Frozen River through ordinary native controls:
+
+| App | Software GL | WebGL |
+| --- | --- | --- |
+| Original Tux Racer 0.61a | Owning software OpenGLHostBridge context/shared memory; main guest/render CPU flags 1. Finish and matching best result: 01:50.50, 15 herring, score 0. | Owning live WebGLBackend v1, Intel/Mesa ANGLE; guest/render CPU flags 0. Finish and matching best result: 02:02.96, 19 herring, score 0. |
+
+The coordinator inspected both returned best-result screens, the WebGL finish
+and software steering frame. Textured terrain, transparent tree silhouettes,
+Tux and readable changing HUD accompany acceleration, steering and release.
+Both actual guest/render modules match `f9650607…`. Twenty-four exact ACKs and
+sixteen independent key releases complete without UNKNOWN or replay. The black
+backing behind the speed readout remains disclosed; these are bounded visual
+checks, not flawless rendering or pixel parity. Different times and paths do
+not measure comparative performance, clock accuracy or FPS. Audio remains open.
+Evidence was hash-verified before normal nonforced box shutdown.
+[Race records, backend identities, tests and limits](re-notes/tuxracer-current-browser-backends-20261108.md).
+Full historical27 and remaining per-app coverage remain open.
+
+## November 8: Quake II browser world and blaster on both backends
+
+Published `a16f5b820`, run `20261108-quake2-bounded-world`, verifies ordinary
+Game → Easy, textured world/weapon/HUD, forward movement, keyboard turning and
+blaster discharge/projectiles on both current browser routes. The coordinator
+inspected both projectile frames and software forward progress.
+
+| App | Software GL | WebGL |
+| --- | --- | --- |
+| Original Quake II demo | Owning OpenGLHostBridge software context/shared memory, guest/render CPU software flags 1; world, movement, turning and discharge reviewed. | Owning live WebGLBackend v1 on Intel/Mesa ANGLE, guest/render CPU software flags 0; world, movement, turning and discharge reviewed. |
+
+Executing modules match `f9650607…`. Nineteen exact ACKs and fourteen independent
+key releases complete without gameplay UNKNOWN or replay. The accepted size
+metadata repair remains unchanged; bounded request-path tests prevent the prior
+oversized-wait failure. Both guard encounters cause incoming player damage;
+outgoing hits, kills, door/pickup and onward level progress remain unverified.
+Different timing and views do not prove parity, FPS or audio quality. Evidence
+was hash-verified before normal nonforced box shutdown.
+[Backend identities, captures, tests and limits](re-notes/quake2-bounded-world-20261108.md).
+Full historical27 and remaining per-app coverage remain open.
+
+## November 8: Heretic II browser docks and door on both backends
+
+Published `7000de90d`, run `20261108-heretic2-current-browser-backends`,
+verifies current original campaign progress on both browser routes:
+
+| App | Software GL | WebGL |
+| --- | --- | --- |
+| Original Heretic II demo | Owning GL endpoint 1 software context/shared memory, CPU software flag 1; textured docks, narrative trigger and opened door, raised threshold reviewed. | Owning GL endpoint 1 WebGLBackend v1, CPU software flag 0, live Intel/Mesa ANGLE context; textured docks, narrative trigger and opening door reviewed. |
+
+The coordinator inspected the WebGL door-before/after pair and software doorway
+capture. Both actual CPU/render modules match `f9650607…`; the separate legacy
+WebGL endpoint on the software route is not its GL owner. Forty-six exact ACKs
+and forty independently released holds accompany movement and attack poses.
+Player damage and spell light do not establish an outgoing hit or kill. Full
+interior traversal, objective completion, matched pixels, FPS and audio quality
+remain unverified. Evidence was hash-verified before normal nonforced box stop.
+[Captures, actual backend identities and limits](re-notes/heretic2-current-browser-backends-20261108.md).
+Full historical27 and remaining per-app coverage remain open.
+
+## November 8: Hexen II browser world and traversal on both backends
+
+Published `3e75cd4b7`, run `20261107-hexen2-current-browser-backends`, verifies
+current browser courtyard movement, ramp ascent and skull-door traversal:
+
+| App | Software GL | WebGL |
+| --- | --- | --- |
+| Original Hexen II demo | Owning `OpenGLHostBridge` software context/shared memory, CPU software flag 1; textured chamber and close spider reviewed. | Owning live `WebGLBackend`, CPU software flag 0, non-lost ANGLE SwiftShader context; textured chamber reviewed. |
+
+The coordinator inspected both post-door captures. Live CPU/render modules
+match `f9650607…`, and the published audio repair is present. Software presents
+establish active rendering, not FPS; its separate legacy WebGL endpoint is not
+the GL owner. Thirty exact ACKs and independently released holds accompany the
+progress. No attack was submitted: player damage and a visible spider do not
+prove an enemy hit or kill. Viewpoints/timing differ, so pixel parity and
+performance remain unverified. The earlier CLI notice-only and MIDI-blocked
+observations below retain their original scope rather than describing this run.
+[Backend identity, reviewed captures and lifecycle](re-notes/hexen2-current-browser-backends-20261107.md).
+Full historical27 and remaining per-app backend/gameplay cells remain open.
+
+## November 7: Current GLTron browser gameplay on both backends
+
+Published `175f0258b`, run `20261107-gltron-current-browser-round`, verifies
+ordinary native steering in serial cooperative browser rounds on both routes:
+
+| App | Software GL | WebGL |
+| --- | --- | --- |
+| Original GLTron 0.70 | Main `OpenGLHostBridge`, software context and `gl_sw_enabled=1`; live turn and bent yellow trail reviewed. | Owning `WebGLBackend.gl` matches the observed context and `gl_sw_enabled=0`; live turn and bent yellow trail reviewed. |
+
+The coordinator inspected both `steer-live-after.png` captures and their paired
+state records: direction 3 → 0, trail offset 0 → 1, player alive before/after
+with speed 8.5 and winner -1. Actual module is `f9650607…`, with the published
+audio fix present. The toolbar label is not backend evidence; stale overlay
+text and different viewports are disclosed. This proves scoped gameplay on
+both routes, not matching pixels, FPS, physical GPU performance or audio quality.
+The synthetic-clock CLI menu limitation remains a separate observation.
+[Backend ownership, captures, original inputs and limits](re-notes/gltron-current-browser-round-20261107.md).
+Other per-app cells and full historical27 coverage remain incomplete.
+
+## November 7: Forsaken threaded recovery and GLTron audio primitive
+
+Published `6c682a2ab` follows the short startup sweep with a longer original
+Forsaken observation. Threaded software Direct3D is black at ten seconds,
+reaches the original menu at twenty seconds, and proceeds to readable Volcano.
+Ordinary thrust moves from the starting room into the metal corridor; firing
+reduces PULS from 2000 to 1946. The coordinator inspected the matching room and
+corridor captures. This does not establish a persistent threaded renderer
+failure, a hit, WebGL parity or complete crash freedom. The exact clear/caller
+preceding transient black intervals remains uncaptured. Evidence:
+`20261107-forsaken-threaded-black`.
+[Source, controls, screenshots and limits](re-notes/forsaken-threaded-black-20261107.md).
+
+Published `ac1bcecee` fixes headless waveOut idle-time banking: a drained queue
+previously counted its idle gap as playback of newly submitted buffers, causing
+premature completion. Duration/FIFO/header-reuse/rate/callback regressions and
+the locked build pass. The original cooperative GLTron still submits no first
+scene and reaches no menu. The remaining investigation follows batch-clock
+publication, completion eligibility, consumer wake and runnable producer budget;
+the primitive repair is not a menu fix. Evidence: `20261107-gltron-audio-service`.
+[Regression, original result and missing observations](re-notes/gltron-audio-service-20261107.md).
+Full historical27 membership and per-app software/WebGL gameplay coverage remain
+incomplete. These observations do not change that requirement.
+
+## November 7: Hexen II post-notice progress and control repair
+
+Published `10bf01e42` fixes stdin control replies being suppressed by diagnostic
+trace windows. Actual production Notepad reproduces the missing reply before
+the fix; success, error, snapshot and ordinary key replies pass afterward.
+Focused control regressions and the locked build passed.
+
+The cooperative original passed its notice and reached native GL plus MIDI
+open-callback execution. Missing replies stopped that run as UNKNOWN; the
+threaded arm was not launched. Its final logo texture is not a composited menu
+or world capture. Evidence was verified before normal shutdown of
+`bx_25tc5y5f`.
+[Observed progress, regression and limits](re-notes/graphics-post-notice-20261107.md).
+
+Published `eee2adf57` follows through with repaired transport: the cooperative
+original reaches a reviewed composited courtyard with fists and HUD, but black
+scene regions and incomplete HUD glyphs remain visible. The threaded arm creates
+native GL and then fails at MIDI stream open. The host incorrectly rejects its
+local main VM when an auxiliary Worker backend exists. The fix admits only the
+verified main instance; callback lifecycle, foreign-owner rejection, actual
+Worker regressions and the locked build pass. The original was not rerun after
+the fix. Backend selection does not prove auxiliary-thread execution, and empty
+PCM does not prove playback. Evidence was verified before normal archived stop
+of `bx_xtyxkm7m`. Playback, parity and historical27 completion remain open.
+[Composited world, MIDI repair and limits](re-notes/graphics-repaired-pair-20261107.md).
+
+
+Published `fece02eca` then reaches the threaded composited courtyard and records
+visible forward movement toward a stone wall. Black models and HUD regions
+persist. Bounded draw state identifies enabled texture names with no image
+levels and positive primary colors. The ordinary shader incorrectly sampled
+incomplete textures; the repair preserves API enable state while skipping
+incomplete texture application, with failing-before/passing-after WebGL1/2 pixel
+regressions, focused suites and locked build passing. These original captures
+predate the shader fix. Published `cd98b939d` reviews a fresh original with the
+repair: previously black statue/tree geometry becomes grey and HUD blocks become
+a white strip; missing artwork and broad black world regions persist. The first
+observed failed image call, number3550, sets WAT `GL_OUT_OF_MEMORY` before host
+upload. CPU image storage fails before definition metadata is written; DIB
+backing exhaustion was subsequently reproduced and repaired in published
+`ef2709a76`: GL CPU images now use reclaimable heap backing, with production
+capacity/lifetime/copy regressions and the locked build passing.
+[Visible repair and storage failure](re-notes/graphics-texture-world-20261107.md).
+
+Published `4e9e3fe17` verifies the allocator repair in a fresh registered original:
+textured statue/tree, illustrated HUD, courtyard floor/walls and ramps replace
+the grey/white/missing artwork. All 5,563 image definitions reach host uploads;
+call 3,550 has error zero and sampled DIB occupancy remains 621 pages. Ordinary
+movement produces a flask inventory icon and changed views, followed by damage,
+zero health and a natural return. No confirmed enemy hit, objective or visual
+parity follows. Evidence was hash-verified before normal archived shutdown.
+The prearmed watchdog was absent at final inspection; its unexplained lifetime
+is a prerequisite for the next original, rather than claimed continuous coverage.
+[Restored artwork, gameplay and limits](re-notes/graphics-storage-gameplay-20261107.md).
+
+MIDI open/callback execution was observed, but no playback or auxiliary guest
+execution was established. Evidence was retrieved and hash-verified before
+normal archived stop of `bx_hqm2pn99`.
+[Threaded movement, texture repair and remaining boundary](re-notes/graphics-threaded-followthrough-20261107.md).
+
+## November 7: Heretic II after texture storage repair
+
+Published `1815b027c` verifies textured Silverspring docks, roofs, sky, Corvus,
+stone and HUD on the registered threaded/headless-GL route. Ordinary movement
+reaches waterside views; health falls from100 to26 near a visible rat, followed
+by the native Load Game book. No attack input, enemy defeat, doorway traversal
+or objective was proved. The bounded observer records3,002 image definitions
+and matching uploads with error zero; later image coverage is unknown.
+
+The revised detached supervisor survives launcher-session termination in focused
+mock tests and records original watchdog heartbeats through normal stop. This
+addresses the next-run lifetime prerequisite without explaining the earlier
+HexenII watchdog disappearance. Evidence was hashed before nonforced archived
+shutdown. The graphics slot next runs the existing current-module crash sweep;
+this one GL app does not establish historical27 membership or D3D parity.
+[World progress, lifecycle checks and limits](re-notes/heretic2-texture-followthrough-20261107.md).
+
+## November 7: Repaired-module startup crash sweep
+
+Published `3b89643d3` records twelve serial20-second windows across QuakeII,
+QuakeIII, GLTron, HexenII, HereticII and Forsaken, cooperative and threaded.
+Every window reaches its harness deadline without a classified escaped trap,
+unimplementedAPI, guest exit, setup failure or external timeout. This is startup
+coverage, not gameplay or complete crash freedom. HexenII remains at its notice.
+Cooperative GLTron and threaded Forsaken end black; their opposite modes show
+menus. Native contexts, backend selection and unequal scheduler progress do not
+by themselves identify a renderer defect. No speculative production fix landed.
+
+All twelve actual module reads match the tested allocator build; runtime/native
+pins and20 sweep regressions pass. Evidence was hash-verified before normal
+archived shutdown. Later Forsaken progression and the partial GLTron audio
+repair are recorded above; exact historical27 membership and full backend
+coverage remain open.
+[Six-app results and limitations](re-notes/graphics-post-allocator-crash-sweep-20261107.md).
+
+## November 7: Tunnel, Twist and Boids browser coverage
+
+Published `fa63787b0` closes the four remaining Worker configuration harness
+gaps after exercising boolean readiness and the exact capture path against
+production guest/render Workers locally. Twelve native compositor captures
+cover software Tunnel Worker and WebGL Tunnel, Twist and Boids Worker cases.
+Tunnel and Twist show scene motion. Boids shows a moving terrain boundary
+and one blue triangle; a recognizable flock remains unverified. Earlier
+cooperative WebGL Boids observations also lacked a flock through 120 seconds.
+Advancing draws and zero errors do not establish complete flock rendering.
+
+The WebGL launcher forces ANGLE SwiftShader; the reported Intel renderer string
+is not physical GPU evidence. Unique evidence and both modules were SHA-verified
+before normal nonforced shutdown of `bx_88fguqk8`. No emulator defect, FPS,
+audio, parity or historical 27-app completion is claimed.
+[Worker configuration evidence](re-notes/graphics-worker-readiness-20261107.md).
+Published `794273255` completes that discriminator: all 13 birds and 130
+triangles survive into completed GPU geometry with exact XYZ/RHW preservation.
+Two birds intersect the Worker view while 11 lie outside; all 13 lie outside
+the separately timed cooperative view. Six native compositor captures agree
+with those counts. These observations establish neither a full visible flock
+nor correctness of the original model/matrix projection. No rendering defect
+was demonstrated in that run.
+Evidence was hash-verified before normal nonforced archive of `bx_z65jbe9z`.
+[Geometry and visible-flock evidence](re-notes/boids-visible-flock-20261107.md).
+Published `bae5dfb76` completes the original-model transform comparison:
+an independent scalar oracle exactly reproduces all 4,680 submitted position
+components across 39 bird draws. A separate high-precision calculation places
+all 13 birds outside the frustum in each of three observation windows, explaining
+the terrain-only phase. This excludes a model-to-submission transform mismatch
+in those draws; upstream x86 simulation, camera construction and native Windows
+parity remain unverified. Evidence was SHA/size verified before normal nonforced
+archive of `bx_2svdb5d8`.
+[Original-model transform evidence](re-notes/boids-model-transform-20261107.md).
+Published `f04a2048d` verifies current original SimGolf bitmap rendering and
+native construction: a new tee and green, Hole 1 open for play as a scenic
+127-yard par 3, and a native championship course export. The 86,831-byte CSE
+was recovered and SHA-verified; a resumable career save or played round remains
+unverified. The actual owning WebGL 1 bitmap is 800×600, hwnd 0, composed through
+GDI; browser provider reports ANGLE Mesa Intel UHD 620. Both executing modules
+are `e41511fe…`. Twenty-eight actual Chromium release controls, full production
+Worker qualification and the locked build passed. Evidence was verified before
+normal archived shutdown of `bx_bevw9s9b`. This adds named scene and native
+interaction evidence, without claiming historical27 completion or parity.
+[SimGolf course and export evidence](re-notes/simgolf-release-repair-gameplay-20261107.md).
+
+## November 7: Architecture, Jazz and Rock & Roll scene motion
+
+Published `17a9d604d` adds 12 named cases for original registered Architecture,
+Jazz and Rock & Roll savers: software and WebGL, each with cooperative and
+guest Worker execution. All 36 captures were inspected by the worker; the
+coordinator inspected Architecture's threaded WebGL motion pair and Rock & Roll
+scene. Objects change pose and extent against fixed backgrounds, with continued
+owning execution and no recorded escaped trap during the observation windows.
+
+All six WebGL cases report zero errors and fallbacks; their actual provider is
+ANGLE Vulkan SwiftShader. Software draw completion counts remain unavailable.
+The locked build, three focused checks and postflight pins passed. Evidence and
+both modules were retrieved and hash-verified before normal nonforced shutdown.
+No implementation defect was established. FPS, audio, Windows-reference
+correctness, backend parity and historical27 membership remain open.
+[Named cases, actual providers and evidence limits](re-notes/graphics-remaining-savers-20261107.md).
+
+## November 7: three registered savers across both backends and schedulers
+
+Published `c04cc7024` records motion in the original Falling Leaves, Geometry
+and Sci-Fi savers: software and WebGL, each with cooperative and guest Worker
+execution. The worker inspected all 36 preferred captures across 12 named
+cases, showing objects moving relative to fixed backgrounds. The coordinator
+also inspected Geometry's threaded WebGL motion pair. Fourteen launches had
+no recorded escaped trap, unimplemented-API trap or page exception.
+
+Two initial trials affected by an observer's viewport change remain excluded
+from the preferred motion evidence; fixed-viewport followups cover those cases.
+The locked build and three focused regressions passed. All 2,218 captured
+successful response bodies matched pinned bytes; 62 additional bodies were
+unavailable to DevTools and are not individually certified. Evidence and both
+modules were retrieved and verified before normal box shutdown. This establishes
+named scene motion, with timing, visual-reference parity, audio and full
+historical27 membership still open.
+[Named cases, captures and limits](re-notes/graphics-saver-motion-20261107.md).
+
+## November 7: registered Direct3D samples across both schedulers
+
+Published `3a006e140` records 12 successful registered startup cases for
+`dx_globe`, `dx_viewer` and `dx_flip3dtl`: software and WebGL, each with
+cooperative and threaded execution. The worker inspected every final startup
+capture and ordinary controls. Viewer loads the original `mslogo.x` through
+File/Open; Globe switches to wireframe through its Render menu; Flip3DTL rotates.
+The coordinator also inspected the threaded WebGL Viewer model and Globe
+wireframe captures and sent them to the owner.
+
+The locked build and three focused sample regressions passed. The texture-wrap
+recording fixture failure found during that run was subsequently reproduced and
+repaired in `fe9458c93`. The fixture explicitly observes per-primitive storage
+and every submitted UV view, preserving its existing software pixel and wrap
+oracles. The focused test and locked build pass; production rendering is
+unchanged. A separate actual WebGL native16 regression passed 16 configurations
+and 96 dependent pixel pairs across both shipped modules and direct/Worker
+execution, with 56 negative controls rejected. That pixel evidence is separate
+from the recording fixture's UV checks.
+[Fixture repair and native16 evidence](re-notes/graphics-wrap-fixture-20261107.md).
+
+No emulator repair was justified. Globe texture bands still need an aligned Windows
+reference; full historical27 membership, FPS, audio and backend parity remain
+open. Evidence was retrieved and verified before normal nonforced box shutdown.
+[Cases, controls, hashes and test limitation](re-notes/graphics-dx-samples-20261107.md).
+
+## November 7: Quake III browser WebGL movement, firing and torch pair
+
+Published `524cc8138` verifies the authentic PK3 transfer and 913 runtime pins.
+The owning OpenGLHostBridge uses WebGLBackend v1 on Intel/Mesa ANGLE, with no
+software batches or fallback reported. The coordinator inspected the settled
+Q3DM1 courtyard, forward-progress and torch-approach captures: ordinary balanced
+W input moves toward the lit arch while the weapon, HUD and world remain readable.
+
+The later published `fe995f4db` completes ordinary firing and the requested
+same-camera torch pair on the owning WebGL 1 backend, Intel/Mesa UHD 620.
+The coordinator inspected both torch captures: ammunition changes 92→82,
+the flame remains visible, and the arch, trim and crosshair stay aligned.
+Four fixed architecture rectangles totaling 59,150 pixels are byte-identical.
+The run verifies all 914 runtime pins and retrieves its evidence before normal
+box shutdown. No emulator defect was demonstrated. Full historical27 coverage,
+FPS, audio and backend parity remain open.
+[Firing, paired captures, identities and cleanup](re-notes/q3-fire-torch-20261107.md).
+[Earlier movement and transfer evidence](re-notes/q3-chunked-media-20261107.md).
+
+
+## November 7: Quake III browser software torch and WebGL menu
+
+Published `e0194cce7` repairs stale launch metadata: the controls file contains
+567 bytes, while its recorded size was 488. The production-loader regression,
+focused checks and locked build passed. Findings `2661845f9` record original
+browser software GL gameplay, respawn, movement and firing. Paired skull-torch
+captures show ammunition 96→94 with health 21 and readable flames in both;
+the coordinator personally inspected both captures. Actual GL endpoint 1 uses
+software, despite the UI WebGL label and a separate legacy WebGL endpoint.
+
+The serial WebGL run verifies the owning OpenGLHostBridge WebGLBackend and
+Intel/Mesa ANGLE provider at level selection only. A CDP Tab timeout followed
+by an incorrectly queued Enter prevented a gameplay claim; recovery released
+both keys and emptied the queue. WebGL world rendering and torch parity remain
+unproved. A fresh worker tests finally-release and command-success gating
+before original WebGL follow-through. All 909 pins passed and the sole box
+stopped normally after evidence retrieval. No FPS, audio or full27 claim follows.
+[Captures, renderer identities and input boundary](re-notes/q3-browser-torch-20261107.md).
+
+## November 7: native GL gameplay with the Worker scheduler
+
+Published `999436b27` records original Quake II movement, turning and visible
+blaster fire, and GLTron cycle turns through native llvmpipe GL. Quake II
+created no auxiliary guest threads; GLTron created a guest Worker that executed
+two slices and RPCs. Balanced controls were released and both originals exited
+normally. Retained round-result text does not establish GLTron survival or
+victory. No new emulator defect was demonstrated. Browser parity, FPS and
+audio remain open; the browser Quake III follow-through is recorded above.
+[Gameplay captures, thread observations and limits](re-notes/graphics-repaired-native-sweep-20261107.md).
+
+## November 7: Forsaken browser WebGL combat
+
+Published `8304ab98e` verifies ordinary Volcano movement, look and firing on
+Chrome 151, with the owning WebGL2 worker on Intel UHD 620. Inspected captures
+show ammunition 2000→1918, “ENEMY KILLED YOU,” then a readable respawn with four
+lives and restored shield/hull. No emulator mismatch was demonstrated. The
+white death interval is excluded from readable-world claims; intermediate
+damage, enemy kills, level completion and backend parity remain unverified.
+The box stopped normally after evidence retrieval. The subsequent native GL
+Worker-scheduler gameplay observations are recorded above.
+[Captures, identities and limits](re-notes/forsaken-current-webgl-combat-20261107.md).
+
+## November 7: Descent 3 installation prerequisite
+
+Published `c2316ac83` records current browser startup stopping before GL at
+missing installer-derived DirectX registry metadata, followed by normal exit.
+The existing registry regression passes; no rendering defect or current flight
+progress was demonstrated. Published `35952117c` completes bounded installation
+recovery: 25 installed media hashes match, but no completed authentic DirectX
+snapshot or original setup media was found. The recovered genuine DX7a installer
+checkpoint still requires six WININIT operations; importing its version alone
+would misrepresent installation. Supported restart completion remains necessary
+before another flight check. The graphics slot now tests original Forsaken
+browser WebGL combat.
+[Startup evidence and recovery prerequisite](re-notes/descent3-current-browser-flight-20261107.md).
+[Installation recovery evidence](re-notes/descent3-installation-state-20261107.md).
+
+
+## November 7: repaired original Quake III torch follow-through
+
+Published `eef6cb6cb` closely matched the retained skull-torch scene on repaired
+native GL without the black quads before firing. A bot kill interrupted firing
+at that camera. Separate inner-room firing consumed four machinegun rounds;
+ordered decal draws and compositor samples preserve darkened RGB with opaque
+presentation. No new emulator defect was demonstrated. Exact historical cause,
+browser parity and synchronized firing at the retained camera remain open.
+[Original captures, owning pixels and runtime limits](re-notes/q3-repaired-torch-world-20261107.md).
+
+
+## November 7: opaque GL window presentation repaired
+
+Published `36a212cac` fixes two demonstrated presentation defects: destination
+alpha leaked into opaque window composition, and native canvas readback read
+the restored draw framebuffer instead of the presented default framebuffer.
+Public GL/WGL regressions pass on standard and compatibility modules and reject
+the old behavior; focused rendering tests and the locked full build pass.
+
+The preceding original Quake III run captured Q3DM1 wall-fire decal state on
+native GL. It did not match the retained skull-torch viewpoint and preceded the
+repair. The exact torch shapes, post-repair original rendering and browser
+parity remain unverified. A fresh worker continues that rendering investigation.
+[Owning draw evidence, regression oracles and run limits](re-notes/q3-torch-rendering-20261107.md).
+
+## November 7: original native GL gameplay after the shader repair
+
+Published `7e26c8485` records original runs containing native GL shader repair
+`aaaf6e370`, with standard module
+`e41511fe861363fbe1639d80f20cbcdd7240f46937c93a801eaa256ca094c467`.
+These are Node routes on Mesa llvmpipe, separate from browser WebGL evidence.
+
+| Title | Observed route and ordinary gameplay | Remaining limits |
+| --- | --- | --- |
+| Quake II demo | Cooperative native GL: Game/Easy reaches the world; paired W and Right change the view. | Threads reached menus only. |
+| Quake III demo | Cooperative native GL reaches Q3DM7 and moves forward; threads reaches Q3DM1, respawns and moves forward. | Cooperative Left press lacked release when the guard ended. Torch-adjacent black shapes remain under investigation. |
+| GLTron | Cooperative native GL: cycle/trail, paired A turn, crash/winner and return to menu. | Threads reached menus only; visual parity remains unproven. |
+| Forsaken demo | Registered software D3D in both modes: Volcano world, visible green fire/ammunition decrease and changed view after Up. | This supplies no GL or browser evidence for Forsaken. |
+
+The eight serial startup checks reported no escaped trap or unimplemented API.
+Their short captures alone did not prove gameplay; six controlled followups
+supplied the observations above. The sweep selected a Quake III logo texture,
+so followups used compositor captures. The coordinator reviewed selected world
+and input captures. No new repair, FPS, audio, complete crash freedom or full
+historical27 coverage follows from these runs. Evidence was retrieved before
+normal box shutdown. [Exact identities, captures and route limits](re-notes/graphics-fixed-gl-originals-20261107.md).
+
+## November 7: OrganicArt rectangle reproduced on both renderers
+
+Published `8b1dae070` recovers the run-local browser adapter and records eight
+confirmed software/WebGL scene layers, all with the same lower-right white
+rectangle. The coordinator inspected a scene layer from each renderer. Native
+traces report missing `CALogo.gif` and installation registry values; software
+submits white geometry at the rectangle bounds. This corroborates the existing
+missing authentic logo-input explanation; no emulator rendering repair was
+justified. Matching original installation metadata/assets remain needed.
+
+The actual loaded module is
+`e41511fe861363fbe1639d80f20cbcdd7240f46937c93a801eaa256ca094c467`.
+The two routes were observed at different natural scenes, so these captures do
+not establish frame parity or FPS. All 117 retrieved artifacts passed hash
+checks and the fresh box stopped normally. [Run, route corrections and evidence
+limits](re-notes/organicart-adapter-recovery-20261107.md).
+
+## November 7: current GTA2, Tomb Raider and Diablo II gameplay evidence
+
+These runs advance individual title/backend cells. Their linked notes record
+actual source and module identities, reviewed captures, inputs, owning renderer
+counters, and cleanup. They do not establish current-main coverage for the entire
+historical corpus or resolve the exact historical 27-ID membership. Older dated
+tables below retain their historical scope.
+
+| Title | Current WebGL evidence | Current software evidence | Remaining limits |
+| --- | --- | --- | --- |
+| GTA2 Wild Demo | Walking, native Enter vehicle entry and distinct SHARK driving translation; owning WebGL endpoint reports zero errors/software fallback. Coordinator reviewed entry/driving captures. Published `27fdd86e9`. [Run and review](re-notes/gta2-current-driving-20261107.md). | Separate software run verifies settled walking, native Enter BUG entry and driving translation against road/gantry landmarks. Owning legacy/software endpoint 1 has no GPU adapter and reports advancing direct software completions, error 0. Published `9d8ebf6e9`; coordinator also inspected the retained driving pair. [Software run](re-notes/gta2-direct-software-20261107.md). | Combat, audio, FPS and backend parity unproven; old fullscreen failure did not recur. Software module bytes are identified; fresh compilation provenance is not inferred from staging HEAD. |
+| Tomb Raider II demo | Venice: settled forward movement, small turn, pistol draw and a visible muzzle-flash/lighting response to Control. Owning Worker WebGL reports zero errors or software fallback. Latest published `58d054088`. [Run and review](re-notes/tr2-webgl-gameplay-20261107.md). | Production software selection demonstrates settled forward movement and persistent pistol draw. Owning software completions advance with no GPU adapter, WebGL triangles, errors or fallbacks. Coordinator reviewed captures. Published `c22e58ae8`. [Software run](re-notes/tr2-software-gameplay-20261107.md). | Jump, target hits/damage, audio, software firing and FPS comparison unproven. |
+| Tomb Raider III demo | Explicit New Game reaches Jungle. Forward movement settles at a changed position/camera; a separate Space action leaves both pistols raised. Owning Worker WebGL draws advance, with zero reported errors or software fallback. Published `d5c39cdf2`. [Run and review](re-notes/tr3-current-browser-20261107.md). | Settled Jungle translation and persistent pistol draw, personally reviewed by coordinator. Owning software completions advance with no GPU adapter, GL triangles, errors or fallback. Published `c0b3d06ad`. [Software run](re-notes/tr3-software-gameplay-20261107.md). | Initial long input returned to title; its cause is unproven. Jump, combat, audio, FPS and backend parity remain unproven. |
+| Diablo II demo | Single Player reaches town; ordinary ground-click movement changes terrain position and persists after idle. Actual owning WebGL counters advance. Published `68240bf8b`. [Town movement](re-notes/diablo2-recoverable-scene-20261106.md). | Supported software selection reaches town and demonstrates persistent ground-click movement, with advancing owning software draw counters and no GPU adapter. Published `7437aa212`. [Software run](re-notes/diablo2-software-town-20261106.md). | Later traversal remained in town: field/enemy combat and FPS parity are unproven. [Later attempt](re-notes/diablo2-field-combat-20261106.md). |
+
+The earlier WebGL Tomb Raider runs used actual Worker module
+`6cd858302895de91df5af17e3a3742281e31f369ddb6528d7b96252b3423caac`.
+The later TR2 WebGL firing run used actual guest and render Worker module
+`2f9fd9f5fb1841afe68f47f61d9870ea617a73f2c45253cbf662c2479b723e55`,
+with its source commit and retained patches recorded in the linked note.
+The TR2 software run used actual Worker module
+`c1fbcf285cd0e7f0468d8c22af9ddf4b7edc7b7f092af77e41d51f3da2b7c186`.
+The TR3 software run used actual Worker module
+`762e723515df6ce8c197fd0d23e0b84869657b0b49e673ad4ac2c48f78b8991f`.
+Missing historical provenance files are disclosed in their notes rather than
+reconstructed. Each run used one original on a fresh separate boat and retrieved
+evidence before normal stop. None demonstrated a new emulator defect or changed
+production code.
+
+## November 4: original MDK2 browser/WebGL gameplay controls observed
+
+The ordinary localhost candidate selector now retains the existing MDK2
+registration. The original executable ran through Launch → New Game → Medium
+in an inspected browser with a real owning Worker WebGL1 context (ANGLE,
+Intel Mesa), canonical module `cffca869b541e6eff12ae3a6b74c4476977e0a7e23cd43d8ec5ba8faecd4bcee`.
+Reviewed captures include the original startup/cutscenes, tutorial, Up/Down
+movement and Space entering and exiting the Sniper Bullet view. [Exact source, input, backend and run limitations](re-notes/mdk2-browser-gameplay-20261104.md).
+The software CLI result below retains its separate scope; shooting/jumping,
+other title/backend gaps and exact historical 27-ID membership remain open.
+
+## November 3: MDK2 prerequisites and bounded software gameplay verified
+
+The current `unsupportedMdk2` list in `test/test-wgl-proc-availability.js`
+is **empty**. Its separate `fontWglApis` list checks the three implemented
+layer/font exports. This is a static inventory observation, not a fresh runtime
+test or proof that an original game will encounter no further unsupported API.
+The historical checkpoints below retain their original scope.
+
+| Subsequent published change | Accepted evidence and limits |
+| --- | --- |
+| `8028df6ba` complete `wglCopyContext` transaction | [All twenty server mask bits, atomic failures, direct and delayed Worker ABI checks, WebGL1/2 pixels](re-notes/gl-copy-context-20261103.md) |
+| `d2ef199a9` shared texture publication | [Original cyan-pixel failure repaired in WebGL1/2 through direct and Worker routes](re-notes/gl-shared-texture-visibility-20261103.md) |
+| `7baae9487` raw Worker drawable fixture and response cloning | [Production drawable contract and software response clone repair](re-notes/gl-raw-worker-drawable-20261103.md) |
+| `36f205f11` three edge-flag exports | [Outgoing boundary flags, intact polygon edges, native/Worker/WebGL1/2 pixels](re-notes/gl-edge-flag-20261103.md) |
+| `b3e5c1f90` boundary polygon two-sided lighting | [Collinear-leading-vertex orientation repair and cyclic-start controls](re-notes/gl-boundary-two-sided-lighting-20261103.md) |
+
+These accepted results close the earlier context-copy and shared-texture
+prerequisites. They do not establish original MDK2 gameplay, complete visual
+correctness or backend parity for the historical 27 applications.
+
+The 23-export evaluator family is published in `4ec8732ba`: real curves,
+surfaces, mesh topology, automatic normals, map/query state, lists and context
+state pass native, queued Worker and WebGL1/2 tests plus eighteen regressions.
+A zero-evaluation mutation is rejected. [Evidence and limits](re-notes/gl-evaluator-family-20261103.md).
+Coordinator verified all 135 local artifact hashes and actual STOPPED state with
+a completed verified snapshot. The compatibility binary was omitted from local
+recovery; its hash/log and exact-source rebuild recipe remain retained.
+Selection/feedback is published in `91da9cb835`: all eight APIs use real
+primitive clipping, depth/name hit records, feedback tokens, overflow/error and
+render restoration semantics. Locked build, native, actual queued Worker,
+WebGL1/2 and twenty-one regressions pass; a hit-suppression mutation is rejected.
+[Evidence and limits](re-notes/gl-selection-feedback-20261103.md).
+Coordinator verified181 local artifact hashes and86 recovered payload hashes,
+including BOTH canonical and compatibility modules, plus actual STOPPED state
+and completed verified snapshot. Original MDK2 gameplay remains unverified.
+Color-index is published in `c96b1b241`: thirteen APIs implement genuine typed
+state, arrays, queries, lists and context semantics. Locked build, native,
+actual queued Worker, WebGL1/2 and twenty-four regressions pass; a lost-index
+mutation fails as expected. Coordinator verified167 local and102 recovered
+payload hashes, both modules, actual STOPPED state and verified snapshot, and
+inspected restored WebGL pixels. [Evidence](re-notes/gl-color-index-family-20261103.md).
+The final three observed prerequisites, `wglCreateLayerContext`,
+`wglUseFontBitmapsA` and `wglUseFontOutlinesA`, are published in `20fed4877`
+and `856be2942`. [Retained semantic and original-run evidence](re-notes/mdk2-wgl-layer-font-family-20261103.md)
+covers native, actual queued Worker, WebGL1/2, rejecting controls, locked
+builds and 34 scoped regressions. Coordinator review checked all 356 recovered
+files, both modules and the completed snapshot followed by normal STOP.
+The original run reached an inspected 640×480 Demo attract scene; this does
+not establish player control. The subsequent original New Game → Medium route is verified in `081a33477`: ordinary Up/Down movement and reversible Space sniper mode, with reviewed captures and 314 sequential control requests (maximum 64 batches). [Run evidence and limitations](re-notes/mdk2-ordinary-menu-control-20261103.md). Coordinator checked all 204 final local hashes, including both modules and 106 recovered payload files. This is explicit software CLI gameplay; the November 4 browser result above adds bounded WebGL1 controls. Shooting/jumping and per-title software/WebGL evidence for the full historical corpus remain open.
+
+### Recovered original corpus table; exact 27-ID membership still unresolved
+
+The count predates this table. Commit
+`2d722ab3766c288d13796ed9dad3f1ceeca8f1eb` (September 22) introduced
+`tools/gfx-app-census.js` and reported 27 OpenGL/Direct3D candidates among
+225 registry apps, including seven D3DRM screen savers. Its commit message
+explicitly retains `icewind_dale_demo` and `tworld` as possible launcher noise.
+The original scanner used DLL/name literals in registered executables and DLLs;
+it did not establish runtime API use. Reproduce this provenance with
+`git show --format=fuller 2d722ab37` and
+`git show 2d722ab37:tools/gfx-app-census.js`.
+The commit does not enumerate all 27 IDs. Recovering that exact output still
+requires the contemporaneous registry and binary inputs or a retained census;
+running today's expanded scanner against today's files cannot establish the
+historical membership. No app is removed on the basis of the noise warning.
+Source-only evidence: `scratch/runs/20261105-gld3d-historical-census-provenance/`.
+
+On November 6, the exact September 22 registry and scanner were evaluated
+directly from Git objects against the currently retained binary paths. The
+registry still has 225 apps. This produced 89 candidates including DirectDraw,
+and **28 candidates with a family other than DirectDraw**; the original commit
+reported 87 and 27 respectively. The reconstruction records SHA-256 and size
+for each available input among 333 unique paths, with four missing inputs.
+It does not establish that today's files equal the September 22 binaries.
+The script and complete results are retained in
+`scratch/runs/20261106-historical-census-candidate/`.
+
+A hash crosscheck against notes at that same September 22 revision anchors
+41 of the 329 retained inputs to historically documented SHA-256 values.
+All 41 retained files were rehashed and their sizes checked. These anchors
+include non-graphics inputs and do not prove census-time file availability.
+The historical Icewind Dale note documents the same 6,283,264-byte executable
+retained today, SHA-256
+`b94816d10029cb99c0315f175330c917be2fff298394e853e2764973d8d13af4`.
+Changed Icewind executable bytes therefore do not explain the reconstruction's
+eight OpenGL candidates versus the reported seven. Availability at scan time,
+other input identities and the exact 27-ID membership remain unresolved.
+The reproducible matches and historical note identity are retained as
+`historical-hash-anchors.json` and `icewind-identity-followup.json` in that run.
+A missing hash citation is not evidence that an input changed.
+
+The 28 reconstructed candidates are `generally`, `arcanum_demo`,
+`ut2003_demo`, `ut2003_demo_server`, `ut2004_demo`, `icewind_dale_demo`,
+`baldurs_gate_chapters_1_2_demo`, `morrowind`, `simgolf_demo`,
+`black_white_2_demo`, `quake2_demo`, `halflife_uplink`, `warcraft3_demo`,
+`pawn`, `tworld`, `winamp`, `mcm`, `ptct`, `dx_globe`, `dx_viewer`,
+`dx_flip3dtl`, and the seven screen savers listed below. These are a reproducible
+candidate list for follow-up, not a replacement historical 27-ID manifest or
+runtime coverage evidence. The missing paths are the historical Atomic
+Bomberman executable and the Quake II, Diablo II and Half-Life installer paths;
+other registered files can still produce hits for an app with a missing path.
+
+The original version of this file is retained at commit `d5b3b56cb`
+(October 6, task `GLD3D-CORPUS-27-20261006`). It describes the goal as every
+OpenGL and Direct3D registry app working on both software and WebGL. Its
+"Apps that really use OpenGL or Direct3D" table contains **26 grouped rows
+and 37 named entries** after splitting slash/comma groups. These include
+seven screen savers with abbreviated names, SDK examples, a server variant,
+and the heavy titles; the table is not an unambiguous 27-ID manifest.
+
+Reproduce the source with
+`git show d5b3b56cb:docs/gl-d3d-corpus-status.md`. Preserve its entries as
+historical candidates when reconciling coverage; do not select 27 by dropping
+grouped examples or heavy titles. All 37 names now resolve to current registry
+IDs as described below; the exact intended 27-ID set and current evidence for
+both backends remain open. The original
+software sweep explicitly capped runs at 120 seconds and did not run its
+WebGL arm, so its menu/loading rows and older WebGL citations do not establish
+current gameplay or parity. This recovers a concrete provenance source without
+claiming that the historical membership question is solved.
+
+The seven abbreviated screen-saver entries do map unambiguously to current
+registrations in `lib/apps.js`:
+
+| Historical entry | Current registry ID | Executable |
+| --- | --- | --- |
+| `scr_architec` | `scr_architec` | `ARCHITEC.SCR` |
+| `fallingl` | `scr_fallingl` | `FALLINGL.SCR` |
+| `geometry` | `scr_geometry` | `GEOMETRY.SCR` |
+| `jazz` | `scr_jazz` | `JAZZ.SCR` |
+| `oasaver` | `scr_oasaver` | `OASAVER.SCR` |
+| `rockroll` | `scr_rockroll` | `ROCKROLL.SCR` |
+| `scifi` | `scr_scifi` | `SCIFI.SCR` |
+
+The remaining 30 historical names are already exact current registry IDs:
+
+```text
+blood2_demo tomb_raider_2_demo tomb_raider_3_demo gta2_demo mw3
+diablo2_demo darkstone_demo arcanum_demo dx_boids dx_flip3dtl
+dx_tunnel dx_twist mcm dx_globe dx_viewer halflife_uplink
+simgolf_demo quake2_demo warcraft3_demo ptct ut2003_demo
+ut2003_demo_server ut2004_demo alien_shooter crimsonland pawn
+pirates_2004 black_white_2_demo morrowind winamp
+```
+
+On November 5, splitting the original table's first column at slashes and
+commas reproduced 26 groups and 37 unique names. Looking up every name in
+`require('./lib/apps.js').APPS`, with only the six abbreviated saver aliases
+above expanded, resolved all 37 to unique registry IDs and executable paths.
+The complete path mapping and source hashes are retained in
+`scratch/runs/20261105-gld3d-historical-registry-map/result.json`; the registry
+SHA-256 was `146c8059f639a1571e6c9e925a5ab7676ffd547a56327863ea72b6eb3aa22455`.
+This checks registry declarations, not installed media or execution. In
+particular, `ut2003_demo` and `ut2003_demo_server` share an executable path but
+remain distinct registrations and historical candidates.
+
+This static mapping retains all 37 historical candidates. The savers' paired
+October 30 browser observations are recorded below; mapping adds no runtime
+coverage. The intended exact 27-ID membership remains unresolved.
+
+### Earlier November 3 checkpoint: 51 unsupported names
+
+The published lookup test at `c1f211fdc` records **51** unsupported mandatory
+MDK2 names. The earlier 60-name checkpoint below is historical. These subsequent
+commits account for the nine-name reduction:
+
+| Published change | Newly implemented exports | Retained evidence |
+| --- | ---: | --- |
+| `345270459` line and polygon stipple | 3 | `test/test-gl-stipple.js`, `test/test-gl-stipple-web.js` |
+| `e318fe1c5` interleaved arrays | 1 | [All GL 1.1 layouts and direct/queued/WebGL validation](re-notes/gl-interleaved-arrays-20261102.md) |
+| `1e48691f4` shared object namespaces | 1 | [Shared context objects and lifetime](re-notes/gl-shared-context-objects-20261102.md) |
+| `3785da2fa` texture residency | 1 | [Oni prerequisite evidence](re-notes/oni-demo.md) |
+| `024c732b0` double color and texture priority | 2 | [Oni prerequisite evidence](re-notes/oni-demo.md) |
+| `c1f211fdc` all sixteen logic operations | 1 | [Stored-width native, WebGL and Worker validation](re-notes/gl-full-logic-operations-20261103.md) |
+
+Published `bd1a15a25` then preserves exact integer color-source words before
+float32 conversion through current state, arrays, display lists and provoking
+vertices. Computed colors retire that provenance. Run
+`20261103-gl-exact-integer-source-recover` passed resolved native direct and
+actual queued zero-fallback controls, real WebGL1/2 and browser Worker pixels,
+information-loss rejecting controls, focused regressions and the locked build.
+The two context/hardening oracle failures were reproduced with pre-change GL
+bodies. The coordinator previously verified the retained evidence hashes and
+4,129 source pins before accepting this repair; the temporary boat stopped.
+This repairs the information-loss prerequisite identified in the
+[logic-operation investigation](re-notes/gl-logic-op-semantics-20261102.md).
+Published `c1f211fdc` completes `glLogicOp` with all sixteen operations on
+native RGB555/RGB565/RGBA8 and actual WebGL1/2, including browser Workers.
+The coordinator verified 450 retained artifact hashes and 4,108 current source
+pins, 32 passing production invocations including the locked build, 520 WebGL
+records and 15 intended rejecting controls. The native shared queue records
+336 submissions with zero fallback. The temporary boat is verified stopped.
+Run `20261103-gl-full-logic-operations` and coordinator review
+`20261103-coordinator-gl-logic-review` retain the source/module identities and
+checks. Context copying was the next bounded prerequisite at this checkpoint;
+its subsequent implementation is recorded above.
+
+These results do not qualify an original MDK2 replay, its first window or
+its gameplay, establish backend parity for the historical 27 applications,
+or reconstruct that historical membership. The next acceptance remains actual
+runtime and pixel evidence at the scope of each requirement.
+
+## November 2: MDK2 prerequisites and accepted unit movement
+
+Published `181f4295fe` repairs MDK2's six retained software drawable cases.
+Direct and queued routes now cover selected front/back reads and writes,
+independent destination blending, NONE with depth/stencil updates, drawable
+rebinding and lifecycle. All 25 focused runs, four affected reruns and the final
+locked build pass in `20261102-mdk2-drawable-color-buffers`. The follow-up
+`df747405e` verifies those cases again and records the then-remaining WebGL boundary:
+FRONT read/draw and BOTH draw return error 1282; cross-drawable rebinding fails.
+That probe uses the actual consumer dispatcher with a recorder, without GPU
+pixel evidence. Published `71fb8fb279` subsequently repairs that boundary with
+per-drawable FRONT/BACK attachments and lifecycle handling. Its run
+`20261102-mdk2-webgl-drawable-attachments` passes 167 pixel assertions each in
+WebGL1 and WebGL2, 13 endpoint checks and 21 actual browser Worker checks on
+ANGLE Intel UHD Graphics 620 / Mesa 23.2.1.
+
+Published `47d4a08225` also repairs rejected-setter state restoration across
+presentation: blending, scissor and viewport now survive the next same-context
+draw. Run `20261102-mdk2-accumulation-implementation` passes 321 checks each in
+WebGL1 and WebGL2, 13 endpoint checks, 26 actual browser Worker checks, 32 focused
+runs and the locked build. That browser reports ANGLE SwiftShader; it does not
+establish hardware GPU qualification.
+
+Published `b50eb7b0bf` adds seven rectangle aliases with direct/queued native
+pixel and ABI checks in `20261102-gl-rectangle-family`. Published `69fa4b52c`
+then implements `glLoadMatrixd`, `glTranslated` and `glScaled`, including double
+argument decoding, selected-stack postmultiplication, display-list snapshots
+and Begin error atomicity. Run `20261102-gl-double-matrix-implementation`
+passes 60 checks each through actual resolved direct and queued routes, meaningful
+negative controls, eight focused regressions and the locked build on an exact
+7,186-input snapshot. Evidence was retrieved and hash-checked before its temporary
+boat was stopped. See [matrix evidence](re-notes/gl-double-matrix-transforms-20261102.md).
+Published `ab45b7d43` subsequently implements signed per-drawable accumulation,
+including `glAccum` and `glClearAccum`. Run
+`20261102-mdk2-accum-implementation-remote` passes 261 native observations each
+through resolved direct and queued routes, 584/588 actual WebGL1/WebGL2 checks,
+525 browser Worker checks, meaningful old-source and semantic negatives,
+27 focused regressions, the union gate and the locked build. All 7,202 snapshot
+inputs and 21 tested committed blobs match; evidence was retrieved before its
+temporary boat was stopped. Published `a6a1248b9` then implements native
+`glGetDoublev` with binary64 output, authoritative state conversion and synchronous
+queued visibility. Run `20261102-gl-getdoublev-implementation-resume` passes 157
+ABI checks per direct/queued route, 30 regression variants, 14 rejecting controls
+and the locked build. Its evidence archive hash was independently verified and
+its temporary boat stopped. That result left 175 mandatory names unsupported.
+Published `4631ff857` subsequently repairs the already-resolved `glRotated`;
+its double argument and matrix semantics do not change the missing-export count.
+See [rotation evidence](re-notes/gl-rotated-native-20261102.md).
+
+At this November 2 checkpoint, fourteen subsequently accepted families reduced
+the unsupported set to **60** mandatory names in the lookup test:
+
+| Accepted implementation | Newly implemented exports | Evidence |
+| --- | ---: | --- |
+| `9bafbc319` typed normals | 8 | [Normal conversions, lighting and direct/queued validation](re-notes/gl-typed-normal-family-20261102.md) |
+| `9f56285e2` typed texture coordinates | 25 | [Numeric adapters, dimensional defaults and display lists](re-notes/gl-typed-texcoord-family-20261102.md) |
+| `7170d9afa` typed vertices | 14 | [Numeric adapters, homogeneous coordinates and direct/queued validation](re-notes/gl-typed-vertex-family-20261102.md) |
+| `80ebba348` raster positions | 23 | [Clipping, raster lighting/texgen, bitmap pixels and WebGL1/2 validation](re-notes/gl-raster-position-family-20261102.md) |
+| `8480aed7f` integer fog/light/material | 6 | [Pname conversions, lighting, lists and direct/queued validation](re-notes/gl-integer-light-material-fog-20261102.md) |
+| `bb2cef8fe` indexed light/material queries | 4 | [Stored-state conversion, ABI, lists and direct/queued validation](re-notes/gl-light-material-query-20261102.md) |
+| `0cd72e8bb` texgen setters and queries | 6 | [Double transforms, numeric conversions and direct/queued validation](re-notes/gl-texgen-numeric-query-20261102.md) |
+| `342d0433b` texture environment and parameter queries | 5 | [Context, unit and bound-object state with rendered pixels](re-notes/gl-texture-state-query-20261102.md) |
+| `cda0ebd87` user clip planes | 2 | [Six eye-space planes, primitive clipping and WebGL pixels](re-notes/gl-user-clip-planes-20261102.md) |
+| `451708e35` one-dimensional textures | 3 | [Storage, sampling, integer vector parameters and rendered pixels](re-notes/gl-one-dimensional-textures-20261102.md) |
+| `a8b85a569` texture copy/readback and pixel transfer | 7 | [Framebuffer and texture storage, transfer, packing, lists and WebGL pixels](re-notes/gl-texture-copy-readback-20261102.md) |
+| `57cf33689` boolean and pointer queries | 2 | [Byte-sized boolean conversion, saved array pointers and resolved ABI checks](re-notes/gl-boolean-pointer-query-20261102.md) |
+| `3a49ef5e2` pixel maps | 6 | [Per-context tables, numeric conversions, mapped transfers and literal pixels](re-notes/gl-pixel-map-20261102.md) |
+| `93793279e` raster pixels | 4 | [Draw/copy pixels, zoom, pixel-store conversion and WebGL depth equality](re-notes/gl-raster-pixels-20261102.md) |
+
+Each family passed its focused semantic and regression checks, rejecting controls,
+and locked build; the coordinator verified retained evidence hashes and committed
+blobs. Texgen passed 672 literal checks and 560 matching observations per
+direct/queued route, two saved-source and 15 semantic rejecting controls. Texture
+state passed 437 literal checks and 367 matching observations per route, two
+saved-source and 12 semantic rejecting controls, and WebGL1/2 pixel checks.
+User clipping passed 154 literal checks and 98 matching observations per route,
+40 WebGL1/2 pixel checks, two saved-source and nine semantic rejecting controls.
+Their final suites passed 62, 63 and 62 commands respectively, including focused
+regressions, generated checks and the locked build. The coordinator verified
+71/79/77 remote evidence hashes and 11/22/23 tested committed blobs respectively;
+evidence was retrieved before each temporary boat stopped. Genuine 1D textures passed 308 checks and 91 matching full-frame observations per
+direct/queued route, 36 WebGL observations and 68 validation outcomes including
+15 rejecting controls and the locked build. The coordinator verified 252 evidence
+hashes and 24 tested committed blobs; the temporary boat stopped after retrieval.
+Texture copy/readback and pixel transfer passed 29 positive regression/build entries,
+367 checks and 360 literal oracles per direct/queued route, 35 WebGL checks per
+backend, and nine intended negative controls. The coordinator verified 45 evidence
+hashes, 24 tested committed blobs, accepted builds and 13 handoff hashes; the
+temporary boat stopped after retrieval. Boolean/pointer queries subsequently passed 272 literal checks per direct/queued
+route, saved-source and 16 compiled semantic rejecting controls, focused regressions
+and two locked builds. The coordinator verified retained evidence hashes and
+helper absence before accepting `57cf33689`; its temporary boat stopped after
+retrieval. Pixel maps subsequently passed 935 checks per direct/queued route,
+13 semantic and two saved-source rejecting controls, 20 focused commands and
+three locked builds. The coordinator verified 162 final and 96 retrieved evidence
+hashes plus 7,230 accepted source pins; its temporary boat stopped and guard
+was absent. These eight genuine exports reduce 72 to 64 mandatory misses.
+Raster pixels `93793279e` subsequently passed 92 literal checks per direct/queued
+route, WebGL1/2 including depth-copy EQUAL, ten compiled semantic controls,
+saved-source rejection, 17 regressions and the locked build (32 final steps).
+The coordinator matched all 264 retrieved evidence hashes and 7,233 tested
+source inputs; helpers were absent and the temporary boat stopped after retrieval.
+These four genuine exports reduce 64 to 60 mandatory misses. Fresh real-worker
+integration is queued after the two game lanes; no original MDK2 run is claimed. Integer lighting passed 301 checks per direct/queued
+route, two saved-source and fourteen semantic rejecting controls, 36 regressions,
+two generated checks and the locked build (57 commands). The coordinator matched
+all 116 retained evidence hashes and 13 committed blobs. The four indexed queries
+passed 461 checks per direct/queued route with 373 matching observations,
+two saved-source and 13 semantic rejecting controls, 38 regressions, two
+generated checks and the locked build (58 commands). All 77 retained evidence
+hashes and eight committed blobs were independently matched.
+See [query evidence](re-notes/gl-getdoublev-native-state-20261102.md).
+See [the rectangle evidence](re-notes/gl-rectangle-family-20261102.md).
+No original MDK2 replay,
+first window or gameplay has been qualified. See [MDK2 notes](re-notes/mdk2-demo.md).
+
+Dark Reign 2's later `dd82ceb03`, run `20261101-dark-reign2-unit-movement`,
+qualifies selected-unit movement after consumed ordinary Shift-M and a ground
+click. A matched neutral interval and stationary world landmarks distinguish
+unit translation from camera movement. Exact arrival of all six units, combat,
+mission completion and backend parity remain open. This reuses accepted evidence;
+no new original run or current-main pixel comparison was performed for this update.
+See [the movement evidence](re-notes/dark-reign2-demo.md#ordinary-selected-unit-movement-order-2026-11-01).
+
+## November 1: accepted native progress and remaining backend gaps
+
+These results reuse already reviewed original-game evidence. They do not establish
+software/WebGL parity or reconstruct the historical 27-app membership.
+
+| Title | Accepted native evidence | Remaining gap |
+| --- | --- | --- |
+| Redline | `0da33e84b`, run `20261101-redline-world-loading-headroom`: WORLD loading completes, firearm/HUD appears, and consumed ordinary Up moves the player toward the shutter/wall in paired before/held/released PNGs. One original exits 0 after 358.407 seconds; 70 original/configuration pins and 129 actual loaded-file hashes match. | Current WebGL comparison, combat outcome, FPS and audio. Loading/cinematic changes alone were excluded from movement proof. |
+| Dark Reign 2 | `d9aca1952`, run `20261101-dark-reign2-native-mission-input`: Demo Mission 1 terrain, soldiers, objective, command bar and minimap are visible; ordinary mouse selection is verified. One original exits 0 after 327.256 seconds; 29 original/manifest pins and 142 runtime-read hashes match. | Later `dd82ceb03` verifies selected-unit movement after an ordinary order (see November 2 reconciliation above). Mission completion, GPU mip support, backend parity, FPS and audio remain open. Arrow dispatch and changed framing alone were excluded from movement evidence. |
+
+The later native control runs add these bounded checkpoints:
+
+| Title | Accepted native evidence | Remaining gap |
+| --- | --- | --- |
+| Outcast | `039f7f5a2`, run `20261101-outcast-original-weapon-control`: ordinary weapon draw, aim, fire with ammo80→79, release and holster in reviewed PNGs, with consumed WM/DirectInput. One original exits0 after170.150 seconds. | No enemy hit, projectile trajectory, impact, damage, kill or combat outcome. The initial NPC interaction was excluded from firing proof. |
+| Dethkarz | `ca136b967`, run `20261101-dethkarz-native-fire-control`: reviewed before/Shift-held/released captures show a laser flash/bolt and weapon-bar response. Consumed WM down/up and actual `GetAsyncKeyState` returns0/8001/8000/0 establish the ordinary Shift path. Two originals exit0 after192.197 and80.305 seconds. | Exact DirectInput keyboard consumption is unproved: observed DirectInput reads request16-byte mouse state. No impact, damage, combat outcome, charged-shot mechanics, FPS or audio claim. |
+| Incoming | `16f6dd886`, run `20261101-incoming-native-phase-progress`: reviewed hostile-fire captures show score0→250→500→6500, followed by PHASE COMPLETE and a helicopter FOLLOW WAYPOINT prompt. Consumed WM and acquired DirectInput keyboard events support the firing controls. One original exits0 after551.986 seconds. | Later `4088515ae`, run `20261101-incoming-helicopter-margin`, proves ordinary helicopter flight in phase2/10: reviewed control-held/released captures show radar-dish flyover, banking and hill approach, with consumed WM/DirectInput controls. One original exits0 after472.113s. Waypoint arrival, objective change and helicopter phase completion remain open; the earlier transition prompt alone did not prove movement. No full playthrough, WebGL comparison, FPS or audio claim. |
+
+These later runs also reuse module `dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`,
+retain unchanged original/source identities and cleanup evidence, and add no
+current WebGL comparison. See [Outcast notes](re-notes/outcast-demo.md) and
+[Dethkarz notes](re-notes/dethkarz-demo.md), and [Incoming notes](re-notes/incoming-demo.md).
+
+MDK2 remains before its first window. The historical `f0eda338f`, run
+`20261101-mdk2-prewindow-cause`, traces the first rejected lookup to `glAccum`:
+212 requested GL/WGL names were rejected at that point, including 208
+unimplemented procedures; the November 2 update above records the current
+72-name remainder after the accepted implementations listed above.
+The loader enters error2 and then waits for an error string from its suspended
+file worker. One78.087-second original exits0 with a reviewed blank teal image
+and zero ordinary inputs. This is a concrete export-implementation blocker,
+not jump or gameplay evidence. The existing lookup fixture fails a stale-handle
+assertion; scratch-adapted checks pass the actual rejection ABI. Neither proves
+gameplay. See [MDK2 notes](re-notes/mdk2-demo.md).
+
+The Redline and Dark Reign 2 runs loaded module `dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`
+and retained before/after identities and process-cleanup evidence. See
+[Redline notes](re-notes/redline-demo.md) and
+[Dark Reign 2 notes](re-notes/dark-reign2-demo.md) for exact commands, controls,
+observer limits and screenshot interpretation.
+
+The subsequent unchanged GL transform and lighting fixtures passed in
+`0a33e2db4`, run `20261101-gl-descriptor-transform-lighting` (3.246 and
+3.356 seconds, both exit 0). This covers production descriptor assertions;
+it adds no game-pixel, GPU or full-corpus acceptance. See
+[the fixture note](re-notes/gl-descriptor-transform-lighting-20261101.md).
+
+The unchanged stencil/depth fixture also passes in `3fc209ff3`, run
+`20261101-gl-stencil-depth` (7.990 seconds, exit 0). Assertions cover masked and
+scissored clears, alpha/stencil/depth ordering, stencil comparisons and operations,
+allocation failure and resize, context/attribute/display-list state, and immutable
+queued draw snapshots. The expected allocation refusal and caught unsupported
+readback trap belong to the passing assertions. All 12,982 production function
+bodies match the accepted module; three fixture functions/exports and an omitted
+custom section mean the whole module is not byte-identical. This establishes
+bounded native software and manual queue-replay coverage, without proving real
+worker-thread execution, GPU parity, original-game pixels, general crash freedom
+or the full 27-app goal. See [the stencil/depth note](re-notes/gl-stencil-depth-20261101.md).
+
+
+## October 31: known-source browser gameplay and remaining rendering blockers
+
+Shogo `7c510cfe0`, run `20261031T2006Z-shogo-pinned-browser`, shows
+first-person street walking, a Bullgut pickup, turning and Ctrl firing
+(ammo40 to38). The coordinator inspected captures12/13/14, including weapon
+flash. All69 local target pins matched before/after, along with source,
+compiler, module and served bytes. Cleanup verified all23 owned runtime
+processes absent, ports closed, profile gone and browser lock free.
+New Game/difficulty screens were not separately captured; targeted hits,
+kills, mission progress, audio and FPS remain unproven. This owner-pinned
+local build has no independent upstream package comparison. See
+[Shogo notes](re-notes/shogo-demo.md).
+
+Blood II `64c9d009b`, run `20261031T1949Z-blood2-pinned-browser`, now
+shows native elevator exit, walking, turning and pistol fire (ammo50 to48).
+The coordinator inspected captures09/11, including muzzle flash and casing.
+All98 owner-pinned local BUILD109 files plus the manifest matched before/after;
+source/compiler/module and served-byte checks passed. All24 runtime processes
+exited and both ports/profile/browser lock were released. Health100 to29 to0
+and the death camera were observed; the cause and any enemy hit, kill,
+objective, jump, audio or FPS remain unproven. See [Blood II notes](re-notes/blood2-demo.md).
+
+SiN `b16c76d3c`, run `20261031T1953Z-sin-pinned-browser`, reaches native
+menus and the scripted HQ/helipad/city route into first-person Air Assault on
+FCB. Captures13/16 show turning; capture17 ends at RESTART LEVEL. Forward
+translation, settled on-foot play, firing and jumping remain unproven, and no
+restart cause or emulator repair is established. All23 local pins matched;
+runtime cleanup completed at20:01:05. Evidence applies to tested `0d9913225`;
+later publication merged unrelated font/runtime changes without executing them.
+SiN `2d14f5852` adds reviewed Air Assault aim, barrel animation and wall/roof
+impact particles; no enemy damage, objective or exact restart cause is proved.
+FreeSpace `9ed9d4b54` completes genuine DX7a setup pending four WININIT DLL
+replacements; flight remains untested. The reboot follow-up retains that
+checkpoint pending authentic Win98 ordering and failure/retention semantics;
+its offline prototype is uncommitted and has not completed installation.
+Nox subsequently gained native Bunker movement and reviewed jumping/landing
+in `20261031T2127Z-nox-jump-action`. See [FreeSpace notes](re-notes/freespace-demo.md),
+[Nox notes](re-notes/nox-demo.md) and [SiN notes](re-notes/sin-demo.md).
+
+Heretic II `6e91d9608`, run `20261031T1941Z-heretic2-original-browser`,
+reaches tutorial and Easy docks gameplay with native walking, turning, spell
+attacks and jumping/landing. The coordinator inspected captures07/13/32/35.
+All1825 upstream package members matched; source/compiler/module and fixture
+pins matched before/after. All24 runtime processes exited, both ports closed
+and the browser lock was released. No hit, kill, objective, audio or FPS is
+established; tutorial-caption carryover and health100 to94 remain unexplained.
+See [the gameplay notes](re-notes/heretic2-demo.md).
+
+### Darkstone accepted combat reconciliation
+
+The accepted October30 software result `be70e8f86`, run
+`20261030T2206Z-darkstone-software-combat`, already establishes native manual
+skeleton combat: EXP0 to79 and surviving LIFE17/35 after a held-left attack.
+Its screenshot review and publication are recorded in the processed completion
+ledger; no repeat runtime or new acceptance is needed. WebGL skeleton combat
+was accepted separately in `dc988e7cb`, run `20261030T2158Z-darkstone-combat`.
+Both use retained module `4649ee5f` at committed main `10952264c`;
+this is not current-main parity, FPS, audio, save/reload or child-renderer
+qualification. The outer harness exit143 remains unexplained despite local
+cleanup and acknowledged quit. See [the original combat notes](re-notes/darkstone-demo.md).
+
+Blood II's check `dbd1a8adf`, run `20261031T1932Z-blood2-native-browser`,
+stopped before runtime. The owner subsequently designated the local
+DEMO V1.0A (BUILD 109), pinned by its 98 file hashes, as the target build.
+All 98 files and the manifest were rechecked in `20261031T1950Z-blood2-owner-pin`.
+The 7.17 GB compilation is no longer a provenance target or prerequisite;
+do not download it. The browser lane is unblocked. See
+[the exact executable and manifest pins](re-notes/blood2-demo.md).
+Historical table entries below do not establish a new current-main run.
+
+UT2003 ordinary visible-menu SOFTWARE route is now verified by `62ee90c86`,
+run `20261031T1628Z-ut2003-native-menu-play`: native Instant Action, Antalus
+and PLAY reach a joined match without console input. The coordinator inspected
+joined HUD18, firing24 (ammo150 to148, health100) and scoreboard27 (remaining
+14:42; previous26 was14:46). All25 saved focused checks pass, with the same
+frozen9b4e39a2/295 source/seven compiler/881 original/107 served identities.
+Native press/release drained the DirectInput ring; the retained menu image
+covered loading. Additional Enter/click during loading prevent attributing
+joining to one press. No generic emulator defect was demonstrated. All runtime
+exits0 and FULLRELEASE16:36:32; actual SOFTWARE executor has no queue error.
+This supersedes the software menu gap below. Matching original ordinary-menu
+WebGL gameplay is now accepted in `09cedce52`, run
+`20261031T1653Z-ut2003-webgl-menu-execution`: inspected joined HUD17,
+firing23 (ammo150 to149, health100), and scoreboard26 remaining14:48
+(previous25 was14:51). Native movement/look/fire completed; owning WebGL2
+receiver completed19,248 with pending0/failedfalse, and24 focused checks pass.
+The same frozen module/source/input closure was retained. All runtime exits0,
+FULLRELEASE16:58:19. This closes the UT2003 ordinary-menu backend gap;
+full27, FPS, audio, player kills and match completion remain open.
+
+UT2004 documentation `2342e9288` records original DM-Rankin software CLI
+play in `20261031T0427Z-ut2004-match`: native movement, look and firing,
+health100 and ammo100 to96 then94. The coordinator inspected the readable
+firing frame. The runtime completed 8,425 batches in636.949 seconds and
+exited zero; 998 original inputs and1,283 retained pins verified unchanged.
+The default guestWorker browser follow-up `09eb0ecbe` also verifies original
+DM-Rankin movement, look and firing on the actual software endpoint:
+health100, ammo100 to99 then98. The coordinator inspected the readable
+world/HUD frame. Run `20261031T0451Z-ut2004-browser` verifies 998 original
+inputs, 292 source files and 107 served responses. Repair `fb698d57e`
+then moves the windowed-device HWND into shared atomic process state so
+presentation instances retain the correct client origin24,44. Run
+`20261031T0514Z-ut2004-origin` verifies the actual software browser route on
+new module `9b4e39a2`, with its exact295 source files and seven compiler
+inputs retained. The coordinator inspected the complete top clock and
+bottom HUD during native movement/look/fire, health100 and ammo100 to98.
+Visible DeathMatch and PLAY clicks work at their displayed coordinates.
+The full build and focused real-instance/pixel/Reset/DirectDraw tests pass;
+the new regression rejects the saved old source. Enemy hits/kills, match
+completion remain unverified. Documentation `f81b9a35f` closes the WebGL
+native match arm in `20261031T0629Z-ut2004-webgl`: visible menus reach
+DM-Rankin, W/S movement, mouse look and firing100 to98. The coordinator
+inspected initial and changed-view full world/HUD frames. Actual owning
+WebGL2 completed68,885 GL draws and20 LockRect calls;26 trusted inputs,
+998 originals,295 source files, seven compiler files and107 served pins
+pass. The fresh locked build passed. Render640x480 inside browser1024x768;
+ANGLE SwiftShader, no hardware-GPU claim. All19 owned PIDs, watcher and
+ports are cleaned. FPS/audio/kills/match completion remain open. See the
+[UT2004 native route](re-notes/unreal-family-demos.md#ut2004-original-dm-rankin-movementfire-retest-2026-10-31).
+
+UT2003 diagnosis `b2647538c` in `20261031T0531Z-ut2003-readback`
+attests actual WebGL endpoint1 on the same exact `9b4e39a2` build.
+DRAW29 rejects a multi-level cube texture with LOD bias-0.5; READBACK48
+inherits that queue error, and the first LockRect completes with
+INVALIDCALL after token clearance and ESP+20. The coordinator inspected
+the original crash dialog and reran the causal check successfully;881
+original inputs,295 source,7 compiler and107 served pins verify unchanged.
+Repair `5fa12b1be` now implements generic cube LOD sampling with face-local
+mip atlas/filtering. All8,880 WebGL1/2 pixel checks and the full locked build
+pass; saved old source rejects. Run `20261031T0542Z-ut2003-cube-lod` retains
+fresh `9b4e39a2`, exact295 source/seven compiler inputs and881 originals,
+107 served pins and88 trusted native events. DRAW29/READBACK48/LockRect
+complete successfully. The coordinator inspected native DM-Antalus world/HUD,
+health100 and ammo146 after movement/look/fire through the game's console
+`open DM-Antalus` route. Actual WebGL2 records21,049 completed draws with no
+failures. Runtime cleanup recovered an interrupted finalizer and verifies all
+owned processes/ports/profile closed. Menu PLAY, FPS, audio, kills, match
+completion and a matching software-arm qualification remain unverified.
+Software follow-up `a14e5e309`, run `20261031T1533Z-ut2003-software-antalus`,
+stopped before guest input: its custom frozen-response handler omitted COOP/COEP,
+leaving isolation and the default guest worker inactive. The inspected NVIDIA
+startup and 85 completed software operations do not qualify gameplay or establish
+an emulator defect. All 295 source, seven compiler and 881 original inputs verify;
+all runtime resources closed. The next attempt must verify HTTP isolation headers
+and actual isolation/default guest worker before native input.
+Follow-up `98e807e69`, run `20261031T1543Z-ut2003-software-isolated`,
+fixes those scratch-response headers and verifies isolation/default guest worker
+before native input and throughout the route. The coordinator inspected software
+Antalus at “Fire to Start”; the ordinary console route remains explicit. Actual
+software execution completed12,389 operations with no queue error. The disk guard
+stopped before join; queued join22/23 never executed. No joined HUD, movement,
+look, firing, health/ammo/clock progression or software gameplay qualification.
+All frozen inputs and22 focused checks pass; all runtime exits0 and whole-process
+cleanup verifies. The next bounded join attempt requires more disk headroom.
+`cd0272077`, run `20261031T1603Z-ut2003-software-join`, then correctly
+declined launch: actual predecessor cleanup/process gate passed, but free space
+was57,539,072 bytes below the2.6GB reserve. Its14 preparation checks pass;
+there is no new runtime or gameplay evidence. The next attempt follows disk
+recovery and uses a2.8GB initial reserve.
+Follow-up `950e4940e`, run `20261031T1612Z-ut2003-software-join-reserve`,
+completes the software gameplay arm on the same frozen identity. The coordinator
+inspected joined HUD15, forward17, firing21 (ammo150 to148, health100), and
+scoreboard24 elapsed00:33 (earlier00:24). Native console `open DM-Antalus`
+and FIRE join remain explicit; visible menu PLAY is unresolved. Actual software
+Device gpuFALSE completes301,598,102 samples; final queue25,202 completed of
+25,220 submitted, no queue error. All17 captures,63 balanced trusted events,
+107 served pins and24 focused checks pass. Disk minimum2,701,918,208 bytes;
+runtime exits0 and full process cleanup verified16:17:30. FPS/audio/hits/kills
+and match completion remain unqualified. A fresh worker investigates visible
+menu PLAY after the current Diablo browser releases, without repeating accepted
+console gameplay.
+
+Deus Ex documentation `940371775` verifies the default guestWorker browser
+Training route on actual SoftDrv: native approach/retreat, first door opened
+with right mouse, then crossed into the red-floor room. The coordinator
+inspected that gameplay frame. Run `20261031T0447Z-deusex-browser` verifies
+131 original/support inputs, 292 source files and 105 served responses.
+Follow-up `2546fb407`, run `20261031T0606Z-deusex-key-door`, verifies
+NanoKey pickup, slot0/left-click unlocking, right-click opening and traversal
+of the next locked door. The coordinator inspected pickup/unlock/corridor
+frames;74 trusted inputs and the same131 original/292 source/105 served pins
+pass. Actual guest canvas640x480 differs from browser viewport1024x768;
+1024x768 guest rendering is unqualified. Runtime cleanup verified. Training
+completion and FPS remain unverified. Follow-up `3d04b4841`, run
+`20261031T0617Z-deusex-next-exercise`, verifies crowbar pickup/equip and
+breaking an upper wooden supply crate with native input. The coordinator
+inspected pickup, intact/broken crate and Jaime lock-picking follow-up frames;
+102 trusted events/five interaction deltas and131 original/292 source/105 served
+pins pass. Runtime cleanup verified. Lock-picking was not attempted in that run.
+Later accepted SoftDrv/default-worker runs progressed through the training
+exercises to the crate room. `208c41480` retains the preferred native count7
+checkpoint with inspected fresh-page Load/gameplay validation in
+`20261031T1220Z-deusex-crates`. Grounded-jump follow-up `b47dfcf2b`, run
+`20261031T1403Z-deusex-grounded`, establishes positive vertical velocity before
+forward input, but insufficient stationary range and tall-wood collision.
+`2fde12461`, run `20261031T1450Z-deusex-reposition`, creates a genuine native
+two-small-crate stack: the exported upper actor names the lower actor as Base.
+The coordinator inspected restored gameplay, the stack and the failed climb;
+450 balanced trusted events, 56 captures, frozen module/source/original pins
+and cleanup checks pass. Stack access remains unresolved; no stable96 landing
+or training exit was reached. Follow-up `cc4aa4124`, run
+`20261031T1521Z-deusex-stack-recovery`, validates that exact diagnostic
+count8/time01:22:17 through native Load, original actor/save crosscheck and
+inspected gameplay. Count7 remains preferred; the different 1301Z diagnostic
+count8 is not promoted. A native air-crouch attempt reached positive vertical
+velocity 300 but retained height 43 during sampled flight, reaching crouched
+height 16 only after returning to the old wood support. It establishes no new
+stack footing, intermediate support, 96 landing or exit. The interrupted original
+worker's launcher exit 143 remains unexplained; recovery closed the inherited runtime
+with actual Chrome/controller/wrapper/monitor exits of 0. These runs retain module
+`8459597c`, 292 source files,
+131 original/support inputs, 105 canonical served responses and19 DLL mounts.
+They establish further native SoftDrv gameplay, without qualifying a matching
+WebGL renderer, FPS/audio or training completion.
+See the [Deus Ex browser notes](re-notes/deus-ex-demo.md).
+
+Pirates documentation `a7725adaf` verifies native sailing near St. Kitts
+and Nevis in `20261031T0458Z-pirates-knownsource`; the coordinator inspected
+the ship/HUD and persistent white coast. Four matched mesh sequences retain
+attached properties into effective renderer state; ordinary map slots are
+empty while a separate array is populated. Follow-up `83ae79866` in
+`20261031T0520Z-pirates-maps` proves the original separate-map writer and
+encoded reader contract. Four matching writer/default-setup mesh sequences
+include two actual large-draw correlations; the coordinator inspected the
+native coast image. Selection follow-up `de5d26f5f` in `20261031T0535Z-pirates-selection`
+proves original terrain name selection and encoded NSB stage references.
+The original factory returns null for66 terrain requests; nine same-mesh
+correlations explain subsequent default-shader draws. The coordinator
+inspected `sailing.png` and reran the causal evidence check successfully.
+At that diagnostic stage, rejection inside original factory lookup `5bd720` remained unresolved;
+cache/library lookup, requirements and creation must be distinguished.
+Those diagnostic runs reproduced no crash and landed no repair; 1,374 original
+inputs, 292 source files and467 served responses verified.
+
+Subsequent production fixes `c6fa4878a` (bootstrap retirement) and `44d8b27fd`
+(D3D9 MaxStreams cap16) are on main. Later original default-worker WebGL
+runs reach textured coast, town/port, sailing and combat. The stream-cap fix
+is distinct from the earlier shader-factory diagnosis; these outcomes do not
+prove every factory-null event fixed. Accepted `70589baac`, run
+`20261031T1423Z-pirates-native-turn`, reaches the LovelyMary selector, actual
+hull contact and a fading native boarding-deck duel with50 Englishmen and40
+pirates. The coordinator inspected selector/contact/deck images; 108 balanced
+trusted events,57 captures and cleanup checks pass. No duel was played to an
+outcome, no capture was established and no new save was accepted. Final device
+error is unknown; one readonly VFS helper failed, so no all-helper-success or
+VFS-validation claim applies. Frozen module `078d81cb` retains296 source files,
+40 support/compiler inputs,1,374 originals,106 source URLs and3 auxiliary pins.
+Follow-up `18aa9d6a5`, run `20261031T1503Z-pirates-boarding-duel`, stalls at the
+native title on both page attempts. The coordinator inspected that failure;
+34 balanced DOM-trusted events do not prove guest consumption. No native Load,
+new combat or fencing occurred in that run. Earlier boarding evidence remains
+valid. Cheap follow-up `ce79828e8`, run `20261031T1515Z-pirates-title-load-cause`,
+compares 13 retained recipe files and finds identical bytes. It establishes no
+causal harness drift, guest input consumption or supported repair and launches
+no new runtime. Title-to-Load recovery, duel outcome, software parity, FPS/audio
+and full corpus qualification remain open. See the [Pirates boundary notes](re-notes/pirates-2004.md).
+
+Diablo II follow-up `a58fb9844`, run `20261031T1523Z-diablo2-den-checkpoint`,
+retains four whole unedited native DENMAP save files and verifies fresh-page
+character selection, native Load, inspected town gameplay and ordinary movement
+with actual isolation/default guest worker/WebGL. The coordinator inspected the
+restored gameplay frame. The earlier page lacked isolation/default guest worker
+because its custom responder omitted headers; its Blood Moor Zombie combat is
+outside the requested worker configuration and does not qualify that target.
+Den entry remains unverified. Frozen module `7f9da4e9` has unknown compiled-source
+identity; 144 frozen inputs and 25 original runtime files verify unchanged.
+The disk guard stopped cooperatively above 2 GB and all owned runtime resources
+closed. This is native checkpoint evidence, not full both-backend corpus coverage.
+Follow-up `23affb46a`, run `20261031T1543Z-diablo2-isolated-den`,
+verifies isolation/default guest worker from launch through all59 captures.
+The coordinator inspected native restored town08 and Blood Moor combat82;
+124 balanced trusted events and frozen/original/save identities pass. The disk
+guard stopped before Den entry or a newer checkpoint; no new save is claimed.
+All runtime exits0 and whole cleanup verifies at16:03:08.
+See the [Diablo II native restore notes](re-notes/diablo2-demo.md).
+
+Forsaken documentation `50bb30050` records a known-source WebGL frame
+investigation in `20261031T0427Z-forsaken-frame`. The coordinator inspected
+`thrust-short-gpu.png`: briefing text, loading bar and incomplete world
+exist inside the GPU color target, alongside projectiles. Earlier firing
+frames show a readable room, but sustained readable world coverage remains
+unverified. Follow-up `20e6b97a8`, run `20261031T0552Z-forsaken-boundary`,
+retains two complete clear-to-clear intervals, one Flip each. All16 owning
+Execute/transport/GPU submissions match. Six world draws per frame contain
+670 triangles already collapsed at Execute entry and change zero pixels;
+nondegenerate object draws do change pixels. Exact565 uploads from alternating
+backings explain room versus briefing fragments; depth-only clear preserves
+color. The coordinator inspected both frame colors and reran the offline
+check:873 original/292 source/107 runtime pins pass. Follow-up `24b5bd55a`/`7867342ee`, run
+`20261031T0617Z-forsaken-first-mutation`, reconstructs 876 initialization
+deltas and 29 original color-only stores: engine-transformed output becomes
+the next source through Unlock1417, diverging at PROCESSVERTICES1420. The
+startup/attract trace does not independently identify Volcano. A fresh native
+Volcano retest of separate-output candidate `41f5c4c7` preserves 162 source
+vertices over 12 Executes; two complete frames redraw 642 world triangles.
+The coordinator inspected a complete room/HUD and changed pitch with firing
+2000→1998, and reran mutation/source/redraw checks. Owned processes and ports
+are closed. Repair `df174b3cf` is now on remote main. The final allocation-
+failure guard passes injected OOM/retry, 32 color-only cycles, six focused tests
+and the full locked build; both old-source and defective-guard mutations reject.
+Final module `d2c1df73` pins 295 runtime sources and seven compiler files. Native
+candidate screenshots remain distinct. Fresh final-build run `20261031T0713Z-forsaken-repaired-gameplay`, commit `501f52cf1`, now verifies native Volcano room-to-corridor movement, look and repeated firing. The coordinator inspected four room/corridor/instruction captures; 873 originals, 295 sources, seven compiler inputs, 609 responses and 95 trusted events pass. All 59 observed owned PIDs are absent, ports closed and profile gone. Deaths/respawns and white pause frames are disclosed; outer wrapper143 is unexplained despite browser exit0 and verified cleanup. Enemy kills, hidden-door opening, uninterrupted play, hardware GPU, FPS and completion remain unverified.
+See the [Forsaken investigation](re-notes/forsaken-demo.md).
+
+The earlier gameplay runs pin module `8459597c` to the retained ReVolt locked build's exact
+292-file source snapshot, including then-concurrent font edits; observed
+HEAD is not substituted for compiled source. The UT2004 repair uses the
+separately retained `9b4e39a2` source/compiler snapshot described above.
+Own runtimes were cleaned.
+These results extend the per-app evidence without establishing software /
+WebGL parity, audio, real-time performance or completion of the full27.
+
+
+## October 31: Re-Volt attachment repair reaches native WebGL driving
+
+Repair `59a615fc5` fixes GetAttachedSurface matching for allocations created
+before DirectDraw 7: unused DDSCAPS2 extension words no longer reject an
+otherwise valid back buffer. DX7 allocation validation remains active.
+Run `20261031T0403Z-revolt-backbuffer` reproduces the original failure on
+locked build `44aa9976` and reaches the menu, starting grid and native
+Up/Right/Down driving on repaired build `8459597c`. The coordinator inspected
+the race frame: the car is off-road and overturned. Movement is verified;
+checkpoint, lap and race completion are not.
+
+Both builds retain exact source snapshots, including concurrent dirty font
+work; neither is described as a clean commit build. The default guest-worker
+route uses explicit WebGL at stable 1024×768, with all 444 original input
+files unchanged before and after. Locked builds and the focused native COM
+regression pass; the new regression also rejects the saved pre-fix source.
+Two older synthetic fixtures fail identically before and after, outside the
+repaired lookup. Own browsers, controllers, ports and profiles were cleaned;
+the after controller's exit 143 remains unexplained. No software gameplay or
+full-corpus parity is established. See [Re-Volt investigation](re-notes/re-volt-demo.md#known-source-attachment-repair-and-native-race-2026-10-31)
+and the run's retained recovery recipe for the next controlled-lap attempt.
+
+## October 31: Tunnel, Globe and Wormhole startup crash sweep
+
+Run `20261031T0240Z-dx-more-startups` launched registered `dx_tunnel`,
+`dx_globe` and `dx_wormhole` through the cooperative CLI software route,
+without injected input. All three exited zero with no `CRASH`, `RuntimeError`,
+`unreachable` or unimplemented-API signature in their logs. Tunnel completed
+2,905 batches in 15.064 seconds, Globe 16,834 in 15.130 seconds, and Wormhole
+reached 100,000 batches in 9.700 seconds. Personally inspected PNGs show
+textured tunnel walls, the registered textured Globe scene, and Wormhole's
+yellow-green wire grid. Globe's appearance is not a fresh scene-correctness
+finding; preserve the original-scene distinction in its investigation note.
+
+The module hash is
+`8333a35b1efa694462033e87f62ce4a3f5497941d1423540b39a590c9d31134a`;
+compiled-source identity is unknown. Module, region-map, registry and runner
+hashes stayed unchanged across execution, as did all 38 registered input
+files per app. Exact commands, process exits, hashes and observations are
+retained in `executions.json`, `inputs.json`, `after.json`, `assets.json`
+and `summary.json`. No source changed or emulator defect was established.
+These bounded software startup observations do not establish WebGL parity,
+gameplay, audio, performance or completion of the historical 27-app set.
+No matching candidate manifest entry was identified, so this remains
+investigation evidence without a dashboard `result.json`. All three child
+processes ended; no browser, server or Boat was created.
+
+## October 31: bounded Twist and Boids cooperative startup crash sweep
+
+Run `20261031T0237Z-dx-launch-sweep` launched the registered `dx_twist`
+and `dx_boids` executables with `test/run.js --no-build --no-threads`,
+without injected input. Twist completed 6,641 batches in 15 seconds;
+Boids reached the 100,000-batch limit in 5.892 seconds. Both runners exited
+zero, with no `CRASH`, `RuntimeError`, `unreachable` or unimplemented-API
+signature in the preserved logs. Personally inspected final PNGs show the
+textured Twist object and colored Boids flock triangles with cyan boundaries.
+
+The loaded local module hash is `8333a35b1efa694462033e87f62ce4a3f5497941d1423540b39a590c9d31134a`.
+Module, region-map mirror, runner and registry bytes stayed unchanged across
+both executions; their hashes and exact commands are retained in `inputs.json`,
+`executions.json` and `summary.json`. Compiled-source identity is unknown;
+the launch-time HEAD is not proof of that identity. These are cooperative
+CLI software startup observations, not new WebGL, threaded, scene-parity,
+gameplay, audio or performance acceptance. No matching candidate manifest ID
+was found, so the bundle remains investigation evidence without a dashboard
+`result.json`. Both child processes ended; no browser, server or Boat was
+created. No source changed or emulator defect was established.
+
+
+## October 31: bounded OrganicArt original-input recovery found missing source
+
+Run `20261031T0058Z-organicart-recovery` searched the accessible retained
+local sources without repeating the native logo-toggle or substitute-image
+controls. No authentic `CALogo.gif` or source-verified Plus! 98 installation
+registry defaults were recovered. Consequently no new scene replay or
+production change is claimed.
+
+The search inspected 538 ZIP indexes and 104 TAR/TGZ member lists, plus one
+ISO listing. Its only OrganicArt executable match was a byte-identical copy
+of the existing `OASAVER.SCR` in `/tmp/caesar3-packet.tgz`; it supplies neither
+the missing logo nor installation settings. All 47 CAB listing attempts
+failed on unrelated retained game installers' InstallShield format; their
+contents remain unverified. A UTF-8/UTF-16 settings search over 380 retained
+INF/REG/INI/THE/SCN files found no logo/default-setting evidence. The original
+executable's 57-resource inventory has no named CALogo resource and the PE
+has no GIF87a/GIF89a signature; encoded/compressed assets are not ruled out.
+
+The concrete missing input is the authorized original Plus! 98 installation
+media/metadata or a verified installed logo/settings export for this package.
+The historical source lead in `directanimation-design.md:146` is
+`/Volumes/PLUS98/PLUS98.CAB` and memory `reference_plus98_iso.md`; neither is
+present here. This lead does not establish that the CAB contains the logo.
+Native fallback values do not establish installation defaults, so an arbitrary
+logo-disable setting remains unjustified.
+
+The run preserves the search recipe, archive results and limitations,
+192-file screensaver SHA-256 manifest, original archive/member hashes and
+`verification.json`: all 85 prior registered inputs and 192 retained files
+remain unchanged. Original `OASAVER.SCR` SHA-256 is
+`470e28bcbc3cf92c514cd8e8bbf9eae399c59f79ed2adbf7bf2b91d25cfb477c`.
+No browser, server, profile or Boat/test box was created; no runtime cleanup
+is outstanding (box ID/state/expiry not applicable). This was a local source
+recovery attempt within the 25-minute bound, not a fresh rendering test.
+
+## October 31: OrganicArt rectangle isolated to native logo input
+
+Run `20261031T0046Z-organicart-logo` supersedes the startup-only native
+registry comparison in `20261031T0034Z-organicart-rectangle/logo-ab`.
+Both new WebGL arms reached original scenes by 45 seconds and ran for
+210 seconds. With native `DisableCALogo` DWORD **0**, personally inspected
+45/150-second scenes contain the lower-right white rectangle; with DWORD
+**1**, inspected 45/150/210-second scenes do not. Read-only guest observations
+confirm the native disable flag is respectively 0/1. The enabled 210-second
+scene also lacks the rectangle, consistent with the app's hide-logo path;
+this is not a permanent obstruction.
+
+The white area is present in both the 640×480 backing canvas and DirectDraw
+frame layer. In the saved enabled layer, all 3,060 pixels of
+`[550,434,640,468)` are white; the corresponding disabled sample has zero
+white pixels. A separate native trace records `DisableCALogo -> 0`, no
+`CALogo` override, and `SearchPath("CALogo.gif", path=".") -> NOT FOUND`.
+No such file is among the 84 registered scene assets or available screensaver
+files. A fourth launch keeps the logo enabled and sets the app's native
+`CALogo` REG_SZ to the unchanged, already-registered `BOLD6.GIF`: lookup and
+file reads succeed, and personally inspected scene/layer captures show an
+orange/brown texture in the former white rectangle. This deliberate image
+substitution diagnoses the missing default logo input; it does not restore
+the authentic Computer Artworks logo.
+
+No production code or default registry setting was changed, and no guest
+memory was patched. A renderer repair is not established. The remaining
+repair dependency is authentic Plus! 98 logo assets and/or installation
+registry defaults, followed by an original-input replay. The native disable
+key is a demonstrated workaround, not an accepted production repair.
+Randomized scenes differ between arms; this is not same-frame parity, and
+software was not rerun in this follow-up.
+
+All four launches use original `OASAVER.SCR /s`, the same 85 executable/scene
+input hashes, retained module SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`, full source unknown), Chrome 151/ANGLE SwiftShader,
+and guest threads disabled. Exact capture hashes, native traces, byte checks,
+reproduction instructions and cleanup are retained in the run's
+`investigation.json`, `verification.json` and `recovery.txt`. Concurrent SDK
+Viewer changes to `lib/apps.js` and generated file-size metadata were handled
+by recovering byte-identical served versions from launch commit `49340601e`;
+all 920 served-response hashes verify against current or retained exact bytes.
+The first controller was later reaped with status 143 after its cleanup
+record; the signal's sender is unknown. Both later controllers exit 0. All
+three browsers are absent, six HTTP/CDP ports closed and profiles removed.
+Browser work ran approximately 00:45:50–00:56:32 UTC, within 25 minutes.
+No Boat/test box was used (ID/state/expiry not applicable).
+
+## October 31: OrganicArt rectangle reproduced on both routes
+
+Run `20261031T0034Z-organicart-rectangle` reproduces the lower-right white
+rectangle over original OrganicArt scenes on software and WebGL. Personally
+inspected WebGL frames 2/3 and software `restored.png` show different scenes,
+so this is not a same-frame parity check. WebGL records one visible 640×480
+Screen Saver window and host GPU enabled. Software point inspection places
+the rectangle inside the displayed canvas, rather than a separate HTML
+overlay. Its owning drawing operation and cause remain unresolved; no emulator
+repair is claimed.
+
+All three launches used retained module SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`, full source unknown), Chrome 151 with ANGLE SwiftShader,
+registered `/s` startup and guest threads disabled. Each launch verified 85
+executable/scene input pins and 230 served-response hashes. The short software
+arm captured startup only. A secondary CDP connection temporarily resized
+the longer software arm; its inspected capture followed viewport restoration.
+Layer extraction failed when that target closed, so no backing-layer evidence
+or cause is inferred. All browsers and servers closed and profiles were removed;
+no Boat was used. `investigation.json` records these limits and exact captures.
+
+## October 30: PTCT paired original browser rendering
+
+Run `20261030T2351Z-ptct-paired-browser` captures the original registered
+Please the Cookie Thing intro on software and WebGL. Two personally inspected
+frames per route show gray/white geometric beams changing shape and position
+on black. The software route reports `gl_sw_enabled() == 1` without a GPU
+presentation layer; WebGL has an owning GPU layer whose sequence advances
+from 132 to 169. Normal startup uses the registered dialog command, without
+a guest patch. Guest threads were disabled.
+
+Both routes loaded canonical module SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`). Each registration's executable and all 144 served
+response hashes were verified. Chrome 151 was launched with ANGLE SwiftShader
+flags; the GPU vendor string was not queried. Both browsers and static servers
+closed, private profiles were removed, and no Boat was used. Exact timestamps,
+input pins, capture hashes and cleanup checks are in `investigation.json` and
+the two route `verification.json` files. This establishes visible animation,
+not full intro correctness, same-frame parity, FPS, physical GPU performance
+or original 27-app membership.
+
+## October 30: six screensavers, consolidated paired browser captures
+
+Run `20261030T2340Z-screensaver-browser-batch` completes inspected scene
+captures for the six siblings of Architecture on both browser routes:
+
+| App | Personally inspected result |
+| --- | --- |
+| Falling Leaves | Leaves and shadows change over the textured leaf background on both routes. |
+| Geometry | Gold polyhedra change arrangement over the blue radial background on both routes. |
+| Jazz | White musical-note clusters change on black on both routes. |
+| OrganicArt | Software changes from a patterned tunnel to rings; WebGL rings change orientation. A white lower-right rectangle remains unexplained. |
+| Rock & Roll | Guitars and picks change orientation on both routes. |
+| Sci-Fi | Birdlike objects render over the textured alien landscape on both routes; motion was inspected only on software. |
+
+These are original registered executables and scene assets, launched normally
+with `/s`, guest threads off, Chrome 151 and ANGLE SwiftShader. Every launch
+served retained canonical module SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`). Per-frame owning-host GPU state matches the selected
+route. The six registrations contain 114 executable/scene input entries,
+all hash-pinned. Of 2,270 served responses across the batch and retries, 2,263
+were reverified against current bytes or retained matching HEAD bytes. Seven
+intermediate `lib/host-audio.js` responses cannot be reverified after concurrent
+worker edits; their exact recorded hashes remain in the route verification
+records. This is an explicit provenance limitation, not a full immutable
+source replay.
+
+Initial WebGL Jazz captures caught startup; a longer fresh run produced the
+inspected notes. The software browser target closed after OrganicArt, with no
+established cause; a fresh bounded run captured only Rock & Roll and Sci-Fi.
+All four browsers are absent, static ports closed and private profiles removed;
+no Boat was used. `investigation.json` records exact inspected images,
+verification counts and limitations. This establishes visible scenes, with
+motion where stated, not same-frame parity, FPS, physical GPU performance,
+complete scene correctness, complete saver cycles or the full 27-app goal.
+
+## October 30: Architecture browser scene on both routes
+
+Runs `20261030T2338Z-architecture-webgl` and
+`20261030T2338Z-architecture-software` launch registered original
+`ARCHITEC.SCR /s`, with its seven registered scene assets, through the normal
+browser launcher. Personally inspected WebGL frames 2/3 and software frames
+1/2 show the textured marble interior and changing central green objects.
+WebGL frame 1 records startup's white area; it is superseded by the later
+rendered captures, not counted as a scene failure.
+
+Both Chrome 151/ANGLE SwiftShader runs load retained canonical module
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`), with guest threads off. Backend records verify the
+owning host's GPU enabled only for WebGL. All eight registered input hashes
+and every served-response hash are verified separately in each run. Exact
+identities, inspected frames and cleanup appear in `investigation.json`.
+Both browsers are absent, their six ports closed and private profiles removed;
+no Boat was used. This establishes a visible animated scene on both routes,
+not same-frame pixel parity, FPS, physical GPU behavior, a full screensaver
+cycle or completion of the historical 27-app set.
+
+## October 30: longer Boids captures establish flock rendering
+
+Run `20261030T2348Z-boids-scene-diagnosis` extends the short paired
+captures below. Two personally inspected frames per route now show colored
+flock triangles and cyan boundaries changing on both software and WebGL.
+The short captures did not establish a missing-geometry defect; no emulator
+change was made. Both launches served the retained canonical module
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+from source fix `de2e338c4`. All 38 registered inputs and 179 served response
+hashes per route verified against local bytes. Host `d3dimGpu` was present
+only on WebGL. Chrome 151 used ANGLE SwiftShader; page Worker threading was
+requested off. The per-app `wine.threads` default remained true and does not
+prove Worker execution; no thread-mode comparison was performed.
+
+The browsers and static servers are closed and profiles removed; no Boat was
+used. This proves observed flock animation, not same-frame parity, physical
+GPU behavior, FPS, full scene correctness, or recovery of the historical
+27-member list. Shared SDK Viewer aliases retain their documented provenance.
+
+## October 30: paired Boids motion, incomplete scene acceptance
+
+Runs `20261030T2335Z-dx-boids-webgl` and
+`20261030T2335Z-dx-boids-software` retain the original `boids.exe` and each
+contain two personally inspected browser frames. Cyan polygon outlines change
+position on both routes. The images do **not** establish a correctly rendered
+flock; this is narrower than the earlier colored-triangle observation.
+Both Chrome 151/ANGLE SwiftShader runs loaded canonical module `d83e413f…`
+(source `de2e338c4`) with guest threads disabled. Owning-host GPU state was
+verified enabled for WebGL and disabled for software. Each run verifies all
+38 local SDK-directory input hashes and all served response hashes; the input
+manifest includes the renamed ProgressiveMesh aliases described below.
+`investigation.json` records exact module identity, backend and frame paths.
+Both browsers were stopped, all six ports closed and private profiles removed.
+No Boat was used. Full scene correctness, pixel parity, FPS and historical
+corpus membership remain unqualified.
+
+## October 30: Globe motion verified on both repaired-build routes
+
+Runs `20261030T2330Z-dx-globe-webgl` and
+`20261030T2330Z-dx-globe-software` each contain two personally inspected
+captures of the original SDK Globe executable. The shaded, textured sphere
+changes orientation on both routes. This closes the earlier unverified WebGL
+motion finding after GPU Execute extent repair `de2e338c4`; it does not resolve
+the historical texture-band correctness question or establish pixel parity.
+
+Both Chrome 151/ANGLE SwiftShader runs loaded retained canonical module
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`.
+WebGL had the owning host's `d3dimGpu` and GPU selection enabled; software
+had neither. Guest threads were disabled in both. Each run verified 38 local
+SDK-directory input hashes and all 182 served-response hashes. Its `investigation.json` records
+frames, build/backend evidence and cleanup: browser absent, three ports closed,
+private profile removed, no Boat. The different orientations and sphere sizes
+are not a same-frame comparison; FPS, full scene correctness and completion of
+the historical 27-app corpus remain unqualified.
+
+## October 30: original Tunnel WebGL motion verified after extents fix
+
+Run `20261030T2325Z-dx-tunnel-gpu-extents` retested original `dx_tunnel`
+with the canonical module retained from the passing build for GPU Execute
+extent repair `de2e338c4`. Two personally inspected browser captures show
+changed tunnel orientation and texture position. A bounded trace of 284
+copy/present events contains 94 distinct scene-region hashes on both primary
+surface and render target, excluding the text overlay.
+
+Chrome 151/ANGLE SwiftShader loaded module
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`.
+All served-response hashes match their local inputs. The run's `result.json`
+records module identity, captures and verified cleanup: browser exited, three
+ports closed, private profile removed, no Boat. This closes the earlier
+unverified WebGL motion finding for Tunnel; pixel parity, full scene correctness,
+performance and completion of the 27-app corpus remain unqualified.
+
+## October 30: Twist WebGL animation repaired
+
+The original `dx_twist` browser run `20261030T2320Z-dx-twist-gpu-extents`
+now visibly deforms and rotates its textured sphere. Three captured frames
+were personally inspected. The bounded copy trace contains 101 distinct
+scene-region hashes on both the primary surface and render target; changing
+copy rectangles cover the sphere. Before the fix, run
+`20261030T2316Z-dx-twist-copy-trace` copied only the FPS text rectangle after
+the initial frame, leaving the primary scene unchanged despite target updates.
+
+The GPU executor omitted ExecuteBuffer status extents that D3DRM consumes to
+choose its windowed copy rectangle. Accepted draws now report conservative,
+clipped coverage while Execute still owns that status, independently of later
+batch submission or readback. Wrong-target, inactive and empty reports are
+ignored. Triangles, lines, points, clipping and deferred submission have focused
+coverage, including the actual compiled WASM export.
+
+The locked canonical build and five focused D3DIM tests pass. The original
+Chrome 151/ANGLE SwiftShader run loaded retained module
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`;
+served-response integrity and browser/port/profile cleanup are recorded in
+its `result.json`. No Boat was used. This establishes visible animation for
+this sample; pixel parity, complete scene correctness, performance and the
+historical 27-app corpus goal remain unqualified. Earlier stationary-frame
+findings below describe the previous build.
+
+## October 30: Twist motion boundary narrowed; no repair yet
+
+Two original WebGL diagnostic runs, `20261030T2305Z-dx-twist-motion-probe`
+and `20261030T2307Z-dx-twist-frame-boundary`, used the same verified canonical
+module `7e8d3194…` from source `8cfa97b0d`. Runtime-only wrappers sampled
+120 distinct submitted vertex hashes and 120 distinct full readback/DIB hashes.
+That establishes progressing geometry submission and readback, not visible
+animation: whole-frame hashes can change with the guest FPS overlay.
+
+Four later samples excluded the overlay and measured the same scene-region
+hash, `3605449039`, while draw count advanced from 14,092 to 14,125. Three
+closely spaced screenshots were personally inspected and show the same sphere
+orientation. This narrows the unresolved animation gap without identifying its
+cause or establishing scene correctness. No production source was changed.
+Each run retains its diagnostic logs and `investigation.json`; both browsers
+exited, all six ports closed, private profiles were removed, and no Boat was used.
+
+## October 30: paired original Twist renders; motion differs
+
+Runs `20261030T2304Z-dx-twist-browser` and
+`20261030T2304Z-dx-twist-software` contain inspected original `dx_twist`
+initial/final frames. Both render a dark textured object with a yellow/black
+radiation symbol. Software shape and orientation change; WebGL frames appear
+stationary. WebGL animation is unverified, and the cause remains undiagnosed.
+This is a concrete follow-up gap rather than a scene-correctness pass.
+
+Both loaded module `7e8d3194…` from the passing canonical build of
+`8cfa97b0d`, with unchanged source hashes recorded in the copied build
+manifest. Chrome 151/ANGLE SwiftShader observed guest threads enabled;
+WebGL used `D3DIMGpu`, while software selected DX2–7 WAT without it.
+Each run verified 39 input hashes and 38 served SDK responses. Its
+`investigation.json` references captures, route/build evidence and cleanup.
+Both own browsers exited, six ports closed and private profiles were removed;
+no Boat was used. FPS overlays are not benchmarks. Pixel parity, complete scene
+correctness and the historical 27-app goal remain unqualified.
+
+
+## October 30: Tunnel renders from a verified canonical build
+
+Runs `20261030T2317Z-dx-tunnel-browser` and
+`20261030T2317Z-dx-tunnel-software` contain inspected initial/final captures
+of original `dx_tunnel`: gray textured tunnel walls with yellow/black edges.
+Software frames show changed orientation; WebGL animation is not established.
+Chrome 151/ANGLE SwiftShader used `D3DIMGpu` on WebGL and the DX2–7 WAT
+software rasterizer without `D3DIMGpu` on software. Guest threads were enabled.
+
+The locked canonical build passed on source `8cfa97b0d`; all 1,148 tracked
+build-source file hashes stayed unchanged across compilation, with no tracked
+source patch. It produced module `7e8d3194…`, matching each loaded module.
+This newly verified build reproduces the earlier retained module hash; it does
+not retroactively establish the earlier runs' complete host/source identity.
+Each run verified 39 inputs and 38 served SDK responses. Build logs, source
+manifest, captures, route observations and cleanup are in its `investigation.json`.
+Both browsers exited, six ports closed, and private profiles were removed.
+No Boat was used. The guest FPS overlay is not a benchmark; these captures do
+not establish pixel parity, full scene correctness, or completion of the 27-app corpus.
+
+
+## October 30: paired original Flip3DTL browser animation
+
+Runs `20261030T2311Z-dx-flip3dtl-browser` and
+`20261030T2311Z-dx-flip3dtl-software` each contain inspected initial/final
+captures of original `dx_flip3dtl`: a Windows 95 textured cube changes
+orientation on both routes. The window identifies itself as Flip3D DISPLAY
+HAL. The guest FPS overlay is not an independently measured benchmark.
+
+Chrome 151/ANGLE SwiftShader used WebGL with `D3DIMGpu` in the first run;
+the second selected the DX2–7 WAT software rasterizer and had no `D3DIMGpu`.
+Guest threads were observed enabled in both. Both loaded retained module
+`7e8d3194…`, compiled source revision unknown, and verified all 39 input
+hashes and 38 served SDK response hashes. Each run's `investigation.json`
+records evidence and cleanup: browser gone, three ports closed, private
+profile removed, no Boat. These observations establish animated textured
+output on both routes, not pixel parity, full scene correctness, performance,
+or completion of the historical 27-app corpus.
+
+
+## October 30: Viewer original-mesh startup failure
+
+`20261030T2308Z-dx-viewer-browser/investigation.json` records a fresh
+original `viewer.exe` browser attempt with WebGL selected. The normal registry
+replaces `camera.x`, `mslogo.x`, and `sphere2.x` with tetra/cube test fixtures.
+For this run only, the launch manifest instead used the original SDK files
+from `dx_globe`, retaining the original Viewer executable. No fixture mesh was
+fetched; 39 input hashes and 38 served SDK responses passed verification.
+
+The inspected startup dialog says **Failed to load camera.x —
+D3DRMERR_NOTFOUND**. A trusted click on OK left no Viewer windows or running
+app. This does not establish a rendered original scene; prior fixture-based
+Open/menu checks do not close this gap. Original `camera.x` uses binary
+`xof 0303bin` ProgressiveMesh/InlineData representation; the failure's cause
+remains unknown. Chrome 151/ANGLE SwiftShader loaded retained module
+`7e8d3194…`, compiled source revision unknown. The browser, three listening
+ports, and private profile were cleaned up; no Boat was used.
+
+## October 30: paired original Globe browser renders
+
+Runs `20261030T2302Z-dx-globe-browser` and
+`20261030T2305Z-dx-globe-software` add inspected initial/final captures of
+original `dx_globe`. Both show the titled Direct3DRM sample with a dark shaded
+sphere and yellow/black textured band. Software captures show a change in
+orientation; WebGL animation is not established. Their different apparent
+sizes and orientations are not a pixel-parity comparison or correctness verdict.
+
+Chrome 151 used ANGLE SwiftShader with guest threads observed enabled.
+The WebGL UI/console and `D3DIMGpu` identify that route; the software UI/console
+identify the DX2–7 WAT rasterizer, with no `D3DIMGpu`. The queried host
+`backend` property was unavailable, and OpenGL `gl_sw_enabled()` does not
+identify the D3DIM route. Both loaded retained module `7e8d3194…` (full hash
+in each `loaded-module.json`), compiled source revision unknown. Each run
+verified 39 input hashes and 38 fetched SDK responses. Browser processes and
+servers are gone and temporary profiles removed. Evidence and limits are in
+each run's `investigation.json`; no FPS, full scene correctness, current-main
+build, or complete historical 27-app claim follows from these captures.
+
+## October 30 Boids browser animation
+
+The original `dx_boids` sample rendered moving colored flock triangles and
+cyan boundaries in two inspected browser captures. Run
+`scratch/runs/20261030T2255Z-dx-boids-browser/` pins the loaded module
+`7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`
+(compiled source revision unknown), 39 inputs, served asset hashes, WebGL
+host selection and a `D3DIMGpu` instance. Chrome used ANGLE SwiftShader and
+guest threads. Readback-shadow performance warnings remain; this is animated
+render evidence, not complete correctness, pixel parity, FPS, or
+recovery of the original 27-member list. Browser and servers were closed.
+
+The paired `20261030T2258Z-dx-boids-software/` run now adds two inspected
+software captures with moving colored triangles and cyan boundaries. It uses
+the identical retained module and SDK inputs; all 39 input and 38 served SDK
+response hashes pass. Host backend `software`, no `D3DIMGpu`, and the UI's
+DX2–7 WAT rasterizer message identify the route. Both routes produce animated
+output; different animation times preclude pixel parity claims. No FPS or
+complete-scene correctness measurement. Its browser, servers and profile were
+cleaned up.
+
+## October 30 Pawn browser move
+
+Run `20261030T2250Z-pawn-browser-move` adds inspected original Pawn browser
+gameplay: native e2–e4 and engine e7–e5 reply in the composited window, WebGL
+selected in Chrome/ANGLE SwiftShader, child GPU frame sequence 2→25. Six
+original inputs and fetched Pawn payloads were hash-checked; loaded module
+`7e8d3194…`, compiled source unknown. Threads were actually enabled. Exact
+backend implementation/export state was not captured; no hardware-GPU or
+complete chess-game claim. This does not establish all 27 historical members.
+
+## October 30 Tile World census lead replay
+
+Run `20261030T2242Z-tworld-input` replayed the registered original Tile World
+on SDL's GDI route. Root inspected Level 1 before/after ordinary keyboard
+movement: remaining chips 6 → 3 and time 200 → 138. Exit 0 after 650
+100,000-block batches. Exact module `7e8d3194` and original input hashes are
+retained; compiled source revision is unknown. This validates bounded gameplay
+for an explicitly named historical census row, while providing no GL/D3D
+renderer qualification. Full-level completion and browser replay remain open.
+
+## October 30 Pawn move and extended Jazz scene
+
+Run `20261030T2238Z-pawn-software-move` exercised the original Pawn executable
+on software D3D9: e2–e4 input followed by the engine's e7–e5 reply. Root
+inspected the composited desktop, including both moved pawns and yellow engine
+move outlines. Exit 0, 20,000 batches; all six original input files hashed.
+Module `7e8d3194` is pinned; its compiled source revision is not independently
+established. This adds bounded CLI software gameplay, not browser parity.
+
+The later `20261030T2236Z-jazz-scene` run resolves the sparse Jazz observation
+below: after 180,000 batches the inspected primary surface shows five large
+lit musical notes and many smaller notes radiating against black. Exit 0;
+seven original inputs verified, retained module `1dbddeaf` / source `d4fb06b46`.
+Neither observation reconstructs the missing historical 27-ID membership list.
+
+## October 30 four further original screensaver observations
+
+Run `20261030T2226Z-d3drm-four-scenes` retains five bounded software D3DIM
+executions of Architecture, Jazz, OrganicArt and RockRoll. All exited 0;
+117 original input identities were hash-checked. Root inspected Architecture's
+textured marble interior, RockRoll's intermediate guitars/picks scene, and
+OrganicArt's extended-run green/red looping forms against orange. The initial
+OrganicArt run ended with an offscreen texture selected; the extended run's
+final capture selected the primary surface. Jazz showed small white fragments
+against black, so its full scene remains unqualified. Loading frames and
+offscreen textures are not evidence of a failed scene renderer. The later
+extended Jazz observation above supersedes this run's sparse-scene limitation.
+
+The exact retained module/source is `1dbddeaf` / `d4fb06b46`, as below, preceding
+the later GLTron repairs. Commands, durations, surface diagnostics, captures,
+input hashes and inspection notes are in the run. These are bounded scene
+observations, not visual correctness, browser parity, current-main validation,
+performance measurements or completion of the historical 27-app goal.
+
+## October 30 Falling Leaves and SciFi software observations
+
+Run `20261030T2222Z-d3drm-scenes` retains original `scr_fallingl` and
+`scr_scifi` software D3DIM executions, each reaching 120,000 batches and exiting
+0. Root inspected the final images: gold/green leaf forms over a leaf backdrop,
+and flying gold forms above terrain under a red sky. Commands, logs and asset
+hashes are retained. These scene observations use the same retained `1dbddeaf`
+module/source `d4fb06b46` as Geometry below, before the subsequent GLTron repair.
+They establish rendered scenes in bounded runs, not visual correctness,
+browser parity, current-main validation, FPS or completion of all 27 apps.
+
+## October 30 Geometry software scene observation
+
+Run `20261030T2217Z-geometry-render` retains two original `scr_geometry /s`
+CLI executions on software D3DIM with the real guest `d3drm.dll`, one per
+cooperative/threaded scheduler. Both exited 0 after 20 seconds without a reported
+guest crash. Root inspected the cooperative intermediate/final and threaded
+final images: gold 3D geometry renders against a blue background. Logs, images
+and five original asset hashes are retained in the run directory.
+
+The tested module is `1dbddeafbeff685596095d18a4fd9240820b00b0fa293d21ac03393f9f652fb1`,
+retained from the original GLTron run on source `d4fb06b46`; this does **not**
+validate subsequent main edits. Browser WebGL, backend parity, FPS and other
+scenes remain unverified. Loader warnings for absent shell32/ole32 DLL files
+remain in the logs. This observation advances one known member's software
+evidence; it does not resolve historical membership or qualify all 27 apps.
+
+## October 20 historical membership and receipt matrix
+
+This is the evidence-table deliverable for **GLD3D-CORPUS-27-20261006**, on
+documentation base `4d57bb66dae7da0a488b9546ccb0b4f4f7ba2434`. It extends this
+canonical document; the dated broader tables below remain historical records.
+**The original 27-ID list is not recovered, and the goal is not complete.**
+No runtime, census execution, asset download or new build was performed.
+
+### Membership provenance and its limits
+
+The retained memory
+`/home/user/.claude/projects/-home-user-wine-assembly/memory/project_gl_d3d_corpus_goal.md`
+(modified September 26, originating session
+`bd610256-7b4f-4ed1-afa0-9c3cf3412fbb`) records the September 22 count:
+27 apps, with overlapping family totals GL7 / D3DRM10 / D3DIM9 / D3D8 7 /
+D3D9 2. Original census commit
+`2d722ab3766c288d13796ed9dad3f1ceeca8f1eb` independently records 27 among
+225 registry entries. Neither contains the complete output.
+The memory's SHA-256 is
+`edf52a63ba936a24d25b1cd3e21cd4a939e4fb6c92d45fa7a66d93e65fc4d8e4`.
+The original registry blob is `65f56177c3bbafe8f4ce0818e5369e44f235777c`;
+the original census-tool blob is `45425e4ab7eed19a9aef67bc76365f4baa0885b5`.
+These pin the recovery inputs that survive, not the missing binary inventory.
+
+Membership labels in the table below are deliberately distinct:
+
+- **S**: seven explicitly included screensavers. The original commit and
+  memory say seven `scr_*`; the [screensaver note](re-notes/plus98-dx-screensavers.md)
+  explicitly identifies all seven as members of that 27-app target.
+- **N**: `icewind_dale_demo` and `tworld`, explicitly described as two
+  census rows in the original commit, despite likely launcher noise.
+- **E**: Quake II, Half-Life and Warcraft III are original-commit examples
+  of multiple renderers. They are strong leads, but an example is not recovered
+  emitted census output.
+- **M**: named in the evolving September goal memory's progress notes.
+  Their relevance is established; membership in the September 22 output is
+  not. Later additions/fixes cannot silently establish original membership.
+
+Thus **nine IDs are explicitly tied to the historical count**, with **18
+membership slots unresolved**. E/M rows below are useful evidence mappings,
+not assignments to those slots. There are 30 distinct IDs below because the
+evolving memory names more than the original denominator; this is not a
+reconstructed 30-app or 27-app manifest. `generally`, mentioned in the memory
+only to exclude its DirectDraw route, is not added.
+
+The bounded local-history search checked 145 retained project JSONL/gzip
+files for the originating UUID and the original 27/87-of-225 census text,
+then specifically checked the four retained September histories for census
+references. It found memory copies/references, not the original stdout.
+The originating session file is absent from that project directory.
+The exact search summaries, memory hash and path checks are retained under
+`scratch/runs/20261020-gld3d-evidence-matrix/`. This is a local search result,
+not a claim that the original session no longer exists elsewhere.
+
+Missing provenance is specifically the September 22 census's enumerated
+stdout, or that originating session's tool result. A reconstruction instead
+needs the original registry/tool revision **and the contemporaneous
+executable/DLL inventory with identities and path resolution**, including
+which inputs were missing. Current `gfx-app-census.js` also scans mounted
+companion PEs and IID bytes; the original tool did not cover that same set.
+`gl-name-census.js` names static reach, not calls, and API-loader/driver
+binaries can name all GL entry points. Neither tool can turn current assets,
+API conformance tests or family counts into historical membership/gameplay.
+
+### Reading the receipt columns
+
+**H** means a retained committed report says the scene/input was reviewed;
+the original run bundle is absent locally in this audit, so there is no new
+image/backend revalidation. **L** means the stated local receipt was read;
+only Quake II's October 1 before/after PNGs were newly viewed here. **U** means
+the required evidence is unknown or not identified. A report's source is
+the tested source, not this document's base or a later fix commit.
+
+All run IDs below resolve relative to `scratch/runs/`. Exact IDs are printed
+in full; where only a date or glob survives, that is an explicit missing-ID
+dependency. The audit's `validation.json` records existence and hashes of
+available references without changing evidence. **No row is a current-main
+both-backend pass.** Software means the emulator backend, not a game's
+internal software renderer. A Node `--headless-gl` result remains a Node
+bridge result, not proof of browser WebGL. FPS is unqualified unless a
+specific metric and limitation are stated.
+Of the 25 exact distinct run directories cited here, only the October 1
+Quake II software directory is locally present; the other 24 are absent.
+All 11 linked reports exist in the pinned Git base. The shared checkout's
+Unreal-family and Black & White 2 notes are older than that base; their
+later findings in this matrix were read from the base's Git objects.
+
+Receipt groups used in the table:
+
+- **S6** — [screensaver report](re-notes/plus98-dx-screensavers.md), source
+  `80dfe68e`, CLI software D3DIM, `--tick-ms-per-batch=2`.
+  Six exact per-app IDs below are given by its pattern; their bundles are
+  absent. Jazz's original software ID is only a glob.
+- **B6** — the October 6 browser sweep described in this document:
+  `20261006T1840Z-gld3d-webgl`, source `97aae839`, browser `--gpu`,
+  legacy `?d3dim-gpu`. H, module identity not recoverable from the cited
+  summary. This does not certify hardware GPU rather than SwiftShader.
+- **P10** — `20261010T1850Z-gld3d-current-main-probes`, source `cac339517`,
+  module prefix `6a798f18`, boat llvmpipe/Xorg. Explicit software selectors
+  versus Node `--headless-gl` (legacy also `--d3dim-gpu`). H, absent bundle.
+  Unrouted probes establish only the photographed state; MCM had a routed race.
+- **U10** — `20261010T2050Z-ut-family-both-arms`. H, software D3D8/D3D9
+  versus Node headless GL. The dated table does not pin this routed run's
+  source/module; do not borrow P10's identity for it.
+- **Q8** — the [software review](../ops/handoffs/quake2-software-ordinary-20261008.md)
+  and [WebGL review](../ops/handoffs/quake2-ordinary-traversal-20261007.md)
+  pin source `096889e174488a97529b8e73076d3a1e2feb2345` and module
+  `fb1be916c309bf619a9331c8fd46c4319f9051af76b05b236d3c362bb632638f`.
+  Ordinary browser `ref_gl` forward/reverse/idle, six reviewed images each;
+  software endpoint/owning Worker proof is described explicitly. H.
+- **W8** — [software review](../ops/handoffs/warcraft3-software-20261008.md)
+  and [WebGL review](../ops/handoffs/warcraft3-campaign-world-20261008.md):
+  accepted source `f62ab3c9f1223ab47cf623470f6343d508257878`, module
+  `4dc5ac2c477c71c64a42530562e4cf51e145bd966232e15330acfc01753d54de`.
+  Browser guest OpenGL, matching host/owning endpoints, Thrall selection and
+  opposing movement reviewed. H; integrated findings `0d9515322` are not a
+  new tested build.
+
+### Per-app evidence and missing dependencies
+
+| App / membership | Emulator software receipt and tested identity | WebGL receipt and tested identity | Screenshot / input / FPS status and precise remaining dependency |
+|---|---|---|---|
+| `scr_architec` / S | H S6: `20261006T0250Z-scr_architec-w4-software`, interior renders. | H B6: `20261006T1840Z-gld3d-webgl`, renders. | Reviewed-render reports only; interactive gameplay N/A; FPS U. Recover both bundles and per-capture backend/module identities. Short white loading captures are not failures. |
+| `scr_fallingl` / S | H S6: `20261006T0250Z-scr_fallingl-w4-software`, leaves/shadows. | H B6: `20261006T1840Z-gld3d-webgl`, leaves/shadows. | Historical opaque-shadow defect; the October 10 lit-alpha correction in the screensaver note supersedes “black leaves are intended.” Its paired corrected render receipts are not here. Input N/A, FPS U. |
+| `scr_geometry` / S | H S6: `20261006T0250Z-scr_geometry-w4-software`, renders. | H B6: `20261006T1840Z-gld3d-webgl`, renders. | Recover scene captures/identities; historical distant-fill/wireframe issues cannot be judged from API tests. Input N/A, FPS U. |
+| `scr_jazz` / S | H P10: `20261010T1850Z-gld3d-current-main-probes`, renders. Earlier software ID only `20261006T02*-scr_jazz-gld3d-sw`. | H B6: `20261006T1840Z-gld3d-webgl`; later P10 is Node GL, not another browser pass. | Recover exact early ID or P10 bundle and paired frames; input N/A, FPS U. |
+| `scr_oasaver` / S | H S6: `20261006T0250Z-scr_oasaver-w4-software`, renders. | H B6: `20261006T1840Z-gld3d-webgl`, renders with stray-box caveat. | Scene/timer changes require mid-scene series. `20261011T0640Z-scr-default-clock-w4`, source `dcbdf0521`, explains tick dependence; absent here. Correctness still not revalidated; input N/A, FPS U. |
+| `scr_rockroll` / S | H S6: `20261006T0250Z-scr_rockroll-w4-software`, renders. | H B6: `20261006T1840Z-gld3d-webgl`, renders. | Recover paired scene/identity evidence; input N/A, FPS U. Exit capture can be a scene transition. |
+| `scr_scifi` / S | H S6: `20261006T0250Z-scr_scifi-w4-software`, renders. | H B6: `20261006T1840Z-gld3d-webgl`, renders. | Recover paired captures; tick dependence and later lit-alpha correction as above. Input N/A, FPS U; source fix alone is not a new render pass. |
+| `icewind_dale_demo` / N | U for a GL/D3D route. Later sweep reports DirectDraw as registered. | U for GL/D3D; no backend pass inferred from static `opengl32` text. | Original membership explicit, actual 3D use unproved. Exact traced run ID/source missing; preserve launcher-noise classification rather than inventing a rendering failure. |
+| `tworld` / N | U for a GL/D3D route; later sweep classifies tile game as non-3D. | U for GL/D3D. | Same membership-versus-use distinction. Recover runtime trace/source if resolving API scope; no 3D gameplay/FPS acceptance. |
+| `quake2_demo` / E | H Q8: `20261008T000901Z-quake2-software-ordinary`. Also L `20261001T230900Z-quake2-universal-software`: browser shared-Worker software, source label `d1ea48a9` plus documented snapshot corrections, module `e3924487eea80ca213d1e4f7865b7823d1f41ea3d5fdb484a382ee2b69f912b8`. | H Q8: `20261007T213620Z-quake2-ordinary-traversal`, browser WebGL ordinary traversal. | October 1 result/benchmark and two PNGs locally inspected: textured room/HUD and changed viewpoint, endpoint `gl/software`; keyboard movement is the original report's claim. Q8's stronger ordinary forward/reverse/idle bundles absent. October 1 **0.850 completed publications/s** is one regressed sample, not general gameplay FPS or paired acceptance. Recover historical membership and Q8 bundles. |
+| `warcraft3_demo` / E | H W8: `20261008T0400Z-warcraft3-software-runtime`. | H W8: `20261008T0156Z-warcraft3-campaign-world-runtime`. | Reports review selection/opposing movement on both OpenGL arms; FPS/audio/combat U. Recover bundles and original membership. This says nothing about D3D8 gameplay; preserve laptop Warcraft III ownership/pause. |
+| `halflife_uplink` / E | H dated table: September 22 corridor/HUD on software GL; exact run ID/source U. | H `20261006T2100Z-hl-uplink-lazy-mci`, browser GL corridor/HUD after fix `5f4bac8c`; exact tested source/module U. | `4-gameplay-webgl-lazy.png` absent with bundle; source fix is not exact run identity. Ordinary input/FPS not separately established by these summaries. Recover both identities and original membership. |
+| `simgolf_demo` / M | H dated table: software gameplay; exact October 6 ID/source U. | H `20261006T0503Z-simgolf_demo-webgl-route-w5`, browser GL course/build bar; tested source/module U. | Historical screenshot review, not fresh controls/FPS qualification. Recover software ID, browser bundle/identities and original membership. Cursor edge-scroll can explain a black view. |
+| `ptct` / M | L `20261030T2351Z-ptct-paired-browser/software`: changing geometric beams, WAT rasterizer enabled. | L same run root: changing beams on owning GPU layer; same canonical `d83e413f…`, source `de2e338c4`. | Two inspected frames per route; one executable input and 144 served hashes each verified, cleanup verified. Full intro correctness, parity, FPS and historical membership remain U. |
+| `mw3` / M | L `20261110-mw3-proof-repair-weapon-gameplay-1030`: original browser software D3D, module `79f0842e…`, source `1c59017d5`; reviewed movement, turn and visible laser beam/red indicator/raised heat. | L `20261110-mw3-webgl-menu-consumption-1045`: original owning Worker WebGL, module `79f0842e…`, source `44d457af2`; reviewed cockpit movement 449→441 m and turn to compass10. Visible firing consequence remains unverified on this current run. | [Movement, turn and firing behavior](re-notes/mw3-upload-gameplay-20261107.md), `b3b0be723`: reviewed terrain/heading changes and range 449→441→428→410 m; normal GetDeviceData consumed balanced input. Tested preparation base `1c42d2302`; compiled module provenance recorded separately. [Named target selection](re-notes/mw3-deadline-recovery-20261107.md), `53e1139dd`: Firefly/Owens target panels; increasing enemy range does not prove approach. Both boxes normally archived. November 10 software evidence: normal owning GetDeviceData caller `0x4f76c8` consumed balanced Space DIK57 press/release sequences9/10; coordinator reviewed full `recovered/case-software/weapon.png` in run `20261110-mw3-proof-repair-weapon-gameplay-1030`. November 10 WebGL1045 observed 48 paired owning GetDeviceState completions at caller `0x4fa56c`, nine returning the held mouse button, followed by reviewed Pilot Entry and ordinary cockpit control. Coordinator reviewed full `recovered/case-webgl/movement-settled.png` and `turn.png`; [run report](../scratch/runs/20261110-mw3-webgl-menu-consumption-1045/report.md). Space press/release returned together 757 ms after release, and both prearmed captures were late; the live guard stopped subsequent gameplay commands. Current WebGL Chrome/Node and manager/watchdog actual parent waits plus separate EOF retained; box independently stopped normally. The earlier software run retains its original local-manager wait gap. Software beam verified; impact, damage/kill, sustained playability, FPS, current paired-backend parity and historical membership U. |
+| `dx_boids` / M | L `20261030T2348Z-boids-scene-diagnosis/software`: moving colored flock triangles and cyan boundaries, canonical `d83e413f…`. | L same run, root frames: moving colored triangles/boundaries, same module/source `de2e338c4`. | Two inspected frames per route; 38 input and 179 served hashes each verified; backend and cleanup verified. Full scene correctness, FPS, parity and membership U. |
+| `dx_tunnel` / M | L `20261107-graphics-worker-readiness/case-software-dx_tunnel`: original Worker software, changing textured tunnel/radiation sign. | L same root, `case-webgl-dx_tunnel`: changing textured tunnel, owning Worker WebGL2/SwiftShader, module `e41511fe…`; zero observed GL errors/fallbacks. | Personally reviewed retained 15/45-second PNGs on both routes; [runtime closure and cleanup](re-notes/graphics-worker-readiness-20261107.md) pins JS snapshot `38b9f7d319` plus patches and inputs. Compiled source commit, same-frame parity, full scene correctness, measured FPS and historical membership U. Review hashes: `20261107-tunnel-twist-retained-review`. |
+| `dx_twist` / M | L `20261110-twist-current-paired-scene-motion-0900/case-software-dx_twist`: original changing textured body; actual guest GPU enable false, no owning render endpoint. | L same root, `case-webgl-dx_twist`: changing body/visible faces; actual owning Worker WebGL2/SwiftShader, zero reported errors/fallbacks/software draws. | All six full 15/30/45-second PNGs personally reviewed. [Current paired scenes and recovery](re-notes/twist-current-paired-scene-motion-20261110.md): locked build/source `e2063597c7`, live guest/render module `79f0842e…`, served-source and stable-owner bindings. Paired software/source motion gap closed. Full scene correctness, measured FPS, reference/backend parity and historical membership U. |
+| `dx_flip3dtl` / M | H P10: `20261010T1850Z-gld3d-current-main-probes`, textured cube. | H `20261006T1935Z-gld3d-webgl-recheck`, browser render; later P10 Node GL reports 33k draws/zero fallback. | Recover paired images and browser source/module; sample interaction/FPS U. Original membership remains unproved. |
+| `dx_globe` / M | L `20261030T2330Z-dx-globe-software`: original textured sphere visibly rotates; canonical module `d83e413f…`, source `de2e338c4`. | L `20261030T2330Z-dx-globe-webgl`: original textured sphere visibly rotates on owning D3DIMGpu. Also L `20261107-globe-original-band-oracle`: natural original Worker WebGL draw/readback, module `e41511fe…`, source `6d465979a` plus recorded patch. | October paired frames establish motion. November [original band oracle](re-notes/globe-original-band-oracle-20261107.md), `afd8bde95`, matches all12 selected pixels around six black/nonblack transitions exactly using independent scalar and60digit Decimal calculations; root reran Decimal check from raw inputs (`20261107-globe-corpus-review`). Bands at these samples are expected texture content. The remaining101 of5347 robust interior pixels differ by one channel value; full scene/seam correctness, same-frame backend parity, FPS and historical membership remain unqualified. |
+| `dx_viewer` / M | Historical fixture rendering only; original plain-Mesh assets unavailable. | L `20261030T2308Z-dx-viewer-browser`: rejects renamed PM input with D3DRMERR_NOTFOUND; no original scene. | `20261030T2334Z-viewer-input-diagnosis` proves camera/mslogo/sphere2 aliases equal PM files. Prior original-mesh provenance claim withdrawn. Restore actual plain-Mesh inputs before original-scene retest; fixture/menu checks remain narrower. FPS and membership U. |
+| `mcm` / M | H P10: `20261010T1850Z-gld3d-current-main-probes`, routed Stunt Quarry race, 200 s. | H P10 Node GL routed race, 225k draws/zero fallback reported; older September 20 browser report lacks exact ID here. | Recover route/input/frame receipts; don't promote Node GL to browser. FPS and original membership U. |
+| `arcanum_demo` / M | H `20261008T1431Z-arcanum-gameplay-qualified`, browser cooperative software D3DIM, crash-site westward movement. | H same run, explicit browser WebGL, westward movement. | [Review](../ops/handoffs/arcanum-gameplay-20261008.md) pins module `d8d4096f957ed51cecab589b5a1ec7bf402336f13959ce0710faf2f7d3c68960`; full tested closure is missing `provenance/pins.json` (branch base `7e4ce05ce` alone is insufficient). WebGL 434/20.127145 s = **21.562919 visible presentations/s**, idle scene, not scanout. Software FPS rejected because observer missed OffscreenCanvas. Recover bundle/membership. |
+| `ut2003_demo` / M | Reviewed original ordinary-menu Software gameplay: `62ee90c86`, run `20261031T1628Z-ut2003-native-menu-play`; DM-Antalus PLAY/join, movement/look/fire, health100/ammo150→148, advancing scoreboard clock. Actual Software Device gpu=false and completed executor samples retained. | Reviewed original ordinary-menu WebGL gameplay: `09cedce52`, run `20261031T1653Z-ut2003-webgl-menu-execution`; PLAY/fire-to-join, movement/look/fire, health100/ammo150→149, advancing scoreboard clock. Actual owning WebGL2 executor; ANGLE SwiftShader, no hardware-GPU claim. | Both accepted runs pin module `9b4e39a2…`, 881 original/295 source/7 compiler/107 actual served files; original default guestWorker and `-d3d -window -nosound` retained. Reviewed captures, balanced native input and durable cleanup recorded in [Unreal notes](re-notes/unreal-family-demos.md). Earlier cube-LOD repair `5fa12b1be` remains causal evidence; ordinary-menu/backend gaps are closed. Exact historical membership, hits/kills, FPS/audio, same-frame parity and match completion remain unqualified. |
+| `ut2003_demo_server` / M | H October 6 DM-Antalus sweep claim, but exact reviewed software `result.json` was already missing in the October 10 table. | H B6: `20261006T1840Z-gld3d-webgl`, browser DM-Antalus/HUD. | Recover software ID/result/source and browser bundle. COMCTL seed applies to both registry entries, but the client failure above is not proof of a server run failure. Ordinary control/FPS/membership U. |
+| `ut2004_demo` / M | Reviewed October31 default guestWorker browser software DM-Rankin: native movement/look/fire, health100/ammo98, full clock/HUD and visible-coordinate menu clicks after `fb698d57e`. Run `20261031T0514Z-ut2004-origin`, module `9b4e39a2`, exact295 source+7 compiler inputs; focused/full build pass, old-source regression rejects. Earlier CLI `2342e9288` and browser `09eb0ecbe` also reach gameplay. | Reviewed original ordinary-menu default guestWorker WebGL2 DM-Rankin gameplay, run `20261031T0629Z-ut2004-webgl`, documented `939ff7db0`: PLAY/fire-to-join, native forward/look/fire/retreat, clock20:00→19:51, ammo100→98, health100→96. Owning endpoint1 completes68,545 backend draws with zero observed executor failures; ANGLE SwiftShader, no hardware-GPU claim. | Both browser backend arms have reviewed gameplay. WebGL pins module `9b4e39a2…`, matching295 source/7 compiler files,998 original inputs and107 served snapshots; exact launch snapshot `bf9c495b6`. Same WASM hash does not permit mixing historical host files. Captures/input and cleanup retained in [Unreal notes](re-notes/unreal-family-demos.md). Enemy hits/kills, match completion, audio, FPS, same-frame parity and historical membership remain unqualified. |
+| `morrowind` / M | No reviewed software movement receipt identified; software fix unit tests do not qualify the world. | H `20261005-morrowind-prison-movement`, browser Worker/WebGL forward/reverse/idle; source `94d18605`, module `2e2fd8d1ca62cd87f0bc09312bc4836108df610d00cb7771bb5ae22755eceedc`. | [Metadata review](../ops/handoffs/morrowind-dashboard-evidence-metadata-20261005.md) reports four reviewed gameplay images; bundle absent. Preserve no-heavy-Morrowind restriction. Recover evidence/membership; no software gameplay/FPS claim. |
+| `black_white_2_demo` / M | Reviewed retained October23 CLI D3D9 software tutorial: `20261023T1030Z-black_white_2_demo-claudea7d5-goldscroll`, source `aa09d05dcd6acf80d8f506c1bef1a00a92869119`, recorded module `43375d0fca46b3e9684c18d6ee76cffe743ed55eee03a0188fca171174ae2dc8`. Gold Scroll objective completes after the sixth click, followed by scripted field/storehouse camera pan; 10000 s reported zero failed commands. | No reviewed WebGL gameplay receipt identified in this reconciliation. | November7 retained review `20261107-bw2-retained-software-review` personally inspects f0/f1/g1/g5 and hashes all listed artifacts/screenshots; source-head, module-hash record and successful build log agree with result. Executing module bytes were not recovered here. [B&W2 notes](re-notes/black-white-2.md) retain consumer/input traces. This is historical CLI software evidence, without free play, isolated drag attribution, browser/current-main proof or paired-backend parity. Historical membership remains unknown; preserve pauses. |
+| `winamp` / M | No CLI software MilkDrop visualization receipt. | H browser `20261007-winamp-milkdrop-complete-closure`: source `0cbc1c6ffd`, module `7c6864f8e224a0d42c6743b3c088ce79349101182295b79b1e4fa8a4c3911cc0`; ordinary Start ends in illegal-operation `(2)`, not a backend rendering pass. | [Review](../ops/handoffs/winamp-milkdrop-ordinary-20261007.md) reports 11 images and complete-loader rerun. Capture actual exception/API; do not repeat obsolete “needs Winamp 5” inference. Visualization/FPS unqualified; recover bundle/membership. |
+| `pawn` / M | Recorded October 30 software D3D9 e2–e4 drag and engine e7–e5 reply, run `20261030T2238Z-pawn-software-move`, documented in `4c2fdf3df`. Composited desktop was inspected; exit 0 after 20,000 batches and six original inputs hashed. | Recorded October 30 ordinary browser WebGL-selected drag/reply, run `20261030T2250Z-pawn-browser-move`, documented in `26465f29b`; Chrome/ANGLE SwiftShader, child frame sequence 2→25, threads enabled. | [Pawn notes](re-notes/pawn.md) and the October 30 sections above supersede the earlier board-only observations. Both pin module `7e8d3194…`; compiled source revision remains unknown, and browser backend implementation/export state was not captured. November 6 reconciliation found both original run directories absent from `scratch/runs/`, so captures and identity receipts cannot currently be independently rechecked. Recover bundles and historical membership; no fresh execution, hardware-GPU, full-game or FPS claim. |
+
+### What this delivers, and what remains unqualified
+
+The nine explicitly linked members now have individual software/WebGL evidence
+rows, and all 21 additional named historical leads have separate provenance
+labels and dependencies. This closes the documentation omission only to the
+proved subset, not the historical denominator or runtime goal. Local historical
+imports named `history-scr_*` remain unreviewed/unknown-source evidence and
+cannot replace the missing dated run bundles.
+
+The strongest remaining dependencies are (1) original enumeration provenance,
+(2) recovery of the dated run bundles and source/backend/PNG/input receipts,
+and (3) actual paired gameplay or rendering correctness where only menus,
+API tests, Node bridge routes or defective scenes were reported. Missing local
+bundles are not evidence of deletion everywhere and do not invalidate the
+committed historical reviews. Conversely, a merged caps/mip/Surface/COM fix
+cannot turn those reviews into current-main render qualification.
+
+Existing broader-app work, including Darkstone, Hype and Pirates, remains in
+the dated sections of this canonical table; none is silently assigned a missing
+September membership slot. Preserve laptop Warcraft III/Heroes II ownership,
+all game/heavy-run pauses, CMR3's automated-review hold, and other denied-action
+restrictions. This document authorizes no rerun, replacement game, Claude
+activity, deployment or main integration.
+
+## October 17 retained Darkstone movement review
+
+Later October 15 captures supersede the camera-only result below. Both software
+and WebGL show ordinary ground-click movement with a following camera. The
+software run exited successfully; the WebGL run retained two movements but
+ended at its input-queue deadline (exit 1).
+
+At a closely matching gate/tree/feet pose, WebGL has a substantially larger
+black foreground triangle; software still has a smaller wedge. Neither is
+established as correct. This is movement evidence with an unresolved rendering
+defect, not full backend qualification. Audio, combat, FPS and touch remain
+unmeasured. No new runtime was performed on October 17.
+
+See the [reviewed comparison](darkstone-backend-checkpoint-20261015.md#retained-same-pose-comparison-reviewed-october-17)
+for exact source/module identities, PNG hashes, draw-completion counters and
+cleanup receipts. Runs: `20261015-darkstone-software-movement` and
+`20261015-darkstone-locomotion`. Identical-input foreground draw comparison
+remains the next diagnostic; the old D3D9 capture format alone cannot preserve
+legacy D3DIM live resources and framebuffer/depth history.
+
+## October 15 paired Darkstone result (17:40 UTC)
+
+Fresh source `fadaff08a`, module `9b57583c…`, reached Town through ordinary
+character creation on both software and WebGL. Root reviewed before/idle/held
+ArrowRight screenshots in both arms: camera control is verified. Main renderer
+endpoint 1 reported advancing completed native software draws in the software
+arm and advancing WebGL submissions in the WebGL arm. Reported WebGL errors
+and all six fallback sites were zero; `declinedClears=1` remains a caveat.
+Both arms exited normally and independent postflight verified idle/preserved
+inputs. Full archive SHA-256 is
+`25252b50372c11589f30439d0a13ab39b09576b5844c1855721c26a429c2aa8f`.
+See [the paired receipt](darkstone-backend-checkpoint-20261015.md).
+This supersedes backend-unknown for this new run only. Locomotion, combat,
+audio, FPS, child renderer ownership and original-27 membership remain open.
+
+
+## October 15 current integration status (14:38 UTC)
+
+This section supersedes the earlier same-day startup and unmerged-palette
+statuses below; those sections remain dated evidence.
+
+- Palette candidate `6b269258560cb24c4370d0cd270d95c2eed7a00b` is now an
+  ancestor of main. Its canonical build, sixteen CPU suites, actual WebGL1/2
+  observations and both Worker synchronization modes passed. See
+  [the exact validation receipt](palette-combined-validation-20261015.txt).
+  Default/FALSE filtered-key semantics remain a separate contract question;
+  the explicit TRUE-state tests do not settle that question.
+- Fixed-function stencil/diffuse handling is merged through `9eb485acb`.
+  Actual WebGL1 and WebGL2 each passed 77 observations. Removing the
+  missing-texture guard caused six RGB/linkage failures, establishing that
+  the oracle detects that regression. See
+  [the actual GPU result](iw-render-gpu-result-20261015.json). This validates
+  renderer behavior, not Invisible War gameplay or its held transport changes.
+- Original .kkrieger reaches a first-person level and one reviewed ordinary
+  forward movement. Evidence `2193c3869` and qualification `bee579acb` are on
+  main. The [position capture](kkrieger-position-capture-20261015.md) records
+  body Z progressing from 0 to 0.686228 at fixed yaw and forward basis, with
+  reviewed before/after images. This closes only launch and one movement:
+  observed input/release latency, repeated controls, combat, audio, FPS and
+  a software/WebGL gameplay pair remain unqualified. The strict per-phase
+  comparison still lacks two distinct completed samples; do not call it a
+  performance measurement.
+- CMR3's software LINELIST implementation is merged in `78a06540f` after
+  canonical build, native raster suites and three failing negative controls.
+  The [original-game replay](cmr3-lines-gameplay-20261015.md) now passes Stages,
+  player/car/transmission/country selection and reaches the UK Warwick stage
+  loading map. Rendering then reports `invalid native free list` after batch
+  2402. The exact damaged node has not been captured; the first-failure diagnostic passed independent native conformance and is
+  merged as `729d3fc73`. The subsequent original replay was automatically
+  rejected for possible cybersecurity risk (exact action unspecified), then
+  stopped cleanly at 13:08:09. That diagnostic replay is held: do not retry,
+  rephrase or delegate it around the rejection. This restriction is separate
+  from permitted compatibility/conformance work. Neither driving nor a software/WebGL gameplay pair is qualified.
+  [Line conformance evidence](cmr3-software-line-lists-20261015.md) establishes
+  the bounded raster fix, not the remaining game's correctness.
+
+The earlier Invisible War transport review below is historical: the corrected
+chain was subsequently merged as `3fdb29373`, an ancestor of current main,
+after all eight combined native arms completed with their expected results.
+The exact negative control failed with `RECEIVER_RETIREMENT_DID_NOT_SETTLE`
+and the restored receiver suite passed. See the
+[combined native result and merge receipt](iw-combined-native-result-20261015.md).
+Original Invisible War gameplay, pointer marshalling and both renderer routes
+remain unproved; native conformance does not establish those results.
+
+Before that integration, callback transport remained on task branches. Selective
+port `8793e9f47` and endpoint checkpoint `17e713cd2` preserve main's existing
+lock, generation pins and INITIALIZING/LIVE/FAILED lifecycle; the older
+`e2d10ebb0` branch must not replace those semantics. Exact candidate canonical
+module `a948a826…` passed eight native loader/transport suites. Combined
+local/Worker and Worker/Worker native endpoint races, nested initialization,
+publication acknowledgements and lookup retirement passed at `4050bacb3`.
+
+Independent review then found scheduler teardown could discard a retiring
+Worker and reuse its TID/stack before termination. Fix `b5b69a714` passed
+actual Worker ABI checks and canonical native validation `dca0e6201`: lost
+retirement replies and generation-pin cleanup failures retain ownership;
+successful termination releases the real native stack exactly once. The old
+code fails the intended ownership assertion; restored code passes. Root
+verified archive SHA-256
+`22140338c794795536c124019079412943316e4a879b24014b4d51ea763f04fe`
+under `scratch/runs/20261015-iw-retirement-native/` and its logs/postflight.
+
+The earlier review blocked integration because PID-wide broker admission
+deadlocked independent send chains and blocked a second receiver thread behind
+the first.
+Root reproduced both failures with real Node Workers, without guest WAT, in
+`scratch/runs/20261015-iw-broker-root-review/`. Worker
+`/root/iw_independent_send_fix` implemented per-thread, exact-waiting-frame
+admission and regressions before the combined validation linked above. Do not
+reopen this historical merge blocker as though that correction were absent.
+
+The original 27-app membership evidence and per-game software/WebGL gameplay
+coverage remain incomplete. None of these focused tests closes that goal.
+
+## October 15 source-only next-validation reconciliation
+
+Against `73f27af1b`, Age of Wonders II's viewport repairs `9a438f1b9` /
+`201de22d9` and Start-click repair `b6e18c196` are ancestors. Its dated row's
+terrain/UI defect is superseded by those merged fixes and the October 10
+re-note. This audit does not independently re-review the absent October 10
+capture bundle or certify a backend pair. Darkstone's complete installed
+manifest is locally recoverable, but its original installer and retained
+gameplay bundle are absent on this host. Neither absence invalidates the
+historical observations below. The two exact next validation routes, fixture
+hashes and missing evidence are in
+[the bounded handoff](gl-d3d-next-validations-20261015.md).
+
+## October 15 reviewed follow-up (09:36 UTC)
+
+The dated table below preserves earlier results. Signed SHORT2/SHORT4 GPU
+inputs and software declaration-component defaults are now on main
+`ec4844f16`: canonical build, seven CPU suites and actual WebGL1/2 pixel
+comparisons passed. Coordinator independently checked twelve GPU artifacts
+and 266 tested-source hashes. Original `.kkrieger` run
+`20261015-kkrieger-short-original` eliminates the earlier declaration errors
+but still reaches EIP zero near 310 seconds, with 2 GiB memory and no OOM.
+Its 42 artifacts were independently hash-checked and final screenshot viewed.
+No gameplay is qualified. The next lead is a missing Buffer8 interface;
+the game's actual QueryInterface HRESULT remains uncaptured. See
+`docs/re-notes/kkrieger-beta.md` for the bounded diagnosis and uncertainty.
+
+The palette candidate remains unmerged. Explicit state144 TRUE zero-RGBA
+handling passed canonical build and CPU checks; new Worker coverage passed
+both synchronization modes on `d582f0da5`, including native-index duplicate
+RGB, held state snapshots, cache transitions and depth. Worker observations
+read an XRGB DIB whose unused byte is normalized to 255, not framebuffer
+alpha. Source-alpha behavior is checked through blend/test/depth effects;
+direct GPU tests separately read framebuffer RGBA. Browser software-path
+fixtures exposed incorrect endpoint routing and an assertion on XRGB's unused
+byte; their failures are retained, corrected tests are being rerun, and no
+full browser acceptance is claimed yet. A cache-identity mutation must still
+fail the strengthened oracle. Default/FALSE filtered-key semantics,
+alpha-palette/key precedence and legacy stencil remain separate open work.
+
+## Original 27-app membership evidence
+
+The original census commit is
+`2d722ab3766c288d13796ed9dad3f1ceeca8f1eb` (22 September). Its message records
+27 of 225 apps and seven D3DRM screensavers, but the commit contains only the
+census tool and a CLAUDE.md edit, not the complete per-app output. The tool
+depends on the executable/DLL files present when run. A current-asset rerun
+therefore cannot authenticate the historical membership. The later expanded
+69-app census is a different set, not a recovered original list.
+
+The original stdout or session transcript associated with memory session
+`bd610256-7b4f-4ed1-afa0-9c3cf3412fbb` is still missing from the inspected local
+archives. The 57 references in `scratch/recovery-gl27-20261014/REPORT.txt`
+refer to later dated run IDs, not 57 original September runs. Recover the
+original output, or explicitly label a historically matched reconstruction;
+do not infer a completed 27-app denominator from the current status table.
+
+## October 14–15 targeted follow-up
+
+Authorized Boat exec access now supports separate-box builds and browser tests.
+The older blanket remote-access blocker is resolved; missing historical runs
+and incomplete per-app software/WebGL qualification remain separate gaps.
+
+| Scope | Verified change and evidence | Remaining work |
+|---|---|---|
+| .kkrieger D3D9 startup | `c79b943bb` implements signed Q8W8V8U8 storage/upload/sampling; full build and resource, software, WebGL1/2 and pipeline checks pass. `2e1d68489` fixes recycled sparse heap clearing that overwrote live mesh edges; baseline regression fails and fixed regression passes. Original demo advances beyond the persistent mesh loop. Runs `20261014-kkrieger-q8w8v8u8`, `20261014-kkrieger-mesh-writer`, `20261014-kkrieger-heap-fix`. Both fixes are on main. | Census `20261014-kkrieger-memory-census` proves backing shortage: 2,162,688 requested versus438,272 free; tables have capacity. Report on main `6cb760da2`. Registered2GiB route merged9e8afa2e5 uses174,718,976 extension bytes with OOM0 through300s. Follow-up `20261015-kkrieger-registered-600s` then exits around306s after243 generic declaration errors; correlation is not proven causality. Diagnostics/exit guard mergedcb0bf751a; exact original declaration capture is next. Retained heap space is not classified as a leak. No gameplay or both-backend acceptance. |
+| Serious Sam cooperative startup | `43f04c7c4` prevents the reproduced low-EIP crash by making synchronous-fault file consumers resident on the cooperative backend. Four browser arms distinguish original failure, eager control, fixed policy and Worker behavior; runs `20261014-sam-browser-*`. Fix is on main. | Karnak gameplay/profile `20261014-sam-low-fps` measures3.18–4.05 actual GLfps on forced SwiftShader; pending GPU completion dominates this box. Report/probe `9b53a3795` on main. Logging-off control and Safari hardware cause remain unmeasured. HUD double-count fix `471dee7c2` passes focused mixed GL/GDI regression, not a performance improvement. |
+| Legacy indexed palette candidates | Preserved `c2192e014` passes a separate-box full build and four real-VM CPU/page-watch/resource/software tests. Evidence `20261014-palette-remote-validation`. | Still unmerged. Source reconciliation `f8e4676ce` preserves candidate and main format63 changes. Exact reconciled candidate164dc33ad passed canonical build/four CPU suites; diagnostic-only fixture correction2b28b3e27 passed17 actual framebuffer checks each on WebGL1/2, zero fallback. Root reviewed original runtime hashes and pixel results in `20261015-palette-validation`; forced SwiftShader, reported Intel string is spoofed. Worker reports clean explicit-sync lifetime run125426 with7pixel observations/3blocked-before-drain barriers, pending root receipt review.13of14 follow-up configs pass; Boids route test assumes software default despite current WebGL default and needs explicit route selection. Default-lazy Worker variant, stencil rejection, baseline GPU failure and filtered-key/alpha-key contracts remain gaps. |
+
+These are scoped results, not a new full-corpus sweep. Preserve the historical
+rows below as dated evidence; no original 27-app completion is claimed.
 
 The user's goal: every OpenGL and Direct3D app in the registry works on both the
 **software** and the **WebGL** backend. This is the one shared status table for
@@ -17,6 +2811,37 @@ Selective October 9 reconciliation adds retained Morrowind movement and Pirates
 sailing evidence, current Age of Wonders II movement, and the Black & White 2
 startup repair. This is not a new full-corpus or both-backend run. Missing
 Pirates logs are listed below; the log provenance gaps are not passes.
+
+### October 15 retained evidence update
+
+Darkstone now has a fresh, recovered browser run:
+`scratch/runs/20261015-darkstone-town-2`, source controller `c7e23d5f0`,
+loaded module `04ede400070b3acbdcc2ad5f3c033bcf051e3d2da9a4d28a449324d23ab0ba17`.
+Ordinary character creation reaches Town. The road and gate remain fixed during
+five idle seconds, then rotate under held ArrowRight. This proves camera
+control; it does not prove champion locomotion, combat, FPS or audio.
+The recovered archive SHA-256 is
+`60900452d07daac7bfa60ba9e08cf5217ef66bcb1e1bca93388c034477053540`.
+
+The software backend was requested, but the owning snapshot only exposed replay
+progress, which also includes non-draw commands. Backend qualification therefore
+remains unknown for this run. The October 10 paired-backend claim below remains
+a historical report; its `scratch/runs/20261010T2116Z-darkstone` bundle is absent
+on this host, so it has not been independently revalidated here. Do not replace
+that historical claim with a fresh both-backend pass.
+
+Main `99932f66b` adds endpoint-owned D3DIM completed-call counters, separately
+for requested software and GPU fallback, published on existing natural fences.
+Focused dispatcher/adapter tests cover endpoint isolation, flips and GL exclusion,
+and throwing native calls. These counters were **not** in the Town run and are
+not pixel-write counters. A fresh paired software/WebGL validation is queued;
+no original 27-app membership or full-corpus completion follows from this update.
+
+### October 19 reconciliation, without a new corpus sweep
+
+Surface4/7 ABI support is on main `73433fabe`. The combined RTC/Surface build passed both ABI candidates, eight DirectDraw controls in both dispatch modes, and RTC native Worker/host/RPC checks. This qualifies the tested API behavior, not original-game rendering or both-backend coverage. Legacy DirectDraw Surface4/7 cube-face storage remains unsupported: CreateSurface rejects extended DDSCAPS2/3/4 with E_NOTIMPL. This is distinct from the existing Direct3D8/9 cube-resource and shader paths; those already have implementations and must not be re-created as part of the legacy follow-up. Their presence does not establish original-game or both-backend qualification.
+
+The original September 22 report names 27 measured apps without listing all IDs. The later table below has 26 rows expanding to 37 registry IDs; it must not be relabeled as the original 27-app manifest. Recover the contemporaneous census output to establish membership. The broader goal remains every registered GL/D3D app on both backends.
 
 ### October 10 follow-up, without a new corpus sweep
 
@@ -69,8 +2894,8 @@ This updates retained evidence against main fac1dc0ba; it is not a new corpus sw
 | Arcanum | Retained `20261008T1431Z-arcanum-gameplay-qualified` explicitly pins both backends, ordinary movement and module identity. | Software FPS remains unqualified; later missing-knob notes do not erase this run. |
 | UT2004 | Merged `fc0d7bf10`; `20261010T2240Z-ut2004-sw-menu-input-w5` retains software DM-Rankin and Up movement. | Historical installer route, not a fresh registered-app or full backend-pair certification. |
 | UT2003 | `20261010T2140Z-ut2003-server-sw-w4` and both named artifacts are present; TLS/OOM fixes are merged. | Unattended listen server does not prove player movement; module hash absent. |
-| Daikatana | Retained software `20261006T1830Z-daikatana-demo-gameplay` and explicit CLI WebGL `20261010T2140Z-daikatana-webgl-w4` record world, ordinary movement and weapon pickup. The latter commands `--headless-gl --gl-renderer=webgl --gl-census`; all three artifacts remain present. DLL repair remains merged. | Historical module hashes are incomplete. Browser world/control exists, but its exact GL backend is not attested: generic GPU presentation counters and static guest GL_RENDERER strings do not distinguish software. Do not duplicate generic CLI WebGL qualification. |
-| FreeSpace | Earlier codec/API fixes and retained flight evidence remain available; this is not an unresolved launch crash. | Browser/device evidence remains a separate gap. |
+| Daikatana | Retained software `20261006T1830Z-daikatana-demo-gameplay` and explicit CLI WebGL `20261010T2140Z-daikatana-webgl-w4` record world, ordinary movement and weapon pickup. Fresh browser `20261031T0256Z-daikatana-webgl` records the live GL endpoint's `backend: webgl`, inspected original world/HUD and native ArrowUp movement, with 458 unchanged input entries and 106 verified host snapshots. DLL repair remains merged. | Historical module hashes are incomplete. Fresh browser module `8333a35b…` has unknown compiled source identity; Chrome ANGLE SwiftShader is not hardware-GPU evidence. Combat, level completion and full renderer parity remain unqualified. Do not duplicate generic CLI WebGL qualification. |
+| FreeSpace | Historical flight predates removal of fabricated DirectX metadata. Genuine DX7a setup9ed9d4b54 now produces real files and registry but requires restart: four DLL replacements remain queued. | Fresh worker01a193a3-efe3 implements/tests generic WININIT completion from retained private VFS before flight; heavy work waits current Nox release. No registry fabrication or current flight claim. |
 
 The falling-leaf repair, registered saver clock and headless resize fix are merged. Historical 14/14 crash revisits are retained launch evidence, not a fresh full-game certification. MilkDrop remains held after automatic review; Morrowind remains paused and Heroes II belongs to the laptop.
 
@@ -139,7 +2964,7 @@ screenshot cited was looked at.
 | pirates_2004 | D3D9 | **menu** after `ba161dfb` + `12408feb` + `d7f5a429` | **retained sailing captures** (October 2; record reports Worker/WebGL, source commit unknown, six logs missing) | Ship displacement/date progression visible; white terrain remains. Module hash recorded as `7c5f97f5...`; source commit unknown. [Run](../scratch/runs/20261001-pirates-worker-sailing-after/result.json). No fresh backend qualification; recover provenance or revalidate. Local1371 manifest paths present (1,294,935,424bytes); lack of room for a duplicate local archive is not itself a remote-transfer blocker. |
 | black_white_2_demo | D3D9 | **island flyover** (October9, normal intro/menu with Worker boot fix `efcef0022` and live relative-input opt-in); player control pending | not freshly measured | Shared PE tail mapping fixes startup. Current flyover advances but has recurring rejected draws with declaration/FVF zero, despite zero main-Worker declaration-rejection counters; origin unproven. Stale right-edge pixels and garbled menu text remain. [Live run](../scratch/runs/20261009T0335Z-black-white2-staging-fix/result.json); no ordinary gameplay/FPS claim. Historical diagnostic intro-skip gameplay remains separate. |
 | morrowind | D3D8 | no reviewed software gameplay in this reconciliation | **prison-ship gameplay, forward/reverse movement** (October5; Worker/WebGL) | [Reviewed run](../scratch/runs/20261005-morrowind-prison-movement/result.json), source `94d18605`, module `2e2fd8d1`; four review-image hashes and retained module rechecked October9. Partial typing loss and inset viewport remain. Not current-main, full character creation, audio or FPS qualification. |
-| age_of_wonders2_demo | D3DIM | **gameplay and army movement** (October9, `ff0c1f07b`) | not measured by this run | [Reviewed run](../scratch/runs/20261009T0306Z-age-of-wonders2-gameplay/result.json). FVF RESERVED1 stride repair prevents Miles callback overwrite; movement20→13 verified. Terrain overlaps UI/black polygons remain; FPS/audio unqualified. |
+| age_of_wonders2_demo | D3DIM | **gameplay and army movement** (October9, `ff0c1f07b`) | not measured by this run | [Reviewed run](../scratch/runs/20261009T0306Z-age-of-wonders2-gameplay/result.json). FVF RESERVED1 stride repair prevents Miles callback overwrite; movement20→13 verified. Terrain/UI overlap subsequently repaired by merged `9a438f1b9` / `201de22d9`; October 10 re-note reports clean panels on both renderers. Raw later bundle absent on this host; current backend/control pair, FPS/audio remain unqualified. |
 | winamp | D3D8 (MilkDrop) | not run (CLI) | ordinary playback/Start opens MilkDrop then illegal-operation error (2026-10-07, browser) | original1.04e passes music gate but no visualization; fault/API cause unknown, native DLL probe refusals retained ([run findings](../ops/handoffs/winamp-milkdrop-ordinary-20261007.md)) |
 
 Glide is not in this goal's scope, but the sweep saw it: nfs3_glide_demo
@@ -421,15 +3246,36 @@ size until the next swap, so `resizeContext` now swaps once after resizing.
    Closed later on 10-10: mw3 on WebGL (w5); cmr2, tdr2000, drakan and
    carmageddon2 on WebGL (w4); ut2003 on both arms and ut2004 on WebGL
    (1863d2b5); darkstone_demo on both arms (w5).
-   - **Still open:** diablo2_demo on both arms (w6); the daikatana and arcanum WebGL backends and a ut2003_demo_server
-     software result.json (w4); ut2004 software gameplay
-     (UT2004-SW-MENU-INPUT-20261010).
+   - **Remaining after later evidence:** the historical diablo2_demo pair and
+     ut2003_demo_server software result remain to reconcile. Arcanum's explicit
+     software/WebGL crash-site movement was reviewed in
+     `20261008T1431Z-arcanum-gameplay-qualified`; software scene-qualified FPS
+     remains open, and the missing full provenance bundle noted above is not
+     repaired by that gameplay acceptance. Daikatana's explicit CLI WebGL
+     `20261010T2140Z-daikatana-webgl-w4` and browser
+     `20261031T0256Z-daikatana-webgl` supersede its missing-WebGL entry; the
+     historical module/source identity and combat/parity limits above remain.
+     These are retained observations, not fresh current-main qualification.
+     The historical UT2004 software menu-input
+     blocker is superseded by October31 `fb698d57e` and the reviewed
+     software DM-Rankin browser gameplay evidence above. The separate WebGL
+     native-menu/movement/look/fire result `f81b9a35f`, run
+     `20261031T0629Z-ut2004-webgl`, is also accepted above; FPS, audio,
+     enemy hits/kills and match completion remain open on both arms.
    - **Not split:** bg2 is DirectDraw as registered.
 2. **Heavy D3D8/D3D9 titles**: Pirates (PIRATES-* rows), BW2
    (GAMEPLAY-black_white_2_demo), Morrowind software (heavy route needs user
    sign-off).
-3. **Wrong pictures**: scr_fallingl black leaves on both arms
-   (SCR-FALLINGL-BLACK-LEAVES-20261010), ptct untextured.
+3. **Remaining visual validation:** Falling Leaves' opaque-shadow defect was
+   corrected by the October 10 material-alpha repair documented in
+   [the screensaver notes](re-notes/plus98-dx-screensavers.md). The October 30
+   software scene observation is retained above. The November 3
+   [paired software/browser WebGL evidence](re-notes/falling-leaves-paired-shadow-alpha-20261103.md)
+   validates original alpha127 and source-alpha blending on both routes
+   (a4f232a32; run20261103-falling-leaves-paired-shadow-alpha).
+   Native reference parity and visible edge/texture artifacts remain unqualified;
+   this is not complete visual correctness or historical27 completion.
+   PTCT texture correctness also remains unverified.
 4. **Fault**: Winamp MilkDrop (existing TODOS row).
 
 ## Current-main refresh, 11 October 2026 (GFX-CORPUS-MATRIX-20261011)
@@ -486,3 +3332,103 @@ diehard, deus_ex, ut2003/ut2004, morrowind, pirates (Codex), bw2.
 be compared at the same batch. New failures: Forsaken's heap exhaustion on an
 unattended run, quake3's unreproducible fixture, and the scifi/oasaver
 default-clock frame.
+
+## Historical census recovery anchor — 18 October 2026
+
+The original tool addition is commit `2d722ab3766c288d13796ed9dad3f1ceeca8f1eb`
+(22 September). Its commit message independently records 27 OpenGL/Direct3D
+apps among 225 registry apps, seven `scr_*` D3DRM screensavers, and the
+launcher-noise cautions for `icewind_dale_demo` and `tworld`. The retained
+`project_gl_d3d_corpus_goal.md` memory identifies the originating session as
+`bd610256-7b4f-4ed1-afa0-9c3cf3412fbb` and records family counts GL7, D3DRM10,
+D3DIM9, D3D8 7, D3D9 2 with overlap.
+
+Neither source enumerates all 27 IDs. A matching transcript/census output was
+not found in the checked local Claude project files. This narrows recovery to
+the original tool and registry revision plus the contemporaneous binary
+inventory, or the originating session's saved output. Re-running today's
+tool against today's registry is not equivalent; scanning old registry paths
+against changed/missing binaries is also insufficient without identity checks.
+No historical census was rerun here and no membership or backend qualification
+is inferred from the counts.
+
+### Current registry availability audit, October 19
+
+[Machine-readable inventory](gfx-corpus-current-inventory-20261019.json) pins main `4b0c7d8b3` and the matching scanner hash. All 347 registry entries were considered against files available on this coordinator. Static names/imports/IIDs identify 201 graphics candidates, 135 with a family beyond DirectDraw; these are potential routes, not runtime coverage or gameplay passes. IID-only matches can be false positives.
+
+Thirteen entries lack one or more directly declared executable/DLL paths, and eleven also lack their local file manifests. The inventory records exact missing paths per app. A missing manifest prevents discovery of its companion modules, so an empty family set is not proof of no 3D use. Recovery is needed for those entries; it does not block validation of other available originals. This is the current registry snapshot, not a reconstruction of the missing September 22 historical 27-ID set. Software/WebGL runtime evidence and reviewed gameplay remain separate requirements.
+
+## Software GL presentation bounds assessment — 1 November 2026
+
+Source-only run `20261101-gl-presentation-source-assessment` examined the
+short-pitch/large-output concern in `lib/gl-render-worker.js` presentation.
+Its local check uses `bits + pitch * height`, while row copies read
+`width * 4` bytes. An arbitrarily changed descriptor could violate that
+relationship; this observation alone does not show a producer-reachable bug.
+
+The ordinary window producer validates drawable dimensions in 1..4096 in
+`lib/gl-software-producer.js`, unbinds a prior bitmap, then sets the validated
+default dimensions. The WAT default-size setter enforces the same range.
+The window target constructs its front with `d3d9_create_surface(w,h,32,1)`;
+that constructor allocates the aligned row pitch and backing together. For
+these dimensions, pitch is exactly `4*w`, at most 16384, and backing is at
+most 64 MiB. Allocation failure returns no surface. Bitmap binding clears
+the window front, and presentation skips a zero front.
+
+The remaining snapshot path was checked: `gl_sw_worker_draw` restores
+snapshot dimensions into raster-worker instance globals, but does not restore
+`gl_sw_front`. The production raster workers instantiate their own module;
+`lib/guest-rpc.js` supplies the front exported by the producing guest instance.
+The front-global write sites in the raster WAT either clear it or derive it
+from the constructor above. Thus the inspected worker snapshot path does not
+establish the proposed producer-front counterexample.
+
+No endpoint test, original game, browser or build ran for this assessment;
+no source fix is claimed. The queued repair hypothesis requires a reachable
+producer counterexample before dispatch. Arbitrary descriptor corruption,
+other surface users, runtime lifetime safety, backend parity and the historical
+27-app qualification remain unproven. `source-pins.json` records the eight
+inspected files and revision; this is a scoped source assessment only.
+
+
+## Native GL original gameplay refresh — 7 November 2026
+
+[Original-title evidence and recovery recipe](re-notes/graphics-fixed-gl-originals-20261107.md)
+records run `20261107-graphics-fixed-gl-originals`, published as `7e26c8485`.
+After native GL shader repair `aaaf6e370`, eight original startup sweeps
+(four titles, coop and threads) ended without escaped traps or unimplemented
+APIs. Six ordinary-input followups supplied the following inspected progress.
+
+| Original | Executed route | Inspected progress and limits |
+| --- | --- | --- |
+| Quake II | Node native GL, coop | First-person world, weapon/HUD and view changes after paired W/Right inputs. Threads reached the menu only. |
+| Quake III | Node native GL, coop and threads | Q3DM7/Q3DM1 worlds with bots, weapon/HUD; threads death, respawn and paired W movement. Coop W was balanced, but the later Left release was cut off by the harness deadline. Torch-adjacent black shapes remain unresolved. |
+| GLTron | Node native GL, coop | Moving cycle/trail and paired A direction change, followed by a crash/winner screen. Threads reached the menu only. |
+| Forsaken | Software D3D, coop and threads | Volcano world, visible firing/ammo change and paired Up view change. This does not establish a GL route. |
+
+The tested source was `ce0330c444ea43742259624db5e9cd0240b2f156` plus the
+recorded untracked `lib/wininit-boot.js` patch. All 14 original runs loaded
+standard WASM SHA-256
+`e41511fe861363fbe1639d80f20cbcdd7240f46937c93a801eaa256ca094c467`.
+The native environment was Node 24.22.1, `@node-3d/glfw` 7.4.1,
+`@node-3d/webgl` 6.0.3 and Mesa llvmpipe LLVM 20.1.2. Native GL and WGL
+regressions passed before originals; loaded-module audits matched the pinned
+inputs. The run retained 66 unique inspected PNGs and normally stopped its
+fresh box after evidence recovery.
+
+The short startup sweep selected a Quake III logo texture rather than its
+display; the world claims above use compositor followups. One Q2 teardown/Q3
+launch overlapped by 0.107 seconds in supervisor bookkeeping; later launches
+required terminal records. No new production fix was justified by this run.
+These results establish the named Node routes and observed controls. Browser
+WebGL, full visual parity, FPS, audio, game completion and the missing historical
+27-ID census remain unproven. Current runtime evidence does not reconstruct
+that census.
+
+2026-11-07 10:00 UTC: [Wormhole/Bellhop corrected report](re-notes/graphics-wormhole-bellhop-20261107.md), commit5a5f148ff, establishes zero qualified cases: a missing transitive helper import falsely satisfied broad rejection assertions. Eight observations/24 captures are supplemental only; Wormhole uses DirectDraw and Bellhop remains at an empty GDI connection dialog, with no active D3D/WebGL draws proved. The coordinator independently rehashed all185 retrieved artifacts and inspected both scenes; bx_24t85jnv was normally archived after retrieval. Fresh boids-current-frustum-1000 requires positive complete helper transport before allocation and natural completed-geometry evidence before any rendering diagnosis. No parity/FPS/audio/full27 claim.
+
+2026-11-07 10:13 UTC: [Boids current-frustum report](re-notes/boids-current-frustum-20261107.md), commit79cf7b2e1, records an original cooperative WebGL launch followed by a passive observer image-base lookup failure. No completed geometry or reviewed scene discriminator was captured; flock visibility and parity remain unknown.25 unique artifacts including modules were recovered and verified before normal shutdown of bx_c5kztwfa. Fresh graphics-remaining-worker-configs-1013 covers the four remaining Tunnel/Twist/Boids Worker configurations, requiring production metadata and scheduler qualification before any passive observer is reused. No full27/FPS/audio claim.
+
+2026-11-07 10:23 UTC: [Worker configuration report](re-notes/graphics-remaining-worker-configs-20261107.md), commit46c5d37a7, records a harness failure before the first software Tunnel Worker capture: CDP tried to serialize the guestWorker controller returned by readiness. All four missing configurations remain open; no emulator defect established.25 unique artifacts including both modules were verified before normal nonforced shutdown of bx_8ptdehqn. Fresh graphics-worker-readiness-1023 must exercise a scalar readiness result and the exact capture branch with a live production Worker locally before another allocation.
+
+2026-11-07 15:45 UTC: [Expanded startup report](re-notes/graphics-expanded-crash-20261107.md), commit ecf85c4d9, records six serial 20-second cooperative/threaded runs. None escaped with a trap, exit, setup error or external timeout. Hexen II remained at its opening notice and did not reach GL or MIDI startup. Heretic II reached native GL book menus in both modes; Forsaken reached software Direct3D menus, with three auxiliary Workers executing in threaded mode. The worker inspected six PNGs, verified 54 retrieved artifact references and normally stopped bx_kku6pzkp. Native GL/WGL preflight and 20 sweep regressions passed; no production repair was justified. Fresh graphics-post-notice-1544 targets ordinary Hexen II notice dismissal and the uncovered startup path. These observations do not establish gameplay, visual parity, FPS, audio quality or the historical 27-app census.

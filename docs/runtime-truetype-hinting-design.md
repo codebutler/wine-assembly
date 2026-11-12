@@ -353,6 +353,46 @@ tests. The integration is accepted only when all of these hold:
    cannot trap or loop indefinitely.
 6. The existing bitmap/MS Sans tests remain unchanged in behavior.
 
+## Raster scratch and W text follow-up (2026-10-31)
+
+Raster scratch uses maxp only for compact point capacity. A count-only pass
+through the same hinted geometry and monotone-curve splitter determines the
+emitted edge count; edge/crossing capacity then doubles as needed. The write
+pass retains the existing pixels and fail-fast outline/overflow checks.
+Backing remains on the guest heap to use its variable-size allocator rather
+than reserve a permanent worst-case private arena for sixteen threads. It is
+still a per-instance high-water allocation and consumes guest heap space.
+Each new Wasm instance starts with its own null pointer, zero byte allocation,
+and initial point/edge/crossing capacities; these mutable globals must not be
+copied at spawn. A shared-memory two-instance regression checks independent
+allocations. There is no fixed private-address or shared scratch alias.
+
+In run `20261031-font-fixes`, a fresh instance scans all mapped UCS-2 characters
+at each size. The following byte counts are scratch reservations, excluding
+font bytes, glyph bitmap cache, hinter workspace and heap block headers:
+
+| Face | ppem | Before | After |
+| --- | --- | ---: | ---: |
+| UMing TW (22,692 mappings) | 12 / 16 / 28 / 72 | 11,925,988 | 55,780 |
+| Full Liberation Sans (2,327 mappings) | 12 / 16 / 28 / 72 | 5,188,612 | 52,228 |
+| Deployed Liberation Sans subset (218 mappings) | 12 / 16 / 28 / 72 | 1,059,328 | 51,712 |
+
+The W drawing and measurement paths preserve each full UCS-2 code unit through
+the selected TrueType face's Unicode cmap and exact embedded strike, with
+outline fallback. ExtTextOutW consumes one lpDx advance per WCHAR (or a pair
+with ETO_PDY). Printable WCHAR bytes never trigger ANSI reinterpretation.
+Whole-string and per-character widths share the same selected-font routine.
+For the bundled Western FON faces, characters outside their ANSI charset use
+dfDefaultChar, matching the Win98 bitmap-font behavior rather than drawing the
+WCHAR's low byte. UCS-2 is not surrogate-pair shaping.
+
+ANSI lookup retains CP1252/symbol semantics, including DrawTextA's widened
+presentation buffer. The 35,840-glyph Western bitmap/metrics comparison is
+byte-identical. Subset embedded-strike retention defaults to drop and can be
+explicitly enabled per font with a third `keep` argument in the generator.
+Tahoma's committed outline-only subset is unchanged; enabling its Wine strikes
+would be a separate rendering decision for the owner.
+
 ## ASCII TL;DR
 
 ```

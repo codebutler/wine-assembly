@@ -715,6 +715,7 @@
     (local $old_handler_set_eip i32) (local $old_steps i32)
     (local $old_yield_reason i32) (local $old_yield_flag i32)
     (local $result i32) (local $rounds i32)
+    (local $expected_child i64) (local $expected_root i64) (local $expected_depth i32)
     (if (i32.eqz (local.get $callback)) (then (return (i32.const 1))))
     (local.set $old_eip (global.get $eip))
     (local.set $old_esp (i32.load offset=16 (global.get $reg_base)))
@@ -729,6 +730,12 @@
     (local.set $old_steps (global.get $steps))
     (local.set $old_yield_reason (global.get $yield_reason))
     (local.set $old_yield_flag (global.get $yield_flag))
+    ;; Acquire before writing the guest frame. Nested callbacks must not
+    ;; replace the identity retained by this particular invocation.
+    (call $sync_depth_enter)
+    (local.set $expected_child (call $invocation_current))
+    (local.set $expected_root (global.get $invocation_root))
+    (local.set $expected_depth (global.get $sync_msg_depth))
     ;; Push right-to-left: pcb, cb, buffer, cookie, return thunk.
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $bytes_read))
@@ -744,13 +751,20 @@
     (global.set $steps (i32.const 0))
     (global.set $yield_reason (i32.const 0))
     (global.set $yield_flag (i32.const 0))
-    (call $sync_depth_enter)
     (block $done (loop $run_callback
       (call $run (i32.const 1000000))
       (br_if $done (i32.eqz (global.get $eip)))
       (local.set $rounds (i32.add (local.get $rounds) (i32.const 1)))
       (br_if $done (i32.ge_u (local.get $rounds) (i32.const 64)))
       (br $run_callback)))
+    ;; Check even on timeout, before retirement or interrupted-frame restore.
+    ;; A mismatch traps; process reset owns recovery from an invalid owner.
+    (if (i64.ne (local.get $expected_child) (call $invocation_current))
+      (then (unreachable)))
+    (if (i64.ne (local.get $expected_root) (global.get $invocation_root))
+      (then (unreachable)))
+    (if (i32.ne (local.get $expected_depth) (global.get $sync_msg_depth))
+      (then (unreachable)))
     (call $sync_depth_leave)
     (local.set $result
       (select (i32.load offset=0 (global.get $reg_base)) (i32.const 1) (i32.eqz (global.get $eip))))

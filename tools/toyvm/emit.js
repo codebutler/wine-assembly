@@ -114,6 +114,7 @@ function wideAccessors(b, p, a, setL) {
     s += `
 (func $rd${w}${b} ${p} (param $off i32) (result i32)
   (local $l i32)
+  ${b === '' ? `(if (call $pg_on) (then (call $pg_segment (local.get $seg) (local.get $off) (i32.const ${n}) (i32.const 0))))` : ''}
   (if (call $pg_on) (then (return (call $pg_read
     (i32.add ${b ? '(local.get $base)' : '(call $sbase (local.get $seg))'} (local.get $off))
     (i32.const ${n}) (call $pg_user)))))
@@ -127,6 +128,7 @@ function wideAccessors(b, p, a, setL) {
 
 (func $wr${w}${b} ${p} (param $off i32) (param $v i32)
   (local $l i32)
+  ${b === '' ? `(if (call $pg_on) (then (call $pg_segment (local.get $seg) (local.get $off) (i32.const ${n}) (i32.const 1))))` : ''}
   (if (call $pg_on) (then (call $pg_write
     (i32.add ${b ? '(local.get $base)' : '(call $sbase (local.get $seg))'} (local.get $off))
     (i32.const ${n}) (local.get $v) (call $pg_user)) (return)))
@@ -154,6 +156,7 @@ function memAccessors() {
     s += `
 (func $rd8${b} ${p} (param $off i32) (result i32)
   (local $l i32)
+  ${b === '' ? '(if (call $pg_on) (then (call $pg_segment (local.get $seg) (local.get $off) (i32.const 1) (i32.const 0))))' : ''}
   ${b === 'phys' ? '' : `(if (call $pg_on) (then (return (call $pg_read
     (i32.add ${b ? '(local.get $base)' : '(call $sbase (local.get $seg))'} (local.get $off))
     (i32.const 1) (call $pg_user)))))`}
@@ -165,6 +168,7 @@ function memAccessors() {
 
 (func $wr8${b} ${p} (param $off i32) (param $v i32)
   (local $l i32)
+  ${b === '' ? '(if (call $pg_on) (then (call $pg_segment (local.get $seg) (local.get $off) (i32.const 1) (i32.const 1))))' : ''}
   ${b === 'phys' ? '' : `(if (call $pg_on) (then (call $pg_write
     (i32.add ${b ? '(local.get $base)' : '(call $sbase (local.get $seg))'} (local.get $off))
     (i32.const 1) (local.get $v) (call $pg_user)) (return)))`}
@@ -1086,7 +1090,8 @@ function genExtras() {
   h('popf', 1, `
   ${ops(1)}
   (call $flags_put (i32.or
-    (i32.and (call $pop16) ${DEFINED})
+    (i32.or (i32.and (call $flags_word) (i32.const 0xFFFF0000))
+      (i32.and (call $pop16) ${DEFINED}))
     ${RESERVED}))
   ${POPF_OWES}
     (then (global.set $gip (local.get $t0))
@@ -1100,17 +1105,16 @@ function genExtras() {
   // came out of that sequence with a misaligned stack, concluded it was on
   // something older than a 386, and took the exit.
   //
-  // The upper half is zero on the way out and ignored on the way in: this
-  // machine is a 386, so AC, VM and ID do not exist, and RF is never set.
-  // VM lives outside $flags (see the global), so PUSHFD has to put it back or
-  // a guest that saves and restores EFLAGS around anything loses the mode --
-  // and a V86 monitor reading the frame cannot tell where the trap came from.
-  h('pushf32', 0, `(call $push32 (i32.or (i32.and (call $flags_word) (i32.const 0xFFFF))
+  // AC (bit 18) is writable starting with the 486. Keep it in the actual
+  // EFLAGS state, including arithmetic, 16-bit POPF/IRET and checkpoints.
+  // The selected CPU's defined mask excludes it on a 386 and excludes ID on
+  // both models (the baseline 486 has no CPUID). VM is managed separately.
+  h('pushf32', 0, `(call $push32 (i32.or (call $flags_word)
                                          (i32.shl (global.get $vm86) (i32.const 17))))`);
   h('popf32', 1, `
   ${ops(1)}
   (call $flags_put (i32.or
-    (i32.and (i32.and (call $pop32) (i32.const 0xFFFF)) ${DEFINED})
+    (i32.and (call $pop32) ${DEFINED})
     ${RESERVED}))
   ${POPF_OWES}
     (then (global.set $gip (local.get $t0))
@@ -1326,7 +1330,7 @@ function genExtras() {
     const put = (x) => (lazy ? `(call $flags_put ${x})` : `(global.set $flags ${x})`);
     return put(v
       ? `(i32.or ${read} (i32.const ${1 << b}))`
-      : `(i32.and ${read} (i32.const ${(~(1 << b)) & 0xFFFF}))`);
+      : `(i32.and ${read} (i32.const ${~(1 << b)}))`);
   };
   h('clc', 0, setF(F.CF, 0));
   h('stc', 0, setF(F.CF, 1));
@@ -1349,7 +1353,7 @@ function genExtras() {
   // SAHF/LAHF move the low byte of FLAGS through AH.
   h('sahf', 0, `
   (call $flags_put (i32.or
-    (i32.and (call $flags_word) (i32.const 0xFF00))
+    (i32.and (call $flags_word) (i32.const -256))
     (i32.or (i32.and (i32.shr_u (global.get $ax) (i32.const 8)) (i32.const 0xD5))
             (i32.const 2))))
 `);
@@ -1422,7 +1426,7 @@ function genExtras() {
   (call $rset8 (i32.const 0) (i32.and (local.get $t0) (i32.const 0x0F)))
   (call $flags_put (i32.or
     (i32.and (call $flags_word)
-             (i32.const ${(~((1 << F.CF) | (1 << F.AF))) & 0xFFFF}))
+             (i32.const ${~((1 << F.CF) | (1 << F.AF))}))
     (i32.or (local.get $t2) (i32.shl (local.get $t2) (i32.const ${F.AF})))))
 `);
   }
@@ -1561,10 +1565,13 @@ function genExtras() {
   (if (call $pg_on) (then
     (global.set $pg_vector (i32.const -2)) (global.set $pg_return (i32.const 2))
     (global.set $halt (i32.const 1)) (return)))
+  (if (i32.and (call $pm_active) (i32.ne (i32.and (global.get $flags) (i32.const 0x4000)) (i32.const 0)))
+    (then (drop (call $pm_stop (i32.const ${pmTransfer.STOP.unsupportedSystem}) (global.get $tr))) (return)))
   (global.set $gip (call $pop16))
   (call $sset (i32.const 1) (call $pop16))
   (call $flags_put (i32.or
-    (i32.and (call $pop16) ${DEFINED})
+    (i32.or (i32.and (call $flags_word) (i32.const 0xFFFF0000))
+      (i32.and (call $pop16) ${DEFINED}))
     ${RESERVED}))
   ;; Staying in wasm is only right when nothing is owed at this boundary: TF
   ;; asks for a trap after this instruction, and an IRQ the host is holding
@@ -1598,6 +1605,8 @@ function genExtras() {
   (if (call $pg_on) (then
     (global.set $pg_vector (i32.const -2)) (global.set $pg_return (i32.const 4))
     (global.set $halt (i32.const 1)) (return)))
+  (if (i32.and (call $pm_active) (i32.ne (i32.and (global.get $flags) (i32.const 0x4000)) (i32.const 0)))
+    (then (drop (call $pm_stop (i32.const ${pmTransfer.STOP.unsupportedSystem}) (global.get $tr))) (return)))
   (local.set $t0 (call $pop32))
   (local.set $t1 (call $pop32))
   (local.set $t2 (call $pop32))
@@ -1890,7 +1899,7 @@ function s_shift(kind, w, one, rotate, ofExpr, mask, msb) {
   ;; preceding compare set.
   (local.set $f (i32.and (call $flags_word)
     (i32.const ${(~((1 << isa.F.CF) | (1 << isa.F.OF) | (rotate ? 0
-      : ((1 << isa.F.SF) | (1 << isa.F.ZF) | (1 << isa.F.PF))))) & 0xFFFF})))
+      : ((1 << isa.F.SF) | (1 << isa.F.ZF) | (1 << isa.F.PF)))))})))
   (local.set $f (i32.or (local.get $f) (i32.and (local.get $cf) (i32.const 1))))
   (local.set $f (i32.or (local.get $f)
     (i32.shl (i32.and ${ofExpr} (i32.const 1)) (i32.const ${isa.F.OF}))))
@@ -2000,7 +2009,7 @@ function genDoubleShifts() {
   (local.set $q ${cat})
   (local.set $r (i32.and ${res} (i32.const ${mask})))
   (local.set $f (i32.and (call $flags_word) (i32.const ${(~((1 << isa.F.CF)
-    | (1 << isa.F.OF) | (1 << isa.F.SF) | (1 << isa.F.ZF) | (1 << isa.F.PF))) & 0xFFFF})))
+    | (1 << isa.F.OF) | (1 << isa.F.SF) | (1 << isa.F.ZF) | (1 << isa.F.PF)))})))
   (local.set $f (i32.or (local.get $f) (i32.and ${cf} (i32.const 1))))
   ;; OF is defined only for a count of one, as the sign changing.
   (local.set $f (i32.or (local.get $f) (i32.shl
@@ -2077,7 +2086,7 @@ const BIT_OPS = {
 };
 function genBitOps() {
   const CF_ONLY = (cf) => `(call $flags_put (i32.or
-    (i32.and (call $flags_word) (i32.const 0xFFFE)) (i32.and ${cf} (i32.const 1))))`;
+    (i32.and (call $flags_word) (i32.const -2)) (i32.and ${cf} (i32.const 1))))`;
 
   for (const w of [16, 32]) {
     const mask = WM(w);
@@ -2127,7 +2136,7 @@ function genBitOps() {
       const body = (src, dst) => `
   (local.set $t7 (i32.and ${src} (i32.const ${mask})))
   (call $flags_put (i32.or
-    (i32.and (call $flags_word) (i32.const ${(~(1 << isa.F.ZF)) & 0xFFFF}))
+    (i32.and (call $flags_word) (i32.const ${~(1 << isa.F.ZF)}))
     (i32.shl (i32.eqz (local.get $t7)) (i32.const ${isa.F.ZF}))))
   (if (local.get $t7) (then (call $rset${w} ${dst} ${scan})))
 `;
@@ -2920,6 +2929,12 @@ function gen386() {
 `);
   // CR2 and CR3 are architectural registers even while PG is clear. Keeping
   // them is a prerequisite for paging, not an implementation of translation.
+  h('clts', 0, `
+  (if (i32.and (global.get $cr0) (i32.const 1)) (then
+    (if (i32.or (global.get $vm86) (i32.and (call $sget (i32.const 1)) (i32.const 3)))
+      (then (drop (call $pm_stop (i32.const ${pmTransfer.STOP.unsupportedSystem}) (i32.const 0))) (return)))))
+  (global.set $cr0 (i32.and (global.get $cr0) (i32.const -9)))
+`);
   h('mov_r_cr', 1, `
   ${ops(1)}
   (local.set $t1 (i32.and (i32.shr_u (local.get $t0) (i32.const 4)) (i32.const 7)))
@@ -2945,28 +2960,28 @@ function gen386() {
              (select (i32.const 12) (i32.const 0) ${GRAN}))
     (select (i32.const 0xFFF) (i32.const 0) ${GRAN}))`;
 
-  // Group 6. LLDT is the only one that changes anything: it names a GDT
-  // descriptor whose base is where the LDT lives, and a selector with the
-  // table-indicator bit set is resolved through that instead. LTR and the
-  // VERR/VERW pair are accepted and inert -- there is no task switching here,
-  // and every descriptor this machine builds is readable and writable, so the
-  // access checks can only ever succeed.
+  // Group 6. LLDT supplies the local descriptor table; LTR validates an
+  // available TSS and marks it busy without switching tasks. VERR/VERW retain
+  // their existing permissive contract. Privilege checks precede LTR's memory
+  // operand read, so an inaccessible operand cannot hide #GP(0) / #UD.
   for (const [nm, body] of [
     ['sldt', '(call $rset16 %R% (global.get $ldt))'],
     ['str', '(call $rset16 %R% (global.get $tr))'],
     ['lldt', '(global.set $ldt %V%) (global.set $ldtb (call $gdtbase (global.get $ldt))) (call $pm_cache_ldt (global.get $ldt))'],
-    ['ltr', '(global.set $tr %V%) (call $pm_cache_tr (global.get $tr))'],
+    ['ltr', '(if (call $pm_ltr %V%) (then (return)))'],
     ['verr', `(call $flags_put (i32.or (call $flags_word) (i32.const ${1 << F.ZF})))`],
     ['verw', `(call $flags_put (i32.or (call $flags_word) (i32.const ${1 << F.ZF})))`],
   ]) {
     const store = nm === 'sldt' || nm === 'str';
     h(`${nm}_r`, 1, `
   ${ops(1)}
+  ${nm === 'ltr' ? '(if (call $pm_ltr_priv) (then (return)))' : ''}
   ${body.replace(/%R%/g, '(local.get $t0)')
     .replace(/%V%/g, '(call $rget16 (local.get $t0))')}
 `);
     h(`${nm}_m`, 2, `
   ${ops(2)}
+  ${nm === 'ltr' ? '(if (call $pm_ltr_priv) (then (return)))' : ''}
   ${EA_SETUP_PRE}
   ${store
     ? `(call $wr16 (local.get $t5) (local.get $t4) (global.get $${nm === 'str' ? 'tr' : 'ldt'}))`
@@ -3001,7 +3016,7 @@ function gen386() {
   (local.set $t3 ${src})
   (local.set $t7 (call $descaddr (local.get $t3)))
   (call $flags_put (i32.or
-    (i32.and (call $flags_word) (i32.const ${(~(1 << F.ZF)) & 0xFFFF}))
+    (i32.and (call $flags_word) (i32.const ${~(1 << F.ZF)}))
     (i32.shl (i32.ne (local.get $t7) (i32.const 0)) (i32.const ${F.ZF}))))
   (if (local.get $t7) (then
     (local.set $t7 (i32.sub (local.get $t7) (i32.const 1)))
@@ -4610,14 +4625,15 @@ function helpers() {
   // An index past the six traps, as the br_table this replaced did.
   s += `(func $sset (param $i i32) (param $v i32)
   (if (i32.ge_u (local.get $i) (i32.const ${isa.SEG.length})) (then (unreachable)))
+  (if (i32.eqz (call $pm_active)) (then (call $pm_paragraph_cache (local.get $i))))
   (i32.store (i32.add (i32.const ${isa.REGFILE_SEL}) (i32.shl (local.get $i) (i32.const 2))) (local.get $v))
   (i32.store (i32.add (i32.const ${isa.REGFILE_SEGB}) (i32.shl (local.get $i) (i32.const 2)))
     (call $segbase (local.get $v)))
   (if (i32.eq (local.get $i) (i32.const ${isa.SEG.indexOf('cs')}))
     (then (global.set $d32 (call $segd32 (local.get $v)))))
   (if (i32.eq (local.get $i) (i32.const ${isa.SEG.indexOf('ss')}))
-    (then (global.set $spm (select (i32.const -1) (i32.const 0xFFFF)
-      (call $segd32 (local.get $v))))
+    (then (if (call $pm_active) (then (global.set $spm (select (i32.const -1) (i32.const 0xFFFF)
+      (call $segd32 (local.get $v))))))
       (call $pm_cache_ss (local.get $v))))
   (call $pm_cache_data (local.get $i) (local.get $v)))\n`;
 
@@ -4678,7 +4694,12 @@ function helpers() {
     (then (return (i32.shl (i32.and (local.get $v) (i32.const 0xFFFF)) (i32.const 4)))))
   ;; A null selector addresses nothing, and the low three bits are the
   ;; requested privilege level and table indicator, not part of the index.
-  (if (i32.eqz (i32.and (local.get $v) (i32.const 0xFFF8))) (then (return (i32.const 0))))
+  ;; Only the GDT has a null slot, so the test is 0xFFFC and not 0xFFF8: the
+  ;; table indicator has to stay in it, because selector 4 is LDT entry 0 --
+  ;; an ordinary descriptor -- and reading it as the null selector hands back
+  ;; base 0. ANGEL.EXE's extender lives at LDT entries 0 and 1 and jumped
+  ;; through exactly that one.
+  (if (i32.eqz (i32.and (local.get $v) (i32.const 0xFFFC))) (then (return (i32.const 0))))
   ;; Past the table's own limit there is no descriptor, and reading one anyway
   ;; is how a real-mode segment number that never went through a selector load
   ;; -- 0x9bf0, say -- comes back with a plausible base and a random D bit.
@@ -4714,7 +4735,7 @@ function helpers() {
 (func $descaddr (param $v i32) (result i32)
   (if (i32.eqz (i32.and (global.get $cr0) (i32.const 1)))
     (then (return (i32.const 0))))
-  (if (i32.eqz (i32.and (local.get $v) (i32.const 0xFFF8))) (then (return (i32.const 0))))
+  (if (i32.eqz (i32.and (local.get $v) (i32.const 0xFFFC))) (then (return (i32.const 0))))
   (if (i32.gt_u (i32.and (local.get $v) (i32.const 0xFFF8))
                 (i32.and (global.get $gdtl) (i32.const 0xFFFF)))
     (then (return (i32.const 0))))
@@ -4736,10 +4757,20 @@ function helpers() {
 (func $segd32 (param $v i32) (result i32)
   ;; V86 code is 16-bit by definition -- there is no descriptor to carry a D
   ;; bit. Same ordering argument as $segbase.
-  (if (i32.or (i32.eqz (i32.and (global.get $cr0) (i32.const 1)))
-              (global.get $vm86))
-    (then (return (i32.const 0))))
-  (if (i32.eqz (i32.and (local.get $v) (i32.const 0xFFF8))) (then (return (i32.const 0))))
+  (if (global.get $vm86) (then (return (i32.const 0))))
+  ;; Real mode keeps the D bit the cached descriptor already had, rather than
+  ;; forcing 16-bit. Clearing PE does not reload CS -- the far jump that
+  ;; follows it does, and a real-mode CS load rewrites the base and the limit
+  ;; and leaves the cached size alone. A program that never entered protected
+  ;; mode is unaffected: $d32 starts at 0 and nothing but a descriptor can
+  ;; raise it. ANGEL.EXE's extender is the case that needs this -- it drops to
+  ;; real mode through a 32-bit descriptor and the next block -- a cs-override
+  ;; lidt over its own real-mode IDT pseudo-descriptor -- only decodes as
+  ;; 32-bit code. Read as 16-bit the same bytes come out as push es / add
+  ;; al,0xb / leave, which is where its stack pointer and its AH=3Fh both went.
+  (if (i32.eqz (i32.and (global.get $cr0) (i32.const 1)))
+    (then (return (global.get $d32))))
+  (if (i32.eqz (i32.and (local.get $v) (i32.const 0xFFFC))) (then (return (i32.const 0))))
   ;; No descriptor, no D bit -- see $segbase. Guessing one here is what made a
   ;; real-mode segment look like a 32-bit code selector.
   (if (i32.gt_u (i32.and (local.get $v) (i32.const 0xFFF8))
@@ -5073,7 +5104,7 @@ ${memAccessors()}
   (local.set $r (i32.and (local.get $s)
     (i32.sub (i32.shl (i32.const 1) (local.get $w)) (i32.const 1))))
   (local.set $msb (i32.sub (local.get $w) (i32.const 1)))
-  (local.set $f (i32.and (global.get $flags) (i32.const ${(~isa.FLAGS_ARITH) & 0xFFFF})))
+  (local.set $f (i32.and (global.get $flags) (i32.const ${~isa.FLAGS_ARITH})))
   ;; CF: the bit that fell off the top of the operand width.
   (local.set $f (i32.or (local.get $f)
     (i32.shl (i32.and (i32.shr_u (local.get $s) (local.get $w)) (i32.const 1))
@@ -5114,7 +5145,7 @@ ${memAccessors()}
   (local.set $r (i32.and (local.get $s)
     (i32.sub (i32.shl (i32.const 1) (local.get $w)) (i32.const 1))))
   (local.set $msb (i32.sub (local.get $w) (i32.const 1)))
-  (local.set $f (i32.and (global.get $flags) (i32.const ${(~isa.FLAGS_ARITH) & 0xFFFF})))
+  (local.set $f (i32.and (global.get $flags) (i32.const ${~isa.FLAGS_ARITH})))
   ;; CF is a borrow: a - b went negative, which leaves the bit set above the
   ;; operand width in the 32-bit difference.
   (local.set $f (i32.or (local.get $f)
@@ -5151,14 +5182,14 @@ ${memAccessors()}
   (local $cf i32)
   (local.set $cf ${CF_IN()})
   (call $flags_add (local.get $a) (i32.const 1) (local.get $s) (local.get $w))
-  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const 0xFFFE))
+  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const -2))
                              (local.get $cf))))
 
 (func $flags_dec (param $a i32) (param $s i32) (param $w i32)
   (local $cf i32)
   (local.set $cf ${CF_IN()})
   (call $flags_sub (local.get $a) (i32.const 1) (local.get $s) (local.get $w))
-  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const 0xFFFE))
+  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const -2))
                              (local.get $cf))))
 
 ;; AND/OR/XOR. CF and OF are architecturally cleared; AF is genuinely
@@ -5166,7 +5197,7 @@ ${memAccessors()}
 ;; gate masks AF for these mnemonics and says so in its output.
 (func $flags_logic (param $r i32) (param $w i32)
   (local $f i32)
-  (local.set $f (i32.and (global.get $flags) (i32.const ${(~isa.FLAGS_ARITH) & 0xFFFF})))
+  (local.set $f (i32.and (global.get $flags) (i32.const ${~isa.FLAGS_ARITH})))
   (local.set $f (i32.or (local.get $f)
     (i32.shl (i32.and (i32.shr_u (local.get $r)
         (i32.sub (local.get $w) (i32.const 1))) (i32.const 1))
@@ -5187,7 +5218,7 @@ ${memAccessors()}
 ;; comparison instead.
 (func $flags_add32 (param $a i32) (param $b i32) (param $cin i32) (param $r i32)
   (local $f i32)
-  (local.set $f (i32.and (global.get $flags) (i32.const ${(~isa.FLAGS_ARITH) & 0xFFFF})))
+  (local.set $f (i32.and (global.get $flags) (i32.const ${~isa.FLAGS_ARITH})))
   ;; With no carry in, a wrap shows up as r < a; with one, r == a is also a
   ;; wrap (b was all ones).
   (local.set $f (i32.or (local.get $f)
@@ -5217,7 +5248,7 @@ ${memAccessors()}
 
 (func $flags_sub32 (param $a i32) (param $b i32) (param $cin i32) (param $r i32)
   (local $f i32)
-  (local.set $f (i32.and (global.get $flags) (i32.const ${(~isa.FLAGS_ARITH) & 0xFFFF})))
+  (local.set $f (i32.and (global.get $flags) (i32.const ${~isa.FLAGS_ARITH})))
   (local.set $f (i32.or (local.get $f)
     (select (i32.le_u (local.get $a) (local.get $b))
             (i32.lt_u (local.get $a) (local.get $b))
@@ -5247,14 +5278,14 @@ ${memAccessors()}
   (local $cf i32)
   (local.set $cf ${CF_IN()})
   (call $flags_add32 (local.get $a) (i32.const 1) (i32.const 0) (local.get $r))
-  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const 0xFFFE))
+  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const -2))
                              (local.get $cf))))
 
 (func $flags_dec32 (param $a i32) (param $r i32)
   (local $cf i32)
   (local.set $cf ${CF_IN()})
   (call $flags_sub32 (local.get $a) (i32.const 1) (i32.const 0) (local.get $r))
-  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const 0xFFFE))
+  (global.set $flags (i32.or (i32.and (global.get $flags) (i32.const -2))
                              (local.get $cf))))
 
 ;; MUL/IMUL set CF and OF together from "the upper half carries information"
@@ -5266,7 +5297,7 @@ ${memAccessors()}
   ;; would be preserved from before the last ALU instruction instead of after.
   (call $flags_sync)
   (local.set $f (i32.and (global.get $flags)
-    (i32.const ${(~((1 << isa.F.CF) | (1 << isa.F.OF))) & 0xFFFF})))
+    (i32.const ${~((1 << isa.F.CF) | (1 << isa.F.OF))})))
   (local.set $nz (i32.ne (local.get $nz) (i32.const 0)))
   (global.set $flags (i32.or (i32.or (local.get $f)
     (i32.or (local.get $nz) (i32.shl (local.get $nz) (i32.const ${isa.F.OF}))))
@@ -5449,7 +5480,7 @@ ${memAccessors()}
 (func $flags_sync
   (local $f i32)
   (if (i32.eqz (global.get $fop)) (then (return)))
-  (local.set $f (i32.and (global.get $flags) (i32.const ${(~isa.FLAGS_ARITH) & 0xFFFF})))
+  (local.set $f (i32.and (global.get $flags) (i32.const ${~isa.FLAGS_ARITH})))
   (local.set $f (i32.or (local.get $f) (call $get_cf)))
   (local.set $f (i32.or (local.get $f) (i32.shl (call $get_pf) (i32.const ${F.PF}))))
   (local.set $f (i32.or (local.get $f) (i32.shl (call $get_af) (i32.const ${F.AF}))))
@@ -5500,6 +5531,12 @@ ${memAccessors()}
     (global.set $left (global.get $steps)) (return)))
   (global.set $intno (local.get $vec))
   (local.set $g (call $idtgate (local.get $vec)))
+  ;; Nonpaged protected delivery has no checked restart boundary. Refuse a
+  ;; task gate before any stack write instead of treating its reserved offset
+  ;; as an ordinary interrupt-handler address.
+  (if (local.get $g) (then
+    (if (i32.eq (i32.and (i32.load8_u offset=4 (local.get $g)) (i32.const 31)) (i32.const 5))
+      (then (drop (call $pm_stop (i32.const ${pmTransfer.STOP.unsupportedSystem}) (global.get $tr))) (return)))))
   ;; A trap taken while the CPU is in virtual-8086 mode is not the same
   ;; sequence at all, and it is the ONLY way off that mode -- there is no
   ;; instruction that clears VM. Handled whole, before the size branch below,
@@ -5535,8 +5572,8 @@ ${memAccessors()}
       ;; An interrupt gate clears IF; a trap gate (bit 0 of the type) leaves it
       ;; alone. Both clear TF.
       (global.set $flags (i32.and (global.get $flags)
-        (select (i32.const ${(~(1 << isa.F.TF)) & 0xFFFF})
-                (i32.const ${(~((1 << isa.F.IF) | (1 << isa.F.TF))) & 0xFFFF})
+        (select (i32.const ${~(1 << isa.F.TF)})
+                (i32.const ${~((1 << isa.F.IF) | (1 << isa.F.TF))})
                 (i32.and (i32.load8_u offset=5 (local.get $g)) (i32.const 1)))))
       (call $sset (i32.const 1) (i32.load16_u offset=2 (local.get $g)))
       (global.set $gip (local.get $v)))
@@ -5545,7 +5582,7 @@ ${memAccessors()}
       (call $push16 (call $sget (i32.const 1)))
       (call $push16 (local.get $ip))
       (global.set $flags (i32.and (global.get $flags)
-        (i32.const ${(~((1 << isa.F.IF) | (1 << isa.F.TF))) & 0xFFFF})))
+        (i32.const ${~((1 << isa.F.IF) | (1 << isa.F.TF))})))
       (local.set $v (i32.shl (local.get $vec) (i32.const 2)))
       (global.set $gip (call $rdphys16 (local.get $v)))
       (call $sset (i32.const 1) (call $rdphys16 (i32.add (local.get $v) (i32.const 2))))))
@@ -5644,8 +5681,8 @@ ${memAccessors()}
   ;; Same gate semantics as the ordinary path: a trap gate leaves IF alone, an
   ;; interrupt gate clears it, both clear TF.
   (global.set $flags (i32.and (global.get $flags)
-    (select (i32.const ${(~(1 << isa.F.TF)) & 0xFFFF})
-            (i32.const ${(~((1 << isa.F.IF) | (1 << isa.F.TF))) & 0xFFFF})
+    (select (i32.const ${~(1 << isa.F.TF)})
+            (i32.const ${~((1 << isa.F.IF) | (1 << isa.F.TF))})
             (i32.and (i32.load8_u offset=5 (local.get $g)) (i32.const 1)))))
   (call $sset (i32.const 1) (i32.load16_u offset=2 (local.get $g)))
   (global.set $gip (i32.or (i32.load16_u (local.get $g))
@@ -6324,23 +6361,33 @@ ${[...Array(8).keys()].map(i => `(global $st${i} (mut f64) (f64.const 0))`).join
 ;; and a flat one keeps the whole of ESP.
 (global $spm (mut i32) (i32.const 0xFFFF))
 ;; LDT selector and the linear base it resolved to, plus the task register.
-;; Nothing switches tasks, so $tr is storage that STR can read back.
+;; LTR loads the hidden TSS cache and marks its descriptor busy. Paged task
+;; gates and NT returns are handled at the checked host transfer boundary.
 (global $ldt (mut i32) (i32.const 0))
 (global $ldtb (mut i32) (i32.const 0))
 (global $tr (mut i32) (i32.const 0))
 ;; Checked protected transfers retain SS/TR metadata at load time. Existing
 ;; general instruction protection remains separate; no exception is fabricated.
-(global $pm_es_valid (mut i32) (i32.const 0))
-(global $pm_es_access (mut i32) (i32.const 0))
-(global $pm_ds_valid (mut i32) (i32.const 0))
-(global $pm_ds_access (mut i32) (i32.const 0))
-(global $pm_fs_valid (mut i32) (i32.const 0))
-(global $pm_fs_access (mut i32) (i32.const 0))
-(global $pm_gs_valid (mut i32) (i32.const 0))
-(global $pm_gs_access (mut i32) (i32.const 0))
-(global $pm_ss_valid (mut i32) (i32.const 0))
-(global $pm_ss_limit (mut i32) (i32.const 0))
-(global $pm_ss_access (mut i32) (i32.const 0))
+(global $pm_es_valid (mut i32) (i32.const 1))
+(global $pm_es_access (mut i32) (i32.const 147))
+(global $pm_es_limit (mut i32) (i32.const 65535))
+(global $pm_task_segments (mut i32) (i32.const 0))
+${['es', 'ds', 'fs', 'gs'].map(s => `(global $pm_${s}_mask (mut i32) (i32.const 65535))`).join('\n')}
+(global $pm_cs_valid (mut i32) (i32.const 1))
+(global $pm_cs_access (mut i32) (i32.const 155))
+(global $pm_cs_limit (mut i32) (i32.const 65535))
+(global $pm_ds_valid (mut i32) (i32.const 1))
+(global $pm_ds_access (mut i32) (i32.const 147))
+(global $pm_ds_limit (mut i32) (i32.const 65535))
+(global $pm_fs_valid (mut i32) (i32.const 1))
+(global $pm_fs_access (mut i32) (i32.const 147))
+(global $pm_fs_limit (mut i32) (i32.const 65535))
+(global $pm_gs_valid (mut i32) (i32.const 1))
+(global $pm_gs_access (mut i32) (i32.const 147))
+(global $pm_gs_limit (mut i32) (i32.const 65535))
+(global $pm_ss_valid (mut i32) (i32.const 1))
+(global $pm_ss_limit (mut i32) (i32.const 65535))
+(global $pm_ss_access (mut i32) (i32.const 147))
 (global $pm_tr_valid (mut i32) (i32.const 0))
 (global $pm_tr_base (mut i32) (i32.const 0))
 (global $pm_tr_limit (mut i32) (i32.const 0))
@@ -6376,8 +6423,10 @@ const MACHINE_STATE = ['f_res', 'f_def', 'shmask', 'linmask', 'cr0', 'cr2', 'cr3
   // Hidden bases are lowered into REGFILE_SEGB, not separate WASM globals.
   // Replay of selectors cannot reconstruct a cache after descriptor mutation.
   'esb', 'csb', 'ssb', 'dsb', 'fsb', 'gsb',
-  'pm_es_valid', 'pm_es_access', 'pm_ds_valid', 'pm_ds_access',
-  'pm_fs_valid', 'pm_fs_access', 'pm_gs_valid', 'pm_gs_access',
+  'pm_es_valid', 'pm_es_access', 'pm_es_limit', 'pm_ds_valid', 'pm_ds_access', 'pm_ds_limit',
+  'pm_fs_valid', 'pm_fs_access', 'pm_fs_limit', 'pm_gs_valid', 'pm_gs_access', 'pm_gs_limit',
+  'pm_cs_valid', 'pm_cs_access', 'pm_cs_limit',
+  'pm_task_segments', 'pm_es_mask', 'pm_ds_mask', 'pm_fs_mask', 'pm_gs_mask',
   'pm_ss_valid', 'pm_ss_limit', 'pm_ss_access',
   'pm_tr_valid', 'pm_tr_base', 'pm_tr_limit', 'pm_tr_access',
   'pm_ldt_valid', 'pm_ldt_limit', 'pm_ldt_access',
@@ -6560,10 +6609,14 @@ ${body})`).join('\n')}
   (if (i32.ge_u (local.get $level) (i32.const 386))
     (then
       (global.set $f_res (i32.const 2))
-      (global.set $f_def (i32.const ${isa.FLAGS_DEFINED | 0x7000})))
+      (global.set $f_def (i32.or (i32.const ${isa.FLAGS_DEFINED | 0x7000})
+        (select (i32.const 0x40000) (i32.const 0)
+          (i32.ge_u (local.get $level) (i32.const 486))))))
     (else
       (global.set $f_res (i32.const ${isa.FLAGS_RESERVED}))
       (global.set $f_def (i32.const ${isa.FLAGS_DEFINED}))))
+  ;; Re-selecting a lower model cannot retain an unavailable upper flag.
+  (global.set $flags (i32.or (i32.and (global.get $flags) (global.get $f_def)) (global.get $f_res)))
   ;; Shift-count masking arrived with the 186, one generation before the FLAGS
   ;; change above, so it gets its own threshold rather than sharing that one.
   (global.set $shmask (select (i32.const 31) (i32.const 0xFF)
@@ -6858,7 +6911,9 @@ function useBuild(opts = {}) {
 // region is picked. Nothing about the handlers changes; the exports are names.
 function exportAll(wat) {
   const out = ['(export "h" (table $h))'];
-  for (const m of wat.matchAll(/^\(global \$([\w.]+) /gm)) out.push(`(export "g$${m[1]}" (global $${m[1]}))`);
+  // Declarations can share a line (the REP decline counters do).
+  const code = wat.replace(/;;[^\n]*/g, '');
+  for (const m of code.matchAll(/\(global \$([\w.]+) /g)) out.push(`(export "g$${m[1]}" (global $${m[1]}))`);
   for (const m of wat.matchAll(/^\(func \$([\w.]+)[ \n]/gm)) out.push(`(export "f$${m[1]}" (func $${m[1]}))`);
   for (const m of wat.matchAll(/^\(import "[^"]+" "[^"]+" \(func \$([\w.]+) /gm)) {
     out.push(`(export "f$${m[1]}" (func $${m[1]}))`);

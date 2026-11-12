@@ -307,23 +307,250 @@ const gpuApis = new Map([
   ['glPushClientAttrib', 1], ['glPopClientAttrib', 0],
   ['glStencilMask', 1], ['glStencilFunc', 3], ['glStencilOp', 3], ['glClearStencil', 1],
   ['glColorMask', 4],
+  ['gluScaleImage', 9],
+  ['glRectf', 4],
+  ['glAccum', 2], ['glClearAccum', 4],
+  ['glGetDoublev', 2],
+  ['glRasterPos4f', 4],
+  ['glTexEnvfv', 3],
+  ['glClipPlane', 2],
+  ['glTexImage1D', 8], ['glTexSubImage1D', 7],
+  ['glCopyTexImage1D', 7],
+  ['glCopyTexImage2D', 8],
+  ['glCopyTexSubImage1D', 6],
+  ['glCopyTexSubImage2D', 8],
+  ['glGetTexImage', 5],
+  ['glPixelTransferf', 2],
+  ['glPixelTransferi', 2],
+  ['_glTexImage2D', 9],
+  ['_glTexSubImage2D', 9],
+  ['_glReadTexturePixels', 5],
+
+  ['glGetBooleanv', 2], ['glGetPointerv', 2],
+  ['glPixelMapfv',3], ['glPixelMapuiv',3], ['glPixelMapusv',3],
+  ['glGetPixelMapfv',2], ['glGetPixelMapuiv',2], ['glGetPixelMapusv',2],
+  ['glDrawPixels',5], ['glCopyPixels',5], ['glPixelZoom',2], ['_glRasterSize',0], ['_glReadRasterPixels',6],
+  ['glLineStipple',2], ['glPolygonStipple',1], ['glGetPolygonStipple',1],
+  ['glInterleavedArrays',3],
+  ['wglShareLists',2],
+  ['_glPrioritizeTexture',2],
+  ['glLogicOp',1], // Append-only transport opcode 180; stored-width semantics tested.
+  ['glEdgeFlag',1], ['glEdgeFlagv',1], ['glEdgeFlagPointer',2],
 ]);
 const gpuApiOrder = [...gpuApis.keys()];
+
+// Native integer current colors lower to the existing scalar float-color
+// command. Each shape specifies its actual x86 slot/vector element widths;
+// adding availability here also installs the semantic native dispatch below.
+const integerColorApis = new Map();
+for (const components of [3, 4]) {
+  for (const [suffix, bits, signed] of [['b', 8, 1], ['s', 16, 1],
+    ['i', 32, 1], ['us', 16, 0], ['ui', 32, 0]]) {
+    for (const vector of [0, 1]) {
+      integerColorApis.set(`glColor${components}${suffix}${vector ? 'v' : ''}`,
+        [components, bits, signed, vector]);
+    }
+  }
+}
+
+// Integer fog/light/material spellings lower to existing validated float commands.
+const integerLightMaterialFogApis = new Map([
+  ['glFogiv', [0, 1, 1]], ['glLightModelf', [1, 0, 0]],
+  ['glLightModeliv', [1, 1, 1]], ['glLighti', [2, 0, 1]],
+  ['glLightiv', [2, 1, 1]], ['glMaterialiv', [3, 1, 1]],
+]);
+
+// Synchronous indexed queries read current context state without list recording.
+const lightingQueryApis = new Map([
+  ['glGetLightfv', [0, 0]], ['glGetLightiv', [0, 1]],
+  ['glGetMaterialfv', [1, 0]], ['glGetMaterialiv', [1, 1]],
+]);
+// Texgen adapters share canonical native per-context/unit state.
+const texgenSetApis = new Map([
+  ['glTexGend', [0, 0]], ['glTexGendv', [0, 1]], ['glTexGeniv', [1, 1]],
+]);
+const texgenQueryApis = new Map([
+  ['glGetTexGendv', 0], ['glGetTexGenfv', 1], ['glGetTexGeniv', 2],
+]);
+// Genuine typed current normals lower to the native scalar normal command.
+const typedNormalApis = new Map();
+for (const [suffix, bits] of [['b', 8], ['s', 16], ['i', 32], ['d', 64]]) {
+  for (const vector of [0, 1])
+    typedNormalApis.set(`glNormal3${suffix}${vector ? 'v' : ''}`, [bits, vector]);
+}
+
+// Missing GL1.1 texture-coordinate families share a checked native adapter.
+// Explicit selection leaves the established 2f/2fv/2i/2d/2dv and 4f/4fv
+// command paths and the stable command-stream opcode numbering intact.
+const typedTexCoordApis = new Map();
+for (const [n, suffixes] of [
+  [1, ['d', 'dv', 'f', 'fv', 'i', 'iv', 's', 'sv']],
+  [2, ['iv', 's', 'sv']],
+  [3, ['d', 'dv', 'f', 'fv', 'i', 'iv', 's', 'sv']],
+  [4, ['d', 'dv', 'i', 'iv', 's', 'sv']],
+]) {
+  for (const suffix of suffixes) {
+    const kind = {d: 0x140a, f: 0x1406, i: 0x1404, s: 0x1402}[suffix[0]];
+    typedTexCoordApis.set(`glTexCoord${n}${suffix}`, [n, kind, Number(suffix.endsWith('v'))]);
+  }
+}
+
+// Only the fourteen independently observed missing GL1.1 vertex exports.
+const typedVertexApis = new Map();
+for (const [n, suffixes] of [
+  [2, ['iv', 's', 'sv']],
+  [3, ['dv', 'i', 'iv', 's', 'sv']],
+  [4, ['d', 'dv', 'i', 'iv', 's', 'sv']],
+]) {
+  for (const suffix of suffixes) {
+    const kind = {d: 0x140a, i: 0x1404, s: 0x1402}[suffix[0]];
+    typedVertexApis.set(`glVertex${n}${suffix}`, [n, kind, Number(suffix.endsWith('v'))]);
+  }
+}
+
+const typedRasterPosApis = new Map();
+for (const n of [2, 3, 4]) for (const suffix of ['d','dv','f','fv','i','iv','s','sv']) {
+  if (n === 2 && suffix === 'f') continue; // preserve existing scalar 2f
+  typedRasterPosApis.set(`glRasterPos${n}${suffix}`,
+    [n, {d:0x140a,f:0x1406,i:0x1404,s:0x1402}[suffix[0]], Number(suffix.endsWith('v'))]);
+}
 
 // Dynamic WGL lookup must not expose fail-fast aliases merely because their
 // names exist in the global import table. Derive availability from the same
 // implementation map that dispatch uses. GLU helpers are a separate library.
 out.push('  (func $wgl_api_available (param $id i32) (result i32)');
 // These WGL implementations dispatch to native handlers rather than GPU opcodes.
-const nativeWglApis = new Set(['wglSwapLayerBuffers', 'wglGetCurrentContext', 'wglGetCurrentDC']);
+const nativeWglApis = new Set([
+  'wglCreateLayerContext', 'wglUseFontBitmapsA', 'wglUseFontOutlinesA',
+  'wglSwapLayerBuffers', 'wglGetCurrentContext', 'wglGetCurrentDC', 'wglCopyContext',
+  // The pixel format has no layer planes; these native handlers truthfully
+  // report that failure rather than dispatching to gl_unimplemented.
+  'wglDescribeLayerPlane', 'wglGetLayerPaletteEntries',
+  'wglSetLayerPaletteEntries', 'wglRealizeLayerPalette',
+]);
+const nativeTextureSetApis = new Map([
+  ['glTexParameteriv', [0,1,1]],
+  ['glTexEnvf',[1,0,0]], ['glTexEnvi',[1,1,0]],
+  ['glTexEnvfv',[1,0,1]], ['glTexEnviv',[1,1,1]],
+  ['glTexParameterf',[0,0,0]], ['glTexParameteri',[0,1,0]], ['glTexParameterfv',[0,0,1]],
+]);
+const nativeTextureQueryApis = new Map([
+  ['glGetTexEnvfv',[1,0]], ['glGetTexEnviv',[1,1]],
+  ['glGetTexParameterfv',[0,0]], ['glGetTexParameteriv',[0,1]],
+]);
+const nativeGlApis = new Set([
+  'glClearIndex', 'glIndexMask', 'glIndexPointer', 'glIndexd', 'glIndexdv',
+  'glIndexf', 'glIndexfv', 'glIndexi', 'glIndexiv', 'glIndexs', 'glIndexsv', 'glIndexub', 'glIndexubv',
+  'glFeedbackBuffer', 'glSelectBuffer', 'glRenderMode', 'glPassThrough',
+  'glInitNames', 'glLoadName', 'glPushName', 'glPopName',
+  'glMap1d', 'glMapGrid1d', 'glEvalCoord1d', 'glEvalCoord1dv', 'glMap1f', 'glMapGrid1f', 'glEvalCoord1f', 'glEvalCoord1fv', 'glMap2d', 'glMapGrid2d', 'glEvalCoord2d', 'glEvalCoord2dv', 'glMap2f', 'glMapGrid2f', 'glEvalCoord2f', 'glEvalCoord2fv', 'glEvalPoint1', 'glEvalMesh1', 'glEvalPoint2', 'glEvalMesh2', 'glGetMapdv', 'glGetMapfv', 'glGetMapiv',
+  'glAreTexturesResident', 'glPrioritizeTextures', 'glColor4d',
+  'glPixelStoref',
+  'glGetClipPlane',
+  ...nativeTextureSetApis.keys(), ...nativeTextureQueryApis.keys(),
+  'glRectd', 'glRectdv', 'glRectfv', 'glRecti', 'glRectiv', 'glRects', 'glRectsv',
+  'glLoadMatrixd', 'glTranslated', 'glScaled',
+  'glMultMatrixd', 'glTexCoord2d', 'glTexCoord2dv', 'glTexCoord2i',
+  'glColor3d', 'glColor3dv', 'glColor4dv', 'glVertex2d', 'glVertex2dv', 'glVertex3d',
+  ...integerColorApis.keys(),
+  ...typedTexCoordApis.keys(),
+  ...typedRasterPosApis.keys(),
+  ...typedVertexApis.keys(),
+  ...typedNormalApis.keys(),
+  ...lightingQueryApis.keys(),
+  ...texgenSetApis.keys(),
+  ...texgenQueryApis.keys(),
+  ...integerLightMaterialFogApis.keys(),
+]);
 for (const [id, api] of apiTable.entries()) {
-  if ((gpuApis.has(api.name) || nativeWglApis.has(api.name)) && /^(?:gl[A-Z]|wgl[A-Z])/.test(api.name)) {
+  if ((gpuApis.has(api.name) || nativeWglApis.has(api.name) || nativeGlApis.has(api.name)) && /^(?:gl[A-Z]|wgl[A-Z])/.test(api.name)) {
+    out.push(`    (if (i32.eq (local.get $id) (i32.const ${id})) (then (return (i32.const 1)))) ;; ${api.name}`);
+  }
+}
+out.push('    (i32.const 0))', '');
+
+// SDL first asks wglGetProcAddress, then falls back to GetProcAddress on the
+// system GL library. Both routes must agree about unsupported driver APIs.
+// Real loaded PE export tables are resolved before this fallback predicate.
+out.push('  (func $gl_dynamic_api_unsupported (param $id i32) (result i32)');
+for (const [id, api] of apiTable.entries()) {
+  if (/^(?:gl[A-Z]|wgl[A-Z])/.test(api.name) &&
+      !gpuApis.has(api.name) && !nativeWglApis.has(api.name) && !nativeGlApis.has(api.name)) {
     out.push(`    (if (i32.eq (local.get $id) (i32.const ${id})) (then (return (i32.const 1)))) ;; ${api.name}`);
   }
 }
 out.push('    (i32.const 0))', '');
 
 function handlerCall(api) {
+  if (['wglCreateLayerContext','wglUseFontBitmapsA','wglUseFontOutlinesA'].includes(api.name)) return `      (call $handle_${api.name} (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
+  if (/^glIndex(?:d|f|i|s|ub)v?$/.test(api.name)) {
+    const kind=api.name.slice(7).replace(/v$/, ''), vector=api.name.endsWith('v');
+    const type={d:0x140a,f:0x1406,i:0x1404,s:0x1402,ub:0x1401}[kind];
+    return `      (call $handle_gl_index (i32.const 0x10030) (i32.const ${type}) (i32.const ${+vector}) (i32.const ${kind==='d'&&!vector?2:1}))`;
+  }
+  if (['glClearIndex','glIndexMask','glIndexPointer'].includes(api.name)) {
+    const op={glClearIndex:0x10031,glIndexMask:0x10032,glIndexPointer:0x10033}[api.name];
+    return `      (call $handle_gl_index (i32.const ${op}) (i32.const 0) (i32.const 0) (i32.const ${api.name==='glIndexPointer'?3:1}))`;
+  }
+  if (/^gl(?:FeedbackBuffer|SelectBuffer|RenderMode|PassThrough|InitNames|LoadName|PushName|PopName)$/.test(api.name)) return `      (call $handle_${api.name}_sf)`;
+  if (/^gl(?:Map[12][df]|MapGrid[12][df]|EvalCoord[12][df]v?|EvalPoint[12]|EvalMesh[12]|GetMap[dfi]v)$/.test(api.name)) return `      (call $handle_${api.name}_eval)`;
+  if(api.name==='glEdgeFlagv') return '      (call $handle_gl_edge_vector)';
+  if(api.name==='wglCopyContext') return '      (call $handle_wglCopyContext (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))';
+  if(api.name==='glPrioritizeTextures') return '      (call $handle_gl_prioritize_textures)';
+  if(api.name==='glAreTexturesResident') return '      (call $handle_gl_textures_resident)';
+  if(api.name==='glDrawPixels')return '      (call $handle_gl_draw_pixels)';
+  if(api.name==='glPixelStoref')return '      (call $handle_gl_pixel_storef)';
+  if(api.name==='glCopyPixels'||api.name==='glPixelZoom')return `      (call $handle_gl_texture_command (i32.const ${gpuApiOrder.indexOf(api.name)}) (i32.const ${gpuApis.get(api.name)}))`;
+  if (['glTexImage2D','glTexSubImage2D','glCopyTexImage1D','glCopyTexImage2D','glCopyTexSubImage1D','glCopyTexSubImage2D','glGetTexImage','glPixelTransferf','glPixelTransferi','glPixelMapfv','glPixelMapuiv','glPixelMapusv','glGetPixelMapfv','glGetPixelMapuiv','glGetPixelMapusv'] .includes(api.name)) return `      (call $handle_gl_texture_command (i32.const ${gpuApiOrder.indexOf(api.name)}) (i32.const ${gpuApis.get(api.name)}))`;
+  if(api.name==='glTexImage1D'||api.name==='glTexSubImage1D') return `      (call $handle_gl_tex1d_upload (i32.const ${api.name==='glTexSubImage1D'?1:0}))`;
+  if(api.name==='glClipPlane'||api.name==='glGetClipPlane') return `      (call $handle_gl_clip (i32.const ${api.name==='glGetClipPlane'?1:0}))`;
+  const textureSet=nativeTextureSetApis.get(api.name),textureQuery=nativeTextureQueryApis.get(api.name);
+  if(textureSet) return `      (call $handle_gl_texture_set ${textureSet.map(n=>`(i32.const ${n})`).join(' ')})`;
+  if(textureQuery) return `      (call $handle_gl_texture_query ${textureQuery.map(n=>`(i32.const ${n})`).join(' ')})`;
+  if(api.name==='glIsTexture') return '      (call $handle_gl_texture_is)';
+  const legacyTexgen = ['glTexGeni', 'glTexGenf', 'glTexGenfv'].indexOf(api.name);
+  if (legacyTexgen >= 0) {
+    return `      (call $handle_glTexGen_legacy (i32.const ${83 + legacyTexgen}))`;
+  }
+  const texgenSet = texgenSetApis.get(api.name);
+  if (texgenSet) {
+    return `      (call $handle_glTexGen_typed ${texgenSet.map(n => `(i32.const ${n})`).join(' ')})`;
+  }
+  if (texgenQueryApis.has(api.name)) {
+    return `      (call $handle_glGetTexGen_typed (i32.const ${texgenQueryApis.get(api.name)}))`;
+  }
+  const typedRasterPos = typedRasterPosApis.get(api.name);
+  if (typedRasterPos) {
+    return `      (call $handle_glRasterPos_typed ${typedRasterPos.map(n => `(i32.const ${n})`).join(' ')})`;
+  }
+  const typedVertex = typedVertexApis.get(api.name);
+  if (typedVertex) {
+    return `      (call $handle_glVertex_typed ${typedVertex.map(n => `(i32.const ${n})`).join(' ')})`;
+  }
+  const typedTexCoord = typedTexCoordApis.get(api.name);
+  if (typedTexCoord) {
+    return `      (call $handle_glTexCoord_typed ${typedTexCoord.map(n => `(i32.const ${n})`).join(' ')})`;
+  }
+  const integerLMF = integerLightMaterialFogApis.get(api.name);
+  if (integerLMF) return `      (call $handle_gl_lmf_integer ${integerLMF.map(n => `(i32.const ${n})`).join(' ')})`;
+  const lightingQuery = lightingQueryApis.get(api.name);
+  if (lightingQuery) return `      (call $handle_gl_lighting_query ${lightingQuery.map(n => `(i32.const ${n})`).join(' ')})`;
+  const typedNormal = typedNormalApis.get(api.name);
+  if (typedNormal) {
+    return `      (call $handle_glNormal_typed ${typedNormal.map(n => `(i32.const ${n})`).join(' ')})`;
+  }
+  const integerColor = integerColorApis.get(api.name);
+  if (integerColor) {
+    return `      (call $handle_glColor_integer ${integerColor.map(n => `(i32.const ${n})`).join(' ')} (local.get $arg0))`;
+  }
+  if (api.name === 'glColor4d') {
+    return `      (call $handle_glColor4d (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
+  }
+  // Keep opcode 90 stable, but snapshot its four doubles through guest-page
+  // translation instead of assuming the caller's stack is affine.
+  if (api.name === 'glRotated' && api.handler === 'glRotated') {
+    return `      (call $handle_glRotated (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
+  }
   const gpuOpcode = gpuApiOrder.indexOf(api.name);
   if (gpuOpcode >= 0) {
     return `      (call $handle_gpu_api (i32.const ${gpuOpcode}) (i32.const ${gpuApis.get(api.name)}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
@@ -365,6 +592,16 @@ out.push('  ;; API BR_TABLE DISPATCH — GENERATED, do not edit');
 out.push('  ;; Generated by tools/gen_dispatch.js from api_table.json');
 out.push('  ;; Hand-written dispatch wrapper is in 09b-dispatch.wat');
 out.push('  ;; ============================================================');
+// Native callback history must retain the exact stdcall parent ESP. Generate
+// this from the same ABI metadata as dispatch; unknown/cdecl APIs fail closed.
+const stackBytes = api => api.convention === 'stdcall' && Number.isInteger(api.nargs) ? (api.nargs + 1) * 4 : -1;
+const byteKinds = [...new Set(apiTable.map(stackBytes).concat(-1))].sort((a,b)=>a-b);
+out.push('  (func $api_stdcall_stack_bytes (param $id i32) (result i32)');
+for (const n of [...byteKinds].reverse()) out.push(`    (block $abi${n < 0 ? 'unknown' : n}`);
+out.push(`      (br_table ${apiTable.map(a=>'$abi'+(stackBytes(a)<0?'unknown':stackBytes(a))).join(' ')} $abiunknown (local.get $id))`);
+for (const n of byteKinds) out.push(`    ) (return (i32.const ${n}))`);
+out.push('    (i32.const -1))');
+
 out.push('  (func $dispatch_api_table (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)');
 out.push('');
 out.push('    ;; === Paged br_table dispatch ===');
@@ -396,7 +633,10 @@ for (let base = 0, page = 0; base < N; base += PAGE_SIZE, page++) {
     const id = base + slot;
     const api = apiTable[id];
     out.push(`    ) ;; ${id}: ${api.name}`);
+    const objectCall = /^(?:gl[A-Z]|wgl[A-Z])/.test(api.name);
+    if (objectCall) out.push('      (call $gl_object_enter)');
     out.push(handlerCall(api));
+    if (objectCall) out.push('      (call $gl_object_leave)');
     out.push('      (return)');
   }
   out.push('    ) ;; fallback');
@@ -518,6 +758,13 @@ comInterfaces.push({ prefix: 'IDirectPlayLobby3W', global: 'DX_VTBL_DPLAYLOBBY3W
 // Append only: worker registry offsets of existing interfaces are ABI.
 comInterfaces.push({ prefix: 'IDirectSoundNotify', global: 'DX_VTBL_DSNOTIFY' });
 comInterfaces.push({ prefix: 'IDirectSoundPropertySet', global: 'DX_VTBL_DSPROPERTY' });
+comInterfaces.push({ prefix: 'IDirectSoundBuffer8', global: 'DX_VTBL_DSBUF8', extends: 'IDirectSoundBuffer' });
+comInterfaces.push({ prefix: 'IDirectDrawSurface4', global: 'DX_VTBL_DDSURF4', extends: 'IDirectDrawSurface3' });
+comInterfaces.push({ prefix: 'IDirectDrawSurface7', global: 'DX_VTBL_DDSURF7', extends: 'IDirectDrawSurface4' });
+// These creator identities must survive init_thread too: a private lazy table
+// makes another instance misclassify DirectDraw4/7 as the old descriptor ABI.
+comInterfaces.push({ prefix: 'IDirectDraw4', global: 'DX_VTBL_DDRAW4', extends: 'IDirectDraw2' });
+comInterfaces.push({ prefix: 'IDirectDraw7', global: 'DX_VTBL_DDRAW7', extends: 'IDirectDraw4' });
 
 const ifaceInfo = new Map();
 for (const iface of comInterfaces) {

@@ -14,6 +14,7 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func $t_clear
     (local $i i32)
+    (call $invocation_ensure)
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MM_TIMER_MAX)))
       (i32.store (call $mm_timer_slot (local.get $i)) (i32.const 0))

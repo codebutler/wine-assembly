@@ -710,16 +710,18 @@ const extraWat = `
   assert.strictEqual(setLithFormat([[0, 0x01 | (DIK_UP << 8)]]), 0x80070057,
     'an axis type never matches a key');
   assert.strictEqual(wat.test_di_set_cooperative_level(lith, 0x10000, 6) >>> 0, 0);
+  wat.guest_write32(property + 16, 9);
+  assert.strictEqual(wat.test_di_set_buffer_size(lith, 1, property) >>> 0, 0);
   assert.strictEqual(wat.test_di_acquire(lith) >>> 0, 0,
     'the refused format left the previous custom format in force');
 
-  renderer.pokeAsyncKeyState(0x26, true); // VK_UP
-  renderer.pokeAsyncKeyState(0x41, true); // 'A' -- not in the format
+  renderer.handleKeyDown(0x26); // VK_UP
+  renderer.handleKeyDown(0x41); // 'A' -- not in the format
   wat.guest_write32(count, 8);
   assert.strictEqual(wat.test_di_mouse_get_data(lith, data, count, 0) >>> 0, 0);
   assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4)],
     [1, 0, 0x80], 'Up is reported at its format offset 0 and A, outside the format, not at all');
-  renderer.pokeAsyncKeyState(0x11, true); // VK_CONTROL (DIK_LCONTROL)
+  renderer.handleKeyDown(0x11); // VK_CONTROL (DIK_LCONTROL)
   wat.guest_write32(count, 8);
   wat.test_di_mouse_get_data(lith, data, count, 0);
   assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4)],
@@ -729,14 +731,14 @@ const extraWat = `
   assert.strictEqual(wat.test_di_get_state_sized(lith, 8, data) >>> 0, 0);
   assert.deepStrictEqual([wat.guest_read32(data) >>> 0, wat.guest_read32(data + 4) >>> 0], [0x80, 0x80],
     'GetDeviceState lays the held keys out at their format offsets');
-  renderer.pokeAsyncKeyState(0x26, false);
-  renderer.pokeAsyncKeyState(0x41, false);
-  renderer.pokeAsyncKeyState(0x11, false);
+  renderer.handleKeyUp(0x26);
+  renderer.handleKeyUp(0x41);
+  renderer.handleKeyUp(0x11);
   wat.guest_write32(count, 8);
   wat.test_di_mouse_get_data(lith, data, count, 0);
   assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4),
     wat.guest_read32(data + 16), wat.guest_read32(data + 20)],
-  [2, 4, 0, 0, 0], 'releases come back at the same offsets, again without A');
+  [2, 0, 0, 4, 0], 'releases retain arrival order at their format offsets, without A');
 
   console.log('PASS  DirectInput enumerates Win98 devices/objects and preserves browser input');
 })().catch(error => {

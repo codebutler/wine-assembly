@@ -1,5 +1,33 @@
 # Winamp wVis popup routing
 
+## Desktop Worker popup visibility, 2026-10-14
+
+Release `57a148044` delivered EQ Presets clicks to hwnd 0x10004 and the
+guest called TrackPopupMenu, but no menu appeared. The ordinary CLI Presets
+regression passed all 27 checks. Popup owner, blob, geometry and selection
+were instance-local globals: the guest Worker opened its copy while the
+browser compositor read the idle main-thread instance's empty copy.
+
+Menu tracking now uses an allocated shared-memory record, including the
+TPM_RETURNCMD result and resource-submenu bindings. Existing menu parsing,
+painting, hit testing and command dispatch use the same accessors in both
+instances. Negative index/coordinate defaults are encoded as zero so spawning
+another instance cannot reset a live popup.
+
+The two-instance regression in `test-menu-track-returncmd.js` opens in the
+guest instance and selects/dismisses through the compositor instance. It
+checks WM_COMMAND delivery and return-command results. Substituting local
+globals for the shared accessors fails at "compositor sees guest popup owner"
+(0 instead of 65537); the fixed test passes. Popup text (14 checks), item
+rectangles, owner-draw menus and the 27-check Winamp Presets suite pass.
+
+Chrome desktop Worker captures in `scratch/runs/20261014-winamp-menu-after`
+show Presets, the Load submenu, the Load EQ preset dialog, Cancel, the main
+right-click menu, visualization options and reopening Presets. The earlier Escape attempt did
+not dismiss the preset dialog; Cancel did. The preset list is empty in this
+fixture, so this is menu navigation coverage, not a preset audio test.
+The baseline is `scratch/runs/20261014-winamp-menu-before`. Safari is untested.
+
 ## Binary and guest path
 
 `test/binaries/plugins/candidates/vis_w.dll`, preferred image base
@@ -340,3 +368,148 @@ Resource handles still encode identity using resource IDs: two separately
 loaded menus sharing that ID remain ambiguous until LoadMenu identity is
 replaced. This patch does not fix EnableMenuItem/CheckMenuRadioItem's separate
 global scans, or stale canonical bindings after resource-blob mutations.
+
+## About owner-draw labels and frame, 2026-10-14
+
+Winamp 2.91 dialog 245 uses four BS_OWNERDRAW buttons, not a tab control:
+1212 Winamp, 1163 Credits, 1164 Keyboard shortcuts, and 1215 Version history.
+The WM_DRAWITEM branch at 0x406b50 reads the label and calls DrawTextA at
+0x406c26 with the supplied DC text color. Both native button draw paths had
+supplied COLOR_BTNFACE for a Win16 monochrome branding path, making Win32
+labels gray on gray. Win32 now receives COLOR_BTNTEXT; Win16 is unchanged.
+
+The same desktop reproduction lacked its caption and border. The guest
+DLGPROC returns FALSE for WM_NCPAINT, but dialog_proc_result dropped it.
+The unhandled path now calls defwndproc_do_ncpaint; a handled message still
+returns the guest's result. Chrome Worker captures show the restored frame,
+readable labels, animated About flames, and the animated Credits scene.
+The browser regression now checks label ink and caption text in addition to
+page rendering and worker lifetime across About → Credits → About.
+
+Evidence: scratch/runs/20261014-winamp-about-before and
+scratch/runs/20261014-winamp-about-after (no candidate-corpus entry).
+Canonical build, About browser regression, Calculator pressed/released
+buttons, and dialog subclass erase tests pass. Safari and any separate
+visualization plug-in glitch remain unverified; these fixes do not establish
+that every reported visualization issue is resolved.
+
+### About caption close follow-up
+
+The restored X exposed another missing DefDlgProc fallback: unhandled
+SC_CLOSE and WM_CLOSE were discarded. The Worker input path correctly queues
+SC_CLOSE to the guest; it must then become WM_CLOSE and WM_COMMAND/IDCANCEL.
+Winamp's About DLGPROC at 0x406918 handles command IDs 1 and 2 by calling
+DestroyWindow at 0x406ad7, with animation cleanup reached through destruction.
+The fallback now posts those messages through the owning guest pump, after
+the guest has had its chance to handle each one. It does not destroy the
+dialog from the host renderer. The browser regression clicks X and checks
+the dialog disappears, both animation handles clear, and Winamp stays alive.
+Evidence: scratch/runs/20261014-winamp-about-close-before and -after.
+
+## Original MilkDrop launch attempt, 2026-10-31
+
+Run `scratch/runs/20261031T0005Z-winamp-milkdrop/` used the registered
+Winamp 2.91 and original plug-ins through the normal browser loader. Playback
+started, Preferences opened, and the Input plug-in pane showed the MPEG decoder.
+Two visits to Plug-ins → Visualization left its right pane blank; both frames
+were inspected. This attempt did not reach MilkDrop Start or the earlier
+illegal-operation dialog, so it supplies no new exception address or cause.
+
+The loaded retained canonical module was SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source-fix reference `de2e338c4`, complete compiled source identity unavailable),
+with browser threads disabled and software-rendering flag zero. Served-file
+hashes were checked in `served-verification.json`. The browser later detached
+before further diagnostics; its termination cause is unknown. Controller/server
+closure, process absence and profile removal are recorded separately. No source
+repair or visualizer rendering is claimed. Next: trace the native visualization
+page creation/enumeration and visibility calls, comparing the working Input page.
+
+
+## Visualization enumeration repaired, 2026-10-31
+
+Run `scratch/runs/20261031T0010Z-winamp-visualization-trace/` traced the blank
+pane to a nested synchronous WM_NOTIFY callback. Reopening the resident AVS
+plug-in walked its dependencies again; the synchronous host lookup repeatedly
+returned a Promise for unavailable `shell32.dll`, exhausting the callback's
+bounded service rounds. Returning a known miss in a diagnostic session populated
+the AVS, MilkDrop and Nullsoft list, which was inspected.
+
+The production host now uses the browser DLL availability catalog to complete
+known missing system-dependency lookups synchronously through the loader's
+existing built-in import fallback. Resident and cached bytes still win; lazy
+mounted files, catalogued DLLs, unknown vendor DLLs and hosts without a catalog
+keep their asynchronous lookup. DLL identity/path matching is unchanged. The
+regression fails on the old host and passes after the fix. The loader test's
+older fake exports and DLL-operation mocks were aligned with its current API;
+dependency mapping, patching and initializer ordering remain asserted.
+`test-process-boot-yields`, `test-sync-send-loadlibrary` and the locked canonical
+build pass. Callback ownership remains pending; this adds no callback boundary.
+
+A fresh original browser session, without the diagnostic lookup override,
+populated all three visualizers. MilkDrop Start first correctly requested music;
+starting native playback and retrying reached the original **Plug-in executed
+illegal operation (2)** dialog. Both frames were inspected. Visualization rendering
+is still unqualified; the separate plug-in exception is the next runtime gate.
+The loaded retained module was the same `d83e413f…` identified above, with the
+host-only repair served separately, threads off and software flag zero. Full
+compiled source identity remains unavailable. Before/after served hashes,
+trusted input, screenshots and cleanup records accompany `investigation.json`;
+no Boat was used.
+
+## MilkDrop illegal-operation (2): incompatible IPC contract, 2026-10-31
+
+Run `scratch/runs/20261031T0020Z-winamp-milk-fault/` reproduces the original
+error during native R-repeat/X-play demo playback, Preferences → Visualization
+→ MilkDrop → Start. The error frame was personally inspected. Two subsequent
+instrumented sessions captured the same CPU exception without modifying guest
+code or data: **0xc0000005 at EIP 0x00000001**, on plug-in thread 4.
+
+The retained registered `vis_milk.dll` is the 430592-byte MilkDrop 1.04e candidate,
+SHA-256 `c2a84595bd3b2802be341720a691ecbf0901fc9c5f6a60d01fba6213ba651901`,
+PE timestamp 2007-08-02. It is an original DLL, but this evidence does **not**
+establish it as a plug-in bundled with Winamp 2.91. The exact pairing is
+incompatible at the Winamp IPC boundary:
+
+- At original DLL RVA `0x29ab5`, MilkDrop sends
+  `SendMessageA(0x10001, WM_USER, 0, 3015)` and stores the reply at RVA
+  `0x1bc648`. In the captured mapping the DLL base is `0x014f3000`.
+- `reply/reply-trace.json` records the actual main-thread guest path
+  `0x421290 → 0x4218c4 → 0x421ab2 → 0x421c49 → 0x421d42 → 0x421d8c →
+  0x421dcc`. Original Winamp code at `0x421dcc` is `mov eax,1` followed by
+  register restoration and `ret`. The plug-in resumes at `0x0151cab7`
+  (RVA `0x29ab7`) with EAX=1 and saves it as the function pointer.
+- At RVA `0x3670`, original `call dword ptr [base+0x1bc648]` calls address 1.
+  The exception stack's first word is `0x014f6676`, precisely the instruction
+  following that call. Winamp's own exception handler then shows operation (2).
+
+The [Nullsoft SDK header](https://github.com/hugovk/winamp/blob/master/wa_ipc.h)
+identifies 3015 as `IPC_GET_RANDFUNC`, requiring Winamp 5.1+, and explicitly
+requires rejecting both null and 1 before calling the reply. The header also
+specifies that unsupported IPC requests return 1. Its downloaded bytes and
+source/hash receipt are retained in the run. The DLL checks whether its cached
+pointer is zero before requesting it, but does not reject the unsupported reply.
+Thus this fault supplies no proven emulator cause to repair. Replacing the
+reply with a host RNG or patching the guest would conceal the incompatibility.
+
+The retained emulator is still SHA-256 `d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`,
+source-fix reference `de2e338c4`; full compiled source identity remains unknown.
+The already-published enumeration fix is unchanged. Browser threads are off. The reused driver reads `.value` from the function
+export `gl_sw_enabled`, so this run did not measure the software-rendering flag;
+the earlier reported zero is not independently confirmed here. Original
+module/assets and served-file hashes
+are recorded per session. An initial diagnostic wrapper failed because
+TextDecoder rejects a shared view; that attempt is preserved and excluded from
+the causal trace. Both corrected fresh sessions reproduce the address-1 fault.
+
+No visualization render is claimed: the MilkDrop windows contain a gray client
+area before the fault. Next requires an authentic MilkDrop build compatible with
+2.91, or the matching original Winamp 5.1+ host as a separately scoped pairing;
+keep this exact pair as the incompatibility reproduction. No runtime source
+change or guest patch was made in this investigation.
+
+Validation: original-byte/IPC/reply/store/exception/hash/input/cleanup checks,
+`test-sync-send-loadlibrary`, `test-process-boot-yields`, and the locked canonical
+`tools/build.sh` pass. The build tests current main; browser diagnosis uses the
+retained module above. All three Chrome processes are absent, all nine ports
+are closed, profiles removed, and trusted input is released. No Boat was used.

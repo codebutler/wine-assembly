@@ -91,12 +91,15 @@ function fakeGuest(name, { nameGetter }) {
   for (let i = 0; i < name.length; i++) mem[at + i] = name.charCodeAt(i);
   const state = { eax: 0xdeadbeef, esp: 0x2000, eip: 0x401000, yield: 5, cleared: 0 };
   const exports = {
+    get_dll_count: () => 0,
+    get_dll_table: () => 0,
     get_image_base: () => 0x400000,
     get_eip: () => state.eip,
     set_eip: (v) => { state.eip = v; },
     get_esp: () => state.esp,
     set_esp: (v) => { state.esp = v; },
     set_eax: (v) => { state.eax = v >>> 0; },
+    get_yield_reason: () => state.yield,
     clear_yield: () => { state.yield = 0; state.cleared++; },
     // Guest addresses are linear offsets into this small memory.
     guest_read32: (ga) => new DataView(memory).getUint32(ga, true),
@@ -113,6 +116,40 @@ function fakeGuest(name, { nameGetter }) {
   assert(indexSource.includes("window.WINE_SOURCE_VERSION = String(window.WINE_BUILD || 'dev')") &&
     hostSource.includes("static SOURCE_VERSION = String(globalThis.WINE_SOURCE_VERSION || 'dev')"),
     'the page and browser host must consume the same build-info source version');
+
+  // Exercise the actual browser lookup method: an unavailable built-in system
+  // dependency must finish synchronously inside a nested dialog callback.
+  const vm = require('vm');
+  const lookupStart = hostSource.indexOf('  _findDllBytesSync(fileName, fullName) {');
+  const lookupEnd = hostSource.indexOf('\n  async _findDllBytes(', lookupStart);
+  assert(lookupStart >= 0 && lookupEnd > lookupStart);
+  const BrowserLookup = vm.runInNewContext(
+    'class BrowserLookup {' + hostSource.slice(lookupStart, lookupEnd) + '}; BrowserLookup',
+    { DllLoader: require('../lib/dll-loader'), Promise });
+  const lookup = new BrowserLookup();
+  const entries = new Map();
+  lookup._helpCtx = { vfs: { files: entries, _resolvePath: name => name.toLowerCase() },
+    availableDllFiles: new Set(['comctl32.dll']) };
+  const find = name => lookup._findDllBytesSync(name, 'C:\\Plugins\\' + name);
+  assert.strictEqual(find('shell32.dll'), null, 'catalogued system miss is synchronous');
+  assert(find('comctl32.dll') instanceof Promise, 'available system DLL still needs async fetch');
+  assert(find('vendor.dll') instanceof Promise, 'unknown vendor DLL is not silently skipped');
+  const resident = new Uint8Array([77, 90]);
+  entries.set('c:\\plugins\\shell32.dll', { data: resident });
+  assert.strictEqual(find('shell32.dll'), resident, 'resident app-local system DLL wins');
+  entries.set('c:\\plugins\\shell32.dll', { _provider: async () => resident });
+  assert(find('shell32.dll') instanceof Promise, 'lazy app-local system DLL must be materialized');
+  entries.clear();
+  lookup._loadedDllBytesByName = { 'shell32.dll': resident };
+  assert.strictEqual(find('shell32.dll'), resident, 'previously fetched bytes win');
+  lookup._loadedDllBytesByName = null;
+  lookup._helpCtx.availableDllFiles = null;
+  assert(find('shell32.dll') instanceof Promise, 'without a catalog availability is unknown');
+  lookup._helpCtx.availableDllFiles = { 'shell32.dll': true };
+  assert(find('shell32.dll') instanceof Promise, 'object catalog preserves available DLLs');
+  lookup._helpCtx.availableDllFiles = { 'c:\\plugins\\shell32.dll': true };
+  assert(find('shell32.dll') instanceof Promise, 'exact catalog path preserves available DLLs');
+  console.log('PASS  browser sync DLL lookup distinguishes known system misses from lazy inputs');
 
   const peBytes = syntheticLargePe();
   const peMemory = new ArrayBuffer(0x5000);
@@ -266,7 +303,7 @@ function fakeGuest(name, { nameGetter }) {
   const calls = [];
   const bases = { 'am18.dll': 0x30000000, 'imusic25.dll': 0x31000000,
     'msynth25.dll': 0x32000000, 'ima.dll': 0x33000000 };
-  for (const name of ['loadDll', 'patchDllImports', 'callDllMain', 'loadedModuleNames',
+  for (const name of ['loadDll', 'patchDllImports', 'callDllMain', 'callDllMainAsync', 'beginDllLoad', 'endDllLoad', 'loadedModuleNames',
     'resumeAfterLoadLibraryYield']) saved[name] = loader[name];
   const imageOf = new Map();
   loader.loadDll = (_e, _m, bytes, modulePath) => {
@@ -274,9 +311,12 @@ function fakeGuest(name, { nameGetter }) {
     calls.push(['map', name, modulePath]);
     return { loadAddr: bases[name], dllMain: bases[name] + 0x10 };
   };
-  loader.patchDllImports = (_e, _m, dlls) => calls.push(['patch', dlls[0].name]);
+  loader.patchDllImports = (_e, _m, dlls) => { for (const dll of dlls) calls.push(['patch', dll.name]); };
   loader.callDllMain = (_e, base) => calls.push(['init', base]);
+  loader.callDllMainAsync = async (_e, base) => calls.push(['init', base]);
   loader.loadedModuleNames = () => new Set(['msynth25.dll']);
+  loader.beginDllLoad = () => ({ names: new Set(['msynth25.dll']), pins: [] });
+  loader.endDllLoad = () => {};
   loader.resumeAfterLoadLibraryYield = () => {};
   const withImports = (name, imports) => {
     // One section at RVA 0x1000 holding the import descriptors and the names.
@@ -314,11 +354,12 @@ function fakeGuest(name, { nameGetter }) {
     assert.deepStrictEqual(looked, ['C:\\GAME\\ima.dll', 'C:\\GAME\\imusic25.dll', 'C:\\GAME\\am18.dll'],
       'dependencies are looked up beside the importing module; kernel32 and the mapped msynth25 are not');
     assert.deepStrictEqual(calls, [
-      ['map', 'am18.dll', 'C:\\GAME\\am18.dll'], ['patch', 'am18.dll'],
-      ['map', 'imusic25.dll', 'C:\\GAME\\imusic25.dll'], ['patch', 'imusic25.dll'],
-      ['map', 'ima.dll', 'C:\\GAME\\ima.dll'], ['patch', 'ima.dll'],
+      ['map', 'am18.dll', 'C:\\GAME\\am18.dll'],
+      ['map', 'imusic25.dll', 'C:\\GAME\\imusic25.dll'],
+      ['map', 'ima.dll', 'C:\\GAME\\ima.dll'],
+      ['patch', 'am18.dll'], ['patch', 'imusic25.dll'], ['patch', 'ima.dll'],
       ['init', 0x30000000], ['init', 0x31000000], ['init', 0x33000000],
-    ], 'each dependency is mapped and patched before its importer, and initialized first');
+    ], 'the dependency closure is mapped before patching, and dependencies initialize first');
     assert.strictEqual(d.state.eax, 0x33000000, 'LoadLibraryA returns the module it was asked for');
     assert.strictEqual(d.state.yield, 0);
 

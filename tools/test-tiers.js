@@ -28,6 +28,7 @@ const E2E_PATTERNS = Object.freeze([
 // the cost of useful broad conventions without evicting unit coverage from
 // `run-all.sh quick`.
 const UNIT_EXCEPTIONS = Object.freeze([
+  'test-cli-fault-lifecycle.js',
   'test-control-variant-gate.js',
   'test-pinball-web-lifecycle.js',
   'test-retina-scale2x-web.js',
@@ -44,6 +45,8 @@ const UNIT_EXCEPTIONS = Object.freeze([
 // tests should prefer a descriptive -web/-gameplay/-candidate suffix instead
 // of growing this compatibility list.
 const E2E_EXCEPTIONS = Object.freeze([
+  // Explicit prebuilt diagnostic module/provenance and 512 MiB admission only.
+  'test-d3d9-positiont-com-qualification.js',
   'test-about-cancel.js',
   'test-aoe-menu.js',
   'test-baldurs-gate-demos.js',
@@ -65,6 +68,23 @@ const E2E_EXCEPTIONS = Object.freeze([
   'test-heroes3-demo-launch.js',
   'test-icewind-dale-demo.js',
   'test-les-flat.js',
+  // Assigned audit fixture name; full-module public COM and browser pixels.
+  'test-legacy-texture-rendered-contract.js',
+  // Explicit prebuilt full-module public COM pixels and retained provenance.
+  'test-legacy-mirror-uv-contract.js',
+  'test-legacy-mirror-gpu-worker-contract.js',
+  'test-legacy-public-mip-webgl.js',
+  'test-legacy-addressed-mip-cube.js',
+  'test-legacy-dimensional-vertex-buffer.js',
+  'test-legacy-processvertices-dimensional.js',
+  'test-legacy-processed-texture-transform.js',
+  'test-legacy-generated-coordinate-contract.js',
+  'test-legacy-generated-reflection-contract.js',
+  'test-legacy-generated-projected-contract.js',
+  'test-legacy-generated-normal-reflection-projected.js',
+  'test-legacy-generated-projected-webgl.js',
+  'test-legacy-strided-dimensions.js',
+  'test-legacy-count1-texture.js',
   'test-listbox-ownerdraw.js',
   'test-local-candidates-playability.js',
   'test-mplay32-dual-mode.js',
@@ -72,7 +92,11 @@ const E2E_EXCEPTIONS = Object.freeze([
   'test-notepad.js',
   'test-open-cancel.js',
   'test-pyramid-menu.js',
+  // Historical IW names retained for archived commands; require an admitted
+  // native module and must not enter the ordinary pre-commit unit tier.
+  'test-receiver-retirement-native.js',
   'test-regedit-deep.js',
+  'test-scoped-dll-native.js',
   'test-shell-arrange-windows.js',
   'test-skifree-showwindow-startup.js',
   'test-sound-recorder-audio.js',

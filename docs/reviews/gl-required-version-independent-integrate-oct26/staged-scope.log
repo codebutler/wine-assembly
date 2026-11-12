@@ -1,0 +1,4 @@
+A	test/fixtures/gl-transient-accounting/remote-run.py
+M	test/helpers/palette-browser-supervisor.py
+A	test/test-palette-disk-accounting-omissions.py
+A	test/test-palette-disk-accounting.py

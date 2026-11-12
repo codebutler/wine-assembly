@@ -369,7 +369,7 @@ const { bootRenderHarness } = require('./render-helper');
     for(let level=first;level<3;level++) {
       const width=4>>level,height=width,pitch=width*4+4,p=e.shader_test_alloc(pitch*height);
       pixels.push(p);const bytes=new Uint8Array(mem.buffer,p,pitch*height);bytes.fill(0xcd);
-      const color=format===62?[[129,0,255,13],[127,127,0,9],[0,128,128,7]][level]:colors[level].map(v=>v*255);
+      const color=format===63?[[128,127,129,0],[127,128,127,127],[0,0,0,128]][level]:format===62?[[129,0,255,13],[127,127,0,9],[0,128,128,7]][level]:colors[level].map(v=>v*255);
       for(let y=0;y<height;y++)for(let x=0;x<width;x++)bytes.set(color,y*pitch+x*4);
       u32.set([p,width,height,pitch],table/4+(level-first)*4);
     }
@@ -626,7 +626,7 @@ const { bootRenderHarness } = require('./render-helper');
     let seed=12345;const rnd=()=>((seed=(Math.imul(seed,1103515245)+12345)>>>0)/2**32);
     const same=(actual,expected,label)=>actual.forEach((v,i)=>assert.ok(Object.is(v,expected[i]),`${label} [${i}]: ${v} != ${expected[i]}`));
     const program=bytecode(texTokens);
-    for(const format of [0,21,22,62]) for(const filter of [1,2]) for(const addressU of [1,2,3,4]) {
+    for(const format of [0,21,22,62,63]) for(const filter of [1,2]) for(const addressU of [1,2,3,4]) {
       const ctx=e.d3d_shader_vm_context(program,15),addressV=[1,2,3,4][Math.floor(rnd()*4)];
       const pixels=texture(ctx,{format,addressU,addressV,filter});
       for(let rep=0;rep<3;rep++) {
@@ -712,6 +712,13 @@ const { bootRenderHarness } = require('./render-helper');
   {
     const program=bytecode(texTokens),ctx=e.d3d_shader_vm_context(program,15),m=mipFixture(ctx,{format:62,min:2,mag:2});
     near(sampleLOD(ctx,.5),[0,.5,.5,1],'signed channels decoded before cross-level filtering');
+    m.free();e.d3d_shader_vm_free(ctx);e.d3d_shader_vm_free(program);cases++;
+  }
+  {
+    const program=bytecode(texTokens),ctx=e.d3d_shader_vm_context(program,15),m=mipFixture(ctx,{format:63,min:2,mag:2});
+    near(sampleLOD(ctx,0),[-1,1,-1,0],'Q8W8V8U8 signed endpoints and channel order');
+    near(sampleLOD(ctx,.5),[0,0,0,.5],'Q8W8V8U8 decode before mip interpolation');
+    near(sampleLOD(ctx,2),[0,0,0,-1],'Q8 signed alpha');
     m.free();e.d3d_shader_vm_free(ctx);e.d3d_shader_vm_free(program);cases++;
   }
   for(const vertical of [false,true]) {

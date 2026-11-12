@@ -30,6 +30,10 @@ assert.strictEqual(digest(pak),
   'c9eac1391845d6fabd93d7a1cc48281275410d35e01b74bd7f02325c65c99a42');
 
 for (const [suffix, vfsPath] of [
+  ['/hw.dll', 'c:\\hw.dll'],
+  ['/sw.dll', 'c:\\sw.dll'],
+  ['/hl_res.dll', 'c:\\hl_res.dll'],
+  ['/a3dapi.dll', 'c:\\a3dapi.dll'],
   ['/valve/dlls/hl.dll', 'c:\\valve\\dlls\\hl.dll'],
   ['/valve/cl_dlls/client.dll', 'c:\\valve\\cl_dlls\\client.dll'],
   ['/valve/default.cfg', 'c:\\valve\\autoexec.cfg'],
@@ -38,6 +42,10 @@ for (const [suffix, vfsPath] of [
     file.url.endsWith(suffix) && file.vfsPath === vfsPath),
   `Half-Life Uplink mounts ${suffix} at its installed discovery path`);
 }
+assert.strictEqual((APPS.halflife_uplink.dlls || []).length, 0,
+  'runtime engine/game modules must unload normally instead of becoming EXE roots');
+assert.strictEqual(APPS.halflife_uplink.relativeMouse, undefined,
+  'launcher menus retain absolute input; gameplay arms automatic capture');
 assert(APPS.halflife_uplink.files.some(file =>
   file.url.endsWith('/valve/default.cfg') &&
   file.vfsPath === 'c:\\valve\\default.cfg'),
@@ -52,7 +60,7 @@ assert.strictEqual(halfLifeRegistry.get('EngineGLDriver'), 'Default',
 assert.strictEqual(halfLifeRegistry.get('EngineType'), 2,
   'Half-Life persists the OpenGL renderer rather than the black software path');
 assert.deepStrictEqual(APPS.halflife_uplink.rendererRunSlices,
-  { software: 1000, opengl: 10000 },
+  { software: 1000, opengl: 10000, direct3dWorker: 10000 },
   'Half-Life keeps OpenGL fed while letting its software renderer yield');
 assert(browserShell.includes('wine.onOpenGLContextCountChange = count =>'),
   'browser scheduler follows in-process OpenGL context replacement');
@@ -63,18 +71,13 @@ assert(browserShell.includes("frame.kind === 'gpu'"),
 assert(browserShell.includes("String(change.name).toLowerCase() !== 'enginetype'"),
   'GoldSrc video-mode registry writes switch scheduling before the next frame');
 
-const dlls = [
-  'hw.dll', 'sw.dll', 'hl_res.dll', 'a3dapi.dll',
-  'valve/dlls/hl.dll', 'valve/cl_dlls/client.dll',
-].map(file => path.join(installed, file)).join(',');
 const screenshot = path.join(os.tmpdir(),
   `wine-assembly-half-life-uplink-menu-${process.pid}.png`);
 const run = spawnSync(process.execPath, [
   'test/run.js',
-  `--exe=${exe}`,
+  '--app=halflife_uplink',
   '--no-build',
   '--vfs-include=**/*',
-  `--dll-seed=${dlls}`,
   '--max-batches=1000000',
   // The launcher plays media\intro.avi (1344 frames) through MCI avivideo
   // with "play wait" before it builds the menu; that call blocks, so a click
@@ -106,14 +109,12 @@ for (const marker of [
   assert(output.includes(marker), `missing installed-game marker ${marker}\n${output.slice(-5000)}`);
 }
 const lockAt = output.indexOf('LockWindowUpdate(0x00010001)');
-const moveAt = output.indexOf('MoveWindow(0x00010001', lockAt);
-const redrawAt = output.indexOf('RedrawWindow(', moveAt);
+const unlockAt = output.indexOf('LockWindowUpdate(0x00000000)', lockAt);
+const redrawAt = output.indexOf('RedrawWindow(', unlockAt);
 const redrawEnd = output.indexOf('\n', redrawAt);
-const unlockAt = output.indexOf('LockWindowUpdate(0x00000000)', redrawAt);
-assert(lockAt >= 0 && moveAt > lockAt && redrawAt > moveAt &&
-  output.slice(redrawAt, redrawEnd < 0 ? undefined : redrawEnd).includes('0x00000180') &&
-  unlockAt > redrawAt,
-'Half-Life preserves its lock, child redraw, and unlock window-layout transaction');
+assert(lockAt >= 0 && unlockAt > lockAt && redrawAt > unlockAt &&
+  output.slice(redrawAt, redrawEnd < 0 ? undefined : redrawEnd).includes('0x00000180'),
+'Half-Life unlocks its layout transaction before requesting the child redraw');
 assert(!/UNIMPLEMENTED API|\*\*\* CRASH|RuntimeError:/i.test(output),
   `installed game entered a failed compatibility path\n${output.slice(-5000)}`);
 

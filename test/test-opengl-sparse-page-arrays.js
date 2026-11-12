@@ -39,6 +39,7 @@ for (const imp of WebAssembly.Module.imports(module_)) {
 }
 let draws = [];
 let copiedBorder = null;
+let copiedUpload = null;
 imports.host.gpu_gl_call = (_opcode, streamWa, byteLength) => {
   Stream.replay(Stream.memoryBatch(memory, streamWa >>> 0, byteLength >>> 0), (opcode, _aux, capture) => {
     if (opcode === Stream.PACKED_DRAW_OPCODE) {
@@ -49,6 +50,10 @@ imports.host.gpu_gl_call = (_opcode, streamWa, byteLength) => {
       assert.strictEqual(capture.pointerBorrowed,false,'border vector is copied, never borrowed');
       copiedBorder=Array.from(new Float32Array(memory.buffer.slice(
         capture.pointerOffset,capture.pointerOffset+capture.pointerLength)));
+    }
+    if(opcode===CALL_INDEX.glTexSubImage2D){
+      assert.strictEqual(capture.pointerBorrowed,false);
+      copiedUpload=Array.from(new Uint8Array(capture.buffer,capture.pointerOffset,capture.pointerLength));
     }
     return 0;
   });
@@ -102,6 +107,15 @@ assert.deepStrictEqual(draw(page + 0x100, page + 0x200), want, 'arrays inside on
 assert.deepStrictEqual(draw(page + 4096 - 16, page + 8192 - 8), want,
   'index and vertex arrays straddling a sparse page boundary');
 console.log('PASS glDrawElements reads indices and vertices across a sparse page boundary');
+
+const uploadAt=page+4096-512,uploadBytes=Array.from({length:1024},(_,i)=>i%251);
+uploadBytes.forEach((v,i)=>new DataView(memory.buffer).setUint8(w(uploadAt+i),v));
+call(CALL_INDEX.glTexSubImage2D,[0x0DE1,0,0,0,16,16,0x1908,0x1401,uploadAt]);
+assert.strictEqual(copiedUpload,null,'small sparse texture upload stays queued');
+uploadBytes.forEach((_,i)=>new DataView(memory.buffer).setUint8(w(uploadAt+i),0));
+e.gl_wat_stream_flush();
+assert.deepStrictEqual(copiedUpload,uploadBytes,'texture snapshot gathers nonadjacent sparse pages before mutation');
+console.log('PASS small texture upload snapshots across sparse pages');
 
 e.gl_sw_set_enabled(1);
 call(CALL_INDEX.glBindTexture,[0xDE1,7]);

@@ -26,11 +26,13 @@ const fs = require('fs');
 const isa = require('./isa');
 const { Sound, PIT_HZ } = require('./audio');
 const { Gus } = require('./gus');
+const { readFat12 } = require('./fat12');
 
 const VGA_BASE = 0xA0000;
 const STUB_SEG = 0xF000;      // dedicated host entries occupy F000:0100-01FF
 const STUB_OFF = 0x100;       // ...leaving F000:0000-00FF for driver signatures
 const DEFAULT_IRET_OFF = 0x200;
+const BIOS_KEYBOARD_OFF = 0x300; // real IRQ1 code, outside the host stub window
 // Keep host services and hardware delivery entries individually addressable.
 const HOST_VECTORS = new Set([0, 4, 6, 0x0D, 0x10, 0x11, 0x12, 0x15, 0x16,
   0x1A, 0x1C, 0x31, 0x33, 0x40, 0x5C, 0x67,
@@ -113,7 +115,9 @@ const EMS_PAGE = 0x4000;
 const EMS_TOTAL_PAGES = 512;  // 8MB of expanded memory, the usual EMM386 answer
 const XMS_ENTRY_SEG = 0x00C0; // three bytes below the PSP: int 2Dh; retf
 const XMS_INT = 0x2D;
-const XMS_TOTAL_KB = 8192;
+// Report the same pool that xmsAlloc actually backs. A separate 8MB ceiling
+// stranded nearly half of the configured 16MB guest RAM behind a false OOM.
+const XMS_TOTAL_KB = isa.XMS_SIZE >>> 10;
 // VBE's window-positioning far call, in the same free paragraph as the XMS
 // entry point and clear of its three bytes. See installIvt.
 const VESA_WIN_SEG = XMS_ENTRY_SEG;
@@ -387,12 +391,16 @@ const VGA_DAC = vgaDacTable();
 
 function newVgaState() {
   const v = {
-    // Sixteen sequencer registers, not eight. A plain VGA has eight and the
-    // rest alias, but every SVGA of this era puts its own registers above
-    // them -- Trident's bank register is index 0x0E -- and masking the index
-    // to three bits does not "ignore" those writes, it lands them on a real
-    // register: 0x0E masked is 0x06, the memory-mode register.
+    // Storage also covers the selected Trident model's extended registers,
+    // including bank index 0x0E. Plain VGA has only indexes 0..4, with a
+    // three-bit address field; its absent slots must not become writable
+    // extensions just because this shared backing array is larger.
     seqIndex: 0, seq: new Uint8Array(16),
+    // Ferraro, Programmer's Guide (3rd ed.), section 27.5.1, fig. 27.6:
+    // SR0B data writes select old controls, reads select new controls.
+    // Only SR0D's independent storage is modeled here. SR0E's old-mode
+    // banking/window and an actual chip-version value remain unimplemented.
+    tridentNewControl: true, tridentOldControl2: 0,
     gcIndex: 0, gc: new Uint8Array(16),
     crtcIndex: 0, crtc: new Uint8Array(32),
     // Whether the program has ASKED for the vertical-retrace interrupt. Kept as
@@ -891,6 +899,10 @@ class Machine {
     // The keyboard as hardware: scancodes waiting to be delivered as IRQ1, and
     // the one port 60h reads right now. See keyboardIrq.
     this.kbQueue = [];
+    this.kbBiosQueue = []; // parallel input provenance; never guest-visible
+    this.kbBiosCurrent = null;
+    this.kbBiosFrames = []; // one provenance record per outstanding BIOS IRQ1
+    this.kbBiosExtended = false;
     this.heldKeys = new Map();
     // --keys go on BOTH wires, for the reason pushKey gives: which one a
     // program listens on is not knowable from here. They used to go only into
@@ -903,7 +915,8 @@ class Machine {
     this.kbScan = 0;
     for (const k of this.keys) {
       const sc = (k.ah & 0x7F) || 0x1C;
-      this.kbQueue.push(sc, sc | 0x80);   // make code, then break code
+      this.queueKeyboardScan(sc, { key: k, deferred: false, deliver: true });
+      this.queueKeyboardScan(sc | 0x80);
     }
     this.kbFresh = false;   // set by IRQ1, cleared by the handler's port read
     this.kbReads = 0;
@@ -943,6 +956,10 @@ class Machine {
     // not find" is the first question when a demo renders an empty screen.
     this.fileRoot = opts.fileRoot || null;
     this.currentDirectory = '';
+    this.currentDrive = 2;
+    this.driveDirectories = new Map([[0, ''], [1, ''], [2, '']]);
+    this.floppyVolumes = new Map();
+    this.mediaChanges = [];
     this.directorySearches = new Map();
     this.directorySearchIds = new Map();
     this.directorySearchSerial = 0;
@@ -985,7 +1002,8 @@ class Machine {
     // Whether the guest's addresses still wrap at 1MB. They do until it takes
     // an extended-memory handle; see openBus.
     this.linFlat = false;
-    this.kbc = { output: 1, command: false, pending: null, reply: [] };
+    this.kbc = { output: 1, command: false, pending: null, reply: [], replyDevice: [] };
+    this.keyboard = { pending: null, leds: 0, typematic: 0x2b, scanning: true, lastByte: 0xfe };
     this.vmExports = null;
     this.sliceCut = -1;         // see endSlice
     this.emsHandles = new Map(); this.emsNext = 1; this.emsMaps = 0;
@@ -1223,7 +1241,7 @@ class Machine {
     // volunteer a configuration nothing is standing behind.
     mem[at++] = 0;                    // end of the variables
     mem[at++] = 0x01; mem[at++] = 0x00;   // one string follows: the program path
-    put(`C:\\${String(name).toUpperCase()}`);
+    put(this.absolutePath(String(name)) || String(name).toUpperCase());
     mem[at++] = 0;
     const psp = this.pspSeg << 4;
     mem[psp + 0x2C] = ENV_SEG & 0xFF;
@@ -1257,10 +1275,11 @@ class Machine {
   resolvePath(name, directory = false) {
     if (typeof name !== 'string' || !name || /^[\\/]{2}/.test(name)) return null;
     const drive = /^([a-z]):/i.exec(name);
-    if (drive && drive[1].toUpperCase() !== 'C') return null;
+    const disk = drive ? drive[1].toUpperCase().charCodeAt(0) - 65 : this.currentDrive;
+    if (!this.driveAvailable(disk)) return null;
     const rest = drive ? name.slice(2) : name;
     if (/[:*?\x00-\x1f]/.test(rest) || (!directory && /[\\/]$/.test(rest))) return null;
-    const parts = /^[\\/]/.test(rest) ? [] : this.currentDirectory.split('/').filter(Boolean);
+    const parts = /^[\\/]/.test(rest) ? [] : this.driveDirectory(disk).split('/').filter(Boolean);
     for (const part of rest.split(/[\\/]+/)) {
       if (!part || part === '.') continue;
       if (part === '..') { parts.pop(); continue; } // DOS root is its own parent.
@@ -1268,15 +1287,42 @@ class Machine {
       if (!key) return null;
       parts.push(key);
     }
-    return directory || parts.length ? parts.join('/') : null;
+    return directory || parts.length ? (disk === 2 ? '' : String.fromCharCode(97 + disk) + ':/') + parts.join('/') : null;
+  }
+
+  driveAvailable(drive) { return drive === 2 || this.floppyVolumes.has(drive); }
+  driveDirectory(drive) { return drive === this.currentDrive ? this.currentDirectory : this.driveDirectories.get(drive) || ''; }
+  keyDrive(key) { return /^[ab]:\//.test(key || '') ? key.charCodeAt(0) - 97 : 2; }
+  readOnlyKey(key) { return key !== null && this.keyDrive(key) !== 2; }
+  volumeEntry(key) { return this.floppyVolumes.get(this.keyDrive(key))?.entries.get(key.slice(3)); }
+
+  // Call between runner steps. Failed parsing leaves old media and cwd intact.
+  // Open handles retain old bytes; new opens and searches use the inserted disk.
+  changeDisk(drive, image) {
+    if (typeof drive === 'string' && /^[ab]:?$/i.test(drive)) drive = drive.toUpperCase().charCodeAt(0) - 65;
+    if (drive !== 0 && drive !== 1) throw Error('floppy drive must be A: or B:');
+    const volume = image === null ? null : readFat12(image);
+    if (volume) this.floppyVolumes.set(drive, volume); else this.floppyVolumes.delete(drive);
+    this.mediaChanges.push({ drive, label: volume?.label || '', mounted: !!volume });
+    return { drive, label: volume?.label || '', mounted: !!volume };
   }
 
   fileKey(name) { return this.resolvePath(name); }
 
+  absolutePath(name) {
+    const key = this.fileKey(name);
+    return key === null ? null : (this.keyDrive(key) === 2 ? 'C:/' + key : key).replace(/\//g, '\\').toUpperCase();
+  }
+
+  nextFileHandle() {
+    while (this.files.has(this.fileNext) && this.fileNext <= 0xffff) this.fileNext++;
+    return this.fileNext <= 0xffff ? this.fileNext++ : 0;
+  }
+
   // Resolve each component independently. Never fall back to a basename or
   // traverse host symlinks: neither is part of the mounted DOS namespace.
   hostKey(key) {
-    if (!this.fileRoot || key === null) return null;
+    if (!this.fileRoot || key === null || this.readOnlyKey(key)) return null;
     let at = this.fileRoot;
     for (const part of key.split('/').filter(Boolean)) {
       let names;
@@ -1295,15 +1341,19 @@ class Machine {
   hostPath(name) { return this.hostKey(this.fileKey(name)); }
 
   isDirectory(key) {
+    if (this.readOnlyKey(key)) return this.floppyVolumes.get(this.keyDrive(key))?.directories.has(key.slice(3)) || false;
     // An unmounted machine still has an empty virtual C: root for temp files.
-    if (key === '') return true;
+    if (key === '' || this.virtualDirectories?.has(key)) return true;
     const at = this.hostKey(key);
     if (!at) return false;
     try { return fs.statSync(at).isDirectory(); } catch { return false; }
   }
 
   parentExists(key) {
-    return key !== null && this.isDirectory(key.includes('/') ? key.slice(0, key.lastIndexOf('/')) : '');
+    if (key === null) return false;
+    let parent = key.includes('/') ? key.slice(0, key.lastIndexOf('/')) : '';
+    if (/^[ab]:$/.test(parent)) parent += '/';
+    return this.isDirectory(parent);
   }
 
   // Where the DTA is: wherever AH=1Ah last put it, else the PSP's own at +80h,
@@ -1313,14 +1363,29 @@ class Machine {
   }
 
   // Immediate children only, merging guest overlays with immutable host files.
-  dirEntries(directory = this.currentDirectory) {
+  dirEntries(directory = this.resolvePath('.', true)) {
+    if (this.readOnlyKey(directory)) {
+      const volume = this.floppyVolumes.get(this.keyDrive(directory));
+      if (!volume) return [];
+      const prefix = directory.slice(3), lead = prefix ? prefix + '/' : '', out = [];
+      for (const [key, e] of volume.entries) if (key.startsWith(lead) && !key.slice(lead.length).includes('/'))
+        out.push({ name: key.slice(lead.length).toUpperCase(), size: e.size, attributes: e.attributes, time: e.time, date: e.date });
+      for (const key of volume.directories) if (key && key.startsWith(lead) && !key.slice(lead.length).includes('/'))
+        out.push({ name: key.slice(lead.length).toUpperCase(), size: 0, ...volume.directoryMetadata.get(key) });
+      return out;
+    }
     const out = [];
     const seen = new Set();
     const prefix = directory ? directory + '/' : '';
     for (const [key, rec] of this.tempFiles) {
       if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/')) continue;
       const name = key.slice(prefix.length);
-      out.push({ name: name.toUpperCase(), size: rec.len, attributes: rec.attributes ?? 0x20 }); seen.add(name);
+      out.push({ name: name.toUpperCase(), size: rec.len, attributes: rec.attributes ?? 0x20, time: rec.time, date: rec.date }); seen.add(name);
+    }
+    for (const key of this.virtualDirectories || []) {
+      if (!key || !key.startsWith(prefix) || key.slice(prefix.length).includes('/')) continue;
+      const name = key.slice(prefix.length);
+      if (!seen.has(name)) { out.push({ name: name.toUpperCase(), size: 0, attributes: 0x10 }); seen.add(name); }
     }
     const host = this.hostKey(directory);
     let names = [];
@@ -1356,8 +1421,9 @@ class Machine {
       if (!dosMatch(pattern, e.name)) continue;
       bytes[0x0d] = (at + 1) & 0xff; bytes[0x0e] = (at + 1) >>> 8;
       bytes[0x15] = e.attributes;
-      bytes[0x16] = 0; bytes[0x17] = 0;
-      bytes[0x18] = 0x21; bytes[0x19] = 0x1e;
+      const time = e.time ?? 0, date = e.date ?? 0x1e21;
+      bytes[0x16] = time & 255; bytes[0x17] = time >>> 8;
+      bytes[0x18] = date & 255; bytes[0x19] = date >>> 8;
       for (let i = 0; i < 4; i++) bytes[0x1a + i] = e.size >>> (8 * i) & 0xff;
       const name = e.name.slice(0, 12);
       for (let i = 0; i < 13; i++) bytes[0x1e + i] = i < name.length ? name.charCodeAt(i) : 0;
@@ -1383,7 +1449,7 @@ class Machine {
     // missing file.
     const dev = (name || '').replace(/^[A-Za-z]:/, '').split(/[\\/]/).filter(Boolean).pop();
     if (dev && DEVICES.has(dev.toUpperCase())) {
-      const h = this.fileNext++;
+      const h = this.nextFileHandle(); if (!h) return 0;
       this.files.set(h, { buf: EMPTY, pos: 0, name: dev, device: true });
       this.filesOpened.push(dev);
       return h;
@@ -1393,9 +1459,16 @@ class Machine {
     // decompressed temp file and reads it straight back has to see its own
     // bytes, and nothing here ever touches the real disk for writes.
     const key = this.fileKey(name);
+    if (this.readOnlyKey(key)) {
+      const entry = this.volumeEntry(key);
+      if (!entry) { this.filesMissed.push(name); return 0; }
+      const h = this.nextFileHandle(); if (!h) return 0;
+      this.files.set(h, { buf: Uint8Array.from(entry.data), pos: 0, name, key, readOnly: true, time: entry.time, date: entry.date });
+      this.filesOpened.push(name); return h;
+    }
     if (key && this.tempFiles.has(key)) {
       const rec = this.tempFiles.get(key);
-      const h = this.fileNext++;
+      const h = this.nextFileHandle(); if (!h) return 0;
       this.files.set(h, { buf: rec.data.subarray(0, rec.len), pos: 0, name, rec });
       this.filesOpened.push(name);
       return h;
@@ -1404,7 +1477,7 @@ class Machine {
     if (!p) { this.filesMissed.push(name); return 0; }
     let buf;
     try { buf = fs.readFileSync(p); } catch { this.filesMissed.push(name); return 0; }
-    const h = this.fileNext++;
+    const h = this.nextFileHandle(); if (!h) return 0;
     this.files.set(h, { buf, pos: 0, name, key });
     this.filesOpened.push(name);
     return h;
@@ -1415,6 +1488,11 @@ class Machine {
   // needs it: the program it is asked to run is usually one this run produced.
   readWholeFile(name) {
     const key = this.fileKey(name);
+    if (this.readOnlyKey(key)) {
+      const entry = this.volumeEntry(key);
+      if (!entry) { this.filesMissed.push(name); return null; }
+      return Buffer.from(entry.data);
+    }
     if (key && this.tempFiles.has(key)) {
       const rec = this.tempFiles.get(key);
       return Buffer.from(rec.data.subarray(0, rec.len));
@@ -1429,7 +1507,7 @@ class Machine {
   // real file to the guest: writeable, seekable, and re-openable by name.
   createFile(name) {
     const key = this.fileKey(name);
-    if (!key || !this.parentExists(key) || this.isDirectory(key)) return 0;
+    if (!key || this.readOnlyKey(key) || !this.parentExists(key) || this.isDirectory(key)) return 0;
     // AH=3Ch may truncate an AH=5Ah file while another handle still exists.
     // Keep its identity and attribute policy shared by all open handles.
     const previous = this.tempFiles.get(key);
@@ -1441,7 +1519,7 @@ class Machine {
       }
     }
     this.tempFiles.set(key, rec);
-    const h = this.fileNext++;
+    const h = this.nextFileHandle(); if (!h) return 0;
     this.files.set(h, { buf: rec.data.subarray(0, 0), pos: 0, name, rec });
     this.filesCreated.push(name);
     return h;
@@ -1450,6 +1528,7 @@ class Machine {
   // Write into a created file, growing it. `pos` is honoured, so a program that
   // seeks back to patch a header gets what it wrote there.
   writeFile(f, src, n) {
+    if (f.readOnly) throw Error('read-only DOS volume');
     const source = this.vmExports && this.vmExports.get_cr0() < 0 ? this.guestBytes(src, n) : null;
     // A write into a file that came off the host disk copies it into the
     // in-memory file system first, and every later read of that name sees the
@@ -2209,6 +2288,10 @@ class Machine {
   }
 
   installIvt() {
+    // CLI/batch construction precedes VM allocation. setMemory installs this
+    // firmware once the real backing exists; bulk ROM writes cannot target the
+    // initial empty view (the older byte-at-a-time writes silently did nothing).
+    if (!this.mem.length) return;
     for (let v = 0; v < 256; v++) {
       const at = v * 4;
       // Host-service offset is 0x100 + the vector: the run loop
@@ -2219,7 +2302,8 @@ class Machine {
       // ES:000A against "EMMXXXX0" -- and with the stubs at offset v those
       // eight bytes sat on top of the stubs for INT 0Ah through INT 11h,
       // INT 10h among them.
-      const off = HOST_VECTORS.has(v) ? STUB_OFF + v : DEFAULT_IRET_OFF;
+      const off = v === 9 ? BIOS_KEYBOARD_OFF
+        : HOST_VECTORS.has(v) ? STUB_OFF + v : DEFAULT_IRET_OFF;
       this.mem[at] = off & 0xFF;
       this.mem[at + 1] = off >> 8;
       this.mem[at + 2] = STUB_SEG & 0xFF;
@@ -2228,8 +2312,21 @@ class Machine {
     }
     const base = STUB_SEG << 4;
     this.mem[base + DEFAULT_IRET_OFF] = 0xCF; // actual BIOS default IRET
+    // IRQ1 saves the interrupted registers, reads the controller, and calls
+    // the guest's real INT 15h vector with AH=4F, AL=scan, CF=1. The host BIOS
+    // continuation at F000:0109 receives the returned AL/CF through PUSHF/CALL;
+    // it translates accepted scans only. The outer IRET restores caller flags.
+    this.mem.set([0x60,0x1e,0x06, 0xe4,0x60, 0xb4,0x4f, 0xf9,0xcd,0x15,
+      0x9c,0x9a,0x09,0x01,0x00,0xf0, 0xb0,0x20,0xe6,0x20,
+      0x07,0x1f,0x61,0xcf], base + BIOS_KEYBOARD_OFF);
     for (let i = 0; i < EMS_NAME.length; i++) this.mem[base + 0x0A + i] = EMS_NAME.charCodeAt(i);
 
+    // AT-compatible system configuration, in the conventional BIOS ROM slot.
+    // Eight bytes follow the length word. Only implemented hardware is exposed:
+    // cascaded interrupt controllers, RTC and the IRQ1 keyboard intercept;
+    // no DMA3 disk, external-event wait, EBDA, MCA, or reserved feature flags.
+    this.mem.set([8, 0, 0xFC, 0, 0, 0x70, 0, 0, 0, 0], 0xFE6F5);
+    this.mem[0xFFFFE] = 0xFC;
     this.installRomFonts();
 
     // The XMS control function is not reached through an interrupt: INT 2Fh
@@ -2365,7 +2462,8 @@ class Machine {
   // said when the extender built the table -- see pmHookedVector below.
   hookedVector(v) {
     const at = v << 2;
-    const expected = HOST_VECTORS.has(v) ? STUB_OFF + v : DEFAULT_IRET_OFF;
+    const expected = v === 9 ? BIOS_KEYBOARD_OFF
+      : HOST_VECTORS.has(v) ? STUB_OFF + v : DEFAULT_IRET_OFF;
     if ((this.mem[at + 2] | (this.mem[at + 3] << 8)) !== STUB_SEG
         || (this.mem[at] | (this.mem[at + 1] << 8)) !== expected) return true;
     return this.pmHookedVector(v);
@@ -2468,11 +2566,73 @@ class Machine {
   // person at the keyboard, in the page, a demo reading the hardware directly
   // could never be sent anything at all.
   keyboardIrq() {
-    if (!this.hookedVector(0x09)) return 0;
+    if (!this.keyboard.scanning || this.keyboard.pending) return 0;
+    const bios = this.biosKeyboardIntercept();
+    if (!this.hookedVector(0x09) && !bios) return 0;
+    if (bios && (this.pic.imr[0] & 2)) return 0;
     if (!this.kbQueue.length && !this.kbFill()) return 0;
-    this.kbScan = this.kbQueue.shift();
+    this.kbScan = this.takeKeyboardScan();
+    if (bios && this.kbBiosCurrent?.key) {
+      // A key queued before the hook was installed must not bypass CF/AL.
+      const i = this.keys.indexOf(this.kbBiosCurrent.key);
+      this.kbBiosCurrent.deliver = this.kbBiosCurrent.deferred || i >= 0;
+      if (i >= 0) { this.keys.splice(i, 1); this.syncKbBda(); }
+    }
+    if (bios) this.kbBiosFrames.push({ input: this.kbBiosCurrent });
     this.kbFresh = true;
     return 0x09;
+  }
+
+  biosKeyboardIntercept() {
+    // An extender owns its protected IRQ gates; do not run real BIOS code in
+    // an unrelated protected selector. Existing custom INT 9 delivery stays.
+    return !(this.vmExports?.get_cr0?.() & 1) && this.pic.base[0] === 8
+      && !this.hookedVector(9) && this.hookedVector(0x15);
+  }
+
+  queueKeyboardScan(scan, input = null) {
+    this.kbQueue.push(scan);
+    this.kbBiosQueue.push(input);
+  }
+
+  takeKeyboardScan() {
+    this.kbBiosCurrent = this.kbBiosQueue.shift() || null;
+    return this.kbQueue.shift();
+  }
+
+  biosKeyboardScan(scan) {
+    const frame = this.kbBiosFrames.pop();
+    const input = frame ? frame.input : this.kbBiosCurrent;
+    this.kbBiosCurrent = null;
+    if (scan === 0xe0 || scan === 0xe1) { this.kbBiosExtended = true; return; }
+    const extended = this.kbBiosExtended; this.kbBiosExtended = false;
+    const code = scan & 0x7f, up = !!(scan & 0x80);
+    // Modifier state belongs to the accepted/translated scan, after the hook.
+    const mask = code === 0x2a ? 2 : code === 0x36 ? 1
+      : code === 0x1d ? 4 : code === 0x38 ? 8 : 0;
+    if (mask) {
+      this.mem[0x417] = up ? this.mem[0x417] & ~mask : this.mem[0x417] | mask;
+      return;
+    }
+    if ([0x3a,0x45,0x46].includes(code)) {
+      if (!up) this.mem[0x417] ^= code === 0x3a ? 0x40 : code === 0x45 ? 0x20 : 0x10;
+      return;
+    }
+    if (up || (input && !input.deliver)) return;
+    let ascii;
+    if (input?.key?.ah === code) ascii = input.key.al;
+    else {
+      // Set-1 US translation for a hook that replaces AL. Unchanged keys keep
+      // the frontend's supplied character (including its active layout).
+      const normal = '\0\x1b1234567890-=\b\tqwertyuiop[]\r\0asdfghjkl;\'`\0\\zxcvbnm,./\0*\0 ';
+      const shifted = '\0\x1b!@#$%^&*()_+\b\tQWERTYUIOP{}\r\0ASDFGHJKL:"~\0|ZXCVBNM<>?\0*\0 ';
+      const flags = this.mem[0x417], lower = normal[code] || '\0';
+      const shift = !!(flags & 3) !== (!!(flags & 0x40) && /[a-z]/.test(lower));
+      ascii = (extended ? '\0' : (shift ? shifted[code] : lower) || '\0').charCodeAt(0);
+      if ((flags & 4) && /[a-z]/.test(lower)) ascii = lower.charCodeAt(0) - 96;
+      if (flags & 8) ascii = 0;
+    }
+    this.keys.push({ ah: code, al: ascii }); this.syncKbBda();
   }
 
   // A keystroke from outside: a person typing at the live page, or a test.
@@ -2483,8 +2643,10 @@ class Machine {
   // nothing. Make code then break code, so a handler tracking which keys are
   // held does not think one is stuck down.
   pushKey(scan, ascii) {
-    this.keys.push({ ah: scan & 0xFF, al: ascii & 0xFF });
-    this.kbQueue.push(scan & 0x7F, (scan & 0x7F) | 0x80);
+    const key = { ah: scan & 0xFF, al: ascii & 0xFF }, deferred = this.biosKeyboardIntercept();
+    if (!deferred) this.keys.push(key);
+    this.queueKeyboardScan(scan & 0x7F, { key, deferred, deliver: true });
+    this.queueKeyboardScan((scan & 0x7F) | 0x80);
     this.syncKbBda();
   }
 
@@ -2495,9 +2657,11 @@ class Machine {
     const held = this.heldKeys.has(id);
     if (held && !repeat) return false;
     if (!held) this.heldKeys.set(id, { scan: scan & 0x7F, extended });
-    if (bios) this.keys.push({ ah: scan & 0xFF, al: ascii & 0xFF });
-    if (extended) this.kbQueue.push(0xE0);
-    this.kbQueue.push(scan & 0x7F);
+    const key = bios ? { ah: scan & 0xFF, al: ascii & 0xFF } : null;
+    const deferred = this.biosKeyboardIntercept();
+    if (key && !deferred) this.keys.push(key);
+    if (extended) this.queueKeyboardScan(0xE0);
+    this.queueKeyboardScan(scan & 0x7F, { key, deferred, deliver: bios });
     this.syncKbBda();
     return true;
   }
@@ -2505,8 +2669,8 @@ class Machine {
   keyUp(scan, extended = false) {
     const id = `${extended ? 'e0:' : ''}${scan & 0x7F}`;
     if (!this.heldKeys.delete(id)) return false;
-    if (extended) this.kbQueue.push(0xE0);
-    this.kbQueue.push((scan & 0x7F) | 0x80);
+    if (extended) this.queueKeyboardScan(0xE0);
+    this.queueKeyboardScan((scan & 0x7F) | 0x80);
     return true;
   }
 
@@ -2562,7 +2726,8 @@ class Machine {
     if (!k) return false;
     this.syncKbBda();
     const sc = (k.ah & 0xFF) || 0x1C;
-    this.kbQueue.push(sc, sc | 0x80);
+    this.queueKeyboardScan(sc, { key: k, deferred: true, deliver: true });
+    this.queueKeyboardScan(sc | 0x80);
     this.log(`autokey putting scancode ${sc.toString(16)} on the keyboard port`);
     return true;
   }
@@ -3064,6 +3229,16 @@ class Machine {
     // Read-back of the register files. Code that tweaks one bit of the memory
     // mode does IN/OR/OUT, so returning 0xFF here would set every other bit
     // as a side effect -- including chain-4, which would undo a mode X set.
+    if (port === 0x3C5 && this.svga === 'trident') {
+      const v = this.vga;
+      if (v.seqIndex === 0x0B) {
+        v.tridentNewControl = true;
+        // No chip ID is supplied by this partial model. Zero is an absent
+        // identity policy, not a TVGA8900 hardware version or qualification.
+        return 0;
+      }
+      if (v.seqIndex === 0x0D && !v.tridentNewControl) return v.tridentOldControl2;
+    }
     // Trident: sequencer index 0x0E is the bank register, and the value read
     // back out of it is what SETUP.EXE classifies the chip version on --
     // 0x80..0xFE is a TVGA8900, which is what we present. The low nibble is
@@ -3071,7 +3246,13 @@ class Machine {
     if (port === 0x3C5 && this.svga === 'trident' && this.vga.seqIndex === 0x0E) {
       return 0x80 | (this.svgaBank & 0x0F);
     }
-    if (port === 0x3C5) return this.vga.seq[this.vga.seqIndex];
+    // IBM's VGA register map defines only 00h..04h (Video Subsystems,
+    // September 1992, pp. 2-45..2-50). It does not specify data readback for
+    // absent indexes 5..7. Keep ToyVM's initial zero as a deterministic
+    // absent-register policy, independent of writes, rather than advertise
+    // unsupported extensions to save/clear/set/restore detection probes.
+    if (port === 0x3C5) return this.svga === 'none' && this.vga.seqIndex > 4
+      ? 0 : this.vga.seq[this.vga.seqIndex];
     if (port === 0x3CF) return this.vga.gc[this.vga.gcIndex];
     // Trident: CRTC index 0x1F reads back CRTC 0x0C exclusive-ORed with 0xEA,
     // and that pair IS the detection every program of the era does -- write
@@ -3088,15 +3269,20 @@ class Machine {
     // Writes are consumed synchronously, so IBF is clear. OBF describes an
     // actual controller response or keyboard byte, without consuming either.
     if (port === 0x64) return 0x04 | (this.kbc.command ? 8 : 0)
-      | (this.kbc.reply.length || this.kbFresh || this.kbQueue.length ? 1 : 0);
+      | (this.kbc.reply.length || (this.keyboard.scanning && !this.keyboard.pending && (this.kbFresh || this.kbQueue.length)) ? 1 : 0);
     // Keyboard data. A program with an INT 9 handler finds here what the IRQ
     // just delivered; one that polls the port with no handler at all -- BTW.EXE
     // makes zero INT 16h calls and hooks nothing -- drives the queue itself.
     if (port === 0x60) {
-      if (this.kbc.reply.length) return this.kbc.reply.shift();
-      if (this.kbFresh) { this.kbFresh = false; return this.kbScan; }
+      if (this.kbc.reply.length) {
+        const byte = this.kbc.reply.shift();
+        if (this.kbc.replyDevice.shift()) this.keyboard.lastByte = byte;
+        return byte;
+      }
+      if (!this.keyboard.scanning || this.keyboard.pending) return this.kbScan;
+      if (this.kbFresh) { this.kbFresh = false; this.keyboard.lastByte = this.kbScan; return this.kbScan; }
       if (!this.kbQueue.length && (this.kbReads++ & 0xFFF) === 0) this.kbFill();
-      if (this.kbQueue.length) this.kbScan = this.kbQueue.shift();
+      if (this.kbQueue.length) this.keyboard.lastByte = this.kbScan = this.takeKeyboardScan();
       return this.kbScan;
     }
     // System control port B: the speaker gate and data bits a driver reads,
@@ -3172,6 +3358,49 @@ class Machine {
     return w === 16 ? 0xFFFF : 0xFF;
   }
 
+  // Keyboard-device commands are distinct from the controller's D1 data
+  // phase. Both phases can be pending: an output-port write must not consume
+  // a keyboard LED/typematic parameter or manufacture a keyboard ACK.
+  keyboardCommand(value) {
+    const k = this.keyboard;
+    const reply = (...bytes) => {
+      this.kbc.reply.push(...bytes);
+      this.kbc.replyDevice.push(...bytes.map(() => true));
+    };
+    const clearScans = () => {
+      this.kbQueue.length = 0; this.kbBiosQueue.length = 0;
+      this.kbFresh = false;
+    };
+    if (k.pending && value < 0xed) {
+      if (value > (k.pending === 'leds' ? 7 : 0x7f)) { reply(0xfe); return; }
+      if (k.pending === 'leds') k.leds = value & 7;
+      else k.typematic = value;
+      k.pending = null;
+      reply(0xfa);
+      return;
+    }
+    // A new recognized command interrupts the preceding parameter phase.
+    switch (value) {
+      case 0xed: k.pending = 'leds'; reply(0xfa); return;
+      case 0xee: k.pending = null; reply(0xee); return;
+      case 0xf2: k.pending = null; reply(0xfa, 0xab, 0x83); return;
+      case 0xf3: k.pending = 'typematic'; reply(0xfa); return;
+      case 0xf4: k.pending = null; k.scanning = true; clearScans(); reply(0xfa); return;
+      case 0xf5: case 0xf6: case 0xff:
+        k.pending = null; k.typematic = 0x2b;
+        k.scanning = value !== 0xf5;
+        clearScans();
+        if (value === 0xff) k.leds = 0;
+        reply(0xfa);
+        if (value === 0xff) reply(0xaa);
+        return;
+      case 0xfe: reply(k.lastByte); return;
+      default:
+        // Do not ACK functionality that this set-1 host does not implement.
+        throw new Error('Unsupported keyboard command 0x' + value.toString(16));
+    }
+  }
+
   portOut(port, value, w) {
     port = isaAlias(port);
     if (this.ioTrace && (!this.ioPorts || this.ioPorts.has(port))) {
@@ -3196,7 +3425,7 @@ class Machine {
         throw new Error('Unsupported 8042 controller command 0x' + value.toString(16));
       this.kbc.command = true;
       this.kbc.pending = value === 0xD1 ? 'output' : null;
-      if (value === 0xD0) this.kbc.reply.push(this.kbc.output);
+      if (value === 0xD0) { this.kbc.reply.push(this.kbc.output); this.kbc.replyDevice.push(false); }
       return;
     }
     if (port === 0x60 && this.kbc.pending === 'output') {
@@ -3205,6 +3434,11 @@ class Machine {
       this.kbc.command = false;
       this.kbc.output = value;
       this.setA20(!!(value & 2));
+      return;
+    }
+    if (port === 0x60) {
+      this.kbc.command = false;
+      this.keyboardCommand(value);
       return;
     }
     // --- 8259 PICs ----------------------------------------------------------
@@ -3322,8 +3556,18 @@ class Machine {
     // the data in AH, and the recursion at the top of this function has
     // already split that into two 8-bit writes, so both spellings land here.
     switch (port) {
-      case 0x3C4: v.seqIndex = value & 0x0F; return;
+      case 0x3C4: v.seqIndex = value & (this.svga === 'none' ? 0x07 : 0x0F); return;
       case 0x3C5:
+        if (this.svga === 'trident') {
+          if (v.seqIndex === 0x0B) {
+            v.tridentNewControl = false;  // version data is read-only
+            return;
+          }
+          if (v.seqIndex === 0x0D && !v.tridentNewControl) {
+            v.tridentOldControl2 = value;
+            return;
+          }
+        }
         // The Trident bank register. The value carries the bank exclusive-ORed
         // with 2, which is not a quirk worth hiding: a driver that writes 3
         // means bank 1, and reading the register back has to agree.
@@ -3334,7 +3578,12 @@ class Machine {
         this.vgaSeqWrite(v.seqIndex, value); return;
       case 0x3CE: v.gcIndex = value & 0x0F; return;
       case 0x3CF:
-        v.gc[v.gcIndex] = value;
+        // IBM VGA GC01 (Enable Set/Reset) and GC02 (Color Compare) define
+        // only bits 0..3. Choose zero for reserved-bit readback by discarding
+        // their writes; IBM specifies undefined reads, not a zero guarantee.
+        // Keep selected-model extensions and four-bit index aliases intact.
+        v.gc[v.gcIndex] = this.svga === 'none' && (v.gcIndex === 1 || v.gcIndex === 2)
+          ? value & 0x0F : value;
         // Miscellaneous and Mode between them say whether A000 is a picture and
         // how deep it is, so a mode set done entirely in registers is picked up
         // here rather than only at INT 10h AH=00.
@@ -3374,6 +3623,7 @@ class Machine {
 
   vgaSeqWrite(index, value) {
     const v = this.vga;
+    if (this.svga === 'none' && index > 4) return;
     v.seq[index] = value;
     if (index === SEQ_MAP_MASK) {
       v.maskWrites++;
@@ -3608,6 +3858,12 @@ class Machine {
     const ah = (r.get('ax') >> 8) & 0xFF, al = r.get('ax') & 0xFF;
 
     switch (vec) {
+      case 0x09:
+        // Called by the real BIOS IRQ1 code after the guest INT 15h handler.
+        // CF clear drops the scan; CF set uses the handler's returned AL.
+        if (r.get('flags') & 1) this.biosKeyboardScan(al);
+        else { this.kbBiosFrames.pop(); this.kbBiosCurrent = null; }
+        return true;
       case 0x10: return this.int10(ah, al, r);
       case 0x16: return this.int16(ah, r);
       case 0x1A:
@@ -4179,7 +4435,7 @@ class Machine {
     }
   }
 
-  // The BIOS system services. Only the timing half matters here: AH=86h is a
+  // The BIOS system services. AH=86h is a
   // delay of CX:DX microseconds and three programs spend a thousand calls in
   // it, so declining it left them measuring an elapsed time that never moved.
   //
@@ -4191,6 +4447,13 @@ class Machine {
   int15(ah, al, r) {
     const US_PER_TICK = 1000000 / 18.2065;
     switch (ah) {
+      case 0x4F: // Default keyboard intercept: preserve AL and accept it.
+        r.setResultCf(true); return true;
+      // Return a ROM table through ES:BX and status through AH / saved carry.
+      case 0xC0:
+        r.set('es', 0xF000); r.set('bx', 0xE6F5);
+        r.set('ax', r.get('ax') & 0xFF); r.setResultCf(false);
+        return true;
       case 0x86: {
         const us = ((r.get('cx') & 0xFFFF) * 65536) + (r.get('dx') & 0xFFFF);
         this.setClock(this.pit.phase + us / US_PER_TICK);
@@ -4803,9 +5066,8 @@ class Machine {
         let end = envAt;
         while (end + 1 < envEnd && !(this.mem[end] === 0 && this.mem[end + 1] === 0)) end++;
         if (!sourceEnv || end + 1 >= envEnd) { r.setResultCf(true); r.set('ax', 10); return true; }
-        let childPath = name.replace(/\\/g, '/');
-        if (!/^[A-Za-z]:/.test(childPath)) childPath = 'C:' + (childPath.startsWith('/') ? '' : '/') + childPath;
-        childPath = childPath.replace(/\//g, '\\').toUpperCase();
+        const childPath = this.absolutePath(name);
+        if (childPath === null) { r.setResultCf(true); r.set('ax', 3); return true; }
         const variables = this.mem.slice(envAt, end + 2);
         const envBytes = variables.length + 2 + childPath.length + 1;
         const envParas = Math.ceil(envBytes / 16);
@@ -5003,7 +5265,7 @@ class Machine {
           const bytes = this.guestBytes(src, n, true);
           for (const b of bytes) this.conPutc(b);
         } else if (f && !f.device) {
-          if (f.rec && f.rec.temporary && f.access === 0) { r.setResultCf(true); r.set('ax', 5); return true; }
+          if (f.readOnly || (f.rec && f.rec.temporary && f.access === 0)) { r.setResultCf(true); r.set('ax', 5); return true; }
           this.writeFile(f, src, n);
         }
         r.set('ax', n);
@@ -5093,7 +5355,8 @@ class Machine {
         if ((al & 0xFF) === 0x00) { r.set('dx', (r.get('dx') & 0xFF00) | (this.breakFlag ? 1 : 0)); }
         else if ((al & 0xFF) === 0x01) { this.breakFlag = (r.get('dx') & 0xFF) !== 0; }
         else if ((al & 0xFF) === 0x05) { r.set('dx', (r.get('dx') & 0xFF00) | 3); }  // C:
-        else if ((al & 0xFF) === 0x06) { r.set('bx', 0x0600); r.set('dx', 0); }      // 6.00
+        // AX=3306h: BL is major, BH minor; DL revision, DH ROM/HMA flags.
+        else if ((al & 0xFF) === 0x06) { r.set('bx', 0x0006); r.set('dx', 0); }      // 6.00
         else return false;
         r.setResultCf(false);
         return true;
@@ -5125,21 +5388,39 @@ class Machine {
         else return false;
         r.setResultCf(false);
         return true;
-      case 0x19: r.set('ax', (r.get('ax') & 0xFF00) | 2); return true;   // drive C:
-      // C: is the only mounted drive. Unavailable selections leave it current.
+      case 0x19: r.set('ax', (r.get('ax') & 0xFF00) | this.currentDrive); return true;
+      // Unavailable selections leave the current drive unchanged.
       // AL reports the highest possible drive plus one, not a mounted count.
-      case 0x0E: r.set('ax', (r.get('ax') & 0xFF00) | 3); return true;
+      case 0x0E: {
+        const drive = r.get('dx') & 255;
+        if (this.driveAvailable(drive)) {
+          this.driveDirectories.set(this.currentDrive, this.currentDirectory);
+          this.currentDirectory = this.driveDirectory(drive); this.currentDrive = drive;
+        }
+        r.set('ax', (r.get('ax') & 0xFF00) | 3); return true;
+      }
+      case 0x39: {                              // mkdir, writable C: only
+        const key = this.resolvePath(this.guestPath(r), true);
+        if (key === null || !this.parentExists(key)) { r.setResultCf(true); r.set('ax', 3); return true; }
+        if (!key || this.readOnlyKey(key) || this.isDirectory(key) || this.tempFiles.has(key) || this.hostKey(key)) {
+          r.setResultCf(true); r.set('ax', 5); return true;
+        }
+        if (!this.virtualDirectories) this.virtualDirectories = new Set();
+        this.virtualDirectories.add(key); r.setResultCf(false); return true;
+      }
       case 0x3B: {                              // change current directory
         const key = this.resolvePath(this.guestPath(r), true);
         if (key === null || key.length > 63 || !this.isDirectory(key)) { r.setResultCf(true); r.set('ax', 3); return true; }
-        this.currentDirectory = key;
+        const drive = this.keyDrive(key), relative = drive === 2 ? key : key.slice(3);
+        if (drive === this.currentDrive) this.currentDirectory = relative;
+        this.driveDirectories.set(drive, relative);
         r.setResultCf(false); return true;
       }
       case 0x47: {                              // get current directory
-        const drive = r.get('dx') & 255;
-        if (drive !== 0 && drive !== 3) { r.setResultCf(true); r.set('ax', 15); return true; }
+        const requested = r.get('dx') & 255, drive = requested ? requested - 1 : this.currentDrive;
+        if (!this.driveAvailable(drive)) { r.setResultCf(true); r.set('ax', 15); return true; }
         const at = this.lin(r, 'ds', r.get('si'));
-        this.guestWrite(at, [...Array.from(this.currentDirectory.replace(/\//g, '\\').toUpperCase(), c => c.charCodeAt(0)), 0]);
+        this.guestWrite(at, [...Array.from(this.driveDirectory(drive).replace(/\//g, '\\').toUpperCase(), c => c.charCodeAt(0)), 0]);
         r.setResultCf(false);
         return true;
       }
@@ -5151,9 +5432,36 @@ class Machine {
       // buffer. MAINPART.EXE is the second kind: it allocates EMS, maps four
       // pages and reads its data into them, and every one of those reads was
       // going nowhere.
+      case 0x57: {                              // get/set last-write date/time
+        const fail = code => { r.setResultCf(true); r.set('ax', code); return true; };
+        if (al !== 0 && al !== 1) return fail(1);
+        const f = this.files.get(r.get('bx') & 0xffff);
+        if (!f || f.device) return fail(6);
+        if (al === 0) {
+          // Immutable media handles retain their original disk's metadata.
+          // Unstamped C: files use the same deterministic date as FindFirst.
+          const rec = f.rec || f;
+          r.set('cx', rec.time ?? 0); r.set('dx', rec.date ?? 0x1e21);
+        } else {
+          if (f.readOnly) return fail(5);
+          if (!f.rec) {
+            // Host corpus bytes stay immutable. Metadata changes, like writes,
+            // belong to the guest overlay and must survive close/reopen.
+            const key = f.key || this.fileKey(f.name);
+            const rec = this.tempFiles.get(key) || { data: Uint8Array.from(f.buf), len: f.buf.length };
+            this.tempFiles.set(key, rec);
+            for (const other of this.files.values()) {
+              if (!other.device && !other.readOnly && (other.key || this.fileKey(other.name)) === key) other.rec = rec;
+            }
+          }
+          f.rec.time = r.get('cx') & 0xffff; f.rec.date = r.get('dx') & 0xffff;
+        }
+        r.setResultCf(false); return true;
+      }
       case 0x3D: {                              // open
         const name = this.guestPath(r), rec = this.tempFiles.get(this.fileKey(name));
         const access = al & 3;
+        if (this.readOnlyKey(this.fileKey(name)) && access !== 0) { r.setResultCf(true); r.set('ax', 5); return true; }
         if (rec && rec.temporary && (access > 2 || (rec.attributesActive && (rec.attributes & 1) && access !== 0))) {
           r.setResultCf(true); r.set('ax', 5); return true;
         }
@@ -5207,6 +5515,7 @@ class Machine {
         // AH=40h cheerfully accepted. It reads the result back, finds nothing it
         // wrote and exits 0 without drawing a frame.
         const name = this.guestPath(r), rec = this.tempFiles.get(this.fileKey(name));
+        if (this.readOnlyKey(this.fileKey(name))) { r.setResultCf(true); r.set('ax', 5); return true; }
         if (rec && rec.temporary && rec.attributesActive && (rec.attributes & 1)) {
           r.setResultCf(true); r.set('ax', 5); return true;
         }
@@ -5226,6 +5535,7 @@ class Machine {
       }
       case 0x41: {                              // delete
         const key = this.fileKey(this.guestPath(r));
+        if (this.readOnlyKey(key)) { r.setResultCf(true); r.set('ax', 5); return true; }
         const rec = key && this.tempFiles.get(key);
         if (rec && rec.temporary && rec.attributesActive && (rec.attributes & 1)) { r.setResultCf(true); r.set('ax', 5); return true; }
         if (this.hostKey(key)) { r.setResultCf(true); r.set('ax', 5); return true; }
@@ -5254,7 +5564,7 @@ class Machine {
           const rest = name.replace(/^[A-Za-z]:/, '').replace(/\//g, '\\');
           const parts = rest.split('\\').filter(Boolean);
           if (!parts.length || rest.includes(':')) return null;
-          return { drive: drive ? drive[1].toUpperCase() : 'C', key: this.fileKey(name) };
+          return { drive: drive ? drive[1].toUpperCase() : String.fromCharCode(65 + this.currentDrive), key: this.fileKey(name) };
         };
         const from = parse(source), to = parse(target);
         if (!from || !to) return fail(3);
@@ -5273,6 +5583,12 @@ class Machine {
         return true;
       }
       case 0x36: {                              // free disk space
+        const requested = r.get('dx') & 255, drive = requested ? requested - 1 : this.currentDrive;
+        if (!this.driveAvailable(drive)) { r.set('ax', 0xffff); return true; }
+        const volume = this.floppyVolumes.get(drive);
+        if (volume) {
+          r.set('ax', volume.spc); r.set('cx', volume.bps); r.set('dx', volume.clusters); r.set('bx', volume.freeClusters); return true;
+        }
         r.set('ax', 8);                         // sectors per cluster
         r.set('cx', 512);                       // bytes per sector
         r.set('dx', 0xFFFF);                    // total clusters
@@ -5280,9 +5596,10 @@ class Machine {
         return true;
       }
       case 0x3E: {                              // close
-        const closing = this.files.get(r.get('bx') & 0xFFFF);
+        const handle = r.get('bx') & 0xffff, closing = this.files.get(handle);
         if (closing && closing.rec && closing.rec.temporary) closing.rec.attributesActive = true;
-        this.files.delete(r.get('bx') & 0xFFFF);
+        this.files.delete(handle);
+        if (closing && handle >= 5) this.fileNext = Math.min(this.fileNext, handle);
         r.setResultCf(false);
         return true;
       }
@@ -5344,10 +5661,11 @@ class Machine {
           r.setResultCf(false); return true;
         }
         const key = this.resolvePath(name, true), directory = key !== null && this.isDirectory(key);
+        const entry = key && this.readOnlyKey(key) && this.volumeEntry(key);
         const p = this.hostKey(key);
-        if (!p && !rec && !directory) { r.setResultCf(true); r.set('ax', 2); return true; }
+        if (!p && !rec && !directory && !entry) { r.setResultCf(true); r.set('ax', 2); return true; }
         if (al !== 0) { r.setResultCf(true); r.set('ax', 5); return true; }
-        r.set('cx', directory ? 0x10 : 0x20);
+        r.set('cx', directory ? 0x10 : entry ? entry.attributes : 0x20);
         r.setResultCf(false);
         return true;
       }
@@ -5572,6 +5890,17 @@ class Machine {
         return this.findNext(r, 2);
       }
       case 0x4F: return this.findNext(r, 0x12);
+      case 0x2A: {                              // get date (binary, Sunday=0)
+        // The DOS clock starts at its epoch, 1980-01-01, at tick zero.
+        // Use the same virtual milliseconds as AH=2Ch, not the host wall
+        // clock: pausing/checkpointing a machine must not change its date.
+        // UTC arithmetic avoids host time zones and daylight-saving gaps.
+        const date = new Date(Date.UTC(1980, 0, 1) + this.ticks * 55);
+        r.set('ax', (r.get('ax') & 0xFF00) | date.getUTCDay());
+        r.set('cx', date.getUTCFullYear());
+        r.set('dx', ((date.getUTCMonth() + 1) << 8) | date.getUTCDate());
+        return true;
+      }
       case 0x2C: {                              // get time
         const t = this.ticks * 55;
         r.set('cx', (Math.floor(t / 3600000) << 8) | (Math.floor(t / 60000) % 60));

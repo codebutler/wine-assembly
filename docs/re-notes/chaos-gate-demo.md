@@ -138,3 +138,150 @@ input into a mission and investigate any actual next failure, including the
 unverified button text behavior. No subsequent unimplemented API is established
 by this bounded launch. Expandable memory files/custom IOProcs remain outside
 this implementation.
+
+## Ordinary pre-mission input qualification
+
+Run `20261013T1236Z-chaos-gameplay` uses the unchanged MMIO candidate module
+above, Node v24.18.1, threaded CLI, 640 × 480, and the original extracted
+fixture on `bx_gd476s95`. A real pointer click at `(320,225)` at batch 60000
+opens the Cathedral Bridge. Clicking its green briefing display at `(320,245)`
+opens a readable mission briefing. Clicking the skull at `(320,435)` returns
+to the hub; its far-right door at `(580,330)` opens the squad loadout with
+rendered marine, weapons, statistics, and character name. These are actual
+renderer input events with DOWN/UP delivery recorded by `--trace-input`;
+no guest-state writes.
+
+The fixture's `Chaos_Demo.txt` documents the required route: read the briefing,
+click its skull to return, enter the far-right Configure Squads door, leave
+loadout through its right-hand doors, then enter the center-left Enter Battle
+door. The center foreground floor is not the deployment control. Main-menu
+button labels remain absent, but the hub tooltip and briefing text do render.
+
+Loadout exits through `(565,105)`. Hovering `(130,330)` on the hub then shows
+`Enter Combat <E>` and highlights the center-left door. Clicking it at batch
+115000 starts mission loading and creates guest thread 3 at `0x004b8e60`
+with `CREATE_SUSPENDED`, parameter `0x00978fc4`, handle `0x000e1002`.
+The run subsequently stops returning from main `instance.exports.run(BATCH_SIZE)`: no
+batch-140000 image, final image, API trap, or CLI 70-second timeout appeared.
+It remained CPU-active beyond 90 seconds and did not service SIGTERM.
+A Node inspector pause at 12:42:09 UTC captured `$func546` (`$th_block_retired`,
+mapped using this module's combined WAT), `$run`, and the main JS `run` call.
+This identifies an active interpreter run, not the guest instruction causing
+it. The process was explicitly killed at 12:42:28 UTC (exit 137), and the
+remote runtime slot released. No battlefield or player control is qualified.
+
+Reproduction (append image actions from `evidence.json` for the saved route):
+
+```sh
+node test/run.js --exe=/home/user/chaos-fixture/game/WH40KDemo.exe \
+  --threads --vfs-include='**/*' --no-build --quiet-api --quiet-blocks \
+  --max-seconds=70 --max-batches=150000 --trace-input \
+  --input=60000:click:320:225,70000:click:320:245,80000:click:320:435,90000:click:580:330,100000:click:565:105,115000:click:130:330
+```
+
+Use an external process deadline as well as the CLI guard for this reproduction.
+Next investigation: capture guest EIP/registers and thread state while paused
+inside this non-yielding `run`; test whether the default uop path or mission
+synchronization is responsible. Neither is established by the captured stack.
+No emulator source changed in this input-qualification follow-up, so no build
+or regression suite was rerun. The prior build/test evidence remains separate.
+Missing optional `ole32.dll` and `comctl32.dll` PE fixtures remain explicit.
+
+## Mission stall: bounded inspector comparison
+
+Run `20261013T1254Z-chaos-stall`, 12:55–13:00 UTC, retained the same fixture,
+module hash, remote checkout, Node version and ordinary six-click route above.
+`supervise.js` records the full argument vectors, launches a separate Node child
+with inspector port 9231, reads state at 40 seconds, and independently kills
+that child at 80 seconds. All owned processes were stopped before runtime
+release. No emulator source, build or test changes were made.
+
+The default run paused at batch **124508**, guest EIP **0x00507330**, with
+`dbg_prev_eip` and `dbg_prev2_eip` also 0x00507330, block budget 1000, and
+yield reason zero. Exported EAX/ECX/EDX/EBX/ESP/EBP/ESI were all zero; EDI was
+0xff659b68. The sampled stack contains `$branch_end_at` and `$run`; the prior
+run's `$th_block_retired` sample is consistent with the same dispatch cycle.
+Thread state was T1 waiting at 0x004fb9cc, T2 idle at 0x07503ed0, and
+T3 exited at 0x004b8e7f. Thus the original suspended worker had already run
+and exited; its creation is not itself the established stall cause.
+The supervisor killed the child at 12:56:54.716 UTC.
+
+Disassembly identifies 0x00507330 as a guest memset-like routine: destination,
+fill byte, and count are stack arguments; it aligns the destination, executes
+`rep stosd` at 0x00507371, and returns at 0x00507383. The pre-corruption caller
+and arguments have **not** been captured. The repeated retired-block entry
+and refunded block budget explain the observed non-yielding symptom, but the
+cause of the zero register file is not established.
+
+The otherwise matching **`--no-uop` diagnostic is not a fix**. At its 40-second
+pause (batch 124334), main was at 0x00507371 with all exported GPRs zero and
+budget 74. Its stack sampled `$gs32`, `$rep_stos_mem`, and `$th_rep_stosd`.
+Its final log reports `STUCK at EIP=0x00507383 after 11 batches`,
+ESP zero, EDI 0xff659b68, a worker-1 zero-EIP exit, and a worker-2 unreachable
+trap at 0x07503ed0. GDI DC/object counts were zero. The inspected final
+640 × 480 image is black. CLI exit code zero at 12:57:47.527 UTC reflects its
+stop/report path, not a successful game exit or mission. The corruption
+symptoms therefore occur with both dispatch configurations.
+
+A third, bounded `--trace-eip-range=0x507330-0x507330
+--trace-eip-from=115000 --trace-eip-detail` attempt was inconclusive:
+worker tracing produced entry-only lines from startup, and its inspector
+sample was still at batch 111175, before Enter Combat. It was killed at
+12:59:34.386 UTC. Do not use that sample as mission-state evidence. An
+experimental unnamed-WASM-global index mapping was also unvalidated and is
+excluded from conclusions; exported getters above are the state evidence.
+
+Next useful probe: capture the last valid main-thread stack and the arguments
+to 0x00507330 immediately before the shared register/GDI state is lost, with
+thread-filtered tracing or a conditional inspector breakpoint. Investigate
+the destination/count and the actual memory writer before changing cache
+retirement or guest synchronization. Neither changing the retired-block budget
+nor disabling uops would repair the demonstrated loss of guest state.
+
+The compact local evidence directory contains both run logs, inspector stacks
+and getter results, supervisor exit records and exact commands, the reviewed
+black diagnostic frame, and the explicitly inconclusive trace. The fixture
+remains unregistered; no unrelated dashboard candidate was assigned.
+
+## 2026-11-01: bounded local replacement check stops at missing fixtures
+
+Run `20261101-new-local-game-replacement` is **static preparation only**.
+Current `lib/apps.js` was loaded as registry data: its actual `DESKTOP_APPS`
+contains 46 entries, excluding Chaos Gate and Constructor. The complete list,
+registry SHA-256, observed main HEAD, input hashes and exact-path checks are in
+`scratch/runs/20261101-new-local-game-replacement/{public-list,static-check}.json`.
+Existing notes/TODOS exclude already qualified titles, including the stale
+TR3 reserve, Rune, Redline, Dredmor (both packages are one title), WinBoard,
+Croc 2 and THPS2. Owner-held lanes were not reopened.
+
+The two remaining specifically inspected titles cannot supply an immediate
+local gameplay assignment:
+
+| Title | Concrete first dependency |
+| --- | --- |
+| Chaos Gate | Documented `/home/user/chaos-fixture/game/WH40KDemo.exe` is absent here; `test/binaries/candidates/chaos-gate-demo` is also absent and no app is registered. The historical fixture was on `bx_gd476s95`, whose current availability is unknown. Recover an authentic complete tree before launch preparation. |
+| Constructor | All 28 files named by `test/toyvm-dos-corpus/files/constructor-demo.json` are absent under its declared `test/binaries/dos-games/constructor-demo` root, including `GAME.EXE`, DOS4GW and five distinct DATA.FIL resources. Expected total is 63,205,318 bytes; file-list SHA-256 is `999c95440cd4c9e5155931db7243f6a55fd1e03b66bd9c98839ff041bc41d79c`. Historical graphics detection also remains unqualified; see `constructor-demo.md`. |
+
+The historical Chaos Gate executable hash above and Constructor's recorded
+`d0ac2f05b9a813dc723f170f7418fbfd9af269abcbce8905062c3b63f27dc587`
+are **expected identities, not freshly verified executable hashes**. Neither
+missing executable can be hashed now. No Chaos Gate asset manifest was
+invented. These checks establish a bounded pool blocker at the documented
+paths, not absence everywhere on disk or exhaustion of every possible title.
+
+Next dependency is provision of one complete original fixture from an available
+owner-controlled copy, with executable and every required asset verified.
+For Chaos Gate, preserve SMACKW32/WinG/palette/data paths; the retained six-click
+command above is an exact historical pre-mission route, not a current passing
+launch recipe. Its last observed boundary was corrupted register/GDI state at
+mission loading, with no battlefield or ordinary unit control. Any later
+assignment must first reproduce that boundary on the files actually run,
+then use visible mission controls; it must not revive held concurrency/SEH
+work under a new title label. Relevant existing regressions are
+`test-wing-recommend-dib-format.js`, `test-wing-bitmap.js` and
+`test-mmio-write.js`; these were identified, not executed in this static task.
+
+Stopped after these two dependencies. No download, game, build, browser, Boat,
+source/test edit, fresh capture, FPS or deployment occurred. Sampled free disk
+was 2,186,375,168 bytes, above the requested 2 GB floor. Box ID/state/expiry
+and local runtime shutdown are N/A; coordinator lifecycle ownership is untouched.

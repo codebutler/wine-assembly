@@ -7,6 +7,7 @@ const {
   PACKED_DRAW_OPCODE, VERTEX_FLOATS, ARG_WORDS, BARRIERS,
 } = ABI;
 const TEXTURE_UNITS = 2;
+const SOURCE_FLOATS = 28;
 const stats = {
   calls: 0, byOpcode: new Float64Array(128), spans: 0,
   packedRecords: 0, packedVertices: 0, flushes: 0,
@@ -79,33 +80,33 @@ const stats = {
     return total;
   }
 
-  function appendVertex(out, offset, vertices, index, colorStart) {
-    const start = index * VERTEX_FLOATS;
-    for (let i = 0; i < VERTEX_FLOATS; i++) {
-      out[offset++] = colorStart >= 0 && i >= 3 && i < 7
+  function appendVertex(out, offset, vertices, index, colorStart, stride) {
+    const start = index * stride;
+    for (let i = 0; i < stride; i++) {
+      out[offset++] = colorStart >= 0 && ((i >= 3 && i < 7) || i >= 19)
         ? vertices[colorStart + i - 3] : vertices[start + i];
     }
     return offset;
   }
 
-  function appendTriangle(out, offset, vertices, a, b, c, flat, provoking = c) {
-    const colorStart = flat ? provoking * VERTEX_FLOATS + 3 : -1;
-    offset = appendVertex(out, offset, vertices, a, colorStart);
-    offset = appendVertex(out, offset, vertices, b, colorStart);
-    return appendVertex(out, offset, vertices, c, colorStart);
+  function appendTriangle(out, offset, vertices, a, b, c, flat, provoking = c, stride = VERTEX_FLOATS) {
+    const colorStart = flat ? provoking * stride + 3 : -1;
+    offset = appendVertex(out, offset, vertices, a, colorStart, stride);
+    offset = appendVertex(out, offset, vertices, b, colorStart, stride);
+    return appendVertex(out, offset, vertices, c, colorStart, stride);
   }
 
-  function appendLine(out, offset, vertices, a, b, flat, provoking = b) {
-    const colorStart = flat ? provoking * VERTEX_FLOATS + 3 : -1;
-    offset = appendVertex(out, offset, vertices, a, colorStart);
-    return appendVertex(out, offset, vertices, b, colorStart);
+  function appendLine(out, offset, vertices, a, b, flat, provoking = b, stride = VERTEX_FLOATS) {
+    const colorStart = flat ? provoking * stride + 3 : -1;
+    offset = appendVertex(out, offset, vertices, a, colorStart, stride);
+    return appendVertex(out, offset, vertices, b, colorStart, stride);
   }
 
   // Turn boundary-sensitive desktop primitives into independent WebGL
   // primitives. Independent triangles/lines can subsequently be concatenated
   // without accidentally joining adjacent glBegin/glEnd blocks.
-  function normalizeImmediate(mode, vertices, shadeModel) {
-    const count = Math.floor(vertices.length / VERTEX_FLOATS);
+  function normalizeImmediate(mode, vertices, shadeModel, stride = VERTEX_FLOATS) {
+    const count = Math.floor(vertices.length / stride);
     const flat = shadeModel === GL.FLAT;
     let outputVertices = 0;
     if (mode === GL.TRIANGLES && flat) {
@@ -125,55 +126,56 @@ const stats = {
       return { mode, vertices: vertices instanceof Float32Array
         ? vertices : new Float32Array(vertices) };
     }
-    const out = new Float32Array(outputVertices * VERTEX_FLOATS);
+    const out = new Float32Array(outputVertices * stride);
     let offset = 0;
     if (mode === GL.TRIANGLES && flat) {
       for (let i = 0; i + 2 < count; i += 3) {
-        offset = appendTriangle(out, offset, vertices, i, i + 1, i + 2, true);
+        offset = appendTriangle(out, offset, vertices, i, i + 1, i + 2, true, i + 2, stride);
       }
     } else if (mode === GL.LINES && flat) {
       for (let i = 0; i + 1 < count; i += 2) {
-        offset = appendLine(out, offset, vertices, i, i + 1, true);
+        offset = appendLine(out, offset, vertices, i, i + 1, true, i + 1, stride);
       }
     } else if (mode === GL.QUADS) {
       for (let i = 0; i + 3 < count; i += 4) {
         // An independent quad's fourth vertex shades both lowered triangles.
-        offset = appendTriangle(out, offset, vertices, i, i + 1, i + 2, flat, i + 3);
-        offset = appendTriangle(out, offset, vertices, i, i + 2, i + 3, flat, i + 3);
+        offset = appendTriangle(out, offset, vertices, i, i + 1, i + 2, flat, i + 3, stride);
+        offset = appendTriangle(out, offset, vertices, i, i + 2, i + 3, flat, i + 3, stride);
       }
       mode = GL.TRIANGLES;
     } else if (mode === GL.QUAD_STRIP) {
       for (let i = 0; i + 3 < count; i += 2) {
         // GL_QUAD_STRIP uses the last vertex of each logical quad, not the
         // last vertex of each triangle produced for WebGL.
-        offset = appendTriangle(out, offset, vertices, i, i + 1, i + 3, flat, i + 3);
-        offset = appendTriangle(out, offset, vertices, i, i + 3, i + 2, flat, i + 3);
+        offset = appendTriangle(out, offset, vertices, i, i + 1, i + 3, flat, i + 3, stride);
+        offset = appendTriangle(out, offset, vertices, i, i + 3, i + 2, flat, i + 3, stride);
       }
       mode = GL.TRIANGLES;
     } else if (mode === GL.POLYGON) {
       // A single polygon is shaded by its first vertex in legacy OpenGL.
       for (let i = 1; i + 1 < count; i++) {
-        offset = appendTriangle(out, offset, vertices, 0, i, i + 1, flat, 0);
+        offset = appendTriangle(out, offset, vertices, 0, i, i + 1, flat, 0, stride);
       }
       mode = GL.TRIANGLES;
     } else if (mode === GL.TRIANGLE_FAN) {
       for (let i = 1; i + 1 < count; i++) {
-        offset = appendTriangle(out, offset, vertices, 0, i, i + 1, flat, i + 1);
+        offset = appendTriangle(out, offset, vertices, 0, i, i + 1, flat, i + 1, stride);
       }
       mode = GL.TRIANGLES;
     } else if (mode === GL.TRIANGLE_STRIP) {
       for (let i = 0; i + 2 < count; i++) {
-        if (i & 1) offset = appendTriangle(out, offset, vertices, i + 1, i, i + 2, flat);
-        else offset = appendTriangle(out, offset, vertices, i, i + 1, i + 2, flat);
+        if (i & 1) offset = appendTriangle(out, offset, vertices, i + 1, i, i + 2, flat, i + 2, stride);
+        else offset = appendTriangle(out, offset, vertices, i, i + 1, i + 2, flat, i + 2, stride);
       }
       mode = GL.TRIANGLES;
     } else if (mode === GL.LINE_LOOP || mode === GL.LINE_STRIP) {
       const edges = mode === GL.LINE_LOOP ? count : Math.max(0, count - 1);
       for (let i = 0; i < edges; i++) {
         const end = (i + 1) % count;
-        offset = appendLine(out, offset, vertices, i, end, flat, end);
+        offset = appendLine(out, offset, vertices, i, end, flat, end, stride);
       }
-      mode = GL.LINES;
+      // Preserve connectivity when lowering strips/loops to independent pairs.
+      mode = GL.LINES | 0x1000000;
     }
     return { mode, vertices: offset === out.length ? out : out.subarray(0, offset) };
   }
@@ -181,13 +183,23 @@ const stats = {
   function pointerSpec(opcode, view, stackWa) {
     let arg = -1, length = 0, borrow = false;
     switch (opcode | 0) {
-      case 112: { // glTexParameterfv: invalid enums must not read params
-        if (u32At(view, stackWa, 0) !== 0x0DE1) break;
+      case 147: {
+      if (u32At(view,stackWa,0)!==0x2300) break;
+      const count=u32At(view,stackWa,1)===0x2201?4:u32At(view,stackWa,1)===0x2200?1:0;
+      if(count) {arg=2;length=count*4;}
+      break;
+    }
+    case 112: { // glTexParameterfv: invalid enums must not read params
+        if (! [0x0DE0,0x0DE1].includes(u32At(view, stackWa, 0))) break;
         const pname=u32At(view, stackWa, 1);
         if (pname===0x1004) {arg=2;length=16;}
         else if ([0x2800,0x2801,0x2802,0x2803,0x8066].includes(pname)) {arg=2;length=4;}
         break;
       }
+      case 149: arg=7;length=u32At(view,stackWa,3)*(u32At(view,stackWa,6)===0x1406?16:4);break;
+      case 150: arg=6;length=u32At(view,stackWa,3)*(u32At(view,stackWa,5)===0x1406?16:4);break;
+      case 158: case 159: arg=8;length=u32At(view,stackWa,opcode===158?3:4)*u32At(view,stackWa,opcode===158?4:5)*16;break;
+      case 148: arg = 1; length = 32; break; // glClipPlane
       case 34: arg = 0; length = 64; break; // glLoadMatrixf
       case 109: arg = 0; length = 64; break; // glMultMatrixf
       case 43: // glDeleteTextures(count, names)
@@ -209,7 +221,12 @@ const stats = {
         const format = u32At(view, stackWa, 6);
         const type = u32At(view, stackWa, 7);
         length = checkedImageBytes(width, height, format, type);
-        borrow = true;
+        // Only four-byte texels whose rows need no unpack padding are
+        // snapshotted. Larger or other pixel layouts keep their input lease.
+        const snapshot = u32At(view, stackWa, 0) === 0x0DE1
+          && type === 0x1401 && (format === 0x1908 || format === 0x80E1)
+          && length <= 65536 && (width % 2 === 0 || height === 1);
+        borrow = !snapshot;
         break;
       }
       case 61: { // gluBuild2DMipmaps
@@ -223,14 +240,14 @@ const stats = {
         break;
       }
       case 67: // glLightfv(light, pname, params)
-        arg = 2; length = 16; break;
+        arg = 2; length = u32At(view,stackWa,1) <= 0x1203 ? 16 : u32At(view,stackWa,1) === 0x1204 ? 12 : 4; break;
       case 68: // glMaterialfv(face, pname, params)
-        arg = 2; length = u32At(view, stackWa, 1) === 0x1601 ? 4 : 16; break;
+        arg = 2; length = u32At(view, stackWa, 1) === 0x1601 ? 4 : u32At(view,stackWa,1) === 0x1603 ? 12 : 16; break;
       case 69: // glLightModelfv(pname, params)
-        arg = 1; length = 16; break;
+        arg = 1; length = u32At(view,stackWa,0) === 0xb53 ? 16 : 4; break;
       case 78: // glFogfv(pname, params)
         arg = 1; length = u32At(view, stackWa, 0) === 0x0B66 ? 16 : 4; break;
-      case 83: // glTexGenfv(coord, pname, params)
+      case 85: // glTexGenfv(coord, pname, params)
         arg = 2; length = u32At(view, stackWa, 1) === 0x2500 ? 4 : 16; break;
       case 98: { // gluBuild1DMipmaps(target, internal, width, format, type, data)
         arg = 5;
@@ -260,6 +277,7 @@ const stats = {
           || typeof this.submit !== 'function') {
         throw new TypeError('GL command encoder needs getMemory, guestToWasm, and submit');
       }
+      this.exactColors = !!options.exactColors;
       this.capacity = Math.max(256, options.capacity || DEFAULT_BYTES);
       const BufferType = options.shared !== false && typeof SharedArrayBuffer === 'function'
         ? SharedArrayBuffer : ArrayBuffer;
@@ -275,7 +293,7 @@ const stats = {
       // Reused across glBegin/glEnd spans. Immediate-mode games submit many
       // tiny vertices, so a JS Array push followed by a Float32Array copy made
       // every frame create garbage proportional to its geometry.
-      this.immediateVertices = new Float32Array(VERTEX_FLOATS * 64);
+      this.immediateVertices = new Float32Array(SOURCE_FLOATS * 64);
       this.memoryBuffer = null;
       this.memoryView = null;
     }
@@ -285,7 +303,7 @@ const stats = {
       if (!state) {
         // Texture coordinates are (s, t, r, q): q is 1 unless glTexCoord4f,
         // glMultiTexCoord4fARB or a 4-component array set it.
-        state = { color: [1, 1, 1, 1], texCoord: [0, 0, 0, 1], normal: [0, 0, 1],
+        state = { source: null, color: [1, 1, 1, 1], texCoord: [0, 0, 0, 1], normal: [0, 0, 1],
           shadeModel: GL.SMOOTH, attribStack: [], clientEnabled: new Set(),
           vertexPointer: null, normalPointer: null, colorPointer: null,
           // ARB_multitexture makes the current texture coordinate, the client
@@ -327,6 +345,7 @@ const stats = {
 
     _setColor(opcode, stackWa) {
       const color = this._state().color;
+      if (this._state().source) this._state().source[0] = 0;
       if (opcode === 23) {
         color[0] = this._f32(stackWa, 0);
         color[1] = this._f32(stackWa, 1);
@@ -344,6 +363,7 @@ const stats = {
         const wa = this.guestToWasm(pointer) >>> 0;
         const view = this._memoryView();
         for (let i = 0; i < 4; i++) color[i] = view.getUint8(wa + i) / 255;
+        this._state().source = [8, ...Array.from({length:4},(_,i)=>view.getUint8(wa+i))];
       }
     }
 
@@ -381,7 +401,7 @@ const stats = {
     _appendResolvedVertex(x, y, z, w = 1) {
       if (!this.immediate) return false;
       const state = this._state();
-      this._reserveImmediate(VERTEX_FLOATS);
+      this._reserveImmediate(SOURCE_FLOATS);
       let offset = this.immediate.length;
       this.immediateVertices[offset++] = x;
       this.immediateVertices[offset++] = y;
@@ -399,6 +419,9 @@ const stats = {
       this.immediateVertices[offset++] = state.texCoord[3];
       this.immediateVertices[offset++] = state.texCoord1[2];
       this.immediateVertices[offset++] = state.texCoord1[3];
+      const source=state.source || [0,0,0,0,0];
+      for(let i=1;i<=4;i++){this.immediateVertices[offset++]=source[i]&65535;this.immediateVertices[offset++]=source[i]>>>16;}
+      this.immediateVertices[offset++]=source[0];
       this.immediate.length = offset;
       return true;
     }
@@ -444,6 +467,15 @@ const stats = {
         if (color) {
           for (let i = 0; i < size && i < 4; i++) state.color[i] = color[i];
           if (size < 4) state.color[3] = 1;
+          const pointer=state.colorPointer,info=this._arrayType(pointer.type);
+          if(state.source)state.source[0]=0;
+          if(info.max && this.exactColors){
+            const wa=this.guestToWasm((pointer.pointer+index*(pointer.stride||size*info.bytes))>>>0)>>>0;
+            const signed=!(pointer.type&1),bits=info.bytes*8;
+            const raw=Array.from({length:4},(_,i)=>i<size?(this._memoryView()[info.get](wa+i*info.bytes,true)>>>0)%(2**bits):0);
+            state.source=[bits+(signed?256:0)+(size===3?512:0),...raw];
+            for(let i=0;i<size;i++)state.color[i]=signed?(2*(raw[i]<<(32-bits)>>(32-bits))+1)/(2**bits-1):raw[i]/(2**bits-1);
+          }
         }
       }
       for (let unit = 0; unit < TEXTURE_UNITS; unit++) {
@@ -471,7 +503,7 @@ const stats = {
       if ((count | 0) < 1 || (first | 0) < 0) return;
       const state = this._state();
       if (!state.clientEnabled.has(GL.VERTEX_ARRAY) || !state.vertexPointer) return;
-      const saved = { color: state.color.slice(), texCoord: state.texCoord.slice(),
+      const saved = { source: state.source?.slice() || null, color: state.color.slice(), texCoord: state.texCoord.slice(),
         texCoord1: state.texCoord1.slice(), normal: state.normal.slice() };
       this.immediate = { mode, length: 0 };
       try {
@@ -479,6 +511,7 @@ const stats = {
         this._finishImmediate();
       } finally {
         this.immediate = null;
+        state.source=saved.source;
         for (let i = 0; i < 4; i++) state.color[i] = saved.color[i];
         for (let i = 0; i < 4; i++) state.texCoord[i] = saved.texCoord[i];
         for (let i = 0; i < 4; i++) state.texCoord1[i] = saved.texCoord1[i];
@@ -495,7 +528,7 @@ const stats = {
       if (!info || !count) return;
       const state = this._state();
       if (!state.clientEnabled.has(GL.VERTEX_ARRAY) || !state.vertexPointer) return;
-      const saved = { color: state.color.slice(), texCoord: state.texCoord.slice(),
+      const saved = { source: state.source?.slice() || null, color: state.color.slice(), texCoord: state.texCoord.slice(),
         texCoord1: state.texCoord1.slice(), normal: state.normal.slice() };
       const view = this._memoryView();
       const wa = this.guestToWasm(indices >>> 0) >>> 0;
@@ -507,6 +540,7 @@ const stats = {
         this._finishImmediate();
       } finally {
         this.immediate = null;
+        state.source=saved.source;
         for (let i = 0; i < 4; i++) state.color[i] = saved.color[i];
         for (let i = 0; i < 4; i++) state.texCoord[i] = saved.texCoord[i];
         for (let i = 0; i < 4; i++) state.texCoord1[i] = saved.texCoord1[i];
@@ -514,15 +548,20 @@ const stats = {
       }
     }
 
-    _capturePacked(mode, vertices) {
-      const groupVertices = mode === GL.TRIANGLES ? 3 : mode === GL.LINES ? 2 : 1;
-      const maxFloats = Math.floor((this.capacity - HEADER_BYTES) / 4 / VERTEX_FLOATS)
-        * VERTEX_FLOATS;
-      const chunkFloats = Math.floor(maxFloats / (groupVertices * VERTEX_FLOATS))
-        * groupVertices * VERTEX_FLOATS;
+    _capturePacked(mode, vertices, exact) {
+      const stride=exact?SOURCE_FLOATS:VERTEX_FLOATS;
+      if(!exact){const legacy=new Float32Array(vertices.length/SOURCE_FLOATS*VERTEX_FLOATS);
+        for(let i=0;i<vertices.length/SOURCE_FLOATS;i++)legacy.set(vertices.subarray(i*SOURCE_FLOATS,i*SOURCE_FLOATS+VERTEX_FLOATS),i*VERTEX_FLOATS);
+        vertices=legacy;}
+      const primitive = mode & 0xff;
+      const groupVertices = primitive === GL.TRIANGLES ? 3 : primitive === GL.LINES ? 2 : 1;
+      const maxFloats = Math.floor((this.capacity - HEADER_BYTES) / 4 / stride)
+        * stride;
+      const chunkFloats = Math.floor(maxFloats / (groupVertices * stride))
+        * groupVertices * stride;
       if (!chunkFloats) throw new RangeError('GL command buffer cannot hold one packed primitive');
       stats.packedRecords++;
-      stats.packedVertices += vertices.length / VERTEX_FLOATS;
+      stats.packedVertices += vertices.length / stride;
       for (let base = 0; base < vertices.length; base += chunkFloats) {
         const length = Math.min(chunkFloats, vertices.length - base);
         const recordBytes = align4(HEADER_BYTES + length * 4);
@@ -530,8 +569,9 @@ const stats = {
         const start = this.used;
         const pointerOffset = start + HEADER_BYTES;
         this.view.setUint32(start, recordBytes, true);
-        this.view.setUint32(start + 4, PACKED_DRAW_OPCODE, true);
-        this.view.setUint32(start + 8, mode >>> 0, true);
+        this.view.setUint32(start + 4, exact ? ABI.EXACT_DRAW_OPCODE : PACKED_DRAW_OPCODE, true);
+        const continuation = base && (mode & 0x1000000) ? 0x2000000 : 0;
+        this.view.setUint32(start + 8, (mode | continuation) >>> 0, true);
         this.view.setUint32(start + 12, 0, true);
         this.view.setUint32(start + 16, 0, true);
         this.view.setUint32(start + 20, length * 4, true);
@@ -549,8 +589,9 @@ const stats = {
       if (!immediate || !immediate.length) return;
       const vertices = this.immediateVertices.subarray(0, immediate.length);
       stats.spans++;
-      const geometry = normalizeImmediate(immediate.mode, vertices, this._state().shadeModel);
-      if (geometry.vertices.length) this._capturePacked(geometry.mode, geometry.vertices);
+      const exact=this.exactColors && vertices.some((x,i)=>i%SOURCE_FLOATS===27 && x!==0);
+      const geometry = normalizeImmediate(immediate.mode, vertices, this._state().shadeModel, SOURCE_FLOATS);
+      if (geometry.vertices.length) this._capturePacked(geometry.mode, geometry.vertices, exact);
     }
 
     _capture(opcode, stackWa, aux, pointer, borrowed) {
@@ -601,6 +642,7 @@ const stats = {
         return 0;
       }
       if (opcode === 56) {
+        this._state().source=[8,...Array.from({length:4},(_,i)=>u32At(memoryView,stackWa,i)&255)];
         const color = this._state().color;
         for (let i = 0; i < 4; i++) {
           color[i] = (u32At(memoryView, stackWa, i) & 0xFF) / 255;
@@ -608,6 +650,7 @@ const stats = {
         return 0;
       }
       if (opcode === 111) { // glColor3ub(r, g, b)
+        this._state().source=[520,...Array.from({length:3},(_,i)=>u32At(memoryView,stackWa,i)&255),0];
         const color = this._state().color;
         for (let i = 0; i < 3; i++) {
           color[i] = (u32At(memoryView, stackWa, i) & 0xFF) / 255;
@@ -623,6 +666,7 @@ const stats = {
         color[1] = memoryView.getUint8(wa + 1) / 255;
         color[2] = memoryView.getUint8(wa + 2) / 255;
         color[3] = 1;
+        this._state().source=[520,memoryView.getUint8(wa),memoryView.getUint8(wa+1),memoryView.getUint8(wa+2),0];
         return 0;
       }
       if (opcode === 28) {
@@ -767,7 +811,7 @@ const stats = {
       if (opcode === 76) {
         const state = this._state();
         state.attribStack.push({
-          color: state.color.slice(), texCoord: state.texCoord.slice(),
+          source: state.source?.slice() || null, color: state.color.slice(), texCoord: state.texCoord.slice(),
           texCoord1: state.texCoord1.slice(),
           normal: state.normal.slice(), shadeModel: state.shadeModel,
         });
@@ -775,6 +819,7 @@ const stats = {
         const state = this._state();
         const saved = state.attribStack.pop();
         if (saved) {
+          state.source=saved.source;
           for (let i = 0; i < 4; i++) state.color[i] = saved.color[i];
           for (let i = 0; i < 4; i++) state.texCoord[i] = saved.texCoord[i];
           for (let i = 0; i < 4; i++) state.texCoord1[i] = saved.texCoord1[i];

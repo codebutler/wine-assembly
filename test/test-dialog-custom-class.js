@@ -198,9 +198,8 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_get_window_dc(child), childDc,
     'later GetDC calls reuse the same CS_OWNDC state');
 
-  // Resize helpers may seed COLOR_BTNFACE for the ordinary #32770 dialog
-  // class, but must not synchronously cover an application-owned custom
-  // dialog after its DlgProc has painted it.
+  // Position helpers must not bypass WM_ERASEBKGND to overwrite a dialog's
+  // background, whether its template names a custom class or uses #32770.
   e.test_move_window(hwnd);
   e.test_set_window_pos(hwnd);
   assert.deepStrictEqual(erases, [],
@@ -216,11 +215,11 @@ const extraWat = String.raw`
   const defaultHwnd = hwnd + 1;
   e.test_load_dialog(defaultHwnd, defaultTemplate);
   e.test_move_window(defaultHwnd);
+  assert.deepStrictEqual(erases, [],
+    'MoveWindow leaves dialog background erasure to the paint dispatch');
   e.test_set_window_pos(defaultHwnd);
-  assert.deepStrictEqual(erases, [
-    [defaultHwnd, 16],
-    [defaultHwnd, 16],
-  ], 'ordinary dialogs retain the compatibility BTNFACE resize seed');
+  assert.deepStrictEqual(erases, [],
+    'SetWindowPos must not add an unconditional erase after notifications');
 
   console.log('PASS  custom DLGTEMPLATE class state is inherited');
 })().catch(error => {

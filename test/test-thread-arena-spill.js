@@ -131,7 +131,8 @@ async function main() {
   x.test_arena_reserve();
   assert.strictEqual(get(RECYCLES), 3);
   x.test_arena_depth_leave();
-  x.test_arena_set_depth(1);
+  // Model a real new nested invocation, including its private identity.
+  x.test_arena_depth_enter();
   x.test_arena_set_alloc(get(SPILL_BASE) + 4);
 
   // The nested run ends. Back at depth 0 with the spill in use, every

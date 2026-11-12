@@ -4425,6 +4425,90 @@
     "\91\67\26\69\6d\25\65\27\6b\61"   ;; 0x46..0x4f (4B/4D/48 favor arrow VKs)
     "\28\63\60\6e\00\00\00\7a\7b")     ;; 0x50..0x58 (50 favors VK_DOWN over NP2)
 
+  ;; Shared MAPVK_VK_TO_VSC mapping for MapVirtualKey and OemKeyScan.
+  (func $vk_to_scan (param $uCode i32) (result i32)
+    (local $result i32)
+    (if (i32.eq (local.get $uCode) (i32.const 0x08)) (then (return (i32.const 0x0E)))) ;; Backspace
+    (if (i32.eq (local.get $uCode) (i32.const 0x03)) (then (return (i32.const 0x46)))) ;; Cancel
+    (block $vk0_done
+      ;; Letters A-Z: vkeys 0x41-0x5A -> real PS/2 set-1 scancodes via table
+      (if (i32.and (i32.ge_u (local.get $uCode) (i32.const 0x41)) (i32.le_u (local.get $uCode) (i32.const 0x5A)))
+        (then
+          (local.set $result (i32.load8_u (i32.add (region.addr $VK_SCAN_TABLES 0x00) (i32.sub (local.get $uCode) (i32.const 0x41)))))
+          (br $vk0_done)
+        )
+      )
+      ;; OEM punctuation
+      (if (i32.eq (local.get $uCode) (i32.const 0xBA)) (then (local.set $result (i32.const 0x27)) (br $vk0_done))) ;; ;:
+      (if (i32.eq (local.get $uCode) (i32.const 0xBB)) (then (local.set $result (i32.const 0x0D)) (br $vk0_done))) ;; =+
+      (if (i32.eq (local.get $uCode) (i32.const 0xBC)) (then (local.set $result (i32.const 0x33)) (br $vk0_done))) ;; ,<
+      (if (i32.eq (local.get $uCode) (i32.const 0xBD)) (then (local.set $result (i32.const 0x0C)) (br $vk0_done))) ;; -_
+      (if (i32.eq (local.get $uCode) (i32.const 0xBE)) (then (local.set $result (i32.const 0x34)) (br $vk0_done))) ;; .>
+      (if (i32.eq (local.get $uCode) (i32.const 0xBF)) (then (local.set $result (i32.const 0x35)) (br $vk0_done))) ;; /?
+      (if (i32.eq (local.get $uCode) (i32.const 0xC0)) (then (local.set $result (i32.const 0x29)) (br $vk0_done))) ;; `~
+      (if (i32.eq (local.get $uCode) (i32.const 0xDB)) (then (local.set $result (i32.const 0x1A)) (br $vk0_done))) ;; [{
+      (if (i32.eq (local.get $uCode) (i32.const 0xDC)) (then (local.set $result (i32.const 0x2B)) (br $vk0_done))) ;; \|
+      (if (i32.eq (local.get $uCode) (i32.const 0xDD)) (then (local.set $result (i32.const 0x1B)) (br $vk0_done))) ;; ]}
+      (if (i32.eq (local.get $uCode) (i32.const 0xDE)) (then (local.set $result (i32.const 0x28)) (br $vk0_done))) ;; '"
+      ;; Numbers 0-9: vkeys 0x30-0x39 -> scancodes 0x0B,0x02-0x0A
+      (if (i32.and (i32.ge_u (local.get $uCode) (i32.const 0x30)) (i32.le_u (local.get $uCode) (i32.const 0x39)))
+        (then
+          (if (i32.eq (local.get $uCode) (i32.const 0x30))
+            (then (local.set $result (i32.const 0x0B)))
+            (else (local.set $result (i32.sub (local.get $uCode) (i32.const 0x2F))))
+          )
+          (br $vk0_done)
+        )
+      )
+      ;; Space=0x39, Enter=0x1C, Escape=0x01, Tab=0x0F
+      (if (i32.eq (local.get $uCode) (i32.const 0x20)) (then (local.set $result (i32.const 0x39)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x0D)) (then (local.set $result (i32.const 0x1C)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x1B)) (then (local.set $result (i32.const 0x01)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x09)) (then (local.set $result (i32.const 0x0F)) (br $vk0_done)))
+      ;; Shift=0x2A, Ctrl=0x1D, Alt=0x38
+      (if (i32.eq (local.get $uCode) (i32.const 0x10)) (then (local.set $result (i32.const 0x2A)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x11)) (then (local.set $result (i32.const 0x1D)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x12)) (then (local.set $result (i32.const 0x38)) (br $vk0_done)))
+      ;; Arrow keys: Left=0x4B, Up=0x48, Right=0x4D, Down=0x50
+      (if (i32.eq (local.get $uCode) (i32.const 0x25)) (then (local.set $result (i32.const 0x4B)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x26)) (then (local.set $result (i32.const 0x48)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x27)) (then (local.set $result (i32.const 0x4D)) (br $vk0_done)))
+      (if (i32.eq (local.get $uCode) (i32.const 0x28)) (then (local.set $result (i32.const 0x50)) (br $vk0_done)))
+      ;; F1-F12: vkeys 0x70-0x7B -> scancodes 0x3B-0x46,0x57,0x58
+      (if (i32.and (i32.ge_u (local.get $uCode) (i32.const 0x70)) (i32.le_u (local.get $uCode) (i32.const 0x7B)))
+        (then
+          (if (i32.le_u (local.get $uCode) (i32.const 0x79))
+            (then (local.set $result (i32.add (i32.const 0x3B) (i32.sub (local.get $uCode) (i32.const 0x70)))))
+            (else (local.set $result (i32.add (i32.const 0x57) (i32.sub (local.get $uCode) (i32.const 0x7A)))))
+          )
+          (br $vk0_done)
+        )
+      )
+    )
+    (local.get $result))
+
+  ;; OemKeyScan(WORD): US keyboard, OEM CP437. Its extended characters cannot
+  ;; be typed with one US keystroke; do not use the best-fit OEM conversion
+  ;; table, which would turn box drawing / Greek characters into '?'.
+  ;; Like Windows, translation uses the low byte of the WORD argument.
+  (func $oem_key_scan (param $ch i32) (result i32)
+    (local $vk i32)
+    (local $scan i32)
+    (local.set $ch (i32.and (local.get $ch) (i32.const 0xFF)))
+    (if (i32.ge_u (local.get $ch) (i32.const 0x80))
+      (then (return (i32.const -1))))
+    (local.set $vk (call $vk_key_scan (local.get $ch)))
+    (if (i32.eq (local.get $vk) (i32.const 0xFFFF))
+      (then (return (i32.const -1))))
+    (local.set $scan (call $vk_to_scan (i32.and (local.get $vk) (i32.const 0xFF))))
+    (if (i32.eqz (local.get $scan)) (then (return (i32.const -1))))
+    (i32.or (local.get $scan)
+      (i32.shl (i32.and (local.get $vk) (i32.const 0xFF00)) (i32.const 8))))
+
+  (func $handle_OemKeyScan (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $oem_key_scan (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
   ;; 785: MapVirtualKeyA — translate between vkeys, scan codes, and characters
   (func $handle_MapVirtualKeyA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $uCode i32)
@@ -4438,64 +4522,8 @@
       ;; Type 0: vkey -> scan code
       (if (i32.eqz (local.get $uMapType))
         (then
-          (block $vk0_done
-            ;; Letters A-Z: vkeys 0x41-0x5A -> real PS/2 set-1 scancodes via table
-            (if (i32.and (i32.ge_u (local.get $uCode) (i32.const 0x41)) (i32.le_u (local.get $uCode) (i32.const 0x5A)))
-              (then
-                (local.set $result (i32.load8_u (i32.add (region.addr $VK_SCAN_TABLES 0x00) (i32.sub (local.get $uCode) (i32.const 0x41)))))
-                (br $vk0_done)
-              )
-            )
-            ;; OEM punctuation
-            (if (i32.eq (local.get $uCode) (i32.const 0xBA)) (then (local.set $result (i32.const 0x27)) (br $vk0_done))) ;; ;:
-            (if (i32.eq (local.get $uCode) (i32.const 0xBB)) (then (local.set $result (i32.const 0x0D)) (br $vk0_done))) ;; =+
-            (if (i32.eq (local.get $uCode) (i32.const 0xBC)) (then (local.set $result (i32.const 0x33)) (br $vk0_done))) ;; ,<
-            (if (i32.eq (local.get $uCode) (i32.const 0xBD)) (then (local.set $result (i32.const 0x0C)) (br $vk0_done))) ;; -_
-            (if (i32.eq (local.get $uCode) (i32.const 0xBE)) (then (local.set $result (i32.const 0x34)) (br $vk0_done))) ;; .>
-            (if (i32.eq (local.get $uCode) (i32.const 0xBF)) (then (local.set $result (i32.const 0x35)) (br $vk0_done))) ;; /?
-            (if (i32.eq (local.get $uCode) (i32.const 0xC0)) (then (local.set $result (i32.const 0x29)) (br $vk0_done))) ;; `~
-            (if (i32.eq (local.get $uCode) (i32.const 0xDB)) (then (local.set $result (i32.const 0x1A)) (br $vk0_done))) ;; [{
-            (if (i32.eq (local.get $uCode) (i32.const 0xDC)) (then (local.set $result (i32.const 0x2B)) (br $vk0_done))) ;; \|
-            (if (i32.eq (local.get $uCode) (i32.const 0xDD)) (then (local.set $result (i32.const 0x1B)) (br $vk0_done))) ;; ]}
-            (if (i32.eq (local.get $uCode) (i32.const 0xDE)) (then (local.set $result (i32.const 0x28)) (br $vk0_done))) ;; '"
-            ;; Numbers 0-9: vkeys 0x30-0x39 -> scancodes 0x0B,0x02-0x0A
-            (if (i32.and (i32.ge_u (local.get $uCode) (i32.const 0x30)) (i32.le_u (local.get $uCode) (i32.const 0x39)))
-              (then
-                (if (i32.eq (local.get $uCode) (i32.const 0x30))
-                  (then (local.set $result (i32.const 0x0B)))
-                  (else (local.set $result (i32.sub (local.get $uCode) (i32.const 0x2E))))
-                )
-                (br $vk0_done)
-              )
-            )
-            ;; Space=0x39, Enter=0x1C, Escape=0x01, Tab=0x0F
-            (if (i32.eq (local.get $uCode) (i32.const 0x20)) (then (local.set $result (i32.const 0x39)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x0D)) (then (local.set $result (i32.const 0x1C)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x1B)) (then (local.set $result (i32.const 0x01)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x09)) (then (local.set $result (i32.const 0x0F)) (br $vk0_done)))
-            ;; Shift=0x2A, Ctrl=0x1D, Alt=0x38
-            (if (i32.eq (local.get $uCode) (i32.const 0x10)) (then (local.set $result (i32.const 0x2A)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x11)) (then (local.set $result (i32.const 0x1D)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x12)) (then (local.set $result (i32.const 0x38)) (br $vk0_done)))
-            ;; Arrow keys: Left=0x4B, Up=0x48, Right=0x4D, Down=0x50
-            (if (i32.eq (local.get $uCode) (i32.const 0x25)) (then (local.set $result (i32.const 0x4B)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x26)) (then (local.set $result (i32.const 0x48)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x27)) (then (local.set $result (i32.const 0x4D)) (br $vk0_done)))
-            (if (i32.eq (local.get $uCode) (i32.const 0x28)) (then (local.set $result (i32.const 0x50)) (br $vk0_done)))
-            ;; F1-F12: vkeys 0x70-0x7B -> scancodes 0x3B-0x46,0x57,0x58
-            (if (i32.and (i32.ge_u (local.get $uCode) (i32.const 0x70)) (i32.le_u (local.get $uCode) (i32.const 0x7B)))
-              (then
-                (if (i32.le_u (local.get $uCode) (i32.const 0x79))
-                  (then (local.set $result (i32.add (i32.const 0x3B) (i32.sub (local.get $uCode) (i32.const 0x70)))))
-                  (else (local.set $result (i32.add (i32.const 0x57) (i32.sub (local.get $uCode) (i32.const 0x7A)))))
-                )
-                (br $vk0_done)
-              )
-            )
-          )
-          (br $done)
-        )
-      )
+          (local.set $result (call $vk_to_scan (local.get $uCode)))
+          (br $done)))
       ;; Type 1: scan code -> vkey (reverse table at VK_SCAN_TABLES+0x20, scan 0x00..0x58).
       ;; Pinball walks scan 0..0xFF at dialog init and pairs each with
       ;; GetKeyNameTextA to build the Player Controls combobox.
@@ -5279,6 +5307,35 @@
     (i32.store16 offset=32 (local.get $wa) (i32.const 6))         ;; wProcessorLevel
     ;; wProcessorRevision=0 → already zero
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; GetNativeSystemInfo returns the installed OS's architecture. Our native
+  ;; platform is 32-bit x86 (no WOW64 layer), so use the same SYSTEM_INFO as
+  ;; GetSystemInfo. The JavaScript host's architecture is not the guest OS.
+  (func $handle_GetNativeSystemInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_GetSystemInfo (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  ;; IsWow64Process(hProcess, PBOOL): this OS is native x86, not WOW64.
+  ;; FALSE is the output, not the success return. Resolve process identity and
+  ;; XP's PROCESS_QUERY_INFORMATION right before publishing that result. The
+  ;; host owns child/alias handles and their access masks and closed lifetime.
+  (func $handle_IsWow64Process (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $access i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+    (i32.store (global.get $reg_base) (i32.const 0))
+    (if (i32.eqz (call $current_process_handle_valid (local.get $arg0)))
+      (then
+        (local.set $access (call $host_process_ctl (i32.const 6) (local.get $arg0) (i32.const 0x400)))
+        (if (i32.ne (local.get $access) (i32.const 1))
+          (then
+            (global.set $last_error
+              (select (i32.sub (i32.const 0) (local.get $access)) (i32.const 6)
+                (i32.lt_s (local.get $access) (i32.const 0))))
+            (return)))))
+    (if (call $ptr_range_access_bad (local.get $arg1) (i32.const 4) (i32.const 1))
+      (then (global.set $last_error (i32.const 998)) (return))) ;; ERROR_NOACCESS
+    (call $gs32 (local.get $arg1) (i32.const 0))
+    (i32.store (global.get $reg_base) (i32.const 1)))
 
   ;; GetUserName reports its size including the NUL on both success and
   ;; insufficient-buffer failure. A/W differ only in the destination width.
@@ -6399,6 +6456,22 @@
   ;; ThreadManager's synchronization handles or a VFS file handle.
   (global $IOCP_HANDLE_TAG i32 (i32.const 0x1C0C0000))
 
+  ;; Headers, queues and associations are process-shared, including under real
+  ;; Workers. Reserve a cache line in the unused tail (associations end at
+  ;; 25472) for the existing owner/depth lock; no region placement changes.
+  ;; Helpers suffixed _locked require this lock. Never translate guest memory,
+  ;; call a host import or yield while holding it.
+  (func $iocp_lock
+    (call $lock_acquire (region.addr $IOCP_TABLE 0x6400)))
+  (func $iocp_unlock
+    (call $lock_release (region.addr $IOCP_TABLE 0x6400)))
+  ;; A completion may translate guest output after taking its association
+  ;; snapshot. A per-slot generation prevents its later publication into a
+  ;; closed/reused port while allowing the translation to run without the lock.
+  (func $iocp_generation (param $idx i32) (result i32)
+    (i32.add (region.addr $IOCP_TABLE 0x6440)
+      (i32.shl (local.get $idx) (i32.const 2))))
+
   (func $iocp_header (param $idx i32) (result i32)
     (i32.add (global.get $IOCP_TABLE) (i32.mul (local.get $idx) (i32.const 16))))
 
@@ -6432,6 +6505,8 @@
           (i32.store (i32.add (local.get $hdr) (i32.const 4)) (i32.const 0))
           (i32.store (i32.add (local.get $hdr) (i32.const 8)) (i32.const 0))
           (i32.store (i32.add (local.get $hdr) (i32.const 12)) (i32.const 0))
+          (i32.store (call $iocp_generation (local.get $idx))
+            (i32.add (i32.load (call $iocp_generation (local.get $idx))) (i32.const 1)))
           (i32.store (local.get $hdr) (local.get $handle))
           (return (local.get $handle))))
       (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
@@ -6441,11 +6516,20 @@
   ;; Close a port handle. Returns 1 when this was a port, 0 when it was not,
   ;; so CloseHandle can go on to try the other handle namespaces.
   (func $iocp_close (param $handle i32) (result i32)
-    (local $idx i32)
+    (local $idx i32) (local $i i32) (local $e i32)
+    (call $iocp_lock)
     (local.set $idx (call $iocp_slot (local.get $handle)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
-      (then (return (i32.const 0))))
+      (then (call $iocp_unlock) (return (i32.const 0))))
     (i32.store (call $iocp_header (local.get $idx)) (i32.const 0))
+    ;; Drop bindings now, before another creator can reuse the slot.
+    (loop $bindings
+      (local.set $e (call $iocp_assoc_entry (local.get $i)))
+      (if (i32.eq (i32.load offset=4 (local.get $e)) (i32.add (local.get $idx) (i32.const 1)))
+        (then (i32.store offset=4 (local.get $e) (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $bindings (i32.lt_u (local.get $i) (global.get $IOCP_ASSOC_MAX))))
+    (call $iocp_unlock)
     (i32.const 1))
 
   (func $iocp_push (param $idx i32) (param $bytes i32) (param $key i32)
@@ -6504,7 +6588,7 @@
       (i32.add (global.get $IOCP_ASSOC_OFF) (i32.mul (local.get $i) (i32.const 12)))))
 
   ;; The entry for a file handle, or 0 when that handle is bound to no port.
-  (func $iocp_assoc_find (param $handle i32) (result i32)
+  (func $iocp_assoc_find_locked (param $handle i32) (result i32)
     (local $i i32) (local $e i32)
     (if (i32.eqz (local.get $handle)) (then (return (i32.const 0))))
     (block $done (loop $scan
@@ -6518,12 +6602,20 @@
       (br $scan)))
     (i32.const 0))
 
+  ;; External callers only test presence, never dereference the returned entry.
+  (func $iocp_assoc_find (param $handle i32) (result i32)
+    (local $e i32)
+    (call $iocp_lock)
+    (local.set $e (call $iocp_assoc_find_locked (local.get $handle)))
+    (call $iocp_unlock)
+    (local.get $e))
+
   ;; Bind a file handle to a port slot. Re-binding an already-bound handle
   ;; overwrites its key, which is what a second CreateIoCompletionPort on the
   ;; same file means.
   (func $iocp_assoc_add (param $handle i32) (param $idx i32) (param $key i32) (result i32)
     (local $i i32) (local $e i32)
-    (local.set $e (call $iocp_assoc_find (local.get $handle)))
+    (local.set $e (call $iocp_assoc_find_locked (local.get $handle)))
     (if (i32.eqz (local.get $e))
       (then
         (block $done (loop $scan
@@ -6544,9 +6636,11 @@
   ;; CloseHandle can call it without first asking whether it was ever bound.
   (func $iocp_assoc_drop (param $handle i32)
     (local $e i32)
-    (local.set $e (call $iocp_assoc_find (local.get $handle)))
+    (call $iocp_lock)
+    (local.set $e (call $iocp_assoc_find_locked (local.get $handle)))
     (if (local.get $e)
-      (then (i32.store (i32.add (local.get $e) (i32.const 4)) (i32.const 0)))))
+      (then (i32.store (i32.add (local.get $e) (i32.const 4)) (i32.const 0))))
+    (call $iocp_unlock))
 
   ;; Finish one overlapped request on a bound file handle: publish the byte
   ;; count into the OVERLAPPED the guest supplied and queue the completion.
@@ -6558,28 +6652,39 @@
   ;; 0xC0000011 (STATUS_END_OF_FILE) for a short read at EOF.
   (func $iocp_complete_overlapped (param $handle i32) (param $overlapped i32)
       (param $bytes i32) (param $status i32) (result i32)
-    (local $e i32) (local $idx i32)
-    (local.set $e (call $iocp_assoc_find (local.get $handle)))
-    (if (i32.eqz (local.get $e)) (then (return (i32.const 0))))
+    (local $e i32) (local $idx i32) (local $key i32) (local $generation i32)
+    (call $iocp_lock)
+    (local.set $e (call $iocp_assoc_find_locked (local.get $handle)))
+    (if (i32.eqz (local.get $e)) (then (call $iocp_unlock) (return (i32.const 0))))
     (local.set $idx (i32.sub (i32.load (i32.add (local.get $e) (i32.const 4))) (i32.const 1)))
     ;; The port may have been closed while a file stayed bound to it.
     (if (i32.ne (i32.load (call $iocp_header (local.get $idx)))
                 (i32.or (global.get $IOCP_HANDLE_TAG) (local.get $idx)))
       (then
         (i32.store (i32.add (local.get $e) (i32.const 4)) (i32.const 0))
+        (call $iocp_unlock)
         (return (i32.const 0))))
+    (local.set $key (i32.load offset=8 (local.get $e)))
+    (local.set $generation (i32.load (call $iocp_generation (local.get $idx))))
+    (call $iocp_unlock)
     (if (local.get $overlapped)
       (then
         (call $gs32 (local.get $overlapped) (local.get $status))
         (call $gs32 (i32.add (local.get $overlapped) (i32.const 4)) (local.get $bytes))))
-    (drop (call $iocp_push (local.get $idx) (local.get $bytes)
-      (i32.load (i32.add (local.get $e) (i32.const 8))) (local.get $overlapped)))
+    (call $iocp_lock)
+    (if (i32.and
+          (i32.eq (i32.load (call $iocp_generation (local.get $idx))) (local.get $generation))
+          (i32.ne (i32.load (call $iocp_header (local.get $idx))) (i32.const 0)))
+      (then (drop (call $iocp_push (local.get $idx) (local.get $bytes)
+        (local.get $key) (local.get $overlapped)))))
+    (call $iocp_unlock)
     (i32.const 1))
 
   ;; CreateIoCompletionPort(FileHandle, ExistingCompletionPort, CompletionKey,
   ;;                        NumberOfConcurrentThreads) -> HANDLE
   (func $handle_CreateIoCompletionPort (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32)
+    (call $iocp_lock)
     (if (i32.eq (local.get $arg0) (i32.const -1))
       (then
         ;; INVALID_HANDLE_VALUE with an existing port is the one combination
@@ -6589,11 +6694,13 @@
             (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
             (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+            (call $iocp_unlock)
             (return)))
         (i32.store offset=0 (global.get $reg_base) (call $iocp_create))
         (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (then (global.set $last_error (i32.const 8)))) ;; ERROR_NOT_ENOUGH_MEMORY
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (call $iocp_unlock)
         (return)))
     ;; Attaching a file. Without an existing port the call creates one and
     ;; attaches to it in a single step.
@@ -6606,6 +6713,7 @@
           (then
             (global.set $last_error (i32.const 8))
             (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+            (call $iocp_unlock)
             (return)))
         (local.set $arg1 (i32.load offset=0 (global.get $reg_base)))
         (local.set $idx (call $iocp_slot (local.get $arg1)))))
@@ -6614,29 +6722,34 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (call $iocp_unlock)
         (return)))
     (if (call $iocp_assoc_add (local.get $arg0) (local.get $idx) (local.get $arg2))
       (then (i32.store offset=0 (global.get $reg_base) (local.get $arg1)))
       (else
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $last_error (i32.const 8)))) ;; ERROR_NOT_ENOUGH_MEMORY
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (call $iocp_unlock))
 
   ;; PostQueuedCompletionStatus(port, bytes, key, lpOverlapped) -> BOOL
   (func $handle_PostQueuedCompletionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32)
+    (call $iocp_lock)
     (local.set $idx (call $iocp_slot (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+        (call $iocp_unlock)
         (return)))
     (i32.store offset=0 (global.get $reg_base) (call $iocp_push (local.get $idx)
       (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (global.set $last_error (i32.const 298)))) ;; ERROR_TOO_MANY_POSTS
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (call $iocp_unlock))
 
   ;; GetQueuedCompletionStatus(port, lpBytes, lpKey, lpOverlapped, dwMilliseconds)
   ;; -> BOOL. An empty queue parks the calling thread on its own import thunk
@@ -6644,17 +6757,20 @@
   ;; re-enters from the top when this thread is scheduled again.
   (func $handle_GetQueuedCompletionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $hdr i32) (local $head i32) (local $queue_entry i32)
-    (local $now i32)
+    (local $now i32) (local $bytes i32) (local $key i32) (local $overlapped i32)
+    (call $iocp_lock)
     (local.set $idx (call $iocp_slot (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+        (call $iocp_unlock)
         (return)))
     (local.set $hdr (call $iocp_header (local.get $idx)))
     (if (i32.eqz (i32.load (i32.add (local.get $hdr) (i32.const 12))))
       (then
+        (call $iocp_unlock)
         ;; Nothing queued. A zero timeout is an immediate poll.
         (if (i32.eqz (local.get $arg4))
           (then
@@ -6688,18 +6804,19 @@
     (local.set $head (i32.load (i32.add (local.get $hdr) (i32.const 4))))
     (local.set $queue_entry (i32.add (call $iocp_queue (local.get $idx))
       (i32.mul (local.get $head) (i32.const 12))))
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (i32.load (local.get $queue_entry)))))
-    (if (local.get $arg2)
-      (then (call $gs32 (local.get $arg2)
-        (i32.load (i32.add (local.get $queue_entry) (i32.const 4))))))
-    (if (local.get $arg3)
-      (then (call $gs32 (local.get $arg3)
-        (i32.load (i32.add (local.get $queue_entry) (i32.const 8))))))
+    ;; Consume atomically before guest output translation, which can invoke
+    ;; callbacks or fault handling. The packet survives in instance locals.
+    (local.set $bytes (i32.load (local.get $queue_entry)))
+    (local.set $key (i32.load offset=4 (local.get $queue_entry)))
+    (local.set $overlapped (i32.load offset=8 (local.get $queue_entry)))
     (i32.store (i32.add (local.get $hdr) (i32.const 4))
       (i32.rem_u (i32.add (local.get $head) (i32.const 1)) (global.get $IOCP_QUEUE_CAP)))
     (i32.store (i32.add (local.get $hdr) (i32.const 12))
       (i32.sub (i32.load (i32.add (local.get $hdr) (i32.const 12))) (i32.const 1)))
+    (call $iocp_unlock)
+    (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (local.get $bytes))))
+    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (local.get $key))))
+    (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $overlapped))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 

@@ -397,7 +397,7 @@ const extraWat = String.raw`
   const endptr = exports.guest_alloc(4) >>> 0;
   exports.call_strtod(strtodInput, endptr);
   assert(Math.abs(exports.last_f64() - 250) < 0.000001, 'strtod parses decimal exponents');
-  assert.strictEqual(exports.guest_read32(endptr) >>> 0, strtodInput, 'strtod writes a conservative endptr');
+  assert.strictEqual(exports.guest_read32(endptr) >>> 0, strtodInput + 5, 'strtod advances endptr past the consumed number');
   assert.strictEqual(exports.last_esp_delta(), 4, 'strtod preserves cdecl cleanup');
 
   exports.call_clock();

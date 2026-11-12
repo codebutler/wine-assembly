@@ -1,0 +1,9 @@
+{
+  "paths": [
+    "host.js",
+    "lib/save-bundle.js"
+  ],
+  "closureChanges": [
+    "lib/vfs-persistence.js"
+  ]
+}

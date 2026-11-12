@@ -1417,7 +1417,7 @@ only; shipping renderer behavior is unchanged.
 
 ### Opt-in lazy Lock experiment (`experiment/mw3-lazy-sync`)
 
-The separate worktree `/private/tmp/mw3-lazy-sync` adds a benchmark-only
+The separate worktree `mw3-lazy-sync` adds a benchmark-only
 `--lazy-sync` switch (MW3, WebGL, `--frame-times`, one guest thread). Default
 behavior remains eager. This is a single-render-thread experiment, not a
 general promise for GDI, multiple guest threads or every native pointer cache.
@@ -1483,7 +1483,6 @@ extra synchronization). Its screenshot shows the progressing mission, terrain,
 HUD and another mech. Audit FPS (15.43) includes deliberate byte comparisons
 and is excluded from the timing table. Measured named candidate SHA-256:
 `e1be4076cf7f91f1629acc44f8478749d941bc1a2ca22e22f7a55b4e2b3e9c8b`.
-
 
 ### Merge and default evaluation (2026-09-29)
 
@@ -1581,3 +1580,166 @@ read it as the insert array, so `%1!d!` printed a stack address (0x074FFDC8)
 and `%1!s!` the bytes there. Now "Commander: Bushwacker", "Enemy: Firefly /
 Owens", "Wave 1". Evidence:
 `scratch/runs/20261010T2225Z-mw3-instant-action-glyphs-d10ba697`.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+The 2026-09-30 diagnostic transfer profile (`--transfer-profile`) separates
+the remaining round trip: per cockpit present, `readPixels` 5.964 ms,
+read conversion 0.402 ms, read bookkeeping 0.034 ms; upload conversion
+0.542 ms, GL update 3.240 ms, upload bookkeeping 0.029 ms. About 480 rows
+are uploaded/present. These CPU wall-time measurements include GL waits,
+overlap transport timing, and are not GPU timestamps or a throughput A/B.
+See [the measured report](../lazy-sync-game-results.md) for 593-frame totals,
+load/fallback caveats, hashes and artifacts. Avoiding transfers is the larger
+opportunity than further optimizing shadow/page bookkeeping in this scene.
+
+The subsequent [whole-frame profile](../mw3-whole-frame-profile.md) puts that
+transfer result in context: guest execution excluding waits takes 29–30 ms
+of a 45–47 ms present interval, renderer waits 13–14 ms, and other worker time
+about 2.4 ms. More than 99% of measured transfer spans overlap guest waits.
+The largest category is guest execution (x87/uop/control flow/operand handling),
+not transfers. Renderer-name `getParameter` queries also consume about
+2.2–2.4 sampled ms/present and are a bounded caching candidate. The upload
+timing largely includes `getError` synchronization, not pure transfer bandwidth.
+
+The [guest-loop investigation](../mw3-guest-loop-investigation.md) identifies
+stable projection (`0x4fd394`, about 4,424 entries/present), clamp (`0x51bc31`,
+about 3,592) and trig-table (`0x51bf10`) work. Mixed x87/integer heads miss uop
+lowering while the integer tier remains active. A separate two-op x87-island
+candidate passed 1,000 pair parity cases and an authentic copied clamp kernel,
+but local timing was order-sensitive and clean remote game A/B was interrupted
+by BOX8 connectivity failure. No production change or game speedup is claimed.
+
+The [post-merge profile](../mw3-postmerge-profile.md) measures frozen 837f0a74
+on a new ASCII box: guest execution 28–31 ms/present in sampled windows,
+waits 12–13 ms, and uop/x87/branch handling remain the main guest hotspots.
+CDP proves both old and new measurements used SwiftShader-backed WebGL;
+the earlier hardware-Intel label was incorrect. The clean committed browser
+worker requires its existing working-tree syntax correction before it starts.
+Historical WASM cannot link against the clean host without the old APC support,
+so no causal A/B improvement is claimed.
+
+The [guest/native disassembly follow-up](../mw3-hot-loop-disassembly.md) decodes
+projection (one reciprocal per vertex), clamp/epsilon checks, a 128-bin sine
+lookup, and squared-length/linear-combination rejection. Exact measured WASM
+was compiled with Chrome 151 TurboFan and its x86-64 code extracted from
+jitdump. Uop ADD still loads operand slots/values and dispatches through an
+86-entry table; x87 uses native scalar arithmetic with tag/stack handling and
+store-helper spills. These explain overhead structure, not per-instruction
+CPU attribution. No runtime optimization was made.
+
+The subsequent [mixed-island prototype](../mw3-mixed-island.md) crosses
+ADD-immediate/INC/DEC while retaining FP state. It passes 1,000 randomized
+state/trace comparisons and the authentic projection kernel, with 17.55% less
+kernel guest-thread CPU on ARM64 and 6.07% on x86. V8 native code was captured
+on both machines. Four headful gameplay launches show no established FPS gain
+(scene work varies; one candidate window had 135 renderer fallbacks). The
+experiment remains isolated; no production default was changed.
+
+The [mixed-island census](../mixed-island-census.md) confirms 426,405 visits
+to projection block `0x4fd394` in the fixed CLI route, with two ADDs and one
+DEC absorbed each time. Whole-route pure islands still execute 95,301,398
+operations. The block executor is off on both guest instances. An isolated
+pure/mixed evaluator split passes randomized and copied-kernel parity and
+reaches batch 1150 with the same 4,423,912 API calls and identical cockpit
+pixels; this local run supplies correctness evidence, not an FPS comparison.
+
+### 2026-11-10 scoped recorder and ordinary menu route
+
+Run `20261110-mw3-scoped-recorder-cockpit-1400` privately verified the scoped
+pre-instantiation prefix in the actual isolated production Worker: unwrapped,
+inactive, active, compiled excluded-noise/delayed-read, selected overflow,
+excluded-import exception and decoder-failure controls passed. Node and Chrome
+parents actually waited with separate EOF. The checked launch refused missing
+results before any commands-API call and passed a harmless substituted launch.
+
+The single authorized e587 original reached ordinary Pilot Entry, registered
+pilot `a`, accepted the Instant Action Bushwacker defaults, and showed the loading
+map. The first measured cursor move consumed all `[-128,-23]` relative motion
+and reached `[160,212]`; the three menu selections each had matched pressed and
+released reads. No cockpit or firing was reached. Loading-map snapshots retained
+fence 1153/draw count 288 while guest slices advanced; their engine cause remains
+unclassified, and historical 186/2842 ms gaps remain UNKNOWN.
+
+The first passive profile failed before sampling because the legacy adapter
+exposes no public `targets` map: `adapter.targets.values()` threw. The supported
+repair, `tools/mw3-passive-render-snapshot.cjs`, represents unavailable target
+evidence explicitly and preserves render control words. Regressions construct
+the actual legacy WebGL adapter and execute the serialized replacement without
+GPU commands. A future run-only `critical-repaired.cjs` uses it; it has not been
+browser-verified. Input stopped at the failure, without replay. Evidence was
+hash-verified before normal shutdown of `bx_2m7z48d8`, now archived with completed
+non-forced receipt `stop_964c8bcb4dfd647a` and no expiry.
+
+### 2026-11-10 repaired-diagnostic attempt: private harness lifecycle failure
+
+Run `20261110-mw3-repaired-loading-cockpit-1428` reused and independently
+rehash-checked the accepted e587 runtime graph. All seven scoped production
+Worker controls passed again. The newly prepared complete passive diagnostic
+integration then stopped before its real legacy-adapter setup: background CDP
+observation raced termination of a short-lived fixture Worker and rejected
+`Session with given id not found.` outside the awaiting owner's scope. Node
+exited 1 with both output streams drained; its Chrome child was orphaned, so a
+Chrome parent wait is unavailable. The checked harmless launch and original
+were never attempted. This supplies no new loading-map, cockpit, or firing
+observation, and does not privately verify `critical-repaired.cjs`.
+
+`tools/mw3-private-worker-tasks.cjs` repairs that harness failure path: explicit
+Worker selection excludes disposable scoped-control Workers; immediate rejection
+handlers retain the first failure and wake the awaiting owner to enter cleanup.
+The transport must call `check()` before each later CDP send. Worker module
+capture retains exact sessions and byte hashes; missing bytecode remains
+terminal. Focused controls cover the actual observed protocol error, an awaiting
+owner's cleanup path, synchronous transport errors, event-listener errors,
+module identity, and refusal of later work. A syntax-checked future run-only
+`isolation-control-repaired.cjs` applies the helper; it was not replayed in a
+browser. The production passive snapshot helper is unchanged.
+
+Eight unique control files were recovered and independently rehashed before
+normal delegated stop of `bx_q63vu74d`, then rehashed after stop. The owned
+orphan Chrome received SIGTERM during cleanup, without claiming a recovered
+parent wait. Box state is archived, expiry null, completed non-forced stop
+receipt `stop_b7ea4759c98f1944`. Initial expiry was 2026-11-10 14:53:44.898Z;
+an independent observable 25-minute watchdog was armed before allocation.
+The next separately authorized attempt must privately exercise the full repaired
+route and actual harmless checked start before an original. Historical
+186/2842 ms gaps remain UNKNOWN.
+
+### 2026-11-10 absent matched reads: bounded passive diagnostic
+
+Offline run `20261110-mw3-absent-read-cause-1452` audited retained run
+`20261110-mw3-lifecycle-fixed-cockpit-1440`. The prefix contains exactly the
+`fb10afbdb` production `attachDispatch` function. Its seven private controls
+passed; the complete integration's same recorder retained 49 completed reads.
+The original capture binds Worker target `3D1EFDE5479E5D9EE85ED29F4F91D9AE`,
+instance `443a9544-853d-4cdd-84f1-7c64dc48734b:1`, endpoint 1 and module
+`e587a07b7cbb9410fd52ec374c71f6c87a81e9f4bbd7404c3c64c7bb77253edd`.
+The five-second admission failed before input with zero selected import rows,
+zero reads, zero drops/errors and 1,106,947 excluded hooks. Filtering stored
+rows does not filter dispatch matching. Wrapped-host activity is established;
+actual excluded APIs and the absence of mouse dispatch are not recoverable
+from this aggregate. Neither a selection/binding mismatch nor an engine cause
+is proven. EIP `0x540960` is only an indirect-jump trampoline.
+
+`tools/mw3-live-mouse-observation.cjs` now returns a passive `diagnostic` in
+the actual recorder snapshot/stop response: excluded counts per installed import,
+up to 32 COM-ID/named API categories (names at most 96 bytes), overflow-category
+entry count, dispatch entries/exits, other API/non-mouse selection counts,
+mouse requests/completions and decoder-entry failures. It retains no excluded
+hook rows. Local binding reasons identify changed exports or replaced import
+table wrappers; an empty list does not verify caller-owned Worker/module identity.
+The existing caller binding checks remain necessary. No admission rule, timing
+bound, dispatch matching, runtime/input implementation or guest state changed.
+
+Focused regressions exercise 1,106,947 excluded hooks, category overflow, named
+and COM dispatch, non-mouse rejection, export/table changes, unchanged refusal
+of empty streams, terminal failures and reset/inactive behavior. Function
+serialization, actual production WASM dispatch and production host imports are
+composed offline with 40,000 non-mouse dispatch attempts followed by a matched
+mouse handler. The production run budget can spend a batch on its periodic
+scheduler poll; the test counts actual dispatch entries rather than assuming
+every `run(1)` dispatches. Locked build and 28 focused tests passed. No box or
+original was launched. Next separately authorized observation must retain this
+response from the same bound recorder at first failure, preserving all gates.

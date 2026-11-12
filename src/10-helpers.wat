@@ -174,6 +174,20 @@
   ;; HeapAlloc/VirtualAlloc so every guest store needs only one range check to
   ;; decide whether it can dirty a display bitmap.
   (func $dib_alloc (param $size i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $GDI_ALLOC_LOCK))
+    (local.set $result (call $dib_reserve_locked (local.get $size)))
+    (call $lock_release (global.get $GDI_ALLOC_LOCK))
+    ;; Reserved pages are private now; clearing large images must not block
+    ;; other threads from reserving their own objects or storage.
+    (if (local.get $result) (then
+      (call $zero_memory
+        (i32.add (global.get $DIB_BACKING_BASE)
+          (i32.sub (local.get $result) (global.get $DIB_GUEST_BASE)))
+        (i32.and (i32.add (local.get $size) (i32.const 4095)) (i32.const -4096)))))
+    (local.get $result))
+
+  (func $dib_reserve_locked (param $size i32) (result i32)
     (local $pages i32) (local $page i32) (local $run i32) (local $start i32)
     (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))
     (local.set $pages
@@ -201,12 +215,14 @@
     (memory.fill
       (i32.add (global.get $DIB_PAGE_USED) (local.get $start))
       (i32.const 1) (local.get $pages))
-    (call $zero_memory
-      (i32.add (global.get $DIB_BACKING_BASE) (i32.shl (local.get $start) (i32.const 12)))
-      (i32.shl (local.get $pages) (i32.const 12)))
     (i32.add (global.get $DIB_GUEST_BASE) (i32.shl (local.get $start) (i32.const 12))))
 
   (func $dib_free_wasm (param $wa i32)
+    (call $lock_acquire (global.get $GDI_ALLOC_LOCK))
+    (call $dib_free_locked (local.get $wa))
+    (call $lock_release (global.get $GDI_ALLOC_LOCK)))
+
+  (func $dib_free_locked (param $wa i32)
     (local $page i32) (local $pages i32)
     (if (i32.ge_u
           (i32.sub (local.get $wa) (global.get $DIB_BACKING_BASE))
@@ -397,10 +413,20 @@
   ;; Recursive by owner id, so a critical section that reaches another function
   ;; taking the same lock deadlocks nothing. That is defence rather than a
   ;; feature: nothing here nests deliberately.
+  ;; Extra identity bits for an instance that is not a guest thread at all.
+  ;; The render worker (d3dim_worker_init) never runs init_thread, so its
+  ;; $current_thread_id keeps the default 1 -- which is also the main guest
+  ;; thread's id (tid 0 + 1). With equal owner ids every lock "recursed" across
+  ;; the two: the worker entered LOCK_VIRTUAL_MAP while the guest held it, the
+  ;; two edited the map table at once, and a live heap arena's record vanished
+  ;; under the worker's draw context (Black & White 2's software D3D9 queue
+  ;; then latched "native raster execution failed (-1)" when $w2g of that
+  ;; context returned 0 and its compaction was refused).
+  (global $lock_identity (mut i32) (i32.const 0))
   (func $lock_owner_id (result i32)
     ;; A shadow bridge can run concurrently with the guest using its metadata
     ;; slot. Distinguish their lock identities so they cannot falsely recurse.
-    (i32.or (global.get $current_thread_id)
+    (i32.or (i32.or (global.get $current_thread_id) (global.get $lock_identity))
       (select (i32.const 0x80000000) (i32.const 0) (global.get $host_shadow))))
   (func $lock_acquire (param $lock i32)
     (local $me i32) (local $spins i32)
@@ -949,6 +975,76 @@
   ;; In both cases the count or size a reader can observe only ever names memory
   ;; that is already there. A reader that misses a just-published entry simply
   ;; behaves as it did a microsecond earlier.
+  ;; Bridge stack leases: 16 records of {frame token:i64, guest base, backing}
+  ;; at hidden-page [0x8F00,0x9000). The preceding 24 module-call records
+  ;; occupy [0x8C00,0x8F00); HRSRC descriptors begin at 0x9000. Leases cover
+  ;; one aligned 64KiB window. Every access holds LOCK_VIRTUAL_MAP. The table
+  ;; exists only while the Win32-owned NE arena is published.
+  (func $virtual_map_lease_record (param $i i32) (result i32)
+    (i32.add (call $win16_handle_table)
+      (i32.add (i32.const 0x8F00) (i32.shl (local.get $i) (i32.const 4)))))
+
+  (func $virtual_map_lease_busy (param $base i32) (param $size i32) (result i32)
+    (local $i i32) (local $rec i32) (local $leased i32) (local $arena i32)
+    (local.set $arena (i32.atomic.load (region.addr $WIN16_PROCESS_ARENA 0)))
+    (if (i32.or (i32.eqz (local.get $arena)) (i32.eqz (local.get $size)))
+      (then (return (i32.const 0))))
+    (if (i32.lt_u (i32.add (local.get $base) (local.get $size)) (local.get $base))
+      (then (return (i32.const 1))))
+    (block $done (loop $scan
+      (br_if $done (i32.eq (local.get $i) (i32.const 16)))
+      (local.set $rec (call $virtual_map_lease_record (local.get $i)))
+      (if (i64.ne (i64.load (local.get $rec)) (i64.const 0))
+        (then
+          (local.set $leased (i32.load offset=8 (local.get $rec)))
+          (if (i32.or
+            (i32.and (i32.lt_u (local.get $base) (i32.add (local.get $leased) (i32.const 0x10000)))
+              (i32.lt_u (local.get $leased) (i32.add (local.get $base) (local.get $size))))
+            ;; The lease ledger itself must survive until the last release.
+            (i32.and (i32.lt_u (local.get $base)
+                (i32.add (local.get $arena) (i32.shl (i32.add (global.get $WIN16_SEG_MAX) (i32.const 1)) (i32.const 16))))
+              (i32.lt_u (local.get $arena) (i32.add (local.get $base) (local.get $size)))))
+            (then (return (i32.const 1))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $scan)))
+    (i32.const 0))
+
+  ;; Conservative record preflight also covers a leaked record replaced by a
+  ;; partial commit. Inspect every island before any release/publication.
+  (func $virtual_map_lease_mutation_busy (param $base i32) (param $size i32) (result i32)
+    (local $i i32) (local $rec i32) (local $start i32) (local $length i32)
+    ;; No record walk on the ordinary (no active bridge lease) path.
+    (if (i32.eqz (call $virtual_map_lease_busy (i32.const 0) (i32.const -1)))
+      (then (return (i32.const 0))))
+    (if (call $virtual_map_lease_busy (local.get $base) (local.get $size))
+      (then (return (i32.const 1))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (i32.load (global.get $VIRTUAL_MAP_STATE))))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $start (i32.load (local.get $rec)))
+      (local.set $length (i32.load offset=4 (local.get $rec)))
+      (if (i32.and (i32.lt_u (local.get $base) (i32.add (local.get $start) (local.get $length)))
+        (i32.lt_u (local.get $start) (i32.add (local.get $base) (local.get $size))))
+        (then (if (call $virtual_map_lease_busy (local.get $start) (local.get $length))
+          (then (return (i32.const 1))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $scan)))
+    (i32.const 0))
+
+  ;; A sparse lease must belong to an actual virtual-map record, not the DIB
+  ;; translator or an emulator-private address accidentally accepted by g2w.
+  (func $virtual_map_lease_page_owned (param $guest i32) (param $backing i32) (result i32)
+    (local $i i32) (local $rec i32) (local $base i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (i32.load (global.get $VIRTUAL_MAP_STATE))))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and (i32.ge_u (local.get $guest) (local.get $base))
+        (i32.le_u (i32.add (local.get $guest) (i32.const 4096)) (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))))
+        (then (if (i32.eq (local.get $backing)
+          (i32.add (i32.load offset=8 (local.get $rec)) (i32.sub (local.get $guest) (local.get $base))))
+          (then (return (i32.const 1))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $scan)))
+    (i32.const 0))
+
   (func $virtual_map_commit (param $guest i32) (param $size i32) (result i32)
     (call $virtual_map_commit_protect
       (local.get $guest) (local.get $size) (i32.const 0x40)))
@@ -1110,6 +1206,8 @@
     (local $extended i32) (local $high_water i32)
     (local $candidate i32) (local $gap_end i32) (local $best i32)
     (local $best_size i32) (local $j i32) (local $covered i32) (local $ext i32)
+    (if (call $virtual_map_lease_mutation_busy (local.get $guest) (local.get $size))
+      (then (return (i32.const 0))))
     (if (i32.gt_u (local.get $size) (call $virtual_backing_max_extent))
       (then (return (i32.const 0))))
     (local.set $guest_end (i32.add (local.get $guest) (local.get $size)))
@@ -1535,10 +1633,25 @@
   ;; the next commit is the same observable behaviour -- reading a decommitted
   ;; page is an access violation on Windows, so nothing may see the difference
   ;; -- and it costs nothing on the commit path.
-  (func $virtual_map_decommit_zero (param $guest i32) (param $size i32)
+  (func $virtual_map_decommit_zero (param $guest i32) (param $size i32) (result i32)
     (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
     (local $base i32) (local $rec_end i32) (local $lo i32) (local $hi i32)
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    ;; Round the full request before the first zero/PTE mutation. Zero length
+    ;; retains the existing exact-record meaning, rather than all later maps.
+    (local.set $hi (local.get $size))
+    (if (i32.eqz (local.get $hi))
+      (then
+        (local.set $rec (call $virtual_map_find_record (local.get $guest)))
+        (if (local.get $rec) (then (local.set $hi (i32.load offset=4 (local.get $rec)))))))
+    (local.set $lo (i32.and (local.get $guest) (i32.const -4096)))
+    (local.set $end (i32.add (local.get $guest) (local.get $hi)))
+    (if (i32.or (i32.lt_u (local.get $end) (local.get $guest))
+      (i32.gt_u (local.get $end) (i32.const 0xFFFFF000)))
+      (then (call $lock_release (global.get $LOCK_VIRTUAL_MAP)) (return (i32.const 0))))
+    (local.set $end (i32.and (i32.add (local.get $end) (i32.const 4095)) (i32.const -4096)))
+    (if (call $virtual_map_lease_mutation_busy (local.get $lo) (i32.sub (local.get $end) (local.get $lo)))
+      (then (call $lock_release (global.get $LOCK_VIRTUAL_MAP)) (return (i32.const 0))))
     (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (local.set $i (i32.const 0))
     (block $done (loop $scan
@@ -1588,7 +1701,8 @@
             (i32.sub (local.get $hi) (local.get $lo)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
-    (call $lock_release (global.get $LOCK_VIRTUAL_MAP)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (i32.const 1))
 
   ;; Commit [lo, hi) of an existing record again: publish the pages a decommit
   ;; unpublished, at the record's own backing. Pages still present are left
@@ -1914,6 +2028,16 @@
         (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 16)))))
       (local.set $base (i32.atomic.load (local.get $rec)))
       (local.set $end (i32.load offset=4 (local.get $rec)))
+      ;; Only a free LARGE arena -- one block spanning the whole range, the
+      ;; $heap_large_alloc shape -- is released. Every instance on the memory
+      ;; keeps its own free lists and only ours can be purged here, so another
+      ;; instance may still link into the arena; once the range is reserved
+      ;; again such a link resolves against the new record. For a one-block
+      ;; arena that stays decidable (the link must be the record's base with
+      ;; no live bytes, which $heap_large_alloc checks); for a carved arena it
+      ;; is not, so those keep their range. The software D3D9 render worker is
+      ;; such an instance (test-heap-arena-cross-instance-release.js: without
+      ;; this, a guest-thread release let it hand out the guest's live block).
       (if (i32.and
             (i32.and
               (i32.ge_u (local.get $base) (call $virtual_alloc_min))
@@ -1922,18 +2046,29 @@
               (i32.eqz (i32.atomic.load offset=12 (local.get $rec)))
               (i32.ne (local.get $rec) (global.get $heap_sparse_record))))
         (then
-          (call $heap_free_list_purge (local.get $base) (local.get $end))
-          ;; Unpublish before the backing goes: a record with a zero base is
-          ;; invisible to $heap_arena_find, so nothing can validate a pointer
-          ;; into memory that is on its way back to the pool.
-          (i32.atomic.store (local.get $rec) (i32.const 0))
-          (i32.atomic.store offset=8 (local.get $rec) (i32.const 0))
-          (i32.store offset=4 (local.get $rec) (i32.const 0))
-          (i32.atomic.store offset=12 (local.get $rec)
-            (global.get $HEAP_ARENA_RECYCLED))
-          (drop (call $virtual_map_release (local.get $base)))
-          (local.set $freed (i32.add (local.get $freed)
-            (i32.sub (local.get $end) (local.get $base))))))
+          ;; Nested, not i32.and: both operands of an and are evaluated, and
+          ;; the claim must only ever be attempted on a one-block arena.
+          (if (i32.eq (i32.load (call $g2w (local.get $base)))
+                (i32.sub (local.get $end) (local.get $base)))
+            (then
+              ;; Claim before touching anything: an allocator taking the block
+              ;; claims the same word from zero, so exactly one of us wins.
+              (if (i32.eqz (i32.atomic.rmw.cmpxchg offset=12 (local.get $rec)
+                    (i32.const 0) (global.get $HEAP_ARENA_RECYCLED)))
+                (then
+                  (call $heap_free_list_purge (local.get $base) (local.get $end))
+                  ;; Unpublish before the backing goes: a record with a zero
+                  ;; base is invisible to $heap_arena_find, so nothing can
+                  ;; validate a pointer into memory on its way back to the
+                  ;; pool. The base goes last, because a zero base with the
+                  ;; recycled tag is what lets $heap_arena_register_once take
+                  ;; the slot again.
+                  (i32.atomic.store offset=8 (local.get $rec) (i32.const 0))
+                  (i32.store offset=4 (local.get $rec) (i32.const 0))
+                  (i32.atomic.store (local.get $rec) (i32.const 0))
+                  (drop (call $virtual_map_release (local.get $base)))
+                  (local.set $freed (i32.add (local.get $freed)
+                    (i32.sub (local.get $end) (local.get $base))))))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (local.get $freed))
@@ -2094,6 +2229,31 @@
   ;; first would leak the rest of the allocation on every level reload.
   (func $virtual_map_release_locked (param $guest i32) (result i32)
     (local $rec i32) (local $size i32) (local $i i32) (local $end i32) (local $base i32)
+    ;; Preflight the complete reservation or continuation chain before even
+    ;; diagnostic marking or reserve ownership changes. release_one is also
+    ;; guarded for its other callers, but cannot make a multi-island release
+    ;; atomic after an earlier island was already removed.
+    (if (call $virtual_map_lease_busy (i32.const 0) (i32.const -1)) (then
+    (block $span_found (loop $span_reserves
+      (br_if $span_found (i32.ge_u (local.get $i) (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE))))
+      (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE) (i32.shl (local.get $i) (i32.const 3))))
+      (if (i32.eq (i32.and (i32.load (local.get $rec)) (i32.const -4096)) (local.get $guest))
+        (then (local.set $end (i32.add (local.get $guest) (i32.load offset=4 (local.get $rec)))) (br $span_found)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $span_reserves)))
+    (if (i32.eqz (local.get $end))
+      (then
+        (local.set $end (local.get $guest))
+        (local.set $rec (call $virtual_map_find_record (local.get $end)))
+        (block $span_done (loop $span_chain
+          (br_if $span_done (i32.eqz (local.get $rec)))
+          (local.set $end (i32.add (local.get $end) (i32.load offset=4 (local.get $rec))))
+          (local.set $rec (call $virtual_map_find_record (local.get $end)))
+          (br_if $span_done (i32.eqz (local.get $rec)))
+          (br_if $span_done (i32.eqz (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x80000000))))
+          (br $span_chain)))))
+    (if (call $virtual_map_lease_mutation_busy (local.get $guest) (i32.sub (local.get $end) (local.get $guest)))
+      (then (return (i32.const 0))))
+    (local.set $i (i32.const 0)) (local.set $end (i32.const 0))))
     ;; DIAGNOSTIC ONLY, off by default. When a guest reads through a pointer
     ;; into a region it has already released, the read returns 0 here and its
     ;; own luck on real Windows -- where the freed page may still hold the old
@@ -2193,6 +2353,8 @@
         (then
           (local.set $size (i32.load (i32.add (local.get $rec) (i32.const 4))))
           (local.set $backing (i32.load (i32.add (local.get $rec) (i32.const 8))))
+          (if (call $virtual_map_lease_busy (local.get $guest) (local.get $size))
+            (then (return (i32.const 0))))
           ;; Retire translations before the record disappears or its
           ;; backing becomes reusable. Page-table readers then see either the
           ;; old valid PTE or an unmapped page, never a recycled alias.
@@ -2331,8 +2493,17 @@
       (br_if $scanned (i32.eqz (local.get $cur)))
       (br_if $scanned (i32.gt_u (local.get $steps) (i32.const 1024)))
       (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
-      ;; An unmappable link (its arena was released) ends the list there.
-      (if (i32.eqz (call $heap_arena_find (local.get $cur)))
+      ;; An unmappable link (its arena was released) ends the list there. So
+      ;; does one that maps but is not a free large block any more: another
+      ;; instance may have released this arena (only its OWN lists are purged)
+      ;; and the range been reserved again, and the stale link then resolves
+      ;; against the new record. A free large block is exactly its arena's
+      ;; base with no live bytes; anything else is someone else's memory.
+      (local.set $record (call $heap_arena_find (local.get $cur)))
+      (if (i32.or (i32.eqz (local.get $record))
+            (i32.or
+              (i32.ne (i32.atomic.load (local.get $record)) (local.get $cur))
+              (i32.ne (i32.atomic.load offset=12 (local.get $record)) (i32.const 0))))
         (then
           (if (local.get $prev_w)
             (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
@@ -2360,11 +2531,21 @@
             (i32.load offset=4 (call $g2w (local.get $best)))))
           (else (global.set $heap_large_free
             (i32.load offset=4 (call $g2w (local.get $best))))))
-        (call $heap_arena_charge (call $heap_arena_find (local.get $best)) (local.get $best_size))
-        ;; Fresh pages, as a Windows VirtualAlloc-backed block would be.
-        (call $guest_memset (i32.add (local.get $best) (i32.const 4)) (i32.const 0)
-          (i32.sub (local.get $best_size) (i32.const 4)))
-        (return (local.get $best))))
+        ;; Take it by claiming the arena's live word from zero. A releaser
+        ;; claims the same word (0 -> $HEAP_ARENA_RECYCLED) before it unmaps
+        ;; anything, so exactly one of us wins; a lost race just means the
+        ;; block is gone, and a fresh arena serves the request.
+        ;; Nested, not i32.and: the claim must not run against record 0.
+        (local.set $record (call $heap_arena_find (local.get $best)))
+        (if (local.get $record)
+          (then
+            (if (i32.eqz (i32.atomic.rmw.cmpxchg offset=12 (local.get $record)
+                  (i32.const 0) (local.get $best_size)))
+              (then
+                ;; Fresh pages, as a Windows VirtualAlloc-backed block would be.
+                (call $guest_memset (i32.add (local.get $best) (i32.const 4)) (i32.const 0)
+                  (i32.sub (local.get $best_size) (i32.const 4)))
+                (return (local.get $best))))))))
     (local.set $base (call $virtual_reserve_down (local.get $chunk)))
     (if (i32.eqz (local.get $base))
       (then
@@ -2386,11 +2567,88 @@
     (i32.atomic.store offset=8 (local.get $record) (i32.add (local.get $base) (local.get $chunk)))
     (local.get $base))
 
+  ;; Rewind only our current empty sparse bump arena, and only when every
+  ;; carved header belongs to our private lists. Zero live bytes alone is NOT
+  ;; ownership: a peer may have freed one of our blocks onto its own list.
+  ;; Releasing/re-registering a carved range would leave such a peer's links
+  ;; resolving against new allocations. Keep the map/record and reject missing
+  ;; ownership instead. This runs only on a bump miss, not on every free.
+  (func $heap_sparse_rewind (param $need i32)
+    (local $rec i32) (local $base i32) (local $high i32) (local $end i32)
+    (local $cur i32) (local $header i32) (local $size i32)
+    (local $entries i32) (local $headers i32) (local $steps i32)
+    (local.set $rec (global.get $heap_sparse_record))
+    (if (i32.eqz (local.get $rec)) (then (return)))
+    (local.set $base (i32.atomic.load (local.get $rec)))
+    (local.set $high (global.get $heap_sparse_ptr))
+    (local.set $end (global.get $heap_sparse_end))
+    (if (i32.or (i32.lt_u (local.get $base) (call $virtual_alloc_min))
+      (i32.or (i32.le_u (local.get $high) (local.get $base))
+        (i32.gt_u (local.get $high) (local.get $end)))) (then (return)))
+    (if (i32.or
+      (i32.ne (i32.atomic.load offset=8 (local.get $rec)) (local.get $high))
+      (i32.ne (i32.load offset=4 (local.get $rec)) (local.get $end))) (then (return)))
+    (if (i32.or (i32.ne (i32.atomic.load offset=12 (local.get $rec)) (i32.const 0))
+      (i32.gt_u (local.get $need) (i32.sub (local.get $end) (local.get $base)))) (then (return)))
+    ;; Whole-block arenas use the existing atomic large-block claim/release
+    ;; path. A carved first header cannot satisfy that release predicate while
+    ;; this instance proves its private ownership below.
+    (if (i32.eq (i32.load (call $g2w (local.get $base)))
+      (i32.sub (local.get $end) (local.get $base))) (then (return)))
+    (call $heap_bins_flush)
+    ;; Preflight the entire chain, including its termination, before purge.
+    ;; Count this arena's entries so no extra interior link survives the proof.
+    (local.set $cur (global.get $free_list))
+    (block $listed (loop $list
+      (br_if $listed (i32.eqz (local.get $cur)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (if (i32.gt_u (local.get $steps) (i32.const 65536)) (then (return)))
+      (if (i32.eqz (call $heap_arena_find (local.get $cur))) (then (return)))
+      (local.set $size (i32.load (call $g2w (local.get $cur))))
+      (if (call $heap_block_bad (local.get $cur) (local.get $size)) (then (return)))
+      (if (i32.and (i32.ge_u (local.get $cur) (local.get $base))
+        (i32.lt_u (local.get $cur) (local.get $high)))
+        (then (local.set $entries (i32.add (local.get $entries) (i32.const 1)))))
+      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+      (br $list)))
+    ;; Walk actual allocation boundaries, not just the sum of free sizes.
+    ;; Every header must be found on this instance's validated chain. Bound
+    ;; the combined search; a costly/incomplete proof simply keeps the arena.
+    (local.set $header (local.get $base))
+    (block $covered (loop $blocks
+      (br_if $covered (i32.eq (local.get $header) (local.get $high)))
+      (if (i32.gt_u (local.get $header) (local.get $high)) (then (return)))
+      (local.set $size (i32.load (call $g2w (local.get $header))))
+      (if (call $heap_block_bad (local.get $header) (local.get $size)) (then (return)))
+      (local.set $cur (global.get $free_list))
+      (block $found (loop $find
+        (if (i32.eqz (local.get $cur)) (then (return)))
+        (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+        (if (i32.gt_u (local.get $steps) (i32.const 1000000)) (then (return)))
+        (br_if $found (i32.eq (local.get $cur) (local.get $header)))
+        (if (i32.eqz (call $heap_arena_find (local.get $cur))) (then (return)))
+        (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+        (br $find)))
+      (local.set $headers (i32.add (local.get $headers) (i32.const 1)))
+      (local.set $header (i32.add (local.get $header) (local.get $size)))
+      (br $blocks)))
+    (if (i32.ne (local.get $headers) (local.get $entries)) (then (return)))
+    ;; No peer owns a link and no allocation is live. Remove our links before
+    ;; erasing headers; keep fresh-bump zero semantics across non-affine maps.
+    (call $heap_free_list_purge (local.get $base) (local.get $end))
+    (call $guest_memset (local.get $base) (i32.const 0)
+      (i32.sub (local.get $high) (local.get $base)))
+    (i32.atomic.store offset=8 (local.get $rec) (local.get $base))
+    (global.set $heap_sparse_ptr (local.get $base)))
+
   ;; HeapAlloc starts in the low direct guest window for compatibility, then
   ;; spills to sparse high guest chunks when that window reaches emulator-private
   ;; memory. This keeps Windows heap pointers valid without moving code caches.
   (func $heap_sparse_alloc (param $need i32) (result i32)
     (local $chunk i32) (local $new_top i32) (local $ptr i32) (local $record i32)
+    (if (i32.gt_u (i32.add (global.get $heap_sparse_ptr) (local.get $need))
+          (global.get $heap_sparse_end))
+      (then (call $heap_sparse_rewind (local.get $need))))
     (if (i32.or
           (i32.eqz (global.get $heap_sparse_ptr))
           (i32.gt_u
@@ -2755,6 +3013,7 @@
   ;; and fall back to bump allocation when no free block fits.
   (func $heap_alloc (param $size i32) (result i32)
     (local $need i32) (local $ptr i32)
+    (local $retried i32) (local $largest i32) (local $scan_steps i32)
     (local $prev_w i32) (local $cur i32) (local $cur_w i32)
     (local $bsz i32) (local $rem i32) (local $steps i32) (local $from_free i32)
     (local $cur_rec i32) (local $bi i32) (local $bv i64) (local $next i32)
@@ -2773,7 +3032,7 @@
     ;; Walk free list (guest pointers)
     (local.set $prev_w (i32.const 0)) ;; 0 = scanning from head
     (local.set $cur (global.get $free_list))
-    (block $found (block $scan
+    (block $found (loop $pressure_retry (block $scan
       ;; Large blocks live in an arena of their own ($heap_large_alloc).
       (if (i32.ge_u (local.get $need) (global.get $HEAP_LARGE))
         (then
@@ -2941,15 +3200,33 @@
               (if (local.get $ptr)
                 (then (br $found))
                 (else
+                  ;; Existing bump/reservation/reclaim paths failed. Coalesce
+                  ;; only our safely validated free extents, once, then retry
+                  ;; the ordinary serving path without recursive allocation.
+                  (if (i32.eqz (local.get $retried))
+                    (then
+                      (local.set $retried (i32.const 1))
+                      (local.set $largest (call $heap_compact_free_list_bounded
+                        (i32.const 262144)))
+                      (if (i32.and
+                            (i32.ge_s (local.get $largest) (i32.const 0))
+                            (i32.ge_u (local.get $largest)
+                              (i32.sub (local.get $need) (i32.const 4))))
+                        (then
+                          (local.set $prev_w (i32.const 0))
+                          (local.set $scan_steps (local.get $steps))
+                          (local.set $steps (i32.const 0))
+                          (br $pressure_retry)))))
                   (call $host_heap_oom_trace (local.get $need) (i32.const 1))
                   (return (i32.const 0))))))))
       (local.set $ptr (global.get $heap_ptr))
       (i32.store (call $g2w (local.get $ptr)) (local.get $need))
       (global.set $heap_ptr (i32.add (global.get $heap_ptr) (local.get $need)))
       (call $heap_arena_charge (global.get $heap_arena_record) (local.get $need))
-      (i32.atomic.store offset=8 (global.get $heap_arena_record) (global.get $heap_ptr)))
+      (i32.atomic.store offset=8 (global.get $heap_arena_record) (global.get $heap_ptr))))
     (global.set $heap_stat_allocs (i32.add (global.get $heap_stat_allocs) (i32.const 1)))
-    (global.set $heap_stat_steps (i64.add (global.get $heap_stat_steps) (i64.extend_i32_u (local.get $steps))))
+    (global.set $heap_stat_steps (i64.add (global.get $heap_stat_steps)
+      (i64.extend_i32_u (i32.add (local.get $steps) (local.get $scan_steps)))))
     ;; A recycled block still holds whatever the last owner left in it -- and,
     ;; at offset 4, this allocator's own free-list next pointer. Bump space is
     ;; zero because every arena chunk is committed zeroed, so before this the
@@ -2964,9 +3241,11 @@
     ;; the query at 0x9e5272 scanned guest address i*4 forever. Repairing those
     ;; cells in a live wedged process moved EIP straight out of that loop, which
     ;; is what makes this the fix rather than a guess.
+    ;; Sparse arena pages need not have adjacent backing. Clear guest bytes,
+    ;; otherwise a recycled block can wipe a different live allocation.
     (if (local.get $from_free)
-      (then (call $zero_memory
-        (i32.add (call $g2w (local.get $ptr)) (i32.const 4))
+      (then (call $guest_memset
+        (i32.add (local.get $ptr) (i32.const 4)) (i32.const 0)
         (i32.sub (local.get $need) (i32.const 4)))))
     ;; Return guest pointer past the size header
     (i32.add (local.get $ptr) (i32.const 4)))
@@ -2976,19 +3255,39 @@
   ;; Returns the original guest pointer, or zero for an invalid block/growth.
   ;; The original arena still covers both headers; only the unused suffix moves
   ;; to this instance's free list. Sub-minimum suffixes remain padding.
+  ;;
+  ;; A block that is its whole $heap_large_alloc arena is left whole. Splitting
+  ;; it carves the arena, and a carved arena is one neither $heap_free (large
+  ;; list) nor $heap_arena_release_free recognises any more: the freed block
+  ;; went to the small free list, the next request of the same size reserved
+  ;; a fresh range, and the table filled with dead arenas. The software D3D9
+  ;; backend compacts every ~852 KB draw context this way, and in
+  ;; Black & White 2's render worker that was ~30% of its CPU -- a linear
+  ;; address-space search ($virtual_range_edge_locked) plus a full release
+  ;; scan on every registration (docs/re-notes/black-white-2.md). The tail
+  ;; is no loss: only this instance's small allocations could have used it.
   (func $heap_shrink (param $guest_ptr i32) (param $size i32) (result i32)
     (local $block i32) (local $wa i32) (local $old i32) (local $need i32)
-    (local $tail i32) (local $remaining i32)
+    (local $tail i32) (local $remaining i32) (local $rec i32)
     (if (i32.or (i32.eqz (local.get $guest_ptr))
       (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))) (then (return (i32.const 0))))
     (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
-    (if (i32.eqz (call $heap_arena_find (local.get $block))) (then (return (i32.const 0))))
+    (local.set $rec (call $heap_arena_find (local.get $block)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
     (local.set $wa (call $g2w (local.get $block)))
     (local.set $old (i32.load (local.get $wa)))
     (if (call $heap_block_bad (local.get $block) (local.get $old)) (then (return (i32.const 0))))
     (local.set $need (i32.and (i32.add (local.get $size) (i32.const 11)) (i32.const -8)))
     (if (i32.lt_u (local.get $need) (i32.const 16)) (then (local.set $need (i32.const 16))))
     (if (i32.gt_u (local.get $need) (local.get $old)) (then (return (i32.const 0))))
+    ;; The same whole-arena test $heap_free_impl uses to pick the large list.
+    (if (i32.and
+          (i32.ge_u (local.get $old) (global.get $HEAP_LARGE))
+          (i32.and
+            (i32.eq (i32.atomic.load (local.get $rec)) (local.get $block))
+            (i32.eq (i32.load offset=4 (local.get $rec))
+              (i32.add (local.get $block) (local.get $old)))))
+      (then (return (local.get $guest_ptr))))
     (local.set $remaining (i32.sub (local.get $old) (local.get $need)))
     (if (i32.ge_u (local.get $remaining) (i32.const 16)) (then
       (local.set $tail (i32.add (local.get $block) (local.get $need)))
@@ -3880,29 +4179,505 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
     (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 1))) (i32.const 0)))
 
-  ;; Convert wide string at guest src to ANSI at guest dst, max bytes. Returns length.
-  (func $wide_to_ansi (param $src i32) (param $dst i32) (param $max i32) (result i32)
-    (local $i i32) (local $ch i32)
+  ;; ---- Code page character conversion (DBCS stage 1: CP950 tables) ----
+  ;; Single-character results are packed: bits 0..15 the character (decode)
+  ;; or the emitted bytes, first byte in bits 0..7 (encode); bits 16..23 the
+  ;; byte count consumed (decode) or produced (encode); bit 24 set when the
+  ;; decode input was an invalid/unmapped sequence, or when encode fell back
+  ;; to the default byte. $ansi_char_decode / $ansi_char_encode take an
+  ;; already-resolved code page (see $resolve_code_page below).
+  ;;
+  ;; Only CP950 has conversion tables so far. The dispatch is by code page,
+  ;; so 932/936/949 join by adding a table and one branch; until then they —
+  ;; and every SBCS page — keep the exact historical identity behavior
+  ;; (decode: byte -> same code point, encode: low-byte truncation), which is
+  ;; also what keeps the CP1252 path byte-for-byte unchanged, including the
+  ;; 0x80..0x9F identity convention the font layer uses.
+  (func $cp_has_conversion_tables (param $cp i32) (result i32)
+    (i32.eq (local.get $cp) (i32.const 950)))
+
+  ;; Big5 trail index: 0..62 for trails 0x40..0x7E, 63..156 for 0xA1..0xFE,
+  ;; -1 outside both ranges.
+  (func $big5_trail_index (param $ch i32) (result i32)
+    (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x40)) (i32.le_u (local.get $ch) (i32.const 0x7E)))
+      (then (return (i32.sub (local.get $ch) (i32.const 0x40)))))
+    (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0xA1)) (i32.le_u (local.get $ch) (i32.const 0xFE)))
+      (then (return (i32.add (i32.sub (local.get $ch) (i32.const 0xA1)) (i32.const 63)))))
+    (i32.const -1))
+
+  ;; Decode one character from its first two bytes in resolved page $cp,
+  ;; from Microsoft's CP950 table (bestfit950.txt, 01c-big5-tables).
+  ;; $avail bounds the logical read: a pair is formed only when two bytes
+  ;; remain (string walkers with a NUL-terminated source pass a huge
+  ;; $avail and stop at the terminator before decoding it).
+  ;;   - a non-lead byte decodes through the table's single-byte part
+  ;;     (ASCII, 0x80 -> U+0080, 0xFF -> U+F8F8);
+  ;;   - whether a byte leads a pair is $is_dbcs_lead_byte_for_cp's answer,
+  ;;     the same one IsDBCSLeadByte, CharNextA, _mbsinc and GetCPInfo give
+  ;;     (0x81..0xFE, the table's DBCSRANGE);
+  ;;   - a lead with a trail in 0x40..0x7E / 0xA1..0xFE decodes through the
+  ;;     table's pair part; every EUDC pair is a Private Use Area character;
+  ;;   - what the table does not map decodes to its default char U+003F,
+  ;;     flagged invalid (bit 24) for MB_ERR_INVALID_CHARS: an unmapped
+  ;;     pair consumes both bytes; a lead byte with no byte after it, or
+  ;;     whose next byte is outside both trail ranges, consumes the lead
+  ;;     alone, so a NUL / ASCII / control byte is never swallowed as a
+  ;;     trail. (Those two consumption choices are not defined by
+  ;;     Microsoft's data; they are the conservative reading.)
+  ;; The two entry points below are this core plus a byte source: guest
+  ;; addresses through $gl8 for the conversion family, raw linear memory
+  ;; for the GDI text funnels (stage 2), whose callers hand over pointers
+  ;; their own callers already resolved.
+  (func $cp_char_decode (param $cp i32) (param $b0 i32) (param $b1 i32) (param $avail i32) (result i32)
+    (local $tidx i32) (local $w i32)
+    (if (i32.eqz (call $cp_has_conversion_tables (local.get $cp)))
+      (then (return (i32.or (local.get $b0) (i32.const 0x10000)))))
+    ;; CP950 single byte: the generator guarantees every non-lead byte has
+    ;; a single-byte entry.
+    (if (i32.eqz (call $is_dbcs_lead_byte_for_cp (local.get $cp) (local.get $b0)))
+      (then (return (i32.or
+        (i32.load16_u (i32.add (global.get $BIG5_DECODE_TABLE)
+          (i32.shl (local.get $b0) (i32.const 1))))
+        (i32.const 0x10000)))))
+    (if (i32.lt_u (local.get $avail) (i32.const 2)) ;; lone lead at buffer end
+      (then (return (i32.or (global.get $BIG5_DEFAULT_WCHAR) (i32.const 0x1010000)))))
+    (local.set $tidx (call $big5_trail_index (local.get $b1)))
+    (if (i32.lt_s (local.get $tidx) (i32.const 0)) ;; not a trail: lead alone
+      (then (return (i32.or (global.get $BIG5_DEFAULT_WCHAR) (i32.const 0x1010000)))))
+    (local.set $w (i32.load16_u (i32.add (global.get $BIG5_DECODE_TABLE)
+      (i32.shl
+        (i32.add (global.get $BIG5_SB_ENTRIES)
+          (i32.add
+            (i32.mul (i32.sub (local.get $b0) (global.get $BIG5_LEAD_FIRST)) (i32.const 157))
+            (local.get $tidx)))
+        (i32.const 1)))))
+    (if (i32.eqz (local.get $w)) ;; unmapped pair: both bytes consumed
+      (then (return (i32.or (global.get $BIG5_DEFAULT_WCHAR) (i32.const 0x1020000)))))
+    (i32.or (local.get $w) (i32.const 0x20000)))
+
+  ;; Whether decoding the byte after $b0 is even a question in page $cp:
+  ;; a table-backed page, a lead byte, a pair available. The entry points
+  ;; fetch the trail byte only then, so a read at the very edge of an
+  ;; allocation behaves exactly as the pre-core code did.
+  (func $cp_may_pair (param $cp i32) (param $b0 i32) (param $avail i32) (result i32)
+    (i32.and (call $cp_has_conversion_tables (local.get $cp))
+      (i32.and (call $is_dbcs_lead_byte_for_cp (local.get $cp) (local.get $b0))
+        (i32.ge_u (local.get $avail) (i32.const 2)))))
+
+  ;; Decode the character at guest address $gp in resolved page $cp.
+  (func $ansi_char_decode (param $cp i32) (param $gp i32) (param $avail i32) (result i32)
+    (local $b0 i32)
+    (local.set $b0 (call $gl8 (local.get $gp)))
+    (call $cp_char_decode (local.get $cp) (local.get $b0)
+      (if (result i32) (call $cp_may_pair (local.get $cp) (local.get $b0) (local.get $avail))
+        (then (call $gl8 (i32.add (local.get $gp) (i32.const 1))))
+        (else (i32.const 0)))
+      (local.get $avail)))
+
+  ;; Decode the character at linear-memory address $wa in resolved page
+  ;; $cp — the GDI funnels' byte source. Every mapping decision is
+  ;; $cp_char_decode's; this is a second pair of eyes, not a second brain.
+  (func $ansi_char_decode_wa (param $cp i32) (param $wa i32) (param $avail i32) (result i32)
+    (local $b0 i32)
+    (local.set $b0 (i32.load8_u (local.get $wa)))
+    (call $cp_char_decode (local.get $cp) (local.get $b0)
+      (if (result i32) (call $cp_may_pair (local.get $cp) (local.get $b0) (local.get $avail))
+        (then (i32.load8_u (i32.add (local.get $wa) (i32.const 1))))
+        (else (i32.const 0)))
+      (local.get $avail)))
+
+  ;; Encode one WCHAR in resolved page $cp; $def/$def_len are the default
+  ;; character for unmapped characters, packed in emit order (first byte in
+  ;; bits 0..7, second in bits 8..15) — in a DBCS page the API's default
+  ;; character is itself two bytes and must be emitted whole, never
+  ;; truncated to its first byte. Packing mirrors $ansi_char_decode.
+  ;; CP950 encodes through Microsoft's WCTABLE, best-fit entries included
+  ;; (U+00A5 -> A2 44): that is WideCharToMultiByte's default on every
+  ;; Windows, and Win98 has no way to turn it off. Characters WCTABLE does
+  ;; not list (HKSCS-only ones among them) take the default char.
+  (func $ansi_char_encode (param $cp i32) (param $wc i32) (param $def i32) (param $def_len i32) (result i32)
+    (local $lo i32) (local $hi i32) (local $mid i32) (local $entry i32)
+    (if (i32.eqz (call $cp_has_conversion_tables (local.get $cp)))
+      (then (return (i32.or (i32.and (local.get $wc) (i32.const 0xFF)) (i32.const 0x10000)))))
+    ;; CP950: ASCII encodes as itself.
+    (if (i32.lt_u (local.get $wc) (i32.const 0x80))
+      (then (return (i32.or (local.get $wc) (i32.const 0x10000)))))
+    ;; Binary search the code-point-sorted encode table.
+    (local.set $lo (i32.const 0))
+    (local.set $hi (global.get $BIG5_ENCODE_COUNT))
+    (block $done (loop $search
+      (br_if $done (i32.ge_u (local.get $lo) (local.get $hi)))
+      (local.set $mid (i32.shr_u (i32.add (local.get $lo) (local.get $hi)) (i32.const 1)))
+      (local.set $entry (i32.load (i32.add (global.get $BIG5_ENCODE_TABLE) (i32.shl (local.get $mid) (i32.const 2)))))
+      (if (i32.lt_u (local.get $wc) (i32.shr_u (local.get $entry) (i32.const 16)))
+        (then (local.set $hi (local.get $mid)))
+        (else
+          (if (i32.gt_u (local.get $wc) (i32.shr_u (local.get $entry) (i32.const 16)))
+            (then (local.set $lo (i32.add (local.get $mid) (i32.const 1))))
+            (else
+              ;; A single-byte entry (0x80 for U+0080, 0xFF for U+F8F8,
+              ;; best-fit single bytes) is emitted as one byte.
+              (if (i32.lt_u (i32.and (local.get $entry) (i32.const 0xFFFF)) (i32.const 0x100))
+                (then (return (i32.or (i32.and (local.get $entry) (i32.const 0xFF))
+                  (i32.const 0x10000)))))
+              ;; The table stores (lead << 8) | trail; the packed result
+              ;; wants emit order — lead in bits 0..7, trail in bits 8..15.
+              (return (i32.or
+                (i32.or
+                  (i32.and (i32.shr_u (local.get $entry) (i32.const 8)) (i32.const 0xFF))
+                  (i32.shl (i32.and (local.get $entry) (i32.const 0xFF)) (i32.const 8)))
+                (i32.const 0x20000)))))))
+      (br $search)))
+    ;; Unmapped: the default character, whole, flagged.
+    (i32.or
+      (i32.or
+        (i32.and (local.get $def)
+          (select (i32.const 0xFFFF) (i32.const 0xFF)
+            (i32.eq (local.get $def_len) (i32.const 2))))
+        (i32.shl (local.get $def_len) (i32.const 16)))
+      (i32.const 0x1000000)))
+
+  ;; Convert ANSI string at guest src to wide string at guest dst in page
+  ;; $cp (unresolved; CP_ACP tracks the process page), at most $max wide
+  ;; slots including the terminator. Returns characters written, terminator
+  ;; excluded — the historical $ansi_to_wide contract.
+  (func $ansi_to_wide_cp (param $cp i32) (param $src i32) (param $dst i32) (param $max i32) (result i32)
+    (local $i i32) (local $n i32) (local $dec i32)
+    (local.set $cp (call $resolve_code_page (local.get $cp)))
     (block $d (loop $l
-      (br_if $d (i32.ge_u (local.get $i) (i32.sub (local.get $max) (i32.const 1))))
-      (local.set $ch (call $gl16 (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 1)))))
-      (br_if $d (i32.eqz (local.get $ch)))
-      (call $gs8 (i32.add (local.get $dst) (local.get $i)) (i32.and (local.get $ch) (i32.const 0xFF)))
-      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
-    (call $gs8 (i32.add (local.get $dst) (local.get $i)) (i32.const 0))
-    (local.get $i))
+      (br_if $d (i32.ge_u (local.get $n) (i32.sub (local.get $max) (i32.const 1))))
+      (br_if $d (i32.eqz (call $gl8 (i32.add (local.get $src) (local.get $i)))))
+      (local.set $dec (call $ansi_char_decode (local.get $cp) (i32.add (local.get $src) (local.get $i)) (i32.const 0x7FFFFFFF)))
+      (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $n) (i32.const 1))) (i32.and (local.get $dec) (i32.const 0xFFFF)))
+      (local.set $i (i32.add (local.get $i) (i32.shr_u (i32.and (local.get $dec) (i32.const 0xFF0000)) (i32.const 16))))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (br $l)))
+    (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $n) (i32.const 1))) (i32.const 0))
+    (local.get $n))
 
   ;; Convert ANSI string at guest src to wide string at guest dst, max wchars. Returns length.
   (func $ansi_to_wide (param $src i32) (param $dst i32) (param $max i32) (result i32)
-    (local $i i32) (local $ch i32)
+    (call $ansi_to_wide_cp (i32.const 0) (local.get $src) (local.get $dst) (local.get $max)))
+
+  ;; Counted, linear-memory counterpart of $ansi_to_wide_cp for the GDI
+  ;; text funnels (stage 2): decode $byte_count bytes at $src — negative
+  ;; reads to the NUL terminator, DrawText style — in unresolved page $cp
+  ;; into $dst, at most $max WCHARs, and return the character count. No
+  ;; terminator is stored: the funnels hand counted strings to a pipeline
+  ;; that takes counted strings.
+  (func $ansi_counted_to_wide_wa (param $cp i32) (param $src i32) (param $byte_count i32)
+        (param $dst i32) (param $max i32) (result i32)
+    (local $i i32) (local $n i32) (local $dec i32) (local $avail i32)
+    (local.set $cp (call $resolve_code_page (local.get $cp)))
     (block $d (loop $l
-      (br_if $d (i32.ge_u (local.get $i) (i32.sub (local.get $max) (i32.const 1))))
-      (local.set $ch (call $gl8 (i32.add (local.get $src) (local.get $i))))
+      (br_if $d (i32.ge_u (local.get $n) (local.get $max)))
+      (if (i32.lt_s (local.get $byte_count) (i32.const 0))
+        (then
+          (br_if $d (i32.eqz (i32.load8_u (i32.add (local.get $src) (local.get $i)))))
+          (local.set $avail (i32.const 0x7FFFFFFF)))
+        (else
+          (br_if $d (i32.ge_u (local.get $i) (local.get $byte_count)))
+          (local.set $avail (i32.sub (local.get $byte_count) (local.get $i)))))
+      (local.set $dec (call $ansi_char_decode_wa (local.get $cp)
+        (i32.add (local.get $src) (local.get $i)) (local.get $avail)))
+      (i32.store16 (i32.add (local.get $dst) (i32.shl (local.get $n) (i32.const 1)))
+        (i32.and (local.get $dec) (i32.const 0xFFFF)))
+      (local.set $i (i32.add (local.get $i)
+        (i32.shr_u (i32.and (local.get $dec) (i32.const 0xFF0000)) (i32.const 16))))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (br $l)))
+    (local.get $n))
+
+  ;; The process-page half of the gate the GDI text funnels apply before
+  ;; decoding an ANSI string ($text_decode_cp_for_dc in 10f-gdi-dc.wat
+  ;; consults the selected font's charset first): the resolved process
+  ;; ANSI page when it has conversion tables, else 0 — 0 leaves the
+  ;; string on the historical byte-per-character path, byte-for-byte what
+  ;; unconverted pages have always done.
+  (func $text_decode_code_page (result i32)
+    (local $cp i32)
+    (local.set $cp (call $resolve_code_page (i32.const 0)))
+    (select (local.get $cp) (i32.const 0)
+      (call $cp_has_conversion_tables (local.get $cp))))
+
+  ;; Convert wide string at guest src to ANSI at guest dst in page $cp, at
+  ;; most $max bytes including the terminator; a two-byte character is never
+  ;; split to fit. Returns bytes written, terminator excluded — the
+  ;; historical $wide_to_ansi contract, with byte (not character) accounting
+  ;; so DBCS output is bounded by the same limit.
+  (func $wide_to_ansi_cp (param $cp i32) (param $src i32) (param $dst i32) (param $max i32) (result i32)
+    (local $i i32) (local $n i32) (local $enc i32) (local $elen i32) (local $ch i32)
+    (local.set $cp (call $resolve_code_page (local.get $cp)))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $n) (i32.sub (local.get $max) (i32.const 1))))
+      (local.set $ch (call $gl16 (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 1)))))
       (br_if $d (i32.eqz (local.get $ch)))
-      (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 1))) (local.get $ch))
-      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
-    (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 1))) (i32.const 0))
+      (local.set $enc (call $ansi_char_encode (local.get $cp) (local.get $ch) (i32.const 0x3F) (i32.const 1)))
+      (local.set $elen (i32.shr_u (i32.and (local.get $enc) (i32.const 0xFF0000)) (i32.const 16)))
+      ;; Do not split a pair at the buffer edge; the terminator needs a slot.
+      (br_if $d (i32.gt_u (i32.add (local.get $n) (local.get $elen)) (i32.sub (local.get $max) (i32.const 1))))
+      (call $gs8 (i32.add (local.get $dst) (local.get $n)) (i32.and (local.get $enc) (i32.const 0xFF)))
+      (if (i32.eq (local.get $elen) (i32.const 2))
+        (then (call $gs8 (i32.add (local.get $dst) (i32.add (local.get $n) (i32.const 1))) (i32.and (i32.shr_u (local.get $enc) (i32.const 8)) (i32.const 0xFF)))))
+      (local.set $n (i32.add (local.get $n) (local.get $elen)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (call $gs8 (i32.add (local.get $dst) (local.get $n)) (i32.const 0))
+    (local.get $n))
+
+  ;; Encode $chars UTF-16 units at linear $src into the process ANSI page at
+  ;; linear $dst, at most $cap bytes, no terminator; a two-byte character is
+  ;; never split to fit. Returns bytes written. This is how a Win32 module's
+  ;; UTF-16 resources (RT_STRING, RT_DIALOG, RT_MENU labels) reach an ANSI
+  ;; caller: Windows converts them with the ANSI code page, so a Big5 build's
+  ;; string table arrives as Big5 bytes. Without conversion tables the
+  ;; encoder's identity path keeps the historical low-byte copy exactly.
+  (func $wide_wa_to_ansi_wa (param $src i32) (param $chars i32) (param $dst i32)
+        (param $cap i32) (result i32)
+    (local $cp i32) (local $j i32) (local $n i32) (local $enc i32) (local $elen i32)
+    (local.set $cp (call $resolve_code_page (i32.const 0)))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $j) (local.get $chars)))
+      (local.set $enc (call $ansi_char_encode (local.get $cp)
+        (i32.load16_u (i32.add (local.get $src) (i32.shl (local.get $j) (i32.const 1))))
+        (i32.const 0x3F) (i32.const 1)))
+      (local.set $elen (i32.shr_u (i32.and (local.get $enc) (i32.const 0xFF0000)) (i32.const 16)))
+      (br_if $d (i32.gt_u (i32.add (local.get $n) (local.get $elen)) (local.get $cap)))
+      (i32.store8 (i32.add (local.get $dst) (local.get $n)) (local.get $enc))
+      (if (i32.eq (local.get $elen) (i32.const 2))
+        (then (i32.store8 (i32.add (local.get $dst) (i32.add (local.get $n) (i32.const 1)))
+          (i32.shr_u (local.get $enc) (i32.const 8)))))
+      (local.set $n (i32.add (local.get $n) (local.get $elen)))
+      (local.set $j (i32.add (local.get $j) (i32.const 1)))
+      (br $l)))
+    (local.get $n))
+
+  ;; Convert wide string at guest src to ANSI at guest dst, max bytes. Returns length.
+  (func $wide_to_ansi (param $src i32) (param $dst i32) (param $max i32) (result i32)
+    (call $wide_to_ansi_cp (i32.const 0) (local.get $src) (local.get $dst) (local.get $max)))
+
+  ;; The pre-conversion MultiByteToWideChar, preserved exactly: the page
+  ;; argument was ignored, every byte expanded to its own WCHAR, a short
+  ;; buffer silently truncated the copy, and no error was ever set. This
+  ;; remains the behavior of the API in every launch but a CP950 one, and
+  ;; in a CP950 launch for every page but 950 — the conversion semantics
+  ;; below are opt-in per launch (ansiCodePage: 950), so an app that did
+  ;; not ask for a DBCS page observes no change at all, whatever page it
+  ;; names (CP65001 and CP850 included).
+  (func $multi_byte_to_wide_char_legacy (param $src i32) (param $src_len i32) (param $dst i32) (param $dst_len i32) (result i32)
+    (local $i i32) (local $src_wa i32) (local $dst_wa i32)
+    (local.set $src_wa (call $g2w (local.get $src)))
+    (if (local.get $dst) (then (local.set $dst_wa (call $g2w (local.get $dst)))))
+    (if (i32.eq (local.get $src_len) (i32.const -1)) ;; srcLen=-1 means NUL-terminated
+      (then (local.set $src_len (i32.add (call $strlen (local.get $src_wa)) (i32.const 1)))))
+    (if (i32.eqz (local.get $dst)) ;; query required size
+      (then (return (local.get $src_len))))
+    (block $done (loop $lp
+      (br_if $done (i32.ge_u (local.get $i) (local.get $src_len)))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $dst_len)))
+      (i32.store16 (i32.add (local.get $dst_wa) (i32.shl (local.get $i) (i32.const 1)))
+        (i32.load8_u (i32.add (local.get $src_wa) (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $lp)))
     (local.get $i))
+
+  ;; The pre-conversion WideCharToMultiByte, preserved exactly, as above:
+  ;; low-byte truncation, silent short-buffer truncation, lpDefaultChar /
+  ;; lpUsedDefaultChar never consulted.
+  (func $wide_char_to_multi_byte_legacy (param $src i32) (param $src_len i32) (param $dst i32) (param $dst_len i32) (result i32)
+    (local $i i32) (local $src_wa i32) (local $dst_wa i32)
+    (local.set $src_wa (call $g2w (local.get $src)))
+    (if (local.get $dst) (then (local.set $dst_wa (call $g2w (local.get $dst)))))
+    (if (i32.eq (local.get $src_len) (i32.const -1))
+      (then
+        (local.set $src_len (i32.const 0))
+        (block $d2 (loop $l2
+          (br_if $d2 (i32.eqz (i32.load16_u (i32.add (local.get $src_wa) (i32.shl (local.get $src_len) (i32.const 1))))))
+          (local.set $src_len (i32.add (local.get $src_len) (i32.const 1)))
+          (br $l2)))
+        (local.set $src_len (i32.add (local.get $src_len) (i32.const 1)))))
+    (if (i32.eqz (local.get $dst))
+      (then (return (local.get $src_len))))
+    (block $done (loop $lp
+      (br_if $done (i32.ge_u (local.get $i) (local.get $src_len)))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $dst_len)))
+      (i32.store8 (i32.add (local.get $dst_wa) (local.get $i))
+        (i32.load8_u (i32.add (local.get $src_wa) (i32.shl (local.get $i) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $lp)))
+    (local.get $i))
+
+  ;; Whether MultiByteToWideChar / WideCharToMultiByte convert for real for
+  ;; resolved page $cp: only in a CP950 launch (the per-launch opt-in), and
+  ;; only for a page with tables. Every other page — CP_UTF8 (65001), 850,
+  ;; an explicit 1252, an unknown page — keeps the legacy path above in a
+  ;; CP950 launch exactly as it does in a Western one, never error 87.
+  (func $cp_converts_in_launch (param $cp i32) (result i32)
+    (i32.and (call $cp_has_conversion_tables (global.get $ansi_code_page))
+      (call $cp_has_conversion_tables (local.get $cp))))
+
+  ;; One WCHAR for WideCharToMultiByte: $ansi_char_encode (best fit on, the
+  ;; Windows default), plus WC_NO_BEST_FIT_CHARS (0x400). Win98 does not
+  ;; know that flag (it is Win2000+); honoring it is harmless: a mapping
+  ;; whose bytes do not decode back to the same WCHAR is a best fit, and
+  ;; with the flag it becomes the default char instead.
+  (func $wc2mb_char (param $cp i32) (param $wc i32) (param $def i32) (param $def_len i32) (param $flags i32) (result i32)
+    (local $enc i32)
+    (local.set $enc (call $ansi_char_encode (local.get $cp) (local.get $wc) (local.get $def) (local.get $def_len)))
+    (if (i32.and (i32.ne (i32.and (local.get $flags) (i32.const 0x400)) (i32.const 0))
+          (i32.eqz (i32.and (local.get $enc) (i32.const 0x1000000))))
+      (then
+        (if (i32.ne (i32.and (call $cp_char_decode (local.get $cp)
+                (i32.and (local.get $enc) (i32.const 0xFF))
+                (i32.and (i32.shr_u (local.get $enc) (i32.const 8)) (i32.const 0xFF))
+                (i32.shr_u (i32.and (local.get $enc) (i32.const 0xFF0000)) (i32.const 16)))
+              (i32.const 0xFFFF))
+              (local.get $wc))
+          (then (local.set $enc (i32.or
+            (i32.or
+              (i32.and (local.get $def)
+                (select (i32.const 0xFFFF) (i32.const 0xFF)
+                  (i32.eq (local.get $def_len) (i32.const 2))))
+              (i32.shl (local.get $def_len) (i32.const 16)))
+            (i32.const 0x1000000)))))))
+    (local.get $enc))
+
+  ;; MultiByteToWideChar semantics (Wine/Win32), shared by the API handler
+  ;; and the tests — only where $cp_converts_in_launch; everything else
+  ;; takes the legacy path above and never reaches here. $src_len is cbMultiByte
+  ;; (-1 = NUL-terminated, terminator counted in the result); $dst_len is
+  ;; cchWideChar. Returns the wide characters produced — or the count
+  ;; required when $dst is NULL or $dst_len is 0 — and 0 on failure with
+  ;; $last_error set (ERROR_INVALID_PARAMETER 87,
+  ;; ERROR_INSUFFICIENT_BUFFER 122, ERROR_NO_UNICODE_TRANSLATION 1113 for
+  ;; MB_ERR_INVALID_CHARS).
+  (func $multi_byte_to_wide_char (param $cp i32) (param $flags i32) (param $src i32) (param $src_len i32) (param $dst i32) (param $dst_len i32) (result i32)
+    (local $i i32) (local $n i32) (local $dec i32) (local $invalid i32)
+    (local.set $cp (call $resolve_code_page (local.get $cp)))
+    (if (i32.eqz (call $cp_converts_in_launch (local.get $cp)))
+      (then (return (call $multi_byte_to_wide_char_legacy
+        (local.get $src) (local.get $src_len) (local.get $dst) (local.get $dst_len)))))
+    (if (i32.eqz (local.get $src))
+      (then
+        (if (i32.ne (local.get $src_len) (i32.const 0)) (then (global.set $last_error (i32.const 87))))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $src_len) (i32.const -1))
+      (then
+        (local.set $src_len (i32.const 0))
+        (block $sd (loop $sl
+          (local.set $src_len (i32.add (local.get $src_len) (i32.const 1)))
+          (br_if $sd (i32.eqz (call $gl8 (i32.add (local.get $src) (i32.sub (local.get $src_len) (i32.const 1))))))
+          (br $sl)))))
+    (if (i32.le_s (local.get $src_len) (i32.const 0))
+      (then
+        (if (i32.lt_s (local.get $src_len) (i32.const 0)) (then (global.set $last_error (i32.const 87))))
+        (return (i32.const 0))))
+    ;; Pass 1: count output characters; note invalid sequences.
+    (block $pd (loop $pl
+      (br_if $pd (i32.ge_u (local.get $i) (local.get $src_len)))
+      (local.set $dec (call $ansi_char_decode (local.get $cp) (i32.add (local.get $src) (local.get $i)) (i32.sub (local.get $src_len) (local.get $i))))
+      (if (i32.and (local.get $dec) (i32.const 0x1000000)) (then (local.set $invalid (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.shr_u (i32.and (local.get $dec) (i32.const 0xFF0000)) (i32.const 16))))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (br $pl)))
+    (if (i32.and (local.get $flags) (i32.const 8)) ;; MB_ERR_INVALID_CHARS
+      (then (if (local.get $invalid)
+        (then (global.set $last_error (i32.const 1113)) (return (i32.const 0))))))
+    (if (i32.or (i32.eqz (local.get $dst)) (i32.eqz (local.get $dst_len)))
+      (then (return (local.get $n)))) ;; size query: nothing is written
+    (if (i32.lt_s (local.get $dst_len) (i32.const 0))
+      (then (global.set $last_error (i32.const 87)) (return (i32.const 0))))
+    (if (i32.lt_u (local.get $dst_len) (local.get $n))
+      (then (global.set $last_error (i32.const 122)) (return (i32.const 0))))
+    ;; Pass 2: convert for real.
+    (local.set $i (i32.const 0))
+    (local.set $n (i32.const 0))
+    (block $wd (loop $wl
+      (br_if $wd (i32.ge_u (local.get $i) (local.get $src_len)))
+      (local.set $dec (call $ansi_char_decode (local.get $cp) (i32.add (local.get $src) (local.get $i)) (i32.sub (local.get $src_len) (local.get $i))))
+      (call $gs16 (i32.add (local.get $dst) (i32.shl (local.get $n) (i32.const 1))) (i32.and (local.get $dec) (i32.const 0xFFFF)))
+      (local.set $i (i32.add (local.get $i) (i32.shr_u (i32.and (local.get $dec) (i32.const 0xFF0000)) (i32.const 16))))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (br $wl)))
+    (local.get $n))
+
+  ;; WideCharToMultiByte semantics, mirroring $multi_byte_to_wide_char —
+  ;; only where $cp_converts_in_launch, as there. $def_ptr / $used_ptr are the API's
+  ;; lpDefaultChar / lpUsedDefaultChar guest pointers (0 = API NULL).
+  ;; Unmapped characters emit the default character and set *$used_ptr, as
+  ;; in Wine; in a DBCS page the default character is read as the pair it
+  ;; points to when it points at one, and emitted whole.
+  (func $wide_char_to_multi_byte (param $cp i32) (param $flags i32) (param $src i32) (param $src_len i32) (param $dst i32) (param $dst_len i32) (param $def_ptr i32) (param $used_ptr i32) (result i32)
+    (local $i i32) (local $n i32) (local $enc i32) (local $elen i32) (local $def i32) (local $used i32) (local $ch i32)
+    (local $def_len i32) (local $defb i32)
+    ;; Direct native entry shares the same unsupported-API rule as dispatch.
+    ;; This must precede even codepage resolution/last-error or used-default.
+    (if (global.get $rep_store_step) (then (unreachable)))
+    (local.set $cp (call $resolve_code_page (local.get $cp)))
+    (if (i32.eqz (call $cp_converts_in_launch (local.get $cp)))
+      (then (return (call $wide_char_to_multi_byte_legacy
+        (local.get $src) (local.get $src_len) (local.get $dst) (local.get $dst_len)))))
+    (if (i32.eqz (local.get $src))
+      (then
+        (if (i32.ne (local.get $src_len) (i32.const 0)) (then (global.set $last_error (i32.const 87))))
+        (return (i32.const 0))))
+    (local.set $def (i32.const 0x3F)) ;; "?" — CP950's GetCPInfo default char
+    (local.set $def_len (i32.const 1))
+    (if (local.get $def_ptr)
+      (then
+        (local.set $def (call $gl8 (local.get $def_ptr)))
+        ;; A DBCS default character occupies both bytes at $def_ptr; take
+        ;; the pair when the two bytes form one, so an unmapped character
+        ;; is replaced by the whole character, not its lead byte alone.
+        (local.set $defb (call $gl8 (i32.add (local.get $def_ptr) (i32.const 1))))
+        (if (i32.and (call $cp_may_pair (local.get $cp) (local.get $def) (i32.const 2))
+              (i32.ge_s (call $big5_trail_index (local.get $defb)) (i32.const 0)))
+          (then
+            (local.set $def (i32.or (local.get $def)
+              (i32.shl (local.get $defb) (i32.const 8))))
+            (local.set $def_len (i32.const 2))))))
+    (if (i32.eq (local.get $src_len) (i32.const -1))
+      (then
+        (local.set $src_len (i32.const 0))
+        (block $sd (loop $sl
+          (local.set $src_len (i32.add (local.get $src_len) (i32.const 1)))
+          (br_if $sd (i32.eqz (call $gl16 (i32.add (local.get $src) (i32.shl (i32.sub (local.get $src_len) (i32.const 1)) (i32.const 1))))))
+          (br $sl)))))
+    (if (i32.le_s (local.get $src_len) (i32.const 0))
+      (then
+        (if (i32.lt_s (local.get $src_len) (i32.const 0)) (then (global.set $last_error (i32.const 87))))
+        (return (i32.const 0))))
+    ;; Pass 1: count output bytes; note default-byte use.
+    (block $pd (loop $pl
+      (br_if $pd (i32.ge_u (local.get $i) (local.get $src_len)))
+      (local.set $ch (call $gl16 (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 1)))))
+      (local.set $enc (call $wc2mb_char (local.get $cp) (local.get $ch) (local.get $def) (local.get $def_len) (local.get $flags)))
+      (if (i32.and (local.get $enc) (i32.const 0x1000000)) (then (local.set $used (i32.const 1))))
+      (local.set $n (i32.add (local.get $n) (i32.shr_u (i32.and (local.get $enc) (i32.const 0xFF0000)) (i32.const 16))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $pl)))
+    (if (local.get $used_ptr) (then (call $gs32 (local.get $used_ptr) (local.get $used))))
+    (if (i32.or (i32.eqz (local.get $dst)) (i32.eqz (local.get $dst_len)))
+      (then (return (local.get $n)))) ;; size query
+    (if (i32.lt_s (local.get $dst_len) (i32.const 0))
+      (then (global.set $last_error (i32.const 87)) (return (i32.const 0))))
+    (if (i32.lt_u (local.get $dst_len) (local.get $n))
+      (then (global.set $last_error (i32.const 122)) (return (i32.const 0))))
+    ;; Pass 2: convert for real.
+    (local.set $i (i32.const 0))
+    (local.set $n (i32.const 0))
+    (block $wd (loop $wl
+      (br_if $wd (i32.ge_u (local.get $i) (local.get $src_len)))
+      (local.set $ch (call $gl16 (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 1)))))
+      (local.set $enc (call $wc2mb_char (local.get $cp) (local.get $ch) (local.get $def) (local.get $def_len) (local.get $flags)))
+      (local.set $elen (i32.shr_u (i32.and (local.get $enc) (i32.const 0xFF0000)) (i32.const 16)))
+      (call $gs8 (i32.add (local.get $dst) (local.get $n)) (i32.and (local.get $enc) (i32.const 0xFF)))
+      (if (i32.eq (local.get $elen) (i32.const 2))
+        (then (call $gs8 (i32.add (local.get $dst) (i32.add (local.get $n) (i32.const 1))) (i32.and (i32.shr_u (local.get $enc) (i32.const 8)) (i32.const 0xFF)))))
+      (local.set $n (i32.add (local.get $n) (local.get $elen)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $wl)))
+    (local.get $n))
 
   (func $crash_unimplemented (param $name_ptr i32)
     (call $host_crash_unimplemented (local.get $name_ptr) (i32.load offset=16 (global.get $reg_base)) (global.get $eip) (i32.load offset=20 (global.get $reg_base)))
@@ -3977,11 +4752,17 @@
                      (i32.le_u (local.get $ch) (i32.const 0x9F)))
             (i32.and (i32.ge_u (local.get $ch) (i32.const 0xE0))
                      (i32.le_u (local.get $ch) (i32.const 0xFC)))))))
-    ;; CP936/949/950: 0x81-0xFE.
-    (if (i32.or
-          (i32.or (i32.eq (local.get $cp) (i32.const 936))
-                  (i32.eq (local.get $cp) (i32.const 949)))
-          (i32.eq (local.get $cp) (i32.const 950)))
+    ;; CP950: the conversion table's own DBCSRANGE (bestfit950.txt,
+    ;; 0x81-0xFE), so IsDBCSLeadByte(Ex), CharNextA/CharPrevA(Ex), the
+    ;; _mbs* walkers, GetCPInfo and the decoder are one truth.
+    (if (i32.eq (local.get $cp) (i32.const 950))
+      (then
+        (return
+          (i32.and (i32.ge_u (local.get $ch) (global.get $BIG5_LEAD_FIRST))
+                   (i32.le_u (local.get $ch) (global.get $BIG5_LEAD_LAST))))))
+    ;; CP936/949: 0x81-0xFE.
+    (if (i32.or (i32.eq (local.get $cp) (i32.const 936))
+                (i32.eq (local.get $cp) (i32.const 949)))
       (then
         (return
           (i32.and (i32.ge_u (local.get $ch) (i32.const 0x81))
@@ -4414,9 +5195,17 @@
   (func $wnd_uncover_parent (param $hwnd i32)
     (local $parent i32) (local $xy i32) (local $wh i32)
     (local $x i32) (local $y i32) (local $w i32) (local $h i32)
+    (local $owned i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))
     (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd))) (then (return)))
     (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    (if (i32.eqz (local.get $parent))
+      (then
+        ;; Owned popups expose their owner too. In exclusive DirectDraw these
+        ;; windows paint into the same primary, so retained pixels alone do
+        ;; not restore the owner's background when a modal page disappears.
+        (local.set $parent (call $wnd_get_owner (local.get $hwnd)))
+        (local.set $owned (i32.const 1))))
     (if (i32.eqz (local.get $parent)) (then (return)))
     (if (i32.eq (call $wnd_table_find (local.get $parent)) (i32.const -1)) (then (return)))
     (call $nc_flags_set (local.get $parent) (i32.const 2))
@@ -4430,6 +5219,12 @@
     (local.set $y (i32.shr_s (local.get $xy) (i32.const 16)))
     (local.set $w (i32.and (local.get $wh) (i32.const 0xFFFF)))
     (local.set $h (i32.shr_u (local.get $wh) (i32.const 16)))
+    (if (local.get $owned)
+      (then
+        (local.set $x (i32.sub (call $wnd_window_screen_x (local.get $hwnd))
+          (call $wnd_client_screen_x (local.get $parent))))
+        (local.set $y (i32.sub (call $wnd_window_screen_y (local.get $hwnd))
+          (call $wnd_client_screen_y (local.get $parent))))))
     (if (i32.and (i32.gt_s (local.get $w) (i32.const 0))
                  (i32.gt_s (local.get $h) (i32.const 0)))
       (then
@@ -5512,7 +6307,7 @@
     (i32.const 0))
 
   (func $nc_flags_scan (param $mask i32) (result i32)
-    (local $i i32) (local $ptr i32) (local $flags i32) (local $hwnd i32) (local $new i32)
+    (local $i i32) (local $ptr i32) (local $flags i32) (local $hwnd i32) (local $new i32) (local $owner i32)
     (if (i32.eqz (global.get $nc_flags_count)) (then (return (i32.const 0))))
     ;; $nc_flags_count is per instance and routinely stays non-zero while no
     ;; window holds a $mask bit (a retained erase bit, or a flag set on one
@@ -5526,7 +6321,14 @@
       (br_if $done (i32.ge_u (local.get $i) (call $wnd_slot_end)))
       (local.set $ptr (i32.add (global.get $NC_FLAGS) (i32.mul (local.get $i) (i32.const 4))))
       (local.set $flags (i32.load (local.get $ptr)))
-      (if (i32.and (local.get $flags) (local.get $mask))
+      ;; NC_FLAGS is shared across UI threads, just like PAINT_FLAGS.
+      ;; GetMessage/PeekMessage may only deliver work for their own windows;
+      ;; leave foreign flags intact, including hidden-window cleanup work.
+      (local.set $owner (i32.load (call $wnd_thread_addr (local.get $i))))
+      (if (i32.and
+            (i32.ne (i32.and (local.get $flags) (local.get $mask)) (i32.const 0))
+            (i32.or (i32.eqz (local.get $owner))
+                    (i32.eq (local.get $owner) (global.get $current_thread_id))))
         (then
           (local.set $hwnd (i32.load (call $wnd_record_addr (local.get $i))))
           ;; Defensive cleanup: a corrupt/stale NC flag must not synthesize
@@ -6335,7 +7137,7 @@
           (i32.ne (global.get $focus_hwnd) (i32.const 0))
           (i32.eq (call $ctrl_table_get_id (global.get $focus_hwnd)) (i32.const 0xE900)))
       (then (return (global.get $focus_hwnd))))
-    (local.set $top (global.get $menu_open_hwnd))
+    (local.set $top (call $menu_open_hwnd_get))
     (if (i32.eqz (local.get $top))
       (then
         (if (global.get $focus_hwnd)
@@ -8006,7 +8808,7 @@
   (func $string_load_a (param $id i32) (param $buf_wa i32) (param $buf_len i32) (result i32)
     (local $bundle_id i32) (local $idx i32) (local $data_entry i32)
     (local $rva i32) (local $wa i32) (local $i i32) (local $entry_len i32)
-    (local $copy i32) (local $j i32) (local $ch i32)
+    (local $copy i32)
     (if (i32.le_s (local.get $buf_len) (i32.const 0)) (then (return (i32.const 0))))
     (local.set $bundle_id (i32.add (i32.shr_u (local.get $id) (i32.const 4)) (i32.const 1)))
     (local.set $idx (i32.and (local.get $id) (i32.const 0xF)))
@@ -8025,20 +8827,12 @@
     (local.set $entry_len (i32.load16_u (local.get $wa)))
     (local.set $wa (i32.add (local.get $wa) (i32.const 2)))
     (if (i32.eqz (local.get $entry_len)) (then (return (i32.const 0))))
-    ;; Clamp to buf_len-1 to leave room for NUL
-    (local.set $copy (local.get $entry_len))
-    (if (i32.ge_u (local.get $copy) (local.get $buf_len))
-      (then (local.set $copy (i32.sub (local.get $buf_len) (i32.const 1)))))
-    ;; Convert UTF-16 → ASCII (low byte) into destination
-    (local.set $j (i32.const 0))
-    (block $done (loop $copy_loop
-      (br_if $done (i32.ge_u (local.get $j) (local.get $copy)))
-      (local.set $ch (i32.load16_u (i32.add (local.get $wa)
-        (i32.shl (local.get $j) (i32.const 1)))))
-      (i32.store8 (i32.add (local.get $buf_wa) (local.get $j))
-        (i32.and (local.get $ch) (i32.const 0xFF)))
-      (local.set $j (i32.add (local.get $j) (i32.const 1)))
-      (br $copy_loop)))
+    ;; Encode into the process ANSI page, leaving room for the NUL: buf_len
+    ;; counts TCHARs, which for an A caller are bytes, so a DBCS string is
+    ;; bounded in bytes and never split mid-character. The return value is
+    ;; the byte count, as LoadStringA reports it.
+    (local.set $copy (call $wide_wa_to_ansi_wa (local.get $wa) (local.get $entry_len)
+      (local.get $buf_wa) (i32.sub (local.get $buf_len) (i32.const 1))))
     (i32.store8 (i32.add (local.get $buf_wa) (local.get $copy)) (i32.const 0))
     (local.get $copy))
 
@@ -8118,17 +8912,15 @@
       (br $m_loop)))
     (local.set $wa (i32.add (local.get $wa) (i32.const 2))) ;; skip null
     (global.set $dlg_text_wa (local.get $wa))
-    ;; Allocate guest buffer and convert to ASCII
-    (local.set $buf (call $heap_alloc (i32.add (local.get $len) (i32.const 1)))) (local.set $buf_wa (call $g2w (local.get $buf)))
-    (local.set $j (i32.const 0))
-    (block $c_done (loop $c_loop
-      (br_if $c_done (i32.ge_u (local.get $j) (local.get $len)))
-      (i32.store8 (i32.add (local.get $buf_wa) (local.get $j))
-        (i32.and (i32.load16_u (i32.add (local.get $start)
-          (i32.mul (local.get $j) (i32.const 2)))) (i32.const 0xFF)))
-      (local.set $j (i32.add (local.get $j) (i32.const 1)))
-      (br $c_loop)))
-    (i32.store8 (i32.add (local.get $buf_wa) (local.get $len)) (i32.const 0))
+    ;; Allocate a guest buffer and encode into the process ANSI page. A page
+    ;; with conversion tables may need two bytes per unit; every other page
+    ;; keeps the historical one-byte-per-unit buffer and low-byte copy.
+    (local.set $j (select (i32.shl (local.get $len) (i32.const 1)) (local.get $len)
+      (i32.ne (call $text_decode_code_page) (i32.const 0))))
+    (local.set $buf (call $heap_alloc (i32.add (local.get $j) (i32.const 1)))) (local.set $buf_wa (call $g2w (local.get $buf)))
+    (local.set $j (call $wide_wa_to_ansi_wa (local.get $start) (local.get $len)
+      (local.get $buf_wa) (local.get $j)))
+    (i32.store8 (i32.add (local.get $buf_wa) (local.get $j)) (i32.const 0))
     (global.set $dlg_text_ptr (local.get $buf)))
 
   ;; ---- WND_DLG_RECORDS accessors ----
@@ -8901,6 +9693,7 @@
     (local $i i32) (local $j i32) (local $ch i32) (local $prev i32)
     (if (global.get $env_block) (then (return)))
     (global.set $env_block (call $heap_alloc (global.get $env_cap)))
+    (if (i32.eqz (global.get $env_block)) (then (return)))
     (local.set $prev (i32.const 1))
     (block $done (loop $copy
       (local.set $ch (i32.load8_u (i32.add (region.addr $ENV_DEFAULTS 0x000) (local.get $i))))
@@ -8939,6 +9732,10 @@
   (func $env_find (param $name_g i32) (param $wide i32) (result i32)
     (local $p i32) (local $i i32) (local $a i32) (local $b i32) (local $step i32)
     (call $env_ensure)
+    ;; No empty-name variable: a hidden drive entry's leading '=' belongs to
+    ;; its name (e.g. "=C:"), not an empty name's separator. Keep %% literal.
+    (if (i32.eqz (call $gl_char (local.get $name_g) (local.get $wide)))
+      (then (return (i32.const 0))))
     (local.set $step (select (i32.const 2) (i32.const 1) (local.get $wide)))
     (local.set $p (global.get $env_block))
     (block $miss (loop $entry
@@ -9039,8 +9836,11 @@
     (local $entry i32) (local $value i32) (local $value_len i32)
     (local $out_len i32) (local $required i32)
     (if (i32.eqz (local.get $src)) (then (return (i32.const 0))))
+    (call $env_ensure)
+    (if (i32.eqz (global.get $env_block)) (then (return (i32.const 0))))
     (local.set $src_len (call $guest_strlen (local.get $src)))
     (local.set $scratch (call $heap_alloc (i32.add (local.get $src_len) (i32.const 5))))
+    (if (i32.eqz (local.get $scratch)) (then (return (i32.const 0))))
 
     ;; First pass: exact required character count, excluding the final NUL.
     (block $counted (loop $count
@@ -9070,6 +9870,9 @@
       (br $count)))
     (local.set $required (i32.add (local.get $out_len) (i32.const 1)))
     (local.set $tmp (call $heap_alloc (local.get $required)))
+    (if (i32.eqz (local.get $tmp)) (then
+      (call $heap_free (local.get $scratch))
+      (return (i32.const 0))))
 
     ;; Second pass: materialize the complete expanded string in guest memory.
     (local.set $i (i32.const 0))

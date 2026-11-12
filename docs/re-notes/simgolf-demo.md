@@ -1238,6 +1238,257 @@ The other big blitters are live programs: `0x10017b69` (5324 blocks per
 entry), `0x1001546b` and `0x10016e88`. That includes the colour-key LUT loop
 the 2026-09 browser profile blamed.
 
+## 2026-10-30: original browser putting-green construction
+
+Run `scratch/runs/20261030T2236Z-simgolf-action/` advances the original demo
+beyond its retained course using trusted browser keyboard/mouse input. I
+inspected `course-before.png` (welcome dialog and empty grass),
+`welcome-dismissed.png`, `tee-preview.png` (actually labelled **Putting Green**),
+`putting-green-built.png`, and `final-built-course.png`. Enter dismisses the
+welcome dialog; clicking the build button at browser (110,628), the putting
+green thumbnail at (335,653), then grass at (235,460) constructs a visible green
+with flags and a small attendant structure. The balance changes from 120,000
+to 110,000. Moving the pointer away leaves the construction visible; golfers
+continue moving. Escape opens the game's retirement dialog; Enter selects
+“Wait, I don't want to quit yet!”, and clicking the build button closes its
+palette. This is successful construction, not evidence of a completed golf
+hole, player swing, scoring, audio, or long-term stability.
+
+The local loopback browser route was `simgolf_demo` via `index.html?debug&no-log&gl-renderer=webgl`,
+Chrome 151.0.7922.108, main guest thread on the page (`WINE_THREADS=false`),
+1024x768 browser viewport and 800x600 guest drawable. Read-only replay
+instrumentation observed the executing context's `WebGLBackend`, WebGL 1,
+`software=false`; the WAT `gl_sw_enabled()` export returned 0. Its reported
+renderer was WebKit WebGL, with unmasked string
+`ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6 (Core Profile) Mesa 23.2.1)`.
+Launch arguments requested SwiftShader; that request is not the backend
+measurement and this run makes no physical-GPU claim. All 24 observed input
+events were trusted, with paired key and button releases.
+
+The retained module copied from `build/wine-assembly.wasm` at launch and the
+actual HTTP response both hash to
+`7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`
+(1,892,586 bytes). Its compiled source commit is **unknown**; checkout HEAD at
+launch was `b2745ff6f370a7a7d2a8c89ce76a150209240094`, which is not a claim
+about module provenance. `retained.wasm`, `loaded.wasm`, `loaded-module.json`,
+`registration.json`, `served.jsonl`, and `provenance.json` preserve exact tested
+identities. The original installed fixture remains 1,763 files / 65,166,518
+bytes; all before/after SHA-256 values match. The lazy runtime actually served
+1,103 distinct installed files, including golf.exe and all five DLL seeds;
+every served file matches its original hash. The package source/hash and
+extraction recipe remain those above; the installer was not recovered or
+reverified in this run. No asset edits or guest-state writes were used.
+
+`python3 scratch/runs/20261030T2236Z-simgolf-action/verify.py` passes module,
+served/original asset, backend, trusted input, screenshot existence, and cleanup
+checks (`verification.json`). The global evidence checker still reports the
+pre-existing unrelated Zuma reference outside its run; this run's metadata
+references only its own artifacts. No emulator defect was encountered, so
+there is no source repair or build claim. Browser PID 1051807 exited, loopback
+ports 18700/18701 and CDP 37375 closed, and the private profile was removed;
+/home retained more than 9 GB free. No Boat or assigned box was used (ID,
+state, expiry: N/A). Next gap: construct a full tee-to-green hole and attempt
+native player play/scoring on the original course.
+
+## 2026-10-30: tee-to-green hole opened; null virtual call blocks further play
+
+Run `scratch/runs/20261030T2245Z-simgolf-hole/` uses fresh original-demo
+frames and trusted browser input. The **Build Course** button is the large
+golfer button at browser (47,610); its palette contains separate Tee and Green
+tools at (268,654) and (321,654). This differs from the **Add Buildings**
+palette used for the earlier practice putting green. On the first generated
+Christmas Pines course, placing a tee at (310,465) and green at (475,350)
+produced the visible label **Hole 1 / 150 yards / Par 3** and the native prompt
+**Press 'h' to open hole** (`hole-created.png`); money changed from 120,000 to
+119,500 to 118,500. Pressing H ended that guest session, without retained
+diagnostics identifying its cause.
+
+A second launch in the same browser generated a different terrain layout.
+The old green coordinates were now outside the course; placing the green on
+land at (400,500) and pressing H kept the guest running. I inspected the
+flagged green, tee markers and arriving/moving golfers in
+`attempt2-opened.png` and `attempt2-palette-closed.png`. Selecting Boris opens
+his native panel (`gary-selected-later.png`): **Boris (Professor)**, Normal,
+age 37, Nice and Nice, with a hole-1/par-3 score grid containing 0. That is an
+initial score panel, **not a completed stroke score**. Gary's tutorial advances
+to “We've built one hole, let's build more!” (`gary-native-panel.png`). No
+controlled practice round, confirmed swing/ball flight or completed score was
+verified.
+
+The concrete continuation blocker is retained in `terminal-lifecycle.json`:
+the second guest reached EIP zero during continued simulation, with last block
+`golf.exe+0x4fce1` (VA `0x0044fce1`), previous block `0x0044fcd7`,
+ECX `0x01617064` and EDX zero. Original-binary disassembly shows that block
+loads the object's vtable into EDX and executes `call [edx+0x10]` at
+`0x0044fcec`. The host stopped at its EIP-zero check, not its exception handler.
+The browser resize marking this stop is timestamped 22:45:46.829Z, before the
+22:45:52.106Z right-click probe; that later probe did not cause this exit.
+The origin of the invalid object/vtable remains undiagnosed. No guest writes,
+asset edits or speculative emulator repair were made.
+
+The loaded and retained module both have SHA-256
+`7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`
+(1,892,586 bytes); its compiled source commit remains unknown. Checkout HEAD
+at launch was `3a228c05b`. The local route, Chrome version and thread mode
+match the preceding run. Replay inspection measured the first launch's actual
+`WebGLBackend`, WebGL 1, `software=false`, 800x600 drawable, with the same
+ANGLE/Mesa renderer string. The observer deduplicates context handle 1, so
+it does not independently measure the second launch's backend; the WAT
+software-enabled export was not successfully sampled. All 117 recorded input
+events were trusted with paired releases. All 1,763 original installed file
+hashes remained unchanged, and all 1,105 distinct installed files actually
+served matched their originals. `verify.py` checks these identities, native
+input, retained failure, captures and cleanup. Browser PID 1059035 is absent,
+ports 18710/18711/CDP 34571 are closed and its private profile is removed;
+the controller acknowledged quit but ended before writing its final cleanup
+record, so `cleanup.json` records direct process/port verification. No Boat or
+assigned box was used (ID/state/expiry N/A); /home retained over 9 GB free.
+Next: trace the null vtable's allocation/lifetime and repeat native player
+practice play through a completed score. No code/build correctness claim is
+made by this documentation-only run.
+
+## 2026-10-30: null-call interface identified; original failure not reproduced
+
+Run `scratch/runs/20261030T2252Z-simgolf-null/` narrows the earlier
+`0044fcec` failure to a **JGL palette**, rather than an unidentified golfer
+object. Original-binary disassembly and a fresh live object agree:
+
+- Startup `004380d8` passes wrapper `007e5dd8` and the string at `004ac2e8`,
+  `Bodies\MaleSwap01`, to loader `00469070`. The preceding resource uses the
+  same name and wrapper `007e5d80`; wrappers are spaced by `0x58` bytes.
+- Wrapper vtable `0049e854` has initializer `0046fab0`: it first releases old
+  resources through `0046faf0`, requests a palette from manager
+  `[00802460]` slot `+0x6c`, and stores the result at wrapper `+4`.
+- JGL factory original VA `10040820` allocates `0x820` bytes and calls
+  constructor `100417e0`. That installs vtable `1005c938` and records the
+  wrapper backlink at object `+0x808`. The live object was `01617064`, the
+  **same address** as the earlier failing ECX. Its backlink was `007e5dd8`;
+  vtable `00adf938` resolves to `1005c938` using JGL runtime base `00a83000`.
+- Vtable slot `+0x10` is original VA `10041aa0`, runtime `00ac4aa0`. Its
+  thiscall contract is `(outputRgb, firstIndex, count)`, ending in `ret 0x0c`.
+  It reads three bytes from each four-byte palette entry at object `+8` and
+  writes packed RGB triples. The failing caller requests entries 0..119 into
+  its local buffer. Its `0x31c`-byte stack frame accommodates those 360 bytes.
+- Normal JGL destruction `10041830` clears `[owner+4]` when the backlink is
+  nonzero, installs base vtable `1005c95c`, and runs the base destructor.
+  The deleting destructor `10041810` subsequently frees the object when its
+  flag requests deletion. The caller's wrapper-pointer null check would
+  therefore skip an ordinarily destroyed palette with an intact backlink.
+
+These are disassembly-derived interface names, not recovered C++ symbols.
+`palette-lifecycle-disassembly.txt`, full EXE/DLL disassemblies,
+`object-initial.json`, and `final-palette-lifetime.json` retain the details.
+The initial live vtable was already valid before gameplay; its exact
+constructor execution was not breakpoint-captured.
+
+A watchpoint on the palette's first word recorded **no change** through
+native construction/opening of a 125-yard par-3 hole on Ocean's Edge
+(`opened.png`, inspected). Watchpoints disable the uop tier, so the run then
+removed the watchpoint and checked the first word after each execution
+quantum with the tier guard confirmed zero (`passive-installed.json`). That
+also recorded no change through arriving golfers, the first-green-fee
+tutorial and continued simulation into June. The final retained palette had
+the same pointer/vtable/backlink, with matching live/compiled palette serial
+46226. This is not an original-failure reproduction or a fix.
+
+**Unresolved causal distinction:** the previous failure retains EDX=0 after
+`mov edx,[ecx]`, but does not retain memory at `01617064` at that moment.
+Consequently, a cleared vtable word and an interpreter load/register error
+remain distinguishable hypotheses. No allocation overlap, stale-pointer
+release, offending write or faulty opcode has been proven. Capture both the
+object word and EDX at `0044fce1`/`0044fcec` on the next reproduction before
+changing code. Neither the call nor guest bytes were patched or skipped.
+
+Native people/player selection attempts did not establish a practice round,
+swing or completed score. Escape eventually opened Gary's retirement-choice
+dialog (`final-course.png`, inspected); that is not scoring. Some exploratory
+CDP connections used Puppeteer's default viewport and temporarily changed
+input geometry. `geometry*.json`, `input-mapping.json`, and
+`proper-mapping.json` preserve this limitation; later connections explicitly
+used `defaultViewport:null`, restoring 1024x768. Do not treat missed selection
+clicks as an emulator defect or compare terrain coordinates across layouts.
+
+The loaded/retained module remains SHA-256
+`7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`,
+compiled source commit unknown. `provenance.json` records checkout HEAD when
+sampled, not proof of compilation provenance. Route: local loopback Chrome
+151, main guest on page (`WINE_THREADS=false`), WebGL requested; no actual
+WebGL backend observer was installed in this run, while the final WAT
+`gl_sw_enabled()` sample was 0. All 1,763 original assets / 65,166,518 bytes
+remain unchanged; all 1,110 distinct served fixture files match their hashes.
+`verify.py` passes those checks, retained/loaded module identity, 159 trusted
+input events with paired releases, stable final palette, and cleanup.
+Browser PID 1073634 exited; dynamic loopback ports 44163/34411 and CDP 41101
+closed; private profile and own watcher were removed/stopped. No Boat or
+assigned box was used (ID/state/expiry N/A); /home retained over 9 GB free.
+No source edit, focused code regression, or full-build correctness claim is
+made. The next task is still the original failure reproduction with object
+memory retained, followed by native practice/player scoring.
+
+## 2026-10-30: practice attempt stops at a different JGL virtual call
+
+Run `scratch/runs/20261030T2303Z-simgolf-practice/` prioritizes native gameplay
+without a watchpoint or guest patch. I inspected `green-built.png` (Hole 1,
+100 yards, Par 3), `opened-closed.png` (flagged green and tee), `players.png`
+(moving people and Gary's employee tutorial), and `person-selected.png`
+(guest window gone). Christmas Pines initially appeared black because the
+view was outside the course; zooming out and scrolling brought the original
+terrain into view. Construction required held mouse input; quick placement
+clicks sometimes left only a preview. H opened the hole and people arrived,
+but no player practice, swing, ball flight or completed score was verified.
+The people tabs and moving-person selection attempts did not establish a
+Gary player panel. Do not use those missed selections as proof of a defect.
+
+The concrete execution blocker is a **different** virtual call. At
+`2026-10-30T23:06:57.011Z`, the release-time diagnostic captured EIP 0,
+last block `00a9aa35`, preceding block `00a9aa13`, EBX=ECX=`0156299c`,
+and EDX=`80008000`. The word read at ECX in that same snapshot was also
+`80008000`. JGL loaded at `00a83000` from original base `10000000`, so the
+last block is original `10017a35`:
+
+```asm
+10017a35: mov edx,[ebx]
+10017a37: mov ecx,ebx
+10017a39: call [edx+0x18]
+```
+
+`terminal-lifecycle.json`, `terminal-runtime.json`,
+`jgl-terminal-disassembly.txt`, and `failure-analysis.json` retain the
+observations and address conversion. The observed object word agrees with
+EDX; this occurrence supplies no evidence of a mismatched load result.
+Its allocation history and the source of that word remain unknown. The
+snapshot was taken at guest-memory release, not at an instruction breakpoint;
+the full failing object, stack and target slot were not retained before
+release. The later query for those fields failed after `wine.instance` was
+cleared. No speculative repair was made.
+
+The earlier `0044fce1`/`0044fcec` palette failure was not reproduced. At this
+new stop the original palette remained at `01617064`, with valid first word
+`00adf938`. The stop precedes the later `paused2` and `person-selected`
+input attempts; those screenshots show an already-ended guest, not a pause
+or successful selection. Next: reproduce JGL `10017a35`/`10017a39` with the
+failing object's allocation/write history and target slot retained, prove the
+cause, then return to native practice/scoring.
+
+This run served a retained copy of the provenance-verified module from
+`scratch/runs/20261030T2315Z-dx-current-build/`: SHA-256
+`7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`,
+1,892,586 bytes. The actual HTTP response matches it. That build records
+source commit `8cfa97b0dfbfc8d5e84e8430ed317fa860d9eb3e`, an empty tracked
+source patch, a passing locked canonical build and 1,148 unchanged source
+hashes across compilation; copies of that evidence are retained here.
+No source changes or new code-build claim accompany this documentation update.
+The local Chrome 151 route used `WINE_THREADS=false`, fixed 1024x768 viewport,
+800x600 guest drawable and requested WebGL. The sampled `gl_sw_enabled()` was
+0; the actual browser backend was not independently observed in this run.
+`verify.py` checks original/served asset hashes, module identity, trusted
+paired input, the terminal signature and cleanup; `verification.json`
+contains counts. The asset baseline is copied from the preceding original
+fixture audit, with a fresh post-run hash census. Browser PID 1091572 exited,
+dynamic static/control/CDP ports 43691/34525/44343 closed, and the private
+profile was removed. No Boat or assigned box was used (ID/state/expiry N/A);
+/home retained over 1.5 GB free. Evidence remains local and gitignored.
+
 So the next SimGolf lever is `adc r32,m32` taking the carry from a 16-bit
 `add` in the uop compiler. In this window it is the only `adc` in any
 declined scan (4 heads).
@@ -1270,3 +1521,333 @@ A/B timing (box 3, `tools/uop-game-ab.js --games=sg --branch-clock`):
 - Gameplay phase 2500..4000: 1.3/1.4s against 1.9/2.0s.
 
 The full table, with H3 and WC3g (both neutral), is in uop-tier-design.md §15.1.
+
+## 2026-10-30: JGL write history and a proven PCM cursor defect
+
+Run `scratch/runs/20261030T2312Z-simgolf-jgl/` retains the original working
+driver/module and adds allocation, write, and call-slot observations. No guest
+memory or installed asset was patched. The original 1,763-file asset census
+is unchanged. `causal-history.json` and `served-verification.json` contain the
+machine-readable evidence; diagnostic compiler changes remain in the run directory.
+
+The exact original call is `10017a39: call [edx+18]`, following the object-word
+load at `10017a35`. Twenty valid native call snapshots establish vtable
+`00adf938`, slot `00adf950`, method `00ac4d30` (original `10041d30`), which
+returns `this+408`. This is the palette-buffer accessor, not the earlier
+independent faulting palette pointer. Objects `0156299c` and `012a37ac` each
+have a captured 2,080-byte allocation and constructor transition to this vtable;
+no captured free or replacement allocation spans either object before overwrite.
+
+Two diagnostic runs catch the actual writer. The loaded second copy of
+`sound.dll` has base `0115d000`; block `011628b8` maps to original `100058b8`.
+Its `100058c4: mov WORD PTR [edi],ax` converter advances ESI by eight and EDI
+by two. In `probe3`, writes at object-minus-one and object-plus-one change
+`00adf938 -> 00adf980 -> 00800080`. ECX is already negative, and the loop
+continues across both live objects. The independent `lean` run captures the
+same writer storing zeros. This establishes the overwriting loop, but not the
+origin of its bad count. These runs terminate differently from the prior
+`10017a39`/`80008000` snapshot; they are not an exact replay of that terminal
+call. Probe3's intermediate UI inputs also include a corrected viewport error;
+the lean overwrite does not require those viewport changes.
+
+A separate proven emulator defect is the snapshot audio clock reporting
+partial PCM frames. The retained original-module retest reports a stereo
+16-bit cursor of 25,142 bytes (frame size four), and converter-entry snapshots
+show odd destination addresses. The original caller divides lock lengths by
+four, then doubles the frame count before entering its unguarded converter.
+A zero-count entry would therefore explain the underflow, but was not captured:
+the bounded breakpoint run's full entry history is retained in
+`original2/audio-history.json`. Do not claim that missing causal step as proved.
+
+`lib/host-audio.js` now rounds elapsed snapshot playback to complete PCM frames
+before converting to bytes. The focused regression fails against the old
+calculation (`actual 3`, `expected 0`) and passes with the fix, covering browser
+and guest clocks, stereo/mono, 8/16-bit, and ring wrap. Existing cursor, ring-wrap,
+frequency, and refresh tests pass. The callback census changes only the reviewed
+host-audio hash/reason; invocation ownership remains pending. The required locked
+build passes with explicit exit status zero in `build-final.exit`; its module
+is `d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`.
+
+The fresh `fixed` native retest deliberately retains the supplied original
+`7e8d3194…` module with the repaired host JavaScript, WebGL selected, SwiftShader,
+and cooperative guest threads. Inspected screenshots establish a 75-yard par-3
+open for play, Gary's practice setup, the practice scorecard, and tee shot controls.
+Initial zeroes on that scorecard are not completed strokes. Native construction
+inputs accidentally removed the green once; it was rebuilt through the original
+UI. Subsequent intended shot clicks again applied the construction tool; none
+establish a scored stroke or an input-emulation defect. At closeout the guest
+is still running with both tracked object words valid. The exact invalid-call
+regression and completed scored shot remain unproven. Next capture converter
+entry arguments and the preceding DirectSound lock outputs without a timing-heavy
+breakpoint, then verify native play-tool selection before repeating the stroke.
+All local test browsers, ports, and private profiles are cleaned up; no Boat box
+was used or shut down. See `result.json` for final module/backend/cleanup evidence.
+
+### 2026-10-31: Lock-to-converter cause captured; original practice scored
+
+Run `scratch/runs/20261030T2358Z-simgolf-lock/result.json` closes the missing
+entry-argument trace and reaches native scored practice. No additional production
+change is justified: the existing complete-PCM-frame cursor repair `6a28a08e3`
+already addresses the demonstrated cause.
+
+A diagnostic module adds observation-only host callbacks at converter entry and
+after DirectSound Lock has written its outputs. The converter callback is guarded
+by the exact entry address; observations use bounded counters and a 300-event ring,
+without breakpoints or guest memory writes. The reconstructed source closure,
+three VFS overrides, compiler script, and module hashes are retained. Identical
+module `9d183ea4…` was compared with current repaired host audio and the exact host
+audio from the parent of `6a28a08e3`; original game assets were unchanged.
+
+At `2026-10-31T00:00:58.052Z`, the old clock's Lock on the 65,536-byte ring had
+`offset=62891`, `bytes=2646`, `flags=0`. It returned spans `(19228599,2645)` and
+`(19165708,1)`. The original caller converts each span using
+`2 * floor(spanBytes / 4)`, producing converter counts **1322 and 0**. The second
+entry's stack explicitly contains destination `19165708`, source `18679608`,
+count zero, and return address `0x01162a12`. Original `sound.dll:10005890` executes
+its conversion body before decrementing ECX; zero therefore underflows and runs
+past the output buffer. This connects the prior captured negative-ECX writer at
+`100058c4` to a concrete fractional-frame DirectSound boundary. The guest then
+stopped with tracked object words `[0x00adf938,0]`. This comparison did not replay
+the exact prior `10017a39` terminal, so that particular terminal is not claimed.
+See `old-clock/causal-zero-count.json` and the surrounding retained samples.
+
+The repaired comparison observed 3,357 converter entries and 5,134 Locks with no
+recorded anomaly; both tracked JGL words remained `0x00adf938`. Aggregate statistics
+were enabled midway: those later 1,333 converter entries had minimum count two,
+and 1,277 Locks included 56 wraps with no unaligned spans. These bounded
+observations support the existing repair, rather than a new converter workaround.
+Focused cursor, ring-wrap, and frequency regressions all pass. This task changes
+only this note, so it does not claim a new locked production build; the repair's
+locked build remains documented above.
+
+A separate original-game play run used the supplied retained `7e8d3194…` module
+with repaired host audio `f8770324…`, cooperative threads, WebGL selected and
+SwiftShader, with the game drawing through GDI. That retained module's source
+provenance remains unknown; it is not represented as the freshly traced build.
+Native construction opened a 55-yard par-3 at Ravenwood Farms. Gary's People menu
+started practice; selecting the native **Straight Shot** tool and aiming at the
+green displayed the actual shot line and Lob Wedge controls. The inspected
+`play/shot-button-after-aim.png` shows Gary's first-hole score **2**, with Jimmy
+still at zero; `play/scored-practice.png` subsequently shows both at **2** and the
+hole's stroke average **2.00**. `play/aim-green.png` preserves tool selection.
+These are original UI inputs and original scoring, not synthesized gameplay.
+The Information button tried earlier opens Reports and was not the needed play
+tool. The initial black field was an off-course camera position; native panning
+revealed the course. Neither observation establishes an input or renderer defect.
+
+At closeout the game was running and both tracked object words were valid. All
+111 captured browser input events were trusted, with keys and buttons released.
+All 1,763 native asset files (65,166,518 bytes) remain identical, and served original
+asset hashes were checked against that census. All four owned browsers (including
+an excluded early 404 launch), ports, and private profiles were closed or removed.
+No Boat box was used; box ID/state/expiry are not applicable. Full traces, module
+identities, original screenshots, and cleanup checks remain in the run directory.
+
+### 2026-10-31: native visitor hole completion; Gary finish unverified
+
+Run `scratch/runs/20261031T0013Z-simgolf-hole/` is one original-game browser
+attempt, 00:12:24–00:22:00 UTC, within 20 minutes. This launch generated
+**Dolphin Coast**. Native construction opened hole 1 at **79 yards, par 3**
+(`people.png`). Gary's People/pro control started a **Practice Round** against
+Bing. Straight Shot aiming is inspected in `aim-course-hole.png`; the first
+shot hit a tree (`first-shot.png`). `photo-current.png` preserves native shot
+history. `recovery-current.png` explicitly reports Gary's second shot, a 16-yard
+Lob Wedge recovery to within two feet of the pin, and a Recovery Skills award.
+
+The new completed hole result is **Bing's five-stroke double bogey**.
+`skills-assigned.png` shows Double Bogey and his first greens fee;
+`photo-current.png` preserves the fee notification. Most decisively, inspected
+`final-hole-result.png` shows hole 1, par 3, stroke average **5.00**, and **one
+recorded score in the five-stroke column**. Bing then left the green. This
+establishes a native visitor course-hole completion, not Gary's completed hole
+or a player-controlled tournament finish. Gary's last inspected practice score
+is two (`after-recovery.png`), which alone must not be interpreted as completion.
+A skill-award screen (`pause-tooltip.png`) required assigning three points;
+after that dialog, practice controls disappeared and Gary walked away. His
+final putt/result was not captured. Next: preserve Gary's explicit completion
+message/history through that intervening skill dialog. The Begin Tournament
+tooltip was inspected, but the grey control did not establish a tournament or
+its eligibility requirements. No causal emulator fault was demonstrated.
+
+The executing retained module is `7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`
+(1,892,586 bytes), with **unknown compiled source provenance**. Launch checkout
+HEAD was `03e361f0d`, not an asserted module source. Served repaired host audio
+is `f8770324…`, host.js `3f6b8405…`; full hashes/times are in `verification.json`
+and `served.jsonl`. Route: `index.html?debug&no-log&gl-renderer=webgl`, Chrome
+151.0.7922.108, 1024×768 viewport, 800×600 native drawable, cooperative threads.
+Actual presentation is CanvasRenderingContext2D/GDI, no window GPU layer, no
+D3DIM draws/targets; selected WebGL is not evidence of GPU scene rendering.
+AudioContext was running; audible quality was not independently reviewed.
+The guest remained running with both tracked JGL words `0x00adf938`.
+
+Startup full-page screenshots briefly stalled; subsequent evidence uses direct,
+unmodified native canvas PNGs. `verify.py` passes module identity, unchanged
+1,763-file/65,166,518-byte asset census, and all 1,120 served original-response
+hash checks. The retained input snapshot contains 139 trusted events, with all
+keys/buttons released. The final visitor lookup click after that snapshot used
+the same CDP input/finally-released mouse route but was not separately captured
+in the event snapshot. No guest-state writes or asset edits were used. No code
+changed, so no new runtime tests or locked build are claimed. Browser PID and
+three ports are verified absent/closed, profile removed, board watcher stopped.
+No Boat or assigned box was used (ID/state/expiry N/A). Exact identities,
+inspection evidence and cleanup are retained in the run directory.
+
+### 2026-10-31: Gary's native practice hole completed
+
+Run `scratch/runs/20261031T0026Z-simgolf-gary/` preserves the interrupted
+worker's original browser, continued without relaunch at 00:39 UTC and closed
+at 00:42:09 UTC. The entire browser attempt remained below 20 minutes.
+This is **Ocean's Edge MC, hole 1, 75 yards, par 3**, against Twyla.
+Native Straight Shot/Lob Wedge controls and an aimed first shot are retained
+in `target-hover.png` and `lob-result.png`. `frames/0110.png` shows Gary's
+first stroke; inspected `gary-history-now.png` shows **two strokes** on both
+his Golf Pro card and the practice scorecard. That card's history still shows
+only the first-shot commentary, so it alone did not establish completion.
+
+Inspected `frames/0239.png` and the continuation's first capture,
+`cont-initial.png`, supply the missing completion: **Gary Golf snakes a putt
+five yards into hole 1**, with Twyla witnessing it and Gary acquiring Luck.
+Together with the two-stroke native card, this establishes Gary's completed
+two-stroke practice hole. The original game resolves the putt; no separate
+manual putting input or tournament finish is claimed. The native skill dialog
+then appeared; three points were assigned to Power Hitter, with Accurate
+Putter +100% and Luck +30% visible (`cont-skills-assigned.png`).
+
+During subsequent inspection, clicking the practice control started another
+round against Trudy and reset the displayed card to zero (`cont-gary-history.png`).
+That is a new round, not a revised score for the completed Twyla round. No
+second-round completion is claimed. The native Save Course control reported
+"Ocean's Edge Municipal saved for championship play" (`cont-options-held.png`).
+`final-save-manifest.json` preserves its unmodified 86,831-byte CSE file as
+`final-course-0.cse`, SHA-256
+`facfa36306f4194d7249576ee484254ea4a51741cac903b351ba939caf295821`.
+Keep the earlier export too. This is a championship course export, not a
+verified resumable career checkpoint; no `.sve` was present. To recover the
+course, mount those bytes at the manifest's native path through the ordinary
+launcher VFS and use the game's course loader. Reload was not tested here.
+
+`verify.py` passes the retained module identity `7e8d3194…` (source provenance
+unknown), all 1,763 unchanged original assets, 1,124 served-original response
+hashes, and all 200 trusted input events with keys/buttons released. The guest
+was running with both tracked JGL words `0x00adf938` at close. Chrome
+151.0.7922.108 used cooperative threads, 1024×768 viewport, 800×600 native
+canvas and GDI presentation without a window GPU layer; the WebGL URL selection
+does not establish GPU rendering. AudioContext was running; listening was not
+tested. No guest patches, asset edits, production faults or code changes were
+introduced, so no new runtime build is claimed. `result.json` links the inspected
+captures, exact inputs, verification and save manifest. Browser/controller are
+absent, all three ports closed, private profile removed and inherited board
+watcher stopped. No Boat or assigned box was used (ID/state/expiry N/A).
+
+### 2026-10-31: exported Ocean's Edge reloaded; native championship won
+
+Run `scratch/runs/20261031T0155Z-simgolf-reload/` performed a fresh native
+reload and new scored gameplay at 01:54–02:07 UTC, within 20 minutes. The
+previous export was mounted through the ordinary launcher at its recorded
+`c:\themes\championship\ocean's edge mc.cse` path. Its 86,831 bytes retain
+SHA-256 `facfa36306f4194d7249576ee484254ea4a51741cac903b351ba939caf295821`.
+No course bytes, guest code, skills, or scores were patched.
+
+There is an important recovery prerequisite missing from the earlier recipe.
+Original `golf.exe:0040d99e` passes `saved games\AS1.sve` to FindFirstFileA;
+on failure, `0040d9b8` skips the startup menu and generates a new course.
+The extracted original zero-byte marker is instead mounted under
+`Saved_Games` with an underscore. The first two launches therefore generated
+Ravenwood Farms and Christmas Pines. Native retirement exited through the
+demo splash screens. For the third launch, an ordinary additional file mapping
+mounted the **unchanged original** `installed/Saved_Games/AS1.sve` at
+`c:\saved games\AS1.sve`. This is the original empty marker, not a fabricated
+career save. Its SHA-256 is
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+No production source or manifest was edited. `startup-disasm.txt`,
+`save-string-xrefs.txt`, `alias-mappings.json`, and `actions.jsonl` preserve
+the reason and exact launch/input sequence.
+
+The native startup menu then offered **Play a Championship** (`alias-now.png`).
+`back.png` shows its course loader recognizing Ocean's Edge MC as one hole,
+75 yards, par 3, Fun Rating 57, with Twyla's course record of 2. Selecting it
+and original **Sid Golf.pro** loaded the course. `native-course.png` and
+`people.png` show its clubhouse, waterways, coastal tee, and island green;
+`reference-export-layout.png` preserves the prior export view for comparison.
+The later hole inspection in `sid-card.png` confirms 75 yards/par 3, stroke
+average 2.00 and one recorded two-stroke score. This verifies retained course
+layout and native loading, not recovery of Gary's career or the Trudy round.
+
+The championship loader starts a **Professional Tournament**, the 2001 San
+Diego Open, rather than a Practice Round. Native People/Straight Shot controls
+and a green target produced a new inspected shot: `first-stroke.png` explicitly
+reports Sid Golf's **70-yard Lob Wedge to within 10 feet of hole 1**, with Luck
+improving to 30%. `stroke-score.png` shows Sid at one stroke and Juice Pro at
+zero. The game subsequently resolved play. Most decisively,
+`score-control.png` displays **Tournament Results: Sid Golf −1, 2 strokes,
+wins 20,000 dollars; Juice Pro +4, 7 strokes**. This is a new native tournament
+hole completion and win. A new practice round was not verified; use this
+championship route when recovering the CSE, and do not call it a career or
+practice checkpoint. No tournament save/resume is claimed.
+
+`verify.py` passes the retained module identity `7e8d3194…` (1,892,586 bytes;
+compiled source provenance still unknown), all 1,763 unchanged original assets
+(65,166,518 bytes), all 3,337 served-original hash checks and 77 trusted input
+events with all keys/buttons released. `input-hashes.json` pins the export,
+marker and reused driver helpers. `served.jsonl` pins the executing module,
+export, original assets, host.js `5a8fd3ba…` and repaired audio `f8770324…`.
+Chrome 151.0.7922.108 used cooperative threads, a 1024×768 viewport and native
+800×600 GDI canvas, without a window GPU layer. AudioContext was running;
+audible quality was not assessed. The game was running with both tracked JGL
+words `0x00adf938` at close. The explicit quit completed browser/server cleanup;
+the controller process later reported exit 143, with signal sender unknown.
+Browser PID and all three ports are verified absent/closed, private profile
+removed, and own board watcher stopped. No Boat/test box was used; ID, state
+and expiry are N/A. No emulator defect was established, no source changed,
+and no new runtime build is claimed. Recovery commands and evidence remain
+in `recovery.txt` and `result.json` in the run directory.
+
+### 2026-10-31: second-hole attempt blocked by championship recovery route
+
+Run `scratch/runs/20261031T0215Z-simgolf-hole2/` tested the retained course
+at 02:11–02:20 UTC. **No second playable hole or new architect save was
+completed.** The input CSE remains byte-exact, SHA-256
+`facfa36306f4194d7249576ee484254ea4a51741cac903b351ba939caf295821`
+(86,831 bytes). A separate preservation export, `reloaded-original.cse`, has
+the same bytes/hash; it is not a newly saved two-hole course.
+
+The native loader again recognized Ocean's Edge MC as one hole, 75 yards,
+par 3, with Twyla's record of 2 (`loader.png`, `retry-course.png`). Selecting
+Sid starts a Professional Tournament. Once that transition finishes, Build
+Course is gray and clicking it does not open its palette (`build-palette.png`).
+Early construction clicks during the transition produced an incidental green
+and expenditure, but no verified tee/green pair, hole-2 label or opened hole;
+these unsaved changes were discarded by native retirement. Subsequent shot
+inputs produced a native water-shot complaint; no completed round is claimed.
+
+A second fresh native CSE load reached **Pick a Pro**. Escape, another Escape,
+and Enter did not leave that picker for an architect session
+(`before-pro-cancel.png`, `pro-cancel.png`, `pro-cancel2.png`, `final-picker.png`).
+The concrete blocker is the available recovery route: championship import
+starts tournament play, while no resumable career `.sve` was retained. The
+only mounted `.sve` files are the unchanged original empty marker and its
+space-path alias. This bounded attempt did not find a native import-to-editor
+route; it does not establish that every native route is impossible. Next work
+needs a verified native editing/import route or an original career checkpoint
+containing this layout. No emulator defect was established or source changed.
+
+Capture caveat: after gameplay presentation switches, `#screen` can retain the
+loader image while `#screen-present` shows the live course. After relaunch,
+the latter can itself retain the previous black frame during startup. The
+full-page captures settle which image was actually presented; do not infer
+loading stalls from either canvas alone. An initial marker-URL typo was
+corrected in the run-local driver before the successful fresh launch.
+
+`verify.py` passes all 1,763 original assets (65,166,518 bytes), 1,790 served
+original-response hashes, the retained module identity
+`7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`
+(1,892,586 bytes; compiled source provenance unknown), and 91 trusted inputs
+with keys/buttons released. `additional-verification.json` verifies the
+unchanged input, reloaded VFS export, served host copies and first-browser
+cleanup. Chrome 151.0.7922.108 used cooperative threads, 1024×768 viewport,
+800×600 native GDI presentation and no window GPU layer. AudioContext was
+running; listening was not assessed. No guest patches, cheats, synthetic
+assets, source fixes or new build are claimed. Both browsers are absent, six
+ports closed and both private profiles removed. The first controller exited
+0; the second reported 143 after successful explicit cleanup, sender unknown.
+The board watcher is absent. No Boat/test box was used; ID/state/expiry N/A.

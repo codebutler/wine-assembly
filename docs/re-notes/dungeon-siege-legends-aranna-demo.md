@@ -66,4 +66,45 @@ Tested module SHA256:
 The intermediate `20261010T1517Z-aranna-rtf-fixed` run deliberately remains as
 evidence that repairing group skipping alone left the truncated body blank.
 This fixes text visibility, not complete RichEdit formatting or game compatibility.
-The new-game task remains held for a user licence decision.
+At that checkpoint the new-game task remained held for a user licence decision.
+
+## Original installer recovered, 2026-11-05
+
+The original installer is now available at
+`scratch/game-media/aranna-demo-20261105/dsloademo.exe`: 260378624 bytes,
+SHA256 `e3923f18d3ec9bf52ffe556821dbaa2078e985087c7bf4b171a36b9883b851cf`.
+This exactly matches the recorded original at the top of this note despite
+the different filename. Recovery source:
+[GamesDomain mirror](https://ftpmirror1.infania.net/pub/gamesdomain/demos/dsloademo.exe).
+The initial request timed out after 203887916 bytes; an HTTP 206 response
+supplied the remaining 56490708 bytes. The complete file's size and SHA256
+were checked after resuming. Headers and the recovery receipt are retained in
+`scratch/runs/20261105-aranna-original-media-recovery/`. Reference this file
+by path and hash rather than copying it into future run directories.
+
+Ordinary Accept/Yes authorization from 2026-10-18 persists; the historical
+licence-decision hold above is superseded. This recovery did not run or extract
+the installer, accept an agreement, or establish current gameplay. The next
+runtime task must reconstruct the setup and supporting files, observe ordinary
+acceptance and installation, then test the original game. The replacement box
+`bx_ymnfhg6q` was previously created and stopped with a snapshot; verify current
+access before assigning a runtime. The superseded `bx_hx8msa33` remains untouched.
+
+Fresh runtime preflight on 2026-11-05 at 12:55Z created `bx_96k82f8h`
+using a persisted UUID Idempotency-Key and a one-hour TTL. Creation succeeded,
+but the first SSH command returned HTTP403 `api_key_action_forbidden`,
+“This API key cannot perform ssh.” No setup, guest execution, alternate
+execution route, or SSH retry followed. The coordinator stopped the new box;
+creation, denial and stopped-state evidence are in
+`scratch/runs/20261105-aranna-fresh-runtime/`. Old boxes remain untouched.
+Resume this lane with permitted SSH access or an available serialized local
+runtime slot; recovered media and ordinary acceptance authorization remain valid.
+
+Offline extraction completed at 12:57Z on the coordinator. The canonical files
+are in `scratch/game-media/aranna-demo-20261105/extracted/`; the 28-file inventory
+totals 281799760 bytes, and `DSLOA.exe` matches the historical SHA256 above.
+Both case-distinct setup DLLs are preserved and have identical contents.
+`scratch/runs/20261105-aranna-extraction/result.json` records every size and
+SHA256; `7z-extract.log` records successful extraction. Future runs should
+reference this location rather than copy the payload into evidence directories.
+This operation did not execute the guest, accept the agreement or install it.

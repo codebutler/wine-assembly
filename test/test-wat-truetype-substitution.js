@@ -142,9 +142,13 @@ const manifest = JSON.parse(fs.readFileSync(
     }
   }
 
-  // FW_BOLD is 700; GDI treated anything lighter as regular, and a font
-  // requested at 600 that came back bold would be visibly too heavy.
-  assert.strictEqual(lookup('Arial', 699), expected.get('Arial').regular);
+  // The existing nearest-weight mapper chooses between Regular 400 and
+  // Bold 700 at the midpoint; 600 is intentionally bold (SimCity 2000).
+  assert.strictEqual(lookup('Arial', 500), expected.get('Arial').regular);
+  assert.strictEqual(lookup('Arial', 550), expected.get('Arial').regular);
+  assert.strictEqual(lookup('Arial', 551), expected.get('Arial').bold);
+  assert.strictEqual(lookup('Arial', 600), expected.get('Arial').bold);
+  assert.strictEqual(lookup('Arial', 699), expected.get('Arial').bold);
   assert.strictEqual(lookup('Arial', 700), expected.get('Arial').bold);
   assert.strictEqual(lookup('Arial', 900), expected.get('Arial').bold);
 

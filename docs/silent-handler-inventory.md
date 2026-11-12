@@ -1,5 +1,21 @@
 # Silent-handler inventory history
 
+2026-11-05: 239 -> 237. Both vertex-buffer Unlock handlers now clear shared
+object lock state and reject invalid objects. ProcessVerticesStrided checks
+that state before processing; Lock marks it through the common VB alias.
+No quiet handler was added. Public x86 COM regressions cover locked rejection,
+Unlock recovery and released/recreated buffer lifetimes.
+
+2026-10-19: No inventory change. `ImmGetProperty` shares the existing
+two-argument no-IME result/cleanup and reports zero capabilities/version
+because no IME is installed, consistent with `GetKeyboardLayout/List` exposing
+only plain en-US and `ImmIsIME` returning false. This is the absence of an IME,
+not success for unimplemented composition work. Unknown HKLs cannot name an
+installed IME either. The compiled regression resolves the actual dynamic thunk
+and dispatches all seven property indices plus invalid selectors, checking the
+two-argument stdcall ABI. An installed IME implementation must update these
+queries together. API contract: https://learn.microsoft.com/en-us/windows/win32/api/imm/nf-imm-immgetproperty.
+
 2026-10-10: D3D8 `SetPixelShader` now resolves a live device-owned handle and
 binds the shared shader object, instead of returning an error for every
 nonzero handle. This removes exactly one quiet handler, with none added:
@@ -798,3 +814,34 @@ SetLastError. They remain state accessors, and the changed digest records the
 shared field. The nonblocking uplink connect fixture checks both getter APIs
 after WSAEWOULDBLOCK and SetLastError visibility through WSAGetLastError.
 Pin241/16b4541b407e2e97400277ab321030ab5d6a7b3c7ca52c3aba93e985edd20594.
+
+## Device2/3 immediate drawing (2026-11-05)
+
+240 to 239: the new per-device Begin-family guard makes Device2
+SwapTextureHandles reject calls during an active primitive sequence. This
+removes its formerly straight-line body from the quiet classifier; it does
+not qualify the existing outside-sequence SwapTextureHandles stub. All other
+inventory members are unchanged. Pin
+239/dd03acce6daa85ac00a3959a3b58175dc272f1e157f4c124527e4c18176f28cf.
+See `docs/re-notes/d3dim-immediate-drawing-20261105.md` and run
+`20261105-d3dim-immediate-drawing` for public COM/pixel validation.
+## Shared cursor state (2026-10-31)
+
+GetCursor now calls the per-thread shared cursor-state helper instead of
+reading a WASM-instance-local global. This removes one straight-line handler
+from the inventory, 241 to 240. ShowCursor already contained conditional
+behavior and was outside this inventory; its shared-memory mutation is tested
+across two instances alongside thread isolation and reuse.
+
+## Half-Life integration with current main (2026-11-06)
+
+Merged inventory: 236 manual handlers. Main's 237-entry inventory loses the
+straight-line GetCursor body when the release's shared per-thread cursor read
+is integrated. Device2 immediate-drawing guards and the other main reductions
+remain. Pin: 236/58875d93b21205d21af31abe8c64c1934097c05a567caa78dcca624317395c43.
+
+## Fork merge with upstream main (2026-11-11)
+
+The count stays 236. Membership is upstream's; the digest changes because the
+fork's Winsock last-error accessors read the shared per-thread error field.
+Pin: 236/fc03d176ef17b1fbed442177ac77df958724bdeba9ad0fb2d6d44776bb1c361a.

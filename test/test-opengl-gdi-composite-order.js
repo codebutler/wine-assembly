@@ -19,6 +19,7 @@ const screen = createCanvas(16, 16);
 const renderer = new Win98Renderer(screen);
 const wasm = { exports: {
   get_dx_exclusive_hwnd: () => 0,
+  gl_window_set_gpu_owned: () => 1,
   wnd_window_screen_x: () => 0,
   wnd_window_screen_y: () => 0,
 } };
@@ -122,3 +123,139 @@ assert.deepStrictEqual(
   'a canonical flush after the merge reproduces the GL frame instead of erasing it');
 
 console.log('PASS test-opengl-gdi-composite-order canonical surface');
+
+// A pure GL frame stays GPU-owned until the pre-GDI barrier. Repainting must
+// show it without touching CPU pixels; a later GDI write must retain the rest.
+const ctxFront = front.getContext('2d');
+const originalRead = ctxFront.getImageData.bind(ctxFront);
+let reads = 0;
+ctxFront.getImageData = (...args) => { reads++; return originalRead(...args); };
+fill(front, '#0000ff', 0, 0, 16, 16);
+assert(renderer.deferGpuWindowReadback(hwnd));
+renderer.repaint();
+assert.strictEqual(reads, 0, 'present/repaint do not read the GPU front into CPU storage');
+assert.deepStrictEqual(pixel(9, 9), [0, 0, 255, 255], 'GPU-owned front is visible');
+assert.deepStrictEqual(Array.from(storage.slice(0, 4)), [0, 0, 255, 255],
+  'canonical storage still holds the previous red frame');
+assert(renderer.resolveGpuWindowReadback(hwnd));
+assert.strictEqual(reads, 1, 'first guest pixel access materializes exactly once');
+assert(renderer.resolveGpuWindowReadback(hwnd));
+assert.strictEqual(reads, 1, 'repeated GDI access does not repeat the readback');
+surface.writeRgbaRect(2, 2, 1, 1, new Uint8ClampedArray([0, 255, 0, 255]));
+renderer.repaint();
+assert.deepStrictEqual(pixel(2, 2), [0, 255, 0, 255], 'new GDI pixels cover the GL frame');
+assert.deepStrictEqual(pixel(9, 9), [0, 0, 255, 255], 'untouched GL pixels survive GDI');
+fill(front, '#ff0000', 0, 0, 16, 16);
+assert(renderer.deferGpuWindowReadback(hwnd));
+renderer.repaint();
+assert.strictEqual(reads, 1, 'next GL frame reclaims ownership without readback');
+assert.deepStrictEqual(pixel(2, 2), [255, 0, 0, 255], 'new GL frame replaces old GDI');
+const merge = renderer.mergeGpuLayerIntoBackCanvas;
+renderer.mergeGpuLayerIntoBackCanvas = () => false;
+assert.strictEqual(renderer.resolveGpuWindowReadback(hwnd), false);
+assert(win._gpuFrameLayer.pendingWindowReadback, 'failed synchronization retains pending ownership');
+renderer.mergeGpuLayerIntoBackCanvas = merge;
+assert(renderer.resolveGpuWindowReadback(hwnd));
+win.isChild = true;
+assert.strictEqual(renderer.deferGpuWindowReadback(hwnd), false,
+  'shared parent storage keeps child GL windows on the eager path');
+win.isChild = false;
+ctxFront.getImageData = originalRead;
+console.log('PASS deferred GL ownership, GDI barrier, ordering and retry');
+
+const { OpenGLHostBridge } = require('../lib/gl-compat');
+const bridge = new OpenGLHostBridge({ renderer: () => renderer,
+  exports: wasm.exports, getMemory: () => new ArrayBuffer(0) });
+fill(front, '#0000ff', 0, 0, 16, 16);
+assert(renderer.deferGpuWindowReadback(hwnd));
+let destroyed = false;
+bridge.contexts.set(1, { hwnd, win, layer: win._gpuFrameLayer,
+  frontend: { destroy() { destroyed = true; } } });
+assert.strictEqual(bridge.deleteContext(1), 1);
+assert(destroyed);
+assert.strictEqual(win._gpuFrameLayer, null);
+renderer.repaint();
+assert.deepStrictEqual(pixel(9, 9), [0, 0, 255, 255],
+  'deleting the context preserves its last GPU-owned front in window pixels');
+console.log('PASS deferred GL context destruction preserves the last frame');
+
+// The actual host import must hold a GDI access until an early-acknowledged
+// render batch has published its frame. Use the real renderer and canonical
+// pixels with a deliberately delayed endpoint, so no GPU/browser is required.
+async function asynchronousGdiFence() {
+  const { createHostImports } = require('../lib/host-imports');
+  const { CALL_INDEX } = require('../lib/gl-compat');
+  const memory = new SharedArrayBuffer(512 * 1024 * 1024);
+  const requests = [], events = {}, ownership = [], order = [];
+  const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+  const port = {
+    ready: Promise.resolve(),
+    addEventListener(type, listener) { events[type] = listener; },
+    request(message) {
+      let resolve;
+      const promise = new Promise(done => { resolve = done; });
+      requests.push({ message, resolve });
+      return promise;
+    },
+    terminate() { this.stopped = true; },
+  };
+  wasm.exports.gl_window_readback_version = () => 1;
+  wasm.exports.gl_window_set_gpu_owned = (window, value) => {
+    assert.strictEqual(window, hwnd); ownership.push(value); return 1;
+  };
+  const ctx = { getMemory: () => memory, exports: wasm.exports, renderer,
+    createCanvas, createRenderEndpoint: () => port, sharedRenderWorkerEnabled: true,
+    glBackend: 'webgl', onExit() {} };
+  const { host } = createHostImports(ctx);
+  const submit = opcode => {
+    const view = new DataView(memory, 128, 40);
+    new Uint8Array(memory, 128, 40).fill(0);
+    view.setUint32(0, 40, true); view.setUint32(4, opcode, true);
+    view.setUint32(12, 8, true);
+    return host.gpu_gl_batch({ memoryOffset: 128, bytes: 40 }, 1);
+  };
+  const opened = submit(CALL_INDEX.wglMakeCurrent);
+  await nextTurn();
+  requests[0].resolve({ value: 1, activeWindows: [[1, hwnd]], contexts: 1 });
+  await opened;
+
+  assert.strictEqual(await submit(CALL_INDEX.glFlush), 1,
+    'flush acknowledges the owned batch while its frame is still pending');
+  await nextTurn();
+  assert.strictEqual(ownership.at(-1), 1, 'pre-GDI ownership flag is set before the frame arrives');
+  let fenced = false;
+  const fence = Promise.resolve(host.gpu_gl_call(0x10002, hwnd, 0)).then(value => {
+    assert.strictEqual(value, 1); fenced = true; order.push('GDI readback');
+  });
+  await nextTurn();
+  assert(!fenced, 'real pre-GDI host import waits for pending asynchronous GL frame');
+
+  const pixels = new Uint8ClampedArray(16 * 16 * 4);
+  for (let i = 0; i < pixels.length; i += 4) pixels.set([255, 0, 0, 255], i);
+  events.message({ data: { t: 'frame', frame: {
+    frameToken: requests[1].message.frameToken, hwnd, width: 16, height: 16, pixels,
+  } } });
+  order.push('GL frame');
+  assert(win._gpuFrameLayer.pendingWindowReadback,
+    'arriving GL frame stays GPU-owned until the waiting GDI import materializes it');
+  requests[1].resolve({ value: 1, activeWindows: [[1, hwnd]], contexts: 1 });
+  await fence;
+  assert.strictEqual(ownership.at(-1), 0, 'successful GDI fence releases GPU ownership');
+  assert.deepStrictEqual(order, ['GL frame', 'GDI readback']);
+  assert.deepStrictEqual(Array.from(surface.rgbaRect(9, 9, 1, 1)), [255, 0, 0, 255],
+    'fence publishes delayed terrain into canonical storage');
+  surface.writeRgbaRect(2, 2, 1, 1, new Uint8ClampedArray([0, 255, 0, 255]));
+  renderer.repaint();
+  assert.deepStrictEqual(pixel(2, 2), [0, 255, 0, 255],
+    'GDI drawn after asynchronous glFlush remains above red terrain');
+  assert.deepStrictEqual(pixel(9, 9), [255, 0, 0, 255],
+    'untouched delayed GL terrain survives canonical GDI flush');
+  await ctx.closeGLRender();
+  assert(port.stopped);
+  console.log('PASS asynchronous GL frame -> actual host GDI fence -> canonical green-over-red pixels');
+}
+const asyncWatchdog = setTimeout(() => {
+  console.error('asynchronous GL/GDI integration timed out'); process.exitCode = 1;
+}, 10000);
+asynchronousGdiFence().catch(error => { console.error(error); process.exitCode = 1; })
+  .finally(() => clearTimeout(asyncWatchdog));

@@ -350,3 +350,320 @@ vertex rebind. Original-game browser run
 setup panels, portrait and readable done button after ordinary Enter. The
 before/after pictures were reviewed. This verifies the setup rendering fix;
 player-controlled gameplay, audio and FPS remain unqualified.
+
+## Ion Launcher handoff chain (10-11 October)
+
+(Recovered from branch commit 149a3547b, Oct 2026. The host/WAT fixes named
+here are on main: process aliases `0x00E6xxxx` in `09a0-handlers-base.wat`,
+`lib/process-send-broker.js`. The `GetAdapterMonitor` change in step 2 is
+**not** on main: as of 2026-11-05 both D3D8 and D3D9 handlers deliberately
+return NULL ("no native HMONITOR"), so step 2 may break again.)
+
+Start Game makes DX2 hand the level to `C:\System\Ion Launcher.exe` and exit.
+Each link that broke, in order:
+
+1. **ShellExecuteExA** at DX2 `0x402704` (60-byte SHELLEXECUTEINFO, mask
+   `0x440`, nShow 5); timeout termination at `0x402850`. The old handler
+   faked success without launching and wrote 33 into nShow (+28) instead of
+   hInstApp (+32). Needs a real child and hProcess for NOCLOSEPROCESS.
+2. **Launcher args.** DX2 builds them with format `0x904738`
+   `%s %s "%s" %s %s` (`0x904754` = `dummy`, the third field); field two is
+   MONITORINFOEXA.szDevice from `GetCreationParameters` (`0x4020b5`) →
+   `GetDirect3D` → `GetAdapterMonitor` (`0x4020db`) → `GetMonitorInfoA`
+   (`0x402104`). D3D8/D3D9 returned NULL for every adapter, the empty field
+   shifted the launcher's strtok parse, and it restarted DX2 with empty args.
+   Branch fix (unmerged): adapter 0 → USER32 primary monitor `0x10000`,
+   absent adapters NULL.
+   Good child command: `-display \\.\DISPLAY1 640x480 M1_Seattle_MercDistrict_Sak.gmp?-LoadTravel`.
+3. **Launcher WinMain** `0x4038b0` creates two *events* named `Ion Launcher
+   Mutex` (`0x40a278`) / `Ion Game Mutex` (`0x40a268`); `GetLastError == 183`
+   at `0x40390c` sets BL; BL selects the fresh-launch path at `0x403a7f`.
+   With BL zero, `0x403830` registers the class and `0x403690` creates the
+   window; a zero result also falls to the empty-args restart at `0x403aa0`,
+   so an empty child command cannot distinguish the two. Named events must be
+   shared across processes (the browser namespace confirmed both open with
+   alreadyExists=true).
+4. **FindWindowA** at DX2 `0x4027ba` (filter at `0x904728`) must see the other
+   process's windows: a desktop query precedes the local WND walk.
+5. **Child lifetime.** Browser `process_spawn` installed `_stopChildren` and
+   every `stop()` ran it, so DX2's deliberate `TerminateProcess(-1,-1)` killed
+   its live launcher. Windows ancestry has no such contract; cascade removed.
+6. **DuplicateHandle** at `0x4027f0`/`0x402806`: DX2 duplicates its
+   GetCurrentProcess pseudo handle into the launcher (SAME_ACCESS) and sends it
+   as lParam of message `0x400` via **SendMessageA** (IAT `0x904478`, call
+   `0x402818` — not PostMessage). Launcher handler `0x40377a` stores lParam at
+   `0x40c048`; its wait `0x4033a0` starts that at -1 and pumps up to 120000 ms
+   (timeout returns 1 at `0x403439`). Copying -1 unchanged hit exactly the
+   sentinel; now target-owned process aliases `0x00E60000|n` reference a shared
+   process object that keeps the exit DWORD after teardown. CLI children are
+   separate OS processes and return ERROR_NOT_SUPPORTED for this.
+7. **GetExitCodeProcess** read process_ctl's -1 as invalid handle, but
+   0xFFFFFFFF is DX2's real exit code; op 2 now checks validity only for -1.
+8. **Cross-process SendMessageA** — see the next section; it cut parent exit →
+   level spawn from 122587 ms to 3822 ms.
+
+Launcher statics: `0x4032c0` builds its own SHELLEXECUTEINFO, calls
+ShellExecuteExA at `0x403352`, stores hProcess at `0x40c04c`.
+
+## Synchronous launcher handoff: receiver admission prerequisite (11 October)
+
+The held investigation branch records the original process-alias run in
+`scratch/runs/20261011T1116Z-iw-process-alias-original`. DuplicateHandle returns
+a real target-owned alias, but the launcher still waits 122587 ms. Original
+IAT 0x904478 is **SendMessageA**, not PostMessageA; its foreign-process delivery
+is absent. See diagnosis commit 149a3547b for the two-memory reproduction.
+
+Independent process schedulers introduce a check/dispatch race: reading the
+receiver's yield on the page and dispatching afterward lets an ordinary slice
+run between those commands. Worker `dispatchThreadSend` now accepts an opt-in
+`requireMessagePoint` request. It checks admission on the receiver itself,
+before saving a callback frame or changing registers. Mid-code returns
+`deferred: true` and arms the next incoming-send message point. Exited or
+EIP-zero receivers return `unavailable: true`. Neither response fabricates an
+LRESULT. At yields 7, 10, 15 or 17, the existing callback machinery runs and
+restores the receiver state. Existing unguarded same-process dispatch is unchanged.
+
+This is only the admission primitive, **not a cross-process transport**.
+The future broker must retain deferred requests, retry at a message point,
+handle disappearance, preserve synchronous replies and nested sends, and
+release its incoming-send reservation when finished. It must serialize
+independent callback owners; the admission check alone does not do that.
+Cooperative fallback and inter-process pointer-message marshalling also need
+explicit treatment. Do not wire an unavailable/deferred result into the
+existing resume path as a successful zero return.
+
+Evidence: `scratch/runs/20261011T1134Z-worker-send-admission`. Actual Worker
+tests verify deferral, every admitted yield, context restoration and receiver
+exit; existing nested-send/wait and timing tests pass (23 + 9 checks).
+Reverting the Worker guard makes three new checks fail. Tests ran on the
+retained original-game source plus the candidate, not a fresh full-main build.
+No original-game rerun or new gameplay qualification accompanies this primitive.
+
+### Broker request ownership (held component)
+
+`lib/process-send-broker.js` retains deferred synchronous requests until the
+receiver scheduler notifies progress. It does not poll. Endpoint identity
+includes the registration object, so reusing a PID cannot resurrect requests
+to the previous process. Exit rejects pending sends explicitly; a sender exit
+does not prematurely release an executing receiver callback's frame.
+Zero remains a valid completed LRESULT, distinct from deferral or retirement.
+
+Nested requests carry an active request context and ancestry. A descendant
+can reenter its ancestor's receiver; independent requests and same-chain
+siblings wait until the receiver frame is released. Readiness epochs preserve
+a notification racing an in-flight deferred reply. Invalid replies and stale
+contexts fail rather than masquerading as successful sends.
+
+Evidence `scratch/runs/20261011T1142Z-process-send-broker`: ownership tests plus
+26 actual-Worker/send checks pass, including a broker-retained request that
+enters the actual x86 callback only after scheduler notification. Disabling
+receiver ownership fails the independent-send overlap test. The broker test
+has a wall-clock deadline so a stranded promise cannot pass through Node exit.
+
+This component is **not loaded or wired into the browser yet**. Remaining:
+map foreign HWND ownership to process/thread endpoints; suspend and complete
+the sender's real WAT SendMessage frame; drive blocked and nested receiver
+callbacks through the owner backend; notify readiness from actual scheduling;
+retire endpoints on process shutdown; handle independent cyclic send chains,
+cooperative mode, and pointer-message marshalling without silent success.
+The current tests do not establish those integration contracts or gameplay.
+
+### Worker process-send runtime candidate (2026-10-11, held)
+
+The next candidate wires foreign HWND ownership to registered Worker process
+endpoints. SendMessageA preserves its real stdcall continuation while the
+receiver executes its WndProc; nested sends carry broker ancestry. Shutdown
+retires endpoints. System messages requiring marshalling and cooperative
+processes explicitly return ERROR_NOT_SUPPORTED (50).
+
+`test/test-process-send-runtime.js` runs separate actual Worker/WASM memories
+through the browser host adapter: scalar WM_USER delivery and LRESULT/stack
+restoration, nested A -> B -> A replies, and unsupported-route rejection pass.
+Disabling the resolver makes the receiver-delivery assertion fail. The retained
+boat source passed the full build, broker tests, 26 Worker/send checks and nine
+timing checks. Runtime regression and test-tier evidence is in
+`scratch/runs/20261011T1154Z-process-send-runtime`.
+
+Original browser run `20261011T1157Z-iw-send-runtime-original` confirms
+WM_USER with real process alias 0xe60001 returns 1 in 121 ms. Parent exit to
+level-process spawn is 3822 ms, versus 122587 ms in the alias-only control.
+The final 420-second screenshot still shows LOADING with a full bar. No
+player-controlled gameplay, FPS or audio qualification. The exact retained
+source hashes are recorded; this is not current main. Missing resource:
+`test/binaries/tlbs/stdole2.tlb` (HTTP 404).
+
+Keep this candidate held for integration/correctness review: independent cyclic
+send chains can deadlock; process-wide ownership serializes different receiver
+threads; existing callback-driver failure paths can collapse failures to zero.
+General system-message marshalling and cooperative transport remain absent.
+The successful launcher route does not establish general Win32 compatibility.
+Next game investigation is level-load completion, with a longer bounded run
+and thread samples if loading persists. CMR3 remains the second selected lane.
+
+### Foreign callback failure follow-up
+
+The follow-up stops treating receiver traps, broken transport and callback
+driver failures as valid zero LRESULTs. Foreign failures propagate to the run
+loop; nested receiver frames are unwound once, retaining the fault location
+for the receiver scheduler. Only explicit unsupported transport and retired
+receiver errors map to Win32 errors 50/1400. Reporting those errors also needed
+a real `set_last_error` export: the previous catch silently hid its absence.
+
+The actual two-Worker regression now runs UD2 in the receiver, checks rejection,
+retained fault EIP, balanced callback frame and uncompleted sender; it also
+checks transport rejection and error 1400 after window disappearance. Existing
+successful scalar/nested replies remain covered. Evidence:
+`scratch/runs/20261011T1216Z-process-send-failures`. Full retained-source build,
+broker tests and 26 cross-thread checks pass. Independent cyclic ownership is
+still a correctness hold, and there is no new browser gameplay result.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+### 600-second original route: level execution samples
+
+Run `20261011T1222Z-iw-level-samples` used the retained source plus the held
+failure-propagation candidate. It repeats the successful launcher handoff,
+then still shows LOADING at 600 seconds; browser cleanup exits zero and the
+harness reports no errors. No gameplay, ordinary movement, FPS or audio claim.
+
+Eleven 30-second-spaced samples from the spawned DX2 level process have eleven
+different main EIPs, all yield zero. The secondary thread consistently waits
+at 0x41fb2f, yield one. The earlier single sample at 0x7e15b2 does not establish
+a stuck pointer scan: original disassembly increments its array cursor, and
+the new samples reach other code. Late samples at 0x4b5309/0x4b537e and
+0x4ebcb6 surround indirect calls through the object at 0x9e1210, with slots
+0xfc/0xf4 and texture-stage-shaped arguments. Final main EIP is 0x4db80d.
+This narrows the next probe toward rendering/state submission, without proving
+that loading completed or that a frame is presented.
+
+Next: bounded API/render-call census after level launch, recording Present,
+draw submission and loading-state transitions; avoid another uninstrumented
+long wait. The sampler's additional DevTools connection used its default
+viewport, so intermediate frames show an 800px shell before the final 1000px
+capture. Treat this as diagnostic evidence, not a controlled timing benchmark.
+The missing stdole2.tlb HTTP404 remains recorded, with no demonstrated causal
+connection to the loading screen. Source hashes, samples and disassembly are
+preserved in the run folder.
+
+### Rendering census: persistent shader-link failure behind loading image
+
+Run `20261011T1239Z-iw-render-census` on bx_p3756882 adds per-process counts
+around the existing host graphics bridge. The initial detached attempt did
+not start a browser: fork snapshots omitted node_modules and the build.
+After `npm ci` with browser download disabled and a successful full rebuild,
+the actual original-route capture started at 12:44:35Z. No guest patch or
+approval response was supplied by the capture.
+
+At 300 seconds, the spawned level process had 2284 draw and 571 Present calls.
+At 400 seconds it had 210741 draw and 994 Present calls, but 208350 draws,
+2120 clears and 423 Presents returned the bridge's error value -1. Values
+below -1 are asynchronous request tokens, not the same error category.
+The actual device queue reports:
+
+`FRAGMENT varying d3d_color0 does not match any VERTEX varying`
+
+There is one visible window, HWND 196609, owned by the level process 1002.
+Its GPU layer stays at writeSeq 571. A direct capture of that layer shows
+the loading image itself: this is not an old parent window covering a newly
+presented scene. The game continues issuing work against the failed queue.
+The harness's empty page-error array does not imply a healthy rendering queue.
+
+Three subsequent draw shader IR/source pairs were captured after failure.
+They are context, **not an identification of the first failing pair**.
+Next: capture the vertex/fragment sources and native IR at the first link
+failure, reproduce it with an isolated WebGL link test, and compare intended
+D3D shader linkage before changing missing outputs. Do not paper over the
+error by inventing a color value or clearing the failed queue. The latest
+run still does not qualify gameplay, input response, FPS or audio.
+
+### First failing pair: colorless stencil pass
+
+Run `20261011T1305Z-iw-first-shader-pair` captures the actual first failed
+`createProgram` call, then rethrows the original error and closes the browser.
+The VS1.1 program writes position only. The fixed-function pixel program
+selects texture-factor RGB but retains `d3d_color0.a` as its output alpha.
+There is no vertex color output to link against.
+
+The recorded draw has `colorWriteMask=0`, alpha test disabled, stencil enabled
+(z-fail operation 4), depth testing enabled and depth writes disabled. This is
+a colorless stencil pass, not a request to display an invented diffuse color.
+An isolated WebGL test reproduces the exact link error; replacing only the
+fragment source with a constant output links successfully. That control does
+not yet verify stencil results or constitute an emulator fix.
+
+Next: specialize safe colorless fixed-function passes without removing any
+discard, depth or stencil effects; test stencil behavior and repeat the game
+route. Sources, 2336-byte native vertex IR, render state, diagnostic served
+backend, screenshots and cleanup are preserved in the run folder. Browser
+closed at 13:10:34Z, exit 0; the isolated browser also closed. No gameplay claim.
+
+### Colorless-pass candidate: isolated success, game still blocked
+
+Candidate `7b89c446c` is on `codex/iw-colorless-stencil-20261011`, separate
+from the held transport branch. After normal fixed-function validation it
+removes the pixel color dependency only for colorWriteMask=0 draws without
+alpha test, color key, fog, outlines or a programmed pixel shader.
+WebGL1/2 regressions preserve stencil fail/zfail/pass operations and unchanged
+color; visible draws still reject missing color. Alpha-test/key exclusion
+guards pass. The unfixed negative control fails the original link error.
+
+The original 600-second game rerun `20261011T1320Z-iw-stencil-game` nevertheless
+ends at LOADING with the same error text and writeSeq571. Its recorded backend
+hash matches the candidate. This is **not** a gameplay fix or main-ready result.
+The follow-up first-failure capture includes fog state and primitive identity
+to distinguish a different pair from a specialization exclusion.
+
+`20261011T1329Z-iw-next-shader-pair` resolves that ambiguity: the first
+failure **after** the candidate is a different program, writing position and
+tex0/tex1/tex2. Its fixed pixel stage computes texture times factor RGB but
+retains diffuse alpha. This draw has colorWriteMask=7 (RGB only), no alpha
+test/fog/stencil, and blending enabled with SRC=9 (DESTCOLOR), DST=3
+(SRCCOLOR). Thus the stencil specialization did remove the earlier failure;
+the next failure happens before another completed Present.
+
+Next investigate dead output-alpha elimination when alpha writes are masked
+and neither blend factors nor discard use source alpha. Do not substitute a
+default diffuse color globally: RGB operations or source-alpha blending can
+make that value observable. Both first-pair artifacts are retained for controls.
+
+### Level rendering restored with independent RGB-stage alpha elimination
+
+`1d5243e23` extends the separate rendering branch. It recognizes one active
+fixed stage selecting texture/factor/constant RGB independently, with alpha
+operation disabled and output alpha masked. It removes the initial diffuse
+read only when no source-alpha blend factor, alpha test, fog, outline or
+post-specular operation can make that value observable. Ordinary GLSL
+dead-code elimination alone did not remove the link dependency in WebGL.
+
+Full retained-source build and the expanded WebGL1/2 regression pass: RGB
+values, destination alpha preservation, the game's DESTCOLOR/SRCCOLOR blend,
+source-alpha exclusions, live diffuse/current RGB exclusions, and keyed
+fragment discard preserving stencil. The prior stencil-only commit fails
+the new RGB test with the original link error.
+
+Run `20261011T1345Z-iw-rgb-game` reaches the actual corridor and HUD, with no
+render queue errors in the sampled state. A stationary five-second diagnostic
+sample observed 9 published GPU frames, about 1.80 fps, on Chrome/SwiftShader;
+this is not a controlled performance benchmark. The first W input targeted
+HWND0 after launcher exit and did not visibly move the scene, so this run
+qualifies the scene only, not player control. Audio remains unverified.
+The focused-input follow-up uses an ordinary click on the new level window
+before W; shipped user.ini confirms W is MoveForwardBackward 1.000000.
+
+Run `20261011T1357Z-iw-focused-input` confirms ordinary player input: click
+the level window, hold W, dismiss the game's "Using the Datavault" help with
+Escape, then hold W for six seconds. Reviewed frames change from the corridor
+to a close-up of the nearby grating/barrier, with the HUD retained. The first
+hold also brings up the tutorial. Mouse events name HWND0x30001; key logs
+still say HWND0, so that log field alone does **not** establish a broken
+keyboard route (the game polls DirectInput). The earlier short input run was
+unqualified, not proof of a focus-routing defect.
+
+This establishes a gameplay scene and visible response to ordinary movement
+on the held combined runtime. It does not establish acceptable performance,
+audio, combat, candidate registration or production readiness. Render commits
+7b89c446c/1d5243e23 are independent review candidates; process-send cycle
+ownership remains a separate main-integration hold. Both captures ended
+cleanly and their artifacts are copied locally.

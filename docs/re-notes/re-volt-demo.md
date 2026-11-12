@@ -205,8 +205,126 @@ software fallback, and an original-game before/after profile. No such fix or
 speedup has been tested here. Profiling overhead is unknown; these instrumented
 times are not a speed comparison against the earlier uninstrumented route.
 
+**Update 2026-11-05 — cooperative GPU routing landed (unit-validated only).**
+Ported from `fix/revolt-cooperative-d3dim`: `host.js` gives each cooperative
+thread's imports a `d3dCommands` that calls the one in-page `D3DIMGpu` via
+`callForExports(<that instance's exports>, …)`, and `ThreadManager.spawnPending`
+calls `__initializeCooperative` after WASM/stack/TLS init, which runs
+`attachCooperative` → each instance's new `d3dim_gpu_cooperative_enable`
+export (sets `$d3dim_gpu_on` and `$d3dim_gpu_cooperative`). With
+`$d3dim_gpu_cooperative` set, `$d3dim_worker_fence` / `$d3dim_surface_fence`
+query the shared owner even when this instance has no pending draw of its own,
+since a sibling may own the dirty pixels. The first attach retires the main
+instance's owed async-Flip present and switches the owner to synchronous Flip,
+because that obligation lives in one instance's globals and a sibling could
+swap the chain under the in-flight readback. `test/test-d3dim-cooperative-routing.js`
+covers a secondary-instance draw described with its own exports, cross-instance
+draw/clear/Lock ordering, scratch reuse, page-lease release through a sibling,
+async-Flip retirement at attach, and WebGL-unavailable software fallback
+(`--negative-barrier` / `--negative-caller` fail as intended). **Not yet done:**
+an original-game before/after browser profile on the loading thread — the
+CLI has no WebGL, so the speedup is unmeasured. Limits: a cooperative thread
+spawned before `_startD3DIMGpu` keeps software D3DIM, and Worker-backed
+threads are unchanged (they use the render Worker path).
+
 All 56 transferred original artifacts passed SHA-256 checks. Chrome and driver
 exited normally; the supervisor recorded all 16 discovered child PIDs and both
 owned groups absent at 23:32:57.113 UTC. Independent checks also found the
 supervisor and all recorded PIDs/groups absent. No further run was needed for
 packaging or analysis.
+
+## Default-worker browser attempt (2026-10-31)
+
+Run `scratch/runs/20261031T0358Z-revolt-race` stopped at an inspected startup
+dialog, **`DDERR_NOTFOUND: Can't attach back buffer!`**, before the legal
+screen, menu or race. The console records the dialog at 03:59:14.917 UTC;
+`backbuffer-error.png` and its JSON capture confirm it at 03:59:19.530.
+No steering, checkpoint or lap was reached. This is a precise execution
+blocker for this runtime, not a reproduced loading stall or an established
+current-main regression. No loading profiling or production fix was attempted.
+
+The fresh Chrome 151.0.7922.108 browser used an isolated local server, explicit WebGL
+selection, default enabled guest workers, and a stable 1024×768 viewport.
+Two guest-worker instances were observed; the error capture records
+`guestWorker: true` and renderer `webgl`. This differs from the cooperative
+thread mode used in the October 13 runs. Only the trusted launch-button click
+was sent; no guest memory/state, clock, random seed, settings, original assets
+or executable were changed.
+
+The retained module SHA-256 was
+`8333a35b1efa694462033e87f62ce4a3f5497941d1423540b39a590c9d31134a`.
+Its compilation source revision is **unknown**: the observed checkout HEAD
+is not build provenance. The run copied and verified 106 retained runtime
+snapshots from `20261031T0256Z-daikatana-webgl`, including host, worker,
+renderer, registration and region-map files. `served.jsonl` also records
+live supplementary resources, including the API table and fonts; 41 such
+responses were preserved by hash in `extra-snapshots.json`. The mixed retained
+runtime cannot establish behavior of a clean current-source build.
+
+All 443 installed original files plus the browser manifest passed SHA-256
+checks before and after execution (444 checks each). The original EXE hash
+remained `58ba4835e6607eae62be4e023ef989172cb519c78f34811acba547e9e0e3581a`.
+Evidence contains the original manifests, exact served snapshots, console,
+screenshots, recovery instructions and process checks. Browser exit was zero;
+all 13 recorded controller/browser PIDs were absent, port 37183 was closed,
+and the owned profile was removed. No Boat or test boxes were used.
+
+Next: reproduce this attachment failure with a known-source canonical build
+and the same default-worker route before attributing a cause or attempting
+the documented menu-to-grid driving route. Recovery commands and the retained
+runtime limitation are recorded in the run's `RECOVERY.md`.
+
+## Known-source attachment repair and native race (2026-10-31)
+
+Run `scratch/runs/20261031T0403Z-revolt-backbuffer` reproduces the dialog
+with a locked canonical build, SHA-256
+`44aa997662d60841f292b1ad00e315f5c6b757f96172739b74675ea997e71836`.
+It therefore establishes a current-source failure independently of retained
+`8333a35`. The build includes concurrent uncommitted font work: the exact
+source inventory, source bytes, dirty patch, combined WAT and served runtime
+snapshots are retained; neither build is claimed to be a clean commit build.
+The captured source inventories had no drift through their respective builds.
+
+The original call at `0x423b83` requests BACKBUFFER through Surface4. Its
+stack capability words at `0x074ffa80` are `{4, 0, 1, 31}`: only dwCaps is
+initialized by the call site. Read-only inspection finds primary slot 13,
+caps `0x6238`, owning live back buffers in slots 14/15, with first-child caps
+`0x601c`; owner slot+1 is 6 for all three. The attachment exists and satisfies
+BACKBUFFER. GetAttachedSurface instead rejected the unused extension words.
+[Wine's implementation](https://github.com/wine-mirror/wine/blob/master/dlls/ddraw/surface.c)
+ignores extension capability words for allocations created before DirectDraw 7.
+The generic repair applies that allocation-version rule, including a legacy
+allocation queried through a Surface7 view. DX7 allocation constraints and
+the live-object, requested dwCaps and reference-ownership checks remain active.
+
+The repaired locked build, SHA-256
+`8459597c8d66e098d727fb4ab53e1cf46332241dc7eef2e158f3c475a78b1676`,
+reaches the inspected main menu and starting grid using the original EXE and
+assets, explicit WebGL, default guest workers and stable 1024×768 viewport.
+The render endpoint reports backend `webgl`. Native Enter selects Single Race,
+default player, RC Bandit, Toys in the Hood 1 and the summary. Native Up drives
+the car; later Up+Right and Down produce changed position/orientation and
+speed. Reviewed frames show race times 2.942, 15.582 and 22.302 seconds and
+speeds 1, 8 and 3 mph. The car leaves the road and overturns: this demonstrates
+race execution and input response, **not a checkpoint, completed lap or win**.
+The final Escape capture still shows the race; its filename is not evidence
+that a pause menu opened.
+
+The expanded native Surface4/7 guest-COM regression fails on the saved
+pre-fix DirectDraw source and passes after repair in both tail-call and
+compatibility dispatch modes. It checks legacy extension garbage through
+Surface4/7 views, required dwCaps matching, DX7 rejection and ordinary acquired
+reference release. Explicit AddAttachedSurface lookup also passes. Two older
+synthetic tests (`test-directdraw-surface-caps.js` and
+`test-directdraw-getcaps-allocation.js`) fail identically before/after while
+creating/querying their fixtures, before exercising this repair; their logs
+are retained, and they are not reported as passing. Both locked builds pass.
+
+Both sessions verify all 443 original files plus manifest before and after.
+Browsers exit zero, recorded browser/controller PIDs are absent, all four
+HTTP/CDP ports are closed and both profiles are removed. The after controller
+session reports exit 143 after its successful finally cleanup; no cause is
+attributed. No Boat, delegated workers or test boxes were used. Recovery,
+module identity, tests and cleanup details are in the run's `RECOVERY.md`.
+Next useful gameplay work is native car recovery and a controlled lap from
+the starting grid; no further startup repair is indicated by this run.

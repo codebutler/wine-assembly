@@ -63,6 +63,76 @@ assert.notStrictEqual(idHandle, idView.getUint32(threadIdWa, true),
   assert.strictEqual(events.resetEvent(event), 0, 'closed handle cannot be reset');
 }
 
+// Wait-any validates the whole set before its lowest-index acquisition.
+{
+  const waits = makeThreadManager();
+  const a = waits.createEvent(false, true), b = waits.createEvent(false, true);
+  const manual = waits.createEvent(true, true), closed = waits.createEvent(false, true);
+  waits.closeSyncHandle(closed);
+  const replacement = waits.createEvent(false, false);
+  assert.notStrictEqual(replacement, closed, 'a recycled slot has a fresh identity');
+  const ptr = 0x10000 - 8;
+  const view = new Uint32Array(waits.memory.buffer);
+  const many = (first, second, timeout = 0xFFFFFFFF) => {
+    view[ptr >>> 2] = first; view[(ptr >>> 2) + 1] = second;
+    return waits.waitMultiple(2, ptr, false, timeout);
+  };
+  for (const invalid of [0, 0x12345678, closed, a | 0x80000000]) {
+    assert.strictEqual(many(a, invalid), 0xFFFFFFFF);
+    assert.strictEqual(waits.waitSingle(a, 0), 0, 'invalid later handle leaves ready event unconsumed');
+    waits.setEvent(a);
+    assert.strictEqual(many(invalid, a), 0xFFFFFFFF);
+    assert.strictEqual(waits.waitSingle(a, 0), 0);
+    waits.setEvent(a);
+  }
+  assert.strictEqual(many(a, b), 0, 'both ready chooses lowest index');
+  assert.strictEqual(waits.waitSingle(a, 0), 258, 'chosen auto event consumed once');
+  assert.strictEqual(waits.waitSingle(b, 0), 0, 'higher ready event remains available');
+  waits.setEvent(b);
+  assert.strictEqual(many(a, b, 30), 1, 'finite ready wait chooses second');
+  assert.strictEqual(many(a, b, 0), 258);
+  assert.strictEqual(many(a, b), 65535, 'local no-ready wait retains scheduler sentinel');
+  assert.strictEqual(many(a, manual), 1);
+  assert.strictEqual(waits.waitSingle(manual, 0), 0, 'manual event remains signaled');
+  const thread = waits.createThread(0x6000, 0, 0);
+  const alias = waits.duplicateCurrentThread(2);
+  assert(alias, 'thread alias exists');
+  assert.strictEqual(many(a, alias, 0), 258, 'pending thread alias is valid but not ready');
+  waits.terminateThread(thread, 0);
+  assert.strictEqual(many(a, alias), 1, 'exited thread alias is ready');
+  waits.closeSyncHandle(alias);
+  waits.setEvent(a);
+  assert.strictEqual(many(a, alias), 0xFFFFFFFF, 'closed alias cannot hide behind ready event');
+  for (const [count, address] of [[0, ptr], [65, ptr], [2, ptr + 4], [2, ptr + 1], [2, -4]]) {
+    assert.strictEqual(waits.waitMultiple(count, address, false, 0), 0xFFFFFFFF);
+  }
+  assert.strictEqual(waits.waitSingle(a, 0), 0, 'bad wait array never consumes event');
+  const unaligned = new DataView(waits.memory.buffer);
+  unaligned.setUint32(ptr - 1, a, true); unaligned.setUint32(ptr + 3, manual, true);
+  assert.strictEqual(waits.waitMultiple(2, ptr - 1, false, -1), 1,
+    'x86 handle arrays may be unaligned; read the actual bytes');
+}
+{
+  const waits = makeThreadManager();
+  waits.mainInstance.exports.get_process_id = () => 77;
+  const event = waits.createEvent(false, true), ptr = 0x10000 - 8;
+  const view = new Uint32Array(waits.memory.buffer, ptr, 2);
+  view.set([event, 0xE2000 | 78]);
+  assert.strictEqual(waits.waitMultiple(2, ptr, false, -1), 0xFFFFFFFF, 'foreign process id is invalid');
+  assert.strictEqual(waits.waitSingle(event, 0), 0);
+  view.set([event, 0xE2000 | 77]);
+  assert.strictEqual(waits.waitMultiple(2, ptr, false, 0), 258, 'own live process is valid but unsignaled');
+  view.set([event, 0xE40001]);
+  waits.setEvent(event);
+  waits.processCtl = () => -1;
+  assert.strictEqual(waits.waitMultiple(2, ptr, false, -1), 0xFFFFFFFF, 'invalid child process prevalidated');
+  assert.strictEqual(waits.waitSingle(event, 0), 0);
+  const semaphore = waits.createSemaphore(1, 2);
+  view.set([event, semaphore]);
+  assert.strictEqual(waits.waitMultiple(2, ptr, false, -1), 1);
+  assert.strictEqual(waits.waitSingle(semaphore, 0), 258, 'only one semaphore unit consumed');
+}
+
 const tm = makeThreadManager();
 const handles = [];
 
@@ -529,6 +599,11 @@ function makeRunnableThread(tid, onRun) {
   return {
     tid,
     state: 'active',
+    // These scheduling fixtures represent an already-started thread. A fresh
+    // thread spends its first quantum completing DLL_THREAD_ATTACH, even with
+    // no loaded DLLs; cold-start notification is covered by
+    // docs/reviews/thread-resume-regression-20261020.js.
+    _dllAttachNotified: true,
     sleepCount: 0,
     sleepUntil: 0,
     waitPolls: 0,
@@ -568,6 +643,32 @@ assert.strictEqual(suspendedRunTm.resumeThread(0xe1010), 1, 'resuming an instant
 assert.strictEqual(suspendedRunTm.hasActiveThreads(), true, 'the final resume makes the worker runnable');
 suspendedRunTm.runSlice(100);
 assert.strictEqual(suspendedRuns, 1, 'scheduler executes the worker after its final resume');
+
+// Self-suspend additionally parks the guest at yield 11. Releasing only one of
+// two suspend counts must not clear that yield or re-enter the guest.
+{
+  const selfTm = makeThreadManager();
+  let reason = 11;
+  let clears = 0;
+  let runs = 0;
+  const worker = makeRunnableThread(1, () => {
+    assert.strictEqual(reason, 0, 'self-suspend yield is cleared before guest re-entry');
+    runs++;
+  });
+  worker.suspendCount = 2;
+  worker.instance.exports.get_yield_reason = () => reason;
+  worker.instance.exports.clear_yield = () => { reason = 0; clears++; };
+  selfTm.threads.set(0xe1010, worker);
+  assert.strictEqual(selfTm.resumeThread(0xe1010), 2);
+  selfTm.runSlice(100);
+  assert.strictEqual(runs, 0, 'partial resume leaves self-suspended guest parked');
+  assert.strictEqual(clears, 0, 'partial resume preserves private self-suspend yield');
+  assert.strictEqual(selfTm.resumeThread(0xe1010), 1);
+  selfTm.runSlice(100);
+  assert.strictEqual(runs, 1, 'final resume re-enters self-suspended guest');
+  assert.strictEqual(clears, 1, 'final resume consumes self-suspend yield once');
+  assert.strictEqual(worker.state, 'active', 'resumed guest did not crash');
+}
 
 const vblankTm = makeThreadManager();
 let vblankYield = 13;
@@ -901,5 +1002,59 @@ console.log('PASS  ThreadManager keeps pending worker handles unsignaled');
 console.log('PASS  ThreadManager recycles closed event and semaphore handles');
 console.log('PASS  ThreadManager preserves and atomically consumes wait-all state');
 console.log('PASS  ThreadManager keeps main wait completion logs trace-only');
+// Enigma's audio worker releases and immediately reacquires its mutex within
+// one cooperative slice. Main must get its real parked wait completed between
+// iterations, rather than missing every moment at which the mutex is available.
+{
+  const mtm = makeThreadManager();
+  const mutex = mtm.createMutex(false, '', 2);
+  assert.strictEqual(mtm.waitSingle(mutex, 0xFFFFFFFF, 2), 0);
+  assert.strictEqual(mtm.waitSingle(mutex, 0xFFFFFFFF, 1), 0xFFFF);
+  let reason = 1, handle = mutex, handles = 0, stackBytes = 12, depth = 0;
+  let esp = 0x100, eax = null, pc = null;
+  mtm.mainInstance.exports = {
+    get_yield_reason: () => reason, get_wait_handle: () => handle,
+    get_wait_handles_ptr: () => handles, get_wait_stack_bytes: () => stackBytes,
+    get_sync_msg_depth: () => depth, get_wait_timeout: () => 0xFFFFFFFF,
+    get_esp: () => esp, guest_read32: () => 0x401234,
+    clear_yield: () => { reason = 0; }, set_eax: n => { eax = n; },
+    set_esp: n => { esp = n; }, set_eip: n => { pc = n; },
+  };
+  assert.strictEqual(mtm.releaseMutex(mutex, 2), 1);
+  assert.strictEqual(mtm.waitSingle(mutex, 0xFFFFFFFF, 2), 0xFFFF,
+    'the releasing worker cannot steal the parked main wait');
+  assert.strictEqual(mtm.syncView[mtm._getSyncIdx(mutex) * 4 + 2], 0,
+    'deferring acquisition does not invent ownership');
+  assert.strictEqual(reason, 1, 'a competing acquisition cannot complete main');
+  assert.strictEqual(mtm.checkMainYield(), false);
+  assert.deepStrictEqual([reason, eax, esp, pc], [0, 0, 0x10c, 0x401234],
+    'the ordinary scheduler completes the original guest wait');
+  assert.strictEqual(mtm.waitSingle(mutex, 0, 2), 0x102);
+  assert.strictEqual(mtm.waitSingle(mutex, 0, 1), 0, 'owner recursion is preserved');
+  assert.strictEqual(mtm.releaseMutex(mutex, 1), 1);
+  assert.strictEqual(mtm.releaseMutex(mutex, 1), 1);
+  for (const invalidate of [() => { reason = 0; }, () => { handle++; },
+    () => { handles = 0x200; }, () => { stackBytes = 24; }, () => { depth = 1; },
+    () => { mtm._mainThreadState.suspendCount = 1; }]) {
+    reason = 1; handle = mutex; handles = 0; stackBytes = 12; depth = 0;
+    mtm._mainThreadState.suspendCount = 0; invalidate();
+    assert.strictEqual(mtm.waitSingle(mutex, 0, 2), 0,
+      'a stale, different, nested, or suspended wait cannot reserve the mutex');
+    assert.strictEqual(mtm.releaseMutex(mutex, 2), 1);
+  }
+  reason = 0; mtm._mainThreadState.suspendCount = 0;
+  const workerExports = { get_yield_reason: () => 1, get_wait_handle: () => mutex,
+    get_wait_handles_ptr: () => 0, get_wait_stack_bytes: () => 12 };
+  mtm.threads.set(0xe1000, { tid: 2, state: 'active', instance: { exports: workerExports } });
+  assert.strictEqual(mtm.waitSingle(mutex, 0, 1), 0x102, 'parked workers also get precedence');
+  assert.strictEqual(mtm.waitSingle(mutex, 0, 3), 0, 'the selected worker acquires normally');
+  assert.strictEqual(mtm.releaseMutex(mutex, 3), 1);
+  mtm.threads.get(0xe1000).state = 'exited';
+  assert.strictEqual(mtm.waitSingle(mutex, 0, 1), 0, 'exited workers do not reserve a mutex');
+  assert.strictEqual(mtm.releaseMutex(mutex, 1), 1);
+  mtm.threads.get(0xe1000).state = 'active'; mtm.workerBackend = {};
+  assert.strictEqual(mtm.waitSingle(mutex, 0, 1), 0, 'worker-backed ownership is unchanged');
+}
+console.log('PASS  ThreadManager gives live parked cooperative mutex waiters an acquisition turn');
 console.log('PASS  ThreadManager keeps synchronization-object creation logs trace-only');
 console.log('PASS  ThreadManager keeps every worker hwnd inside its own app slice');

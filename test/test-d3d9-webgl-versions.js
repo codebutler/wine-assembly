@@ -7,7 +7,7 @@ const assert=require('assert'),path=require('path'),puppeteer=require('puppeteer
     args:['--no-first-run','--no-default-browser-check']});
   try{
     const page=await browser.newPage();
-    for(const file of['gpu-backend.js','d3d9-shader.js','d3d9-fixed.js','d3d9-backend.js'])
+    for(const file of['gpu-backend.js','d3d9-shader.js','d3d9-fixed.js','render-clear.js','d3d9-backend.js'])
       await page.addScriptTag({path:path.join(__dirname,'../lib',file)});
     const result=await page.evaluate(()=>{
       const outputs=[];
@@ -92,7 +92,24 @@ const assert=require('assert'),path=require('path'),puppeteer=require('puppeteer
           g.draw({program:lod,vertexBuffer:buffer,stride:8,attributes:[{name:'p',size:2,offset:0}],mode:gl.TRIANGLES,count:3});
           mipPixel=Array.from(g.readPixels(1,1,1,1,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4)));
         }catch(error){mipError=error.message;}
-        npot.push({version,samples,errors,mipPixel,mipError,error:gl.getError()});d.destroy();
+        const signedProgram=g.createProgram('attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}',
+          'precision highp float;uniform sampler2D image;uniform float bias;void main(){gl_FragColor=.5+.5*texture2D(image,vec2(.5),bias);}', ['p'],['image','bias']);
+        const signedSamples=[];
+        for(const format of [63,62,63]) {
+          d.uploadTexture(0,{width:2,height:1,key:'signed-shared',format,
+            pixels:new Uint8Array([128,127,128,128,127,128,128,128]),sampler:{addressU:3,addressV:3,min:2,mag:2}});
+          g.bindTexture(d.textures.get(0),0);g.setUniform(signedProgram,'image','1i',0);
+          g.draw({program:signedProgram,vertexBuffer:buffer,stride:8,attributes:[{name:'p',size:2,offset:0}],mode:gl.TRIANGLES,count:3});
+          signedSamples.push(Array.from(g.readPixels(1,1,1,1,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4))));
+        }
+        const signedLevels=[4,2].map(width=>({width,height:width,
+          pixels:Uint8Array.from({length:width*width*4},(_,i)=>i%4===0?(i%8===0?128:127):i%4===1?(i%8===1?127:128):128)}));
+        d.uploadTexture(0,{...signedLevels[0],format:63,levels:signedLevels,
+          sampler:{addressU:3,addressV:3,min:2,mag:2,mip:1}});
+        g.bindTexture(d.textures.get(0),0);g.setUniform(signedProgram,'bias','1f',8);
+        g.draw({program:signedProgram,vertexBuffer:buffer,stride:8,attributes:[{name:'p',size:2,offset:0}],mode:gl.TRIANGLES,count:3});
+        signedSamples.push(Array.from(g.readPixels(1,1,1,1,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4))));
+        npot.push({version,samples,errors,mipPixel,mipError,signedSamples,error:gl.getError()});d.destroy();
       }
       return {outputs,fallbackVersion,forcedRejected,legacyVersion,npot};
     });
@@ -105,6 +122,8 @@ const assert=require('assert'),path=require('path'),puppeteer=require('puppeteer
     assert.strictEqual(result.fallbackVersion,1);assert(result.forcedRejected);assert.strictEqual(result.legacyVersion,1);
     for(const entry of result.npot){
       assert.strictEqual(entry.error,0);
+      assert.deepStrictEqual(entry.signedSamples,[[128,128,0,0],[128,128,192,255],[128,128,0,0],[128,128,0,0]],
+        'signed filtering and format-specific GPU cache identity');
       if(entry.version===1){
         assert(entry.errors.slice(0,2).every(message=>/NPOT.*clamp/.test(message)));
         assert.match(entry.mipError,/NPOT.*mip/);

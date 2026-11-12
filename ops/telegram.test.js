@@ -57,7 +57,7 @@ test('/blockers matches dashboard grouping and stays read-only for authorized us
  await bot.handle(message('/blockers@wine_bot'));
  assert.deepEqual(reads,['/api/state']);assert.equal(state.chatQueue,undefined);
  const text=calls.map(x=>x.body.text).join('\n');
- assert.match(text,/1 live approvals · 2 primary blockers · 1 dependent tasks/);
+ assert.match(text,/1 live approvals · 2 primary blocker rows · 1 dependent rows/);
  assert.match(text,/Next: Restore archive/);assert.match(text,/Reason: Files absent/);assert.match(text,/Owner: Fixture owner/);
  assert.match(text,/Also holds up: Verify game \[child\]/);assert.match(text,/No dashboard override/);
  assert(!text.includes('Old blocker'));assert(!text.includes('Old approval'));

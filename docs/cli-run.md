@@ -1,5 +1,51 @@
 ## Run
 
+`--trace-input-dispatch` adds bounded CLI input timing observations (at most
+1,000 records plus one suppression notice per process). It works with
+`--quiet-api --quiet-blocks`; without the trace flag, existing output stays
+unchanged. `[input-schedule]` records the requested `scheduledBatch` and the
+actual injection batch, before the action runs; it does not prove an event was
+queued. `[input-enqueue]` identifies raw scripted MSG objects actually queued.
+`[input-dequeue]` records when `h.check_input` consumes an event, with full
+32-bit wParam/lParam, source and a per-consumption `dequeueId`.
+`[input-dequeue-route]` uses that ID for the polling guest's focus routing result
+(hwnd 0 lets WAT select its default). Empty polls produce no new timing record.
+`[dispatch-input]` records mouse/key MSG contents when the main CLI instance
+enters DispatchMessageA/W, before its handler runs. These observations do not
+cover independent worker API loggers, DirectInput polling or completed wndproc
+execution.
+
+Each record includes the observed `batch` and a non-advancing `guestMs` from
+the existing guest clock's publish path. `clock=batch` means its current batch
+base, including clock rebases/pauses. `clock=real` uses the existing
+scaled/mapped elapsed clock. `lastGuestTick` records the last actual return
+through the main host's guest-clock reader, after startup dilation or other
+mapping, in either mode. Before its first observed call it is `unavailable`.
+This value can be stale, including across startup release: publishing time does
+not change it. Host hooks that share this reader also update the observation;
+it does not report independent worker threads' last API reads or QPC's separate
+microsecond interpolation. It is never the raw underlying batch-clock state.
+Neither value is computed from the scheduled batch, and tracing spends no
+guest clock probe. Raw enqueues retain `enqueueId`/`scheduledBatch` at dequeue
+only by object identity. Renderer actions may suppress, combine or generate
+multiple events, so their schedule-to-dequeue identity is unavailable.
+Dispatch always says `correlation=unavailable`: an identical MSG tuple cannot
+prove which host dequeue produced it, especially with repeated keys or mouse
+events. Compare observed windows without treating matching tuples as IDs.
+
+For a separately authorized Penguin follow-up with its registered original
+assets installed, retain the matched schedule and add
+`--screen=800x600 --trace-input-dispatch --quiet-api --quiet-blocks` to
+`node test/run.js --app=penguin_command_1611 --no-build ...`.
+`--screen=WxH` is the existing host viewport option; review captures for the
+full client/cannon area. Use observed dequeue/dispatch batches to place later
+capture brackets; scheduled `34800:keydown:65,34900:keyup:65` alone does not
+establish delivery time. This diagnostic change has source-level regression
+coverage, not a new Penguin gameplay qualification. Run the lightweight test
+with `node --max-old-space-size=256 test/test-cli-tick-ms-input.js --source-only`;
+it executes production CLI hook bodies with real clock/trace code and controlled
+queues/MSG memory, without instantiating the guest VM.
+
 - **Browser:** Open `index.html` (at repo root), select an app, click Launch. Live build deployed at https://wine-assembly.berrry.app via `tools/deploy-berrry.js --update`.
 - **CLI:** `node test/run.js --exe=path/to/exe [options]` — headless execution with auto-build. A registered EXE gets that app's explicit file manifest; an arbitrary bare `--exe` mounts only the executable. Add repeatable/comma-separated `--vfs-include='*.dat,plugins/**/*.dll'` patterns (relative to the EXE directory) for ad-hoc companion assets, or prefer `--app=ID`. Key flags: `--verbose`, `--trace`, `--trace-api`, `--trace-gdi`, `--trace-host=fn1,fn2`, `--no-close`, `--break=0xADDR`, `--break-api=Name`, `--watch=0xADDR`, `--dump-gdi=DIR`, `--max-batches=N`, `--batch-size=N`, `--tick-ms-per-batch=N`
 
@@ -7,7 +53,9 @@
 
   **`--tick-ms-per-batch=N`** (default 200) sets how much guest time one batch is worth on the headless batch-driven clock. Reach for it whenever a game's engine steps on a `WM_TIMER` and the capture shows the clock already expired: at the default 200ms/batch Chip's Challenge burns its entire 100-second level timer in 500 batches and puts up "Ooops! Out of time!" before any `--input` lands. `--real-ticks` is not the fix — a 16-bit app runs 5000 batches in a third of a second of wall clock, so its 110ms timer fires about three times in a whole run and nothing ever moves. `--tick-ms-per-batch=5` reaches real gameplay. An app that always needs another clock registers it in `lib/apps.js` as `cliTickMsPerBatch` (the flag still wins; the browser never reads it). A batch is a fixed block budget, so for a CPU-bound renderer 200 ms/batch reads as a machine that takes minutes per frame: the seven Plus! 98 D3DRM savers register `2`, because at 200 their scene timers expire before the first Flip and the device is rebuilt after every frame.
 
-  **The guest calendar is pinned by default to `1999-06-01T12:00:00Z`** (it then advances with guest time), so two runs of one command are the same run even when the guest seeds from the time of day — Deus Ex diverged per wall-clock second before this. `--wall-clock-ms=N` or an app's `wallClock` in `lib/apps.js` picks another date; `--real-calendar` gives today's date; `--real-ticks` keeps the real calendar. **The time zone is pinned too, to UTC**, so `GetLocalTime` reads 12:00 on a PDT laptop and on a UTC box alike, and agrees with `GetTimeZoneInformation`'s zero bias. `--tz=IANA/Name` picks a zone; `--real-timezone`, `--real-calendar` and `--real-ticks` keep the host's. The browser always uses the real date and zone.
+  **The guest calendar is pinned by default to `1999-06-01T12:00:00Z`** (it then advances with guest time), so two runs of one command are the same run even when the guest seeds from the time of day — Deus Ex diverged per wall-clock second before this. `--wall-clock-ms=N` or an app's `wallClock` in `lib/apps.js` picks another date; `--real-calendar` gives today's date; `--real-ticks` keeps the real calendar unless a calendar pin takes precedence. **The time zone is pinned too, to UTC**, so `GetLocalTime` reads 12:00 on a PDT laptop and on a UTC box alike, and agrees with `GetTimeZoneInformation`'s zero bias. `--tz=IANA/Name` picks a zone; `--real-timezone`, `--real-calendar` and `--real-ticks` keep the host's. The browser always uses the real date and zone.
+
+  **An explicit `--wall-clock-ms` still advances the calendar by batch time, even with `--real-ticks`.** For interactive captures whose deadlines use CRT `time()` and must track elapsed wall time, use `--real-calendar --real-ticks` and omit `--wall-clock-ms`; specify `--tz=UTC` if the capture needs a fixed zone. Barrage 1.0.5 uses `time(NULL) + 180` for its round deadline: its [clock audit](re-notes/barrage-105.md) found that the pinned calendar expired the round early, while the unpinned real-calendar run matched host and guest tick intervals and preserved the full round deadline. This applies to calendar-based deadlines; retain the batch-timer guidance above for short 16-bit `WM_TIMER` runs.
 
   **`--batch-size` is a budget of BLOCKS, not steps, and a block is not a fixed amount of work.** `run(N)` spends one `$block_budget` per basic block, and the `$steps` quantum is 256 block transfers per visit to the run loop, counted at block ends rather than in every dispatch — so one block can be a 3-instruction loop head or an entire folded sprite row. Measured on Diablo (`--batch-stats` + `--handler-hist`): **6.9 ops per block** in its Smacker intro against **282 ops per block** in its menu, a 41x spread inside one app. Ops per second is flat at ~7-9M across both, so the emulator is not "slower" in the menu at all — batches are simply a meaningless unit of work, and any per-batch number (batches/s, ms/batch) silently changes meaning when the guest's code shape changes. Quote ops, or quote wall time for fixed work.
 

@@ -1,5 +1,769 @@
 # American McGee's Alice demo
 
+## Native wind approach reached; underwater blocker before knife (2026-11-03)
+
+Run `scratch/runs/20261103-alice-wind-knife-native/` used one original native
+CLI process, ordinary New Game / Easy and the complete natural opening.
+It reached the first village gnome sequence, returned control, approached
+the visible steam and made one ordinary W+Space jump. The reviewed capture
+at **30698** is inside the steam below the ledge; the following neutral
+capture at **30938** shows Alice underwater beneath the crossing. This is
+the concrete navigation blocker. A wind lift or far-side landing was not
+established. **Knife acquisition, held weapon, melee animation, projectile
+and target damage are all unverified.** No attack or retry was sent.
+
+Before launch, read-only original BSP/scripts and predecessor captures
+established the route: south from the starting cave, west through the timber
+passage rather than into the mushroom alcove, then south at the first gnome.
+The authentic `trigger_accelerate` is model4, origin `(-5088,5076,-112)`,
+world bounds `[-5192,-4984] × [5020,5132] × [-320,96]`, `speed -1`,
+`spawnflags 8`; the adjacent steam emitters identify the crossing. Beyond
+the south landing, the route turns east through the second dialogue trigger
+toward the knife altar at `(-3978,4326,-168)` and its natural `knife_cat`
+cinematic. These static facts establish availability and a route, not pickup
+or successful traversal. BSP SHA256 is
+`4d2435f126831467d52f23722823b5486b6e9ce2f9149bd2f5e06cca94457855`.
+The retained collision slices exclude mesh and mover collision.
+
+Native captures show HUD at24828, cave exit at26468, cleared timber jamb
+at27378, natural gnome sequence at27708/28908, HUD returned at30108 and
+steam alignment at30418. Every steering decision followed personal capture
+review. The earlier menu response-envelope error was repaired in the same
+process before any game input. Unchanged menu captures were original asset
+loading, resolved by the subsequent Easy menu. Native keyboard/focus delivery
+and movement worked; no engine attack or acceleration defect is established.
+Shared cleanup twice archived active local control helpers; they were restored
+from its recovery archives without restarting the guest. This interruption
+and the startup/loading time consumed much of the finite attempt.
+
+The sole process exited normally on ordinary stop after **1779.734 seconds**,
+under the immutable1800s/outer1860s limits, with **210 control commands
+including quit**. No browser, address tracing, shortcut, fabricated save or
+guest/config/registry/media edit was used. Source was committed main
+`a136f176803cacad9246a39194b405f87f66ebe2`; locked build and focused keyboard,
+frozen native control and DirectInput mouse tests passed. The actual compiled
+and instantiated module was2088037 bytes, SHA256
+`7c22e2715377fd09a71887a62211ccd3cc0e8c96e56cbc65ca792e8c35213726`.
+Original15/exact14 mappings, final runtime audit, fullSHA archive and recovery
+are retained in the run directory. No further campaign is authorized here;
+the next work is to resolve the basin position against the authentic wind
+trigger before another separately authorized attempt.
+
+## First village dialogue reached; weapon and attack still unverified (2026-11-03)
+
+Run `scratch/runs/20261103-alice-first-visible-attack/` ends with a concrete
+attempt limit: the immutable 1800-second browser deadline expired during the
+first village gnome's **“Ride the wind”** dialogue, before the knife pickup.
+**This is not a combat success.** Weapon acquisition, a usable held knife,
+attack animation/projectile and target damage remain unverified. No attack
+was dispatched in this run; no emulator attack defect is established.
+
+The predecessor's six reviewed captures and all 6200 archived members were
+independently verified before play. They support its movement/turn findings,
+not weapon ownership. No authentic retained save existed, so this run used
+ordinary New Game / Easy and the complete natural opening. Own HUD appears
+at actual17080. Reviewed W/turn/strafe captures show traversal of the timber
+bends, a purple-mushroom stone alcove at20600, return through its doorway and
+new letterboxed village machinery at23085. The final capture
+`gnome-23485.png` shows the gnome and dialogue at **actual23485 / main22418**.
+Repeated wall contact was diagnosed as route alignment; shorter turns and
+right strafes cleared the jambs. The alcove required returning to the wooden
+passage. These navigation delays consumed the remaining attempt time.
+
+Read-only original assets establish the ordinary knife route and controls:
+`default.cfg` binds W/S/A/D, arrow turning, Space jump, Enter use, 1 knife,
+Mouse1 primary (`+attackright`), Mouse2 alternate (`+attackleft`). The real
+`d_gvillage` knife pickup uses `altar_knife.tik` and `knife_cat`; the script
+attaches the knife during its natural cinematic. The knife model defines
+primary melee and alternate thrown `prj_knife.tik`. Static pickup metadata
+proves availability in the level, not current ownership. The next needed
+step is the ordinary ride-the-wind route to that altar, natural pickup/dialogue,
+then reviewed before/after held-weapon and attack-effect captures. This task
+consumed its only attempt and authorizes no additional launch.
+
+The first harness failure was auxiliary CDP response-body capture: six eager
+HTTP bodies were unavailable at bootstrap, halting the original controller at
+step0. Diagnosis preserved that failure and verified the six original bytes
+in resident VFS; lazy providers were excluded after an expected VfsPendingError
+from the first read-only audit. A bounded Puppeteer connection continued the
+**same page/browser**, without reload or guest changes; the original supervisor
+retained its deadline. A later inspector-cache eviction makes seven auxiliary
+body errors total. The actual HTTP module fullSHA matches; complete HTTP body
+identity for every lazy asset is not claimed. A terminal transport receipt
+failure was reconciled against completed screenshots/logs without replay.
+Controller v2 briefly used800x600; v3 restored1200x900 before gameplay steering.
+
+Source commit `bf14932174801bc0187c45f0735d85dd34c14e3d` seals5850 committed
+source/support files, excluding foreign working changes. All5868 runtime pins,
+15 originals and exact14 companion mappings match after execution. Fresh
+boat-side `flock /tmp/wine-build.lock bash tools/build.sh` and
+`test/test-keyboard-message-lparam.js` pass. HTTP module2084058 bytes SHA256
+`fa326d595b106a9e2f8242ef66c67d0ee5530462d587e7e76867640f800ebfc8` matches.
+Chrome151/Puppeteer25.7 uses software GL, cooperative threads, actual100000,
+frozen16ms, commands<=400 and no address-trace flags. Production code and
+original guest/config/registry/assets were not modified. Exact ordered GL
+copy-context-transaction then Jedi-first-combat-encounter AUTHOR RELEASE gates
+preceded production claim, staging, build, boat and runtime.
+
+The unchanged deadline was10:56:03.504–11:26:03.504 UTC; Chrome closed at
+11:26:03.585 (1800.081 seconds), exit0, driver exit0 at11:26:13.646. All6061
+own archive members and17 inherited original/support members match fullSHA.
+Own archive67947951 bytes SHA256
+`814228379d16b2e5ba5c578d395a0f354dc69e5fe6467c19c4a6d55cdb2bc002`.
+Recovery reuses the already-retained original dependency archive SHA256
+`48e24e19444c7614dff027144d41cb1c0dbb391de237a68fa558d83fcf78c1d7`.
+Source/originals streamed directly to the own boat; no local staging archive
+was duplicated. `RECOVERY.md`, exact pins, controller failures and screenshots
+were retrieved and independently verified before delegated normal shutdown.
+Own boat `bx_rf4y3hp4`, original expiry `2026-11-03T12:16:33.483Z`, shutdown
+owner `alice-first-visible-attack`, is **STOPPED** with snapshot retained.
+Stop `stop_8c78df1a484f5eee` completed11:45:09.894Z, error:null, forced:false;
+scoped remote helpers and own HTTP port were absent before stopping. No predecessor boat was operated. No public deployment.
+
+
+## Original opening reaches player movement and horizontal look (2026-11-03)
+
+Run `scratch/runs/20261103-alice-opening-player-controls/` makes one ordinary
+New Game / Easy browser attempt after the published admission repair. Actual
+screenshots were reviewed before choosing menu inputs. New Game is visible at
+actual 3600, Easy at 3840, Pandemonium loading at 4280, Rabbit dialogue at
+10280, Dementia loading at 12680 and Alice/Cat dialogue at 15480. At **actual
+17080 / main slice 16325**, dialogue has ended: Alice and the player HUD are
+visible at a timbered tunnel entrance. The original opening finishes naturally.
+
+Separate before/after captures establish **movement and horizontal turning**:
+`dialogue-request17080.png` shows the entrance; a W hold advances Alice/camera
+inside the tunnel in `movement-after-request17580.png`. The initial short W
+trial at 17160 was inconclusive. With W released, a separate ArrowRight hold
+rotates the view toward a long lamp-lit corridor in `look-after-request17800.png`.
+This verifies keyboard horizontal turning; vertical and mouse look remain
+unqualified. These filenames agree with the recorded actual-step observations.
+
+**Visible attack remains unverified.** The idle baseline at 17840 precedes two
+ordinary primary-mouse-button down/up trials. Guest WM_LBUTTONDOWN/UP messages
+establish dispatch, but reviewed captures at 17960, 18060, 18280, 18480 and
+18500 show no clear weapon pose, projectile or impact change. Weapon possession,
+equipping/pickup and the attack consumer path were not isolated. These results
+do not establish a general host defect or a loading hang. The next concrete
+step is ordinary weapon-readiness verification, followed by a focused guest or
+native input fixture if primary-button consumption remains uncertain.
+
+The immutable 1800-second deadline runs 09:18:50.524–09:48:50.524 UTC; the
+1860-second outer bound is respected. Final state is **actual 18500 / main
+slice 17351**, frozen guest 296000 ms, yield 0. Commands never exceed 400
+steps; no command or page error occurred. Shared disk dropped below the 2 GB
+floor after capture 17080, delaying new control commands until coordinator
+cleanup. The guest stayed frozen during that pause; neither deadline nor
+attempt count was extended. Chrome and driver exit 0 establish host cleanup,
+not guest exit. No second launch, guest/config/movie edit or intro bypass ran.
+
+Exact GL polygon-color-material release 08:47:21.733769 UTC precedes the
+coordinator-authorized Jedi continuation release 09:04:56 UTC before staging,
+build or runtime. Source commit `0b11aed63eab5847dfcc25fb9b74a968fe4138a8`
+seals 5844 source/support inputs, unchanged after execution; 5862 runtime pins,
+all 15 originals and the exact 14 companion mappings match. A fresh boat-side
+locked build and `test/test-keyboard-message-lparam.js` pass. The HTTP-loaded
+module is 2083613 bytes, SHA256
+`215edf1a09894f4b4d4e9d0e89dce47cf66a42597d084ec218772ec46364a293`.
+Chrome 151 / Puppeteer 25.7 uses software GL, cooperative threads, an actual
+100000 budget and frozen 16 ms steps, without address traces. Production
+source is unchanged; no repair is justified by this attack observation alone.
+
+All **6200** own archived members independently match full SHA256. Own archive
+60097233 bytes has SHA256
+`1f1bfa72d12a2d288a21f9a627142855e4a95c2e19e772f4d2383a8b959c8524`.
+Inherited originals were streamed directly to the boat, without duplicating
+the 108833576-byte archive locally; all 17 inherited original/support members
+were reverified against dependency archive `48e24e19444c7614dff027144d41cb1c0dbb391de237a68fa558d83fcf78c1d7`
+from the admission-repair run below. Corrected recovery was separately retrieved
+and hash-verified before delegated normal shutdown. Scoped runtime/build helpers
+and the own HTTP port were absent. Own boat `bx_7vanbwq9` is **STOPPED**;
+original expiry `2026-11-03T10:36:04.981Z`, shutdown owner this worker.
+`stop_2b4dfebd16dbffc2` completed at `09:52:20.273Z`, error null, forced false;
+snapshots and metadata are retained. No predecessor boat was touched.
+
+## Browser cooperative DLL admission repaired (2026-11-03)
+
+Run `scratch/runs/20261103-alice-browser-admission-repair/` reproduces the
+browser admission cycle through the actual browser host methods, shared loader
+and cooperative scheduler with interpreted PE fixtures. The finalized fixture
+fails with the released old host: main owner 1 remains at yield 5 while owner 2
+holds the real callback gate across an unfinished THREAD_ATTACH. No timer
+releases that gate. The same fixture and sealed module pass after forwarding
+the existing owner-advance hook at all four browser main/thread LoadLibrary/COM
+service sites. The owner advances through 54 scheduler calls, completes its
+nested load/unload and attach before process detach, and runs its thread body.
+
+Admission still uses the real atomic callback gate; the scheduler advances only
+its current unfinished attach owner. True waits retain the parked caller and
+ordinary host wait, failures preserve quarantine pins, and real Workers remain
+excluded. The host yields a browser turn without manufacturing guest time or
+frozen main-step credits and rejects stopped hosts. ProcessBoot, callback gate
+semantics, guest originals/configuration and the scheduler are unchanged.
+
+Ordinary, real sleeping-owner, faulted-owner, nested attach, forwarding,
+retirement/stop/error and Worker exclusion controls pass, alongside existing
+serialization, loader lifecycle/race/import/rollback/terminal, keyboard and CLI
+gate regressions. The locked build passes. Existing
+`test-dll-worker-message-lifecycle.js` separately fails its nested COM assertion
+with `0x80040154` rather than `0x80004002`, identically against the sealed
+released module; it does not load host.js. That baseline failure is retained,
+not counted as a passing check or repaired by this browser change.
+
+Exact GL mask-copy release 07:30:08.066535 UTC precedes Jedi desktop recover
+release 07:53:24.696619 UTC before this task's source/build/runtime work.
+The fixture module is SHA256
+`98203cd6549c75030d5d25118a61f7ca42449a05de0a2cf64e232bc82e6b0e7f`.
+Repair `e29de578e8a4d23c8877a21118589958a2b5780c` is published on main.
+
+One fresh original browser attempt follows that publication. All 4,110 sealed
+source/support inputs match after execution; all 363 staged runtime files and
+15 originals match full SHA256. The actual browser HTTP module is 2,081,665
+bytes and matches the hash above. Original executable and all 14 companion
+mappings are preserved. Chrome 151 / Puppeteer 25.7 uses cooperative threads,
+software GL, frozen 16 ms steps and an actual 100,000 budget, without trace
+addresses, forced-one execution, guest/configuration edits or menu shortcuts.
+
+The previous actual-step-1649 admission stall is passed naturally. Reviewed
+copyright appears at 2200; the genuine main menu has New Game highlighted at
+**actual 3807**, despite filename `startup-request4200.png`. Its 1000-step
+controller command exceeded the CDP 45-second timeout while remaining credits
+continued; this is retained as a controller error, not a guest watchdog fault.
+Ordinary Enter down/20 steps/up/20 steps opens the reviewed Easy menu at 4240.
+A second Enter sequence selects Easy: 4280 still shows the menu, while neutral
+steps show original Pandemonium loading at 4480. Trusted browser key events
+and visible menu changes establish activation; no guest consumer trace ran.
+
+Neutral steps render the original scripted opening, then Dementia loading at
+12880–14480, a portal transition at 14880/15280, and Alice/Cat dialogue at
+15680/16080. The immutable 1200-second browser deadline closes the session at
+**actual 16080 / main slice 15157**, EIP `0x033b870d`, yield 0, frozen guest
+257.28 seconds. The last reviewed frame still has scripted dialogue and no
+player HUD. No W, look or attack input was sent. Browser movement/look/fire
+effects remain **unverified**. The limiting condition is the finite attempt
+ending before the original opening finished; no new guest fault, admission
+stall or loading hang was established. Next: allow enough bounded ordinary
+opening time, review the player view, then test movement/look/visible attack.
+
+All 600 archived members independently match full SHA256, including current
+source/module, all originals, captures/logs and recovery. Archive 108,833,576
+bytes SHA256 `48e24e19444c7614dff027144d41cb1c0dbb391de237a68fa558d83fcf78c1d7`.
+A corrected recovery copy was separately retrieved and verified before stop;
+the original receipt always records the correct final EIP. Chrome and driver
+exit 0 establish host cleanup, not guest exit; cleanup retains the exact CDP
+timeout. Scoped helpers and port 36767 were absent before delegated normal
+shutdown. Own boat `bx_a7vt39d3`, original expiry `08:37:56.578Z`, is STOPPED;
+`stop_1421d68bcb9bed95` completed at `08:22:38.383Z`, error null, forced false,
+snapshots and metadata retained. No predecessor boat was touched. Browser GPU,
+audio, FPS and combat remain unqualified.
+
+## Original browser attempt: cooperative DLL admission blocks startup (2026-11-03)
+
+Run `scratch/runs/20261103-alice-original-browser-gameplay/` makes one original
+browser attempt on main `7ad347a3531d9b7627a03fd5e465afbb509689f8`, after exact
+GL5777 release 06:40:25 UTC then Jedi10321 release 06:55:25 UTC. All 4,158
+released source inputs match before and after; all 355 staged runtime inputs
+and all 15 original files match full SHA256. The actual browser HTTP module
+is 2,081,604 bytes, SHA256
+`75379b0954be582cbeb9df8b40477c5e0b67292fa8833577ebcc7a8e798aaa80`.
+The released locked build and keyboard-message regression pass. No production
+code, original bytes or configuration changed; local HTTP launch metadata
+preserves the ordinary executable and all 14 companion mappings.
+
+Chrome 151.0.7922.108 / Puppeteer 25.7.0 uses a 1200×900 viewport, cross-origin isolation,
+software GL and cooperative guest threads. The actual startup budget remains
+100,000; no trace address, breakpoint or forced-one diagnostic was armed.
+The reviewed first capture shows the original Alice Console. Neutral steps
+reach a gray game surface at step 1600 / main slice 1045. The next request for
+600 steps advances only 49, then the existing progress watchdog times out at
+**actual step 1649 / main slice 1093**, EIP `0x0274aced`, yield 5. The filename
+`startup-2200.png` is a requested label, not a completed-step receipt.
+
+Two read-only snapshots 26.741 seconds apart retain main owner 1 at that EIP,
+callback gate owner 2 / depth 1, and active runnable thread handle `0xe1001`,
+owner 2, EIP `0x0273a520`, with an unfinished DLL attach operation. Main's
+return maps into the unchanged Miles `mss32.dll` immediately after its original
+FreeLibrary call. Current `host.js` awaits `handleLoadLibrary()` before its
+cooperative scheduling phase; that method omits `onDllCallbackGateWait`.
+`process-boot.js` waits for the real callback gate before servicing the yield.
+The CLI already supplies the scheduler's existing owner-advance callback.
+Live gate/thread observations and this source path establish the browser
+counterpart of the cooperative admission cycle; no JS async stack was sampled,
+gate released, guest memory changed or callback skipped by the observer.
+
+No menu became visible, so no New Game/Easy, movement/look or fire input was
+sent. Browser gameplay and any visible attack effect remain **unverified**;
+the earlier native result below remains separate. There is no browser GPU,
+audio or FPS qualification. The attempt ends at this measured blocker, with
+no runtime repair or second original launch. Next: a faithful browser
+old-fail/new-pass scheduling regression and general owner-advance repair,
+focused lifecycle tests and locked build before another original attempt.
+
+All 416 retrieved members, including current source/module, all originals,
+captures/logs and recovery, independently match full SHA256. Archive 92,172,697
+bytes SHA256 `a212a085812ee255778b5fe09e730a218eb9f080009788fd58177c2c23955be1`.
+Chrome and driver exit 0 without errors establish host cleanup, not guest exit.
+Scoped helpers and port 42173 were absent before explicitly delegated normal
+shutdown. Own boat `bx_2kbjhk2y`, original expiry 07:36:17.184 UTC, is STOPPED;
+stop `stop_9cbb6e2e727a4b2a` completed 07:08:39.277 UTC, error null, forced
+false, normal snapshots/metadata retained. No running boat remains assigned.
+
+## Native New Game activation and controlled gameplay verified (2026-11-03)
+
+Run `scratch/runs/20261103-alice-single-trace-native-activation/` completes the
+corrected native route on main `47b47bc6b80b8c8d320b4a363d4f678eede62f87`.
+GL3658's exact release at 05:40:57 preceded Jedi52541's at 05:55:27; both were
+verified before runtime work. All 4,156 released source/support identities
+match before and after use. All 4,352 staged inputs match remotely, including
+all 15 pinned originals. Actual compile and instantiate observations match
+the 2,081,417-byte canonical module SHA256
+`36a80f073b3bc4f59bb66d8c292684085c111be42cf999523723ff0cfab64788`.
+No production source, original bytes, configuration or menu commands changed.
+
+The source-only parser control ran again against the fresh staged CLI before
+guest execution: **only `--trace-at=0x429c10` preserves the requested 100,000
+blocks**. The predecessor's two-address command was not executed. One original
+session reached the genuine main menu at batch 1500, personally reviewed with
+New Game highlighted. Ordinary `keydown:13`, step 20, `keyup:13`, step 20
+opened the difficulty menu, reviewed at 1540. Actual DispatchMessageA receipts
+target hwnd `0x10007`: WM_KEYDOWN/UP, wParam 13, scan `0x1c`, lParams
+`0x001c0001` / `0xc01c0001`. Consumer `0x00429c10` records `[esp+4]=13`,
+`[esp+8]=1/0`, return `0x00439592`, at batches 1500/1520. This is the key
+route, distinct from WM_CHAR consumer `0x0042a130`; no character was injected.
+
+A second ordinary Enter down/up selected Easy. Reviewed captures show loading
+at 1580, the original scripted opening at 2580, another loading screen at
+actual batch 3064, and the level with Alice and HUD at 3796. Neutral steps
+completed at 4180. W down at 4180, 40 steps, W up at 4220, and 10 steps produced
+reviewed gameplay captures at 4220/4230: Alice advanced from the stone passage
+to a wooden landing/wall. Real W down/up dispatches carry scan `0x11`.
+Page Up down at 4230, 12 steps, release at 4242 and four steps changed the
+camera to look up, reviewed at 4246. Ordinary mouse down/up at 4246/4258 reached
+the original window as WM_LBUTTONDOWN/UP; consumer key `0xb2` release was
+observed. Fire captures at 4258/4262 do **not** establish a shot, damage or an
+attack animation, so fire effectiveness remains unverified.
+
+The session quit normally at batch 4262, exit 0 after 595.771 seconds. Long
+HTTP step requests sometimes timed out while their credits continued; separate
+snapshots established actual completion/progress. They were not startup or
+loader faults. The remote filename `intro-3180.png` was a requested checkpoint
+label, but its PNG receipt says batch 3064; the local reviewed copy is correctly
+named `level-loading-3064.png`. No new runtime defect was established or fixed.
+
+All 81 retrieved members independently match full SHA256; archive 5,324,114
+bytes SHA256 `94cee1d0fed65767f69feb767c0f3862bf2dc478bda9c37990ce1622a9c099ce`.
+Scoped helpers and port 8123 were absent before explicitly delegated normal
+shutdown. Own boat `bx_xnrz3em6`, original expiry `06:26:05.797Z`, is STOPPED;
+stop `stop_5e3febc4998fdb87` completed at `06:10:35.490Z`, error null,
+forced false, snapshot/lifecycle metadata retained. Keyboard-message regression,
+static pinned Enter mapping, fresh parser budget checks and notes diff checks
+pass. The released Jedi locked build was verified; Alice changed no code and
+did not repeat that build. Native software rendering/cooperative threads only;
+browser/GPU, audio, FPS and sustained combat are not qualified by this run.
+
+The requested native menu activation and player-controlled gameplay screenshot
+goal is met. A later task may test fire effectiveness from a suitable ordinary
+gameplay position; do not resume this stopped box or repeat the old startup
+diagnoses. Recovery, exact release lines, input log, reviewed frames, actual
+module, source/original seals and completed lifecycle receipt are in the run.
+
+## Native menu input traced; activation capture incomplete (2026-11-03)
+
+Run `scratch/runs/20261103-alice-menu-native-key-activation/` establishes the
+original input path without changing any guest bytes. `lib/input.js` does not
+exist; the host implementation is `lib/renderer-input.js`. The CLI's ordinary
+`keydown:13` / `keyup:13` dispatch supplies WM_KEYDOWN / WM_KEYUP with Enter
+scan code 0x1c: lParams `0x001c0001` / `0xc01c0001`. The existing keyboard
+message regression passes.
+
+In the pinned original EXE, WndProc `0x004731c0` passes the message lParam to
+MapKey `0x00473790`, which extracts the scan code and indexes the table at
+`0x00520c84`. Enter maps to internal key 13; a zero scan code maps to zero.
+The WndProc queues type-1 key/down events through `0x0046c1e0`; event loop
+`0x00439520` calls key consumer `0x00429c10`. WM_CHAR instead queues type 2,
+consumed by `0x0042a130`. UI key/character wrappers `0x0040c530` / `0x0040c550`
+reach distinct focused-widget methods. The original PK3 menu assets put New
+Game and Easy first. These are static findings, not activation receipts.
+
+After GL64819 and fresh Jedi92624 both actually exited zero and posted exact
+AUTHOR RELEASE, all 4,156 current source/support hashes matched Jedi's fresh
+post-GL build seal. Tested checkout identity was
+`cab910b9e62a648c5d8c9590c04ddca4e6411a8b`; actual compile/instantiate receipts
+match the 2,081,417-byte canonical module SHA256
+`36a80f073b3bc4f59bb66d8c292684085c111be42cf999523723ff0cfab64788`.
+All 4,350 staged inputs and all 15 original Alice hashes match after runtime.
+No production source, guest configuration or original payload was edited.
+
+**The activation session was invalidated by its diagnostic setup.** Two
+`--trace-at` addresses (`0x429c10,0x40c530`) make the existing CLI parser force
+`BATCH_SIZE=1`, despite `--batch-size=100000`, even before delayed trace arming.
+The worker overlooked that override. A source-only control reproduces budget
+1 for two addresses and 100,000 for one. At batches 1500 and 2100, the session
+still showed startup EIP `0x004ee9c3`, no window/focus, and a personally reviewed
+solid teal 640×480 frame. This does **not** establish an engine regression or
+repeat the repaired loader-gate diagnosis. No activation key was sent; no
+keydown/keyup receipt, New Game state or gameplay was obtained. A preceding
+host preload failure from omitted staging support is preserved separately;
+its module compile/instantiate arrays are empty and Alice did not execute.
+
+The one actual original execution ended cleanly with exit 0 after 83.135
+seconds. All 38 retrieved evidence members were independently SHA-verified
+before delegated shutdown. Own boat `bx_29ktbjtw`, original finite expiry
+05:51:23.723Z, is verified STOPPED with completed stop/error null at
+05:24:54.088Z; scoped helpers and port 8123 were absent before stop.
+
+Next bounded action: retain ordinary 100,000-block startup and use only
+`--trace-at=0x429c10` for consumer key/down receipts. Personally review the
+menu, then send ordinary Enter keydown/keyup and capture the first New Game
+state before further input. Ordinary movement/look/fire and all activation
+claims remain pending. Do not resume the stopped boat or repeat the old gate
+diagnosis. The ancillary source-sliced clock-domain test still lacks `hasFlag`
+in its VM fixture; the task-local in-memory dependency correction passes its
+clock checks and five mutation controls, but no repository test was changed.
+
+
+## CLI cooperative loader deadlock repaired (2026-11-03)
+
+Run `scratch/runs/20261103-alice-gate-scheduling-repair/` repairs the measured
+main-await/cooperative-owner cycle below. A contended CLI loader admission now
+lets the existing cooperative DLL attach owner advance through the actual
+ThreadManager scheduler. Main remains parked until ordinary atomic gate
+admission succeeds. Gate release, real module references, generation pins,
+attach/detach serialization and callback errors retain their existing owners.
+No callback is skipped and no guest clock or frozen credit is manufactured.
+
+The production CLI regression was measured **before** the repair. A real PE
+EXE loads a real DLL and creates a cooperative thread; its THREAD_ATTACH
+callback holds owner 2 across multiple quanta while main calls FreeLibrary.
+The old CLI cannot finish the step and is killed by the 20-second failure
+guard. Byte-identical EXE/DLL fixtures complete in 0.204 seconds after repair;
+the guard never releases a gate. Real callback thread ID 2, same-owner nested
+LoadLibrary/FreeLibrary, completed attach before detach, and thread ExitThread
+77 are asserted. Separate ordinary scheduling and faulted-owner controls pass;
+the latter retains the unfinished image's real quarantine pin. Rejection,
+retired requester, uncontended and recursive admission controls also pass.
+
+Validation passed on the worker's finite-TTL boat:
+
+- `test/test-cli-cooperative-dll-gate.js`, default, `--ordinary`, `--fault-owner`;
+- `test/test-cooperative-dll-owner.js` and `test/test-dll-callback-serialization.js`;
+- `test/test-dll-lifecycle-races.js` and `test/test-dll-terminal-lifecycle.js`;
+- `flock /tmp/wine-build.lock bash tools/build.sh`.
+
+The three changed ownership-census producer hashes were resealed after an
+explicit lifetime review; broader invocation ownership remains pending. The
+full build generated the canonical 2,079,536-byte module, SHA256
+`24880b0ebdf170b2443d977074bc80f12b3959647dee69114cb09965a70c4741`,
+byte-identical to the ordered GL/Shadow/Jedi predecessor module. The actual
+original run's compile and instantiate observations match those bytes.
+`final-source-inputs.json.gz` records 4,167 source/test/support identities;
+local and remote hashes match before and after runtime. All 15 pinned Alice
+originals also match before and after use.
+
+ONE original execution passed batch 1091, completed the attach continuation,
+and reached the fully painted 640×480 main menu, reviewed at batch 1486.
+All 22 observed loader promises resolved; later observations retain a free
+gate and no attach continuation. Ordinary click at batch 1589 and Enter
+character (`keypress:13`, WM_CHAR) at batch 1693 were queued after visual
+review. Reviewed subsequent frames still show the main menu. A direct HTTP
+`action:click` was rejected without injection before the supported `cmd`
+form was used. No New Game transition or gameplay is established. The same
+run ended at its supervisor bound, 1,734 batches / 130.437 seconds, with clean
+exit 0; there was no second original launch or unchanged retry.
+
+The remaining bounded action is to verify ordinary keydown/keyup menu
+activation and capture the first resulting New Game state. The present
+WM_CHAR/click observations do not establish a new engine fault. Independent
+HTTP snapshots remained responsive; a long step request's HTTP client timeout
+was not a loader deadlock. The reviewed menu and post-input PNGs, complete
+logs, old/new fixtures, canonical module, build output, source seals and
+independently verified 97-member retrieval are under the run's `retrieved/`.
+Runtime helpers and port 8123 were absent before the explicitly delegated
+shutdown of `bx_fq4urv68` (original expiry 04:05:21.682Z).
+
+## Current-main unfinished-step diagnosis (2026-11-03)
+
+Run `scratch/runs/20261103-alice-unfinished-step-diagnosis/` identifies the
+first initialization blocker: **the CLI awaits a loader gate held by a
+cooperative thread that this same await prevents it from scheduling**.
+This is a measured host scheduling cycle; no engine repair was applied.
+Historical movement and the November 1 observations below remain separate.
+
+The sole guest execution used main `8020361e3b2c784f325f8e9bc456e401f7ac456e`
+source, after the DeviceIoControl recovery's actual terminal and exact release.
+The locked full build passed; the actual module is 2,077,794 bytes, SHA256
+`2514961a7051ba000c6bd107447480ca38443046ed4d0c0bf9644345cccc4d15`.
+All 15 retained originals match the recovery manifest before and after use.
+The requested November 1 `RECOVERY.md` is absent at
+`scratch/runs/20261101-alice-original-native-gameplay/RECOVERY.md`; its retained
+final/log/verification evidence and the recovery manifest were available.
+
+Static tracing found that stdin commands are serialized behind a pending step,
+but independent requests to the existing HTTP control server remain usable.
+A task-scoped preload observes exported loader promises, atomic gate words and
+cooperative scheduling without guest execution, clock calls or gate writes.
+Its control holds the real production gate: a pending step and serialized ping
+remain blocked while independent HTTP snapshot/ping succeed, with whole-memory
+SHA unchanged. Releasing the fixture's gate completes both queued operations.
+Promise identity, rejection propagation and bounded recent-history controls
+pass, as do `test-cooperative-dll-owner.js`,
+`test-dll-callback-serialization.js` and
+`flock /tmp/wine-build.lock bash tools/build.sh`. Diagnostic code and evidence
+remain in the ignored run directory; production behavior is unchanged.
+
+The first 600 neutral steps completed with a reviewed gray 640×480 image.
+The next 600-step request stops at **batch 1091**, with 109 credits remaining.
+Independent HTTP observations 73.858 seconds apart show the same two pending
+awaits, gate owner/depth and four cooperative slices:
+
+- Main owner 1 is at `test/run.js:10980` →
+  `handleLoadLibraryYield` → `lib/process-boot.js:924` →
+  `acquireDllCallbackGate`, waiting for gate owner 2, depth 1.
+- Cooperative T1, handle `0xe1001`, has an unfinished DLL attach continuation
+  holding owner 2. Its next `runSlice` lies after the main await in the CLI loop.
+- Main return EIP is `0x0264aced`. Parsing the unchanged original `mss32.dll`
+  import table and disassembly maps this to preferred address `0x21111ced`,
+  immediately after `call *0x2113e08c` at `0x21111ce7`, the imported
+  `KERNEL32!FreeLibrary`. This is an unload gate wait, not a guessed audio fault.
+
+The unfinished-step PNG is also gray. No menu or gameplay was reachable, so
+no ordinary guest input was sent. HTTP quit and SIGTERM cannot complete the
+pending host await; bounded cleanup killed the owned process group (exit -9).
+All runtime helpers are absent. Retrieved evidence was independently hashed;
+4,290 transferred runtime source/test identities and the module still match.
+
+One earlier CLI bootstrap failed before any Wasm compilation because the
+transfer omitted the common `stdole2.tlb` asset. Its separate bootstrap records
+are retained. The required 27 unchanged repository assets were then streamed,
+SHA verified, and a synthetic CLI preflight passed before the sole original
+guest execution. No game/config changes, unchanged guest retry or integrated
+loader lifetime fixes were used. Local free space exceeded 2 GB before heavy
+work; a later dip was recorded and subsequent work only retrieved evidence.
+
+The next repair should let the CLI schedule the existing cooperative attach
+continuation while the main loader request is gated, with a real held-gate
+old-fail/new-pass control before another original attempt. The current result
+establishes the first blocker, not current gameplay or an implemented repair.
+The finite-TTL box `bx_4rk22xvp` is handed back running, helpers absent, with
+original expiry `2026-11-03T02:23:19.621Z`; the coordinator owns shutdown.
+
+## Current-main native attempt: startup stalls before menu (2026-11-01)
+
+Run `scratch/runs/20261101-alice-original-native-gameplay/` stops at the first
+bounded runtime blocker: **initialization stalls before New Game**. The sole
+original launch used actual main `76c40478e9b9aed501aaeda34e20e7366d124aaf`,
+after GL worker `01a19621-4660-7042-a3b4-a3aa542f7c6a` published fresh final
+artifacts and explicitly released runtime/source/build at 08:09:50 UTC.
+Historical movement below remains separate evidence.
+
+The accepted locked build from `d86935e8274cd5d70a53bcc50c5d8bf5632d95c3`
+was reused after all 4,392 pinned inputs and 141 prior actual reads matched.
+The actual compiled module is 2,026,995 bytes, SHA256
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`;
+the region mirror also matches. All 4,444 current source/support pins and all
+15 original files remain unchanged. The recovery's complete manifest still
+hashes to `68668d496dbabdb3b3803b8de12dda356796ba0ce26051ffb0a03df3a2022509`.
+The process-local entry uses `launch-plan.json` and existing local-manifest
+helpers, preserving all 14 companion paths, including `demo/` and
+`snddrivers/`. No shared registration, source, config or backend implementation
+was changed. The CLI uses the established `--gl-renderer=software` provider,
+cooperative threads, frozen control and 100,000-block batches.
+
+The first neutral 600-step request completed. Its reviewed 640×480 PNG is
+uniform gray: neither intro, menu nor gameplay. The frozen input snapshot at
+600 reports zero scheduled/enqueued/dequeued/routed/dispatched events. The
+next ordinary neutral 600-step request, sent at 08:10:37.802 UTC, never
+acknowledged completion during **192.85 seconds**. Later stdin ping remained
+queued behind that step, so a later capture/state was unavailable. Actual
+final batch and guest EIP are unknown; do not call this a batch-1200 capture.
+
+The retained log shows Miles DLL initialization and creation of cooperative
+thread `0xe1001`, entry `0x0203a520`. During its following DLL notifications,
+the last lines are `Calling DllMain at 0x20d1078` and successful EAX=1 return.
+Two OS observations show the Node main thread waiting in `ep_poll`, with about
+four seconds total CPU and no further guest output. These observations locate
+the stall window; they do **not** establish the underlying loader, callback,
+audio or scheduler defect. No integrated lifetime repair was repeated.
+
+SIGTERM at 08:13:50.622 UTC was acknowledged as an orderly-shutdown request,
+but initialization did not return. Bounded cleanup then killed the owned
+process group; guest exit is **-9**, elapsed 218.82 seconds, rather than a
+successful or guest-requested exit. The observer saved the actual module and
+117 compilation-time read identities, all still matching. **Later runtime
+reads were not flushed because SIGKILL cannot run its exit hook**; that is an
+explicit evidence gap. Its separate real sync/async execution, whole-512 MB
+read-only memory, clock-identity and emitted late-10,001 retention checks pass.
+
+No Enter or W input was issued because the menu/gameplay prerequisite was
+never visible. New Game → Easy, W consumption, held/released views and player
+control remain unverified on this build. There was no second original launch.
+The run retains command/control records, reviewed capture, identities,
+stall observations, signals/exits and cleanup. Free disk started at
+2,381,504,512 bytes and stayed above 2 GB. Own runtime/driver/control processes,
+groups and watcher were removed; no temporary runtime or box was acquired
+(box ID/state/expiry N/A). No browser, GPU, audio, FPS or full27 claim follows.
+
+Next prerequisite is a separately scoped diagnosis of this native startup
+stall with controls capable of observing an unfinished step. This task ends
+at that blocker without another original run or loader/lifetime changes.
+
+## Fresh browser attempt: assigned-host access failed (2026-10-31)
+
+Run `scratch/runs/20261031T2245Z-alice-original-browser/` began on main
+`3a3e28d622d397513699be75f9eeaf05a29fed6a`, a descendant of the recovered-media
+commit `d41903f45db7f4cb31da9df910019fe30dd8f84a`. The sole assigned browser
+host was `bx_knya4u7y`. **The first failure was host access, before transfer or
+guest execution; this run establishes no Alice runtime defect or gameplay.**
+
+`boat ssh bx_knya4u7y` returned exit 1, HTTP 403,
+`api_key_action_forbidden`: `This API key cannot perform ssh.` Direct SSH to
+the assigned private SSH endpoint using the installed `ascii_box_ed25519` key
+and account `user` returned exit 255, `Permission denied (publickey)`.
+`access-failures.json` retains both exact errors. No remote command executed;
+no runtime bundle, originals or archive were transferred. No browser, guest,
+input, runtime port or profile was created. Existing browser geometry, native-input,
+static-server and HTTP/module guard harnesses were read, but never run on the
+host. No coordinator browser/heavy game test was run.
+
+The local 15 originals and 14-companion manifest were checked against the
+recovery pins before and after closeout. Local source/support and compiler/tool
+manifests were also hashed before and after: 529 source/support and 867
+compiler/tool paths from the preceding Crimsonland manifest scope, all
+unchanged. Existing local Wasm was
+2,023,821 bytes, SHA256
+`ed3f924ab4c2d8805d862ccb4ca0747f37632bfa1bf2bc4b21bececa820ec622`.
+This assignment performed **no engine edit or build**. That local artifact's
+identity does not prove it was built from current source. Served module,
+served source/compiler and browser-loaded module identities are all **null**:
+there was no runtime HTTP server or browser. There are no fresh screenshots, New Game,
+Easy, W-held/released or changed-view observations.
+
+All available access logs and the pre-stop runtime receipt were saved locally
+before the explicitly delegated shutdown. Nothing existed remotely to retrieve.
+Stop `stop_650bee9b3a37a520` completed without force; the box stopped at
+**2026-10-31T22:45:19.061Z**, verified by `boat --json info bx_knya4u7y`.
+The verified state is **`stopped`**, with no SSH endpoint or URL. Its original
+expiry was `2026-10-31T23:13:53.166Z`; `archiveAfter` is null after stopping.
+Shutdown preceded the 23:03 guest cutoff, 23:06 handback and 23:08 shutdown
+deadline. No successor, resume, public hosting or deployment was attempted.
+
+**Next prerequisite:** restore authorized SSH access for a separately assigned
+browser host before another bounded ordinary New Game → Easy → native W
+attempt. The recovered media remain ready; historical screenshots and already
+integrated loader fixes are not prerequisites. This assignment ends at the
+concrete access failure and returns the stopped box to the coordinator.
+
+Cheap copied HTTP-guard checks passed all 14 cases and five ephemeral local
+server cases, without a browser or guest. Doc diff checking and before/after
+identity checks passed; free local disk remained above 2 GiB. The global run
+evidence checker returned 1 for historical entries, with no mention of this
+run. Alice has no candidate-manifest entry, so this evidence stays in these
+notes rather than attaching a `result.json` to an unrelated candidate.
+
+## Original media recovered; browser task ready (2026-10-31)
+
+Media/preflight only, starting from main
+`2a64e65cc17c137d2d816d33dd0a132d6d9ff2fa`; registry inspection also covers its
+descendant `c24d17db6629c06d36dd1fd6dfbc6b92c869e6dd`. No browser, game,
+build, remote box, installer execution, guest patch or configuration write was
+performed. The loader/serialization/lifetime fixes are already integrated:
+the [October 18 reconciliation](alice-return-fire-reconciliation-20261018.md)
+supersedes the old implementation-status statements below.
+
+Initial local `/home/user` filename inventory found no Alice package or
+extracted media. The old preflight/candidate paths were absent. Before recovery,
+the local registry had 46 `DESKTOP_APPS` and the actual public
+[`lib/apps.js`](https://wine-assembly.berrry.app/lib/apps.js) response had 44;
+neither `DESKTOP_APPS` nor `APPS` contained Alice/McGee. The public response,
+headers and both inventories are retained in
+`scratch/runs/20261031T2239Z-alice-original-recovery/`. No registration or
+public deployment was added.
+
+Recovered the direct Windows demo package from
+[Internet Archive's Alice demo item](https://archive.org/details/AmericanMcgeesAliceDemo),
+using its [direct storage URL](https://ia800804.us.archive.org/32/items/AmericanMcgeesAliceDemo/alice_demo.exe).
+The ordinary `/download/` route returned HTTP 500; the direct storage request
+returned HTTP 200 and all 82,499,584 bytes. The package exactly matches the
+historical SHA256
+`ce873bf2525041a624c1a5a27b513f135b51ffdbeae9f68a6ede3edd8c7078e6`.
+
+**Actual file hashes define this target build.** Independently retrieved
+[upstream item metadata](https://archive.org/metadata/AmericanMcgeesAliceDemo)
+lists that filename/size, MD5 `29a995e2b543972a571e93eb88827e5b` and SHA1
+`45c6e346a86f468db9f67d36aaa29e96e4b0d074`; both digests were independently
+recomputed and match. This establishes the archived upstream object's identity,
+not a publisher signature or an inferred executable version. Its original
+readme identifies the November 27, 2000 demo. PE header metadata is retained
+separately in the payload inventory; no version was invented from a timestamp.
+
+All **15 original files, 85,622,092 bytes**, are now extracted unchanged under
+`test/binaries/candidates/alice-demo/`. All outer ZIP CRCs pass, and every
+extracted file equals its archived member byte for byte. Key target identities:
+
+| Original file | Bytes | SHA256 |
+|---|---:|---|
+| `alice.exe` | 1,454,142 | `61857b521eb7260c28b3ae6960fa8ee18d4d3679b6190f5221131e382e0f3a72` |
+| `demo/cgamex86.dll` | 409,665 | `2fc6c957d8f554ff296271c9c50ec6aa3b5f72531061bf8a23af8d219e6d8c24` |
+| `demo/fgamex86.dll` | 1,970,241 | `42838c2a96520c4b8b42e710d7d5bcf3a7a7f2a71b141a9f75bff01ee28f3d4c` |
+| `demo/pak0.pk3` | 80,849,066 | `14ce74568458078f51f5b4f42a65c5a5888c01c487bbf8c064f541039a306556` |
+
+The complete 15-file size/SHA256/CRC32 inventory is the run's
+`payload-manifest.json`, SHA256
+`68668d496dbabdb3b3803b8de12dda356796ba0ce26051ffb0a03df3a2022509`.
+The PK3's 2,459 files also pass every CRC, including six original BSP maps
+(`d_intro`, `d_gvillage`, `d_garden`, `d_chess`, `d_fortress1`, `d_fortress2`).
+Its original embedded configs remain inside the unmodified PK3; none was
+fabricated, extracted as an override, or edited.
+
+Host manifest `test/binaries/candidates/alice-demo/.wine-assembly-browser.json`
+maps all **14 companions**, preserving `demo/` and `snddrivers/` under `c:\`.
+It is host metadata, separate from the 15 original payload files. An exact copy
+is the run's `browser-manifest.json`, SHA256
+`f723279905dc6649a17933c7907eacbaf5f33eb3bff7e9f2ac4cb80a07878d0a`.
+`launch-plan.json` supplies `alice.exe`, the manifest path, empty inline files
+and `requiredFiles: true` for the later browser task. Static resolution through
+the current shared manifest helpers passes: all 14 URLs exist with exact sizes,
+all guest paths are unique, and no sizes are unknown. Default file policy yields
+12 eager companions and two streamed data files; this is a static policy check,
+not HTTP delivery or runtime qualification.
+
+Recovery recipe: download the direct package above, verify its exact size and
+SHA256 before extraction, then use Python `zipfile.ZipFile` to test CRCs and
+extract all members into an empty candidate directory. No installer is needed.
+Recreate the host manifest by mapping every original member except `alice.exe`
+to `{url: memberName, vfsPath: 'c:\\' + memberName.replace('/', '\\'), size: bytes}`
+under `{schemaVersion: 1, files: [...]}`. Keep its relative URLs beside the
+extracted tree. The retained run contains the package, upstream metadata,
+original readme, exact manifests, source/probe failures and `RECOVERY.txt`.
+Run from the checkout root:
+
+```sh
+python3 scratch/runs/20261031T2239Z-alice-original-recovery/verify-media.py
+```
+
+This checks both upstream digests, historical SHA256, complete original closure,
+byte equality, manifest mappings, every PK3 CRC and free disk above 2 GiB.
+No known original media path is missing. Generated Wasm, host font/system
+support and actual HTTP/module identities must be pinned by the fresh runtime
+task; this preflight does not claim to qualify those dependencies.
+
+**Next:** use this exact media in a fresh ordinary current-main browser task,
+prepare its local app entry from `launch-plan.json`, select New Game → Easy,
+hold and release W, and inspect the resulting movement captures. The readme
+documents those menu choices and W as Move Forward. No saved config, console
+command, synthetic guest file, memory patch or licence workaround is required
+by this media preparation. Record actual served module/source/input identities
+when that task runs.
+
+Historical `20261009T2151Z-alice-lifetime-gameplay/{finding.json,candidate.patch,
+step-6.png,step-8.png}` remain unavailable in the bounded local inventory;
+old boat paths are unverified recovery leads. The native movement reported
+below belongs to `a2dae641…` on `23614c85e` plus its candidate patch, not later
+held builds or current main. Those capture gaps remain explicit and are **not
+a prerequisite for collecting fresh browser evidence**. Browser gameplay,
+audio, FPS and sustained play remain unverified. Boat ID/state/expiry: N/A;
+no runtime was allocated or box lifecycle changed.
+
 ## Original-media preflight (2026-10-09)
 
 Original: `test/binaries/win98-games-a-d/american McGees-alice_demo-OpenGL.exe`,

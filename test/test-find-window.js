@@ -45,7 +45,9 @@ const extraWat = String.raw`
 `;
 
 (async () => {
-  const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const { exports: e, hostCtx } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  // Keep the renderer attached: native/dialog children also exist only in
+  // WAT tables. The source-slice lifecycle suite separately covers no renderer.
 
   const strA = value => {
     const bytes = Buffer.from(value + '\0', 'latin1');

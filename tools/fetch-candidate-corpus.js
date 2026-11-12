@@ -208,16 +208,17 @@ function extractArchive(archive, destination, options = {}) {
   throw new Error(`archive extraction failed (${primary}; ${secondary})${detail ? `:\n${detail}` : ''}${hint}`);
 }
 
-function extractRawMode1Cd(image, destination) {
+function extractRawCd(image, destination, mode = 1) {
+  if (mode !== 1 && mode !== 2) throw new Error('Unsupported raw CD sector mode');
   const RAW_SECTOR_SIZE = 2352;
   const ISO_SECTOR_SIZE = 2048;
-  const USER_DATA_OFFSET = 16;
+  const USER_DATA_OFFSET = mode === 2 ? 24 : 16;
   const sectorsPerChunk = 128;
   const size = fs.statSync(image).size;
   if (!size || size % RAW_SECTOR_SIZE !== 0) {
-    throw new Error(`${image} is not a whole-sector MODE1/2352 image`);
+    throw new Error(`${image} is not a whole-sector MODE${mode}/2352 image`);
   }
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-mode1-cd-'));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-raw-cd-'));
   const iso = path.join(temporary, 'disc.iso');
   try {
     const input = fs.openSync(image, 'r');
@@ -229,13 +230,18 @@ function extractRawMode1Cd(image, destination) {
       while (position < size) {
         const bytes = fs.readSync(input, raw, 0, Math.min(raw.length, size - position), position);
         if (!bytes || bytes % RAW_SECTOR_SIZE !== 0) {
-          throw new Error(`${image} has a truncated MODE1/2352 sector`);
+          throw new Error(`${image} has a truncated MODE${mode}/2352 sector`);
         }
         const sectors = bytes / RAW_SECTOR_SIZE;
         for (let sector = 0; sector < sectors; sector++) {
           const rawOffset = sector * RAW_SECTOR_SIZE;
-          if (raw[rawOffset] !== 0 || raw[rawOffset + 11] !== 0 || raw[rawOffset + 15] !== 1) {
-            throw new Error(`${image} contains a non-MODE1 sector at ${position / RAW_SECTOR_SIZE + sector}`);
+          if (raw[rawOffset] !== 0 || raw[rawOffset + 11] !== 0 || raw[rawOffset + 15] !== mode) {
+            throw new Error(`${image} contains a non-MODE${mode} sector at ${position / RAW_SECTOR_SIZE + sector}`);
+          }
+          if (mode === 2 && (raw.subarray(rawOffset + 1, rawOffset + 11).some(b => b !== 255) ||
+              !raw.subarray(rawOffset + 16, rawOffset + 20).equals(raw.subarray(rawOffset + 20, rawOffset + 24)) ||
+              (raw[rawOffset + 18] & 0x20))) {
+            throw new Error(`${image} requires MODE2 Form1 sectors with matching XA subheaders at ${position / RAW_SECTOR_SIZE + sector}`);
           }
           raw.copy(cooked, sector * ISO_SECTOR_SIZE,
             rawOffset + USER_DATA_OFFSET, rawOffset + USER_DATA_OFFSET + ISO_SECTOR_SIZE);
@@ -374,10 +380,10 @@ function runPostExtract(candidate, destination) {
       const into = path.join(destination, step.into);
       fs.mkdirSync(path.dirname(into), { recursive: true });
       fs.copyFileSync(from, into);
-    } else if (step.type === 'extractRawMode1Cd') {
+    } else if (step.type === 'extractRawMode1Cd' || step.type === 'extractRawMode2Cd') {
       assertSafeRelative(step.image, `${candidate.id}.postExtract[${index}].image`);
       assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
-      extractRawMode1Cd(path.join(destination, step.image), path.join(destination, step.into));
+      extractRawCd(path.join(destination, step.image), path.join(destination, step.into), step.type === 'extractRawMode2Cd' ? 2 : 1);
     } else if (step.type === 'expandSzdd') {
       assertSafeRelative(step.from, `${candidate.id}.postExtract[${index}].from`);
       assertSafeRelative(step.into, `${candidate.id}.postExtract[${index}].into`);
@@ -484,6 +490,40 @@ function runPostExtract(candidate, destination) {
       if (result.status !== 0) {
         throw new Error(`Warcraft III demo MPQ install failed with exit ${result.status}`);
       }
+    } else if (step.type === 'installBaldursGate2Demo') {
+      assertSafeRelative(step.source, `${candidate.id}.postExtract[${index}].source`);
+      if (prepare) {
+        // Preparing an installed fixture must not rerun its one-shot extraction.
+        // Verify required original bytes; preserve additional saves and metadata.
+        const checked = spawnSync(process.execPath, [
+          path.join(ROOT, 'tools', 'bg2-source-recovery.js'), 'verify-installed', destination,
+          path.join(ROOT, 'test', 'candidate-corpus', 'baldurs-gate2-demo-files.json'),
+        ], { cwd: ROOT, stdio: 'inherit', timeout: 300000 });
+        if (checked.error) throw checked.error;
+        if (checked.status !== 0) throw new Error('BG2 installed-file verification failed; fixture unchanged');
+        continue;
+      }
+      // Preserve original split media and detailed recovery receipts outside the
+      // final browser fixture, including when --force removes its staging dir.
+      const source = path.join(destination, step.source);
+      if (!fs.statSync(source).isDirectory()) throw new Error('BG2 source directory missing');
+      const recovery = fs.mkdtempSync(path.join(ASSET_ROOT, '.bg2-recovery-'));
+      const retainedSource = path.join(recovery, 'source');
+      fs.renameSync(source, retainedSource);
+      console.log(`BG2 original sources and recovery receipts: ${recovery}`);
+      if (fs.readdirSync(destination).length) {
+        throw new Error(`BG2 fresh fixture must be empty; original sources retained at ${recovery}`);
+      }
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'bg2-source-recovery.js'), 'recover', retainedSource,
+      ], { cwd: ROOT, stdio: 'inherit', timeout: 1500000, killSignal: 'SIGKILL' });
+      if (result.error) throw result.error;
+      if (result.status !== 0) throw new Error(`BG2 original recovery failed; evidence retained at ${recovery}`);
+      const receipt = JSON.parse(fs.readFileSync(path.join(retainedSource, 'assembly.json'), 'utf8'));
+      if (!receipt.complete || !receipt.comparison.ok || receipt.comparison.actual !== 645 || receipt.comparison.expected !== 645)
+        throw new Error('BG2 requires all645 original-file comparisons before publication');
+      const installed = path.join(retainedSource, 'installed');
+      for (const name of fs.readdirSync(installed)) fs.renameSync(path.join(installed, name), path.join(destination, name));
     } else if (step.type === 'installUnrealDemo') {
       for (const field of ['id', 'source', 'into']) {
         assertSafeRelative(step[field], `${candidate.id}.postExtract[${index}].${field}`);
@@ -642,7 +682,15 @@ function writeBrowserManifest(candidate, destination) {
   const metadataPath = path.join(destination, '.wine-assembly-file-metadata.json');
   const fileMetadata = fs.existsSync(metadataPath)
     ? JSON.parse(fs.readFileSync(metadataPath, 'utf8')) : {};
-  const files = walkBrowserFiles(fileRoot).sort((a, b) => a.localeCompare(b))
+  // These exact fixture-root sidecars belong to the host, not the guest.
+  // Exclude by full path so nested game files and other dotfiles survive.
+  const hostSidecars = new Set([
+    '.candidate-source.json', '.wine-assembly-browser.json',
+    '.wine-assembly-file-metadata.json',
+  ].map(name => path.join(destination, name)));
+  const files = walkBrowserFiles(fileRoot)
+    .filter(relative => !hostSidecars.has(path.join(fileRoot, relative)))
+    .sort((a, b) => a.localeCompare(b))
     .map(relative => {
       const fixtureRelative = path.join(browser.fileRoot, relative);
       const url = fixtureRelative.split(path.sep).join('/');
@@ -687,14 +735,142 @@ function writeBrowserManifest(candidate, destination) {
       ...(browser.cue ? { trackSizes } : {}) }, null, 2)}\n`);
 }
 
+// Publication is a same-filesystem, single-writer transaction. The journal is
+// durable before either rename; restart reconciliation runs before KEEP/PREP.
+// An unjournalled/foreign stage is evidence, never a source of trusted assets.
+function publicationStat(filename) {
+  return fs.lstatSync(filename, { throwIfNoEntry: false });
+}
+
+function publicationIdentity(filename) {
+  const stat = publicationStat(filename);
+  if (!stat) return null;
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`unsafe publication directory: ${filename}`);
+  return `${stat.dev}:${stat.ino}`;
+}
+
+function publicationSync(filename) {
+  const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
+
+function publicationTree(directory, durable = false) {
+  const hash = crypto.createHash('sha256');
+  const buffer = Buffer.alloc(64 * 1024);
+  function walk(at, relative) {
+    publicationIdentity(at);
+    hash.update(JSON.stringify(['directory', relative]));
+    for (const name of fs.readdirSync(at).sort()) {
+      const filename = path.join(at, name);
+      const child = `${relative}/${name}`;
+      const stat = publicationStat(filename);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) walk(filename, child);
+      else if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1) {
+        hash.update(JSON.stringify(['file', child, stat.size]));
+        const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+          let count;
+          while ((count = fs.readSync(fd, buffer, 0, buffer.length, null))) hash.update(buffer.subarray(0, count));
+          if (durable) fs.fsyncSync(fd);
+        } finally { fs.closeSync(fd); }
+      } else throw new Error(`unsafe publication entry: ${filename}`);
+    }
+    if (durable) publicationSync(at);
+  }
+  walk(directory, '');
+  return hash.digest('hex');
+}
+
+function publicationKey(candidate, finalDestination) {
+  return crypto.createHash('sha256').update(JSON.stringify({ candidate, finalDestination })).digest('hex');
+}
+
+function publicationParent(finalDestination) {
+  const parent = path.dirname(finalDestination);
+  const relative = path.relative(ASSET_ROOT, finalDestination);
+  if (relative.startsWith('..') || path.isAbsolute(relative) || !relative) throw new Error('unsafe publication destination');
+  let at = ASSET_ROOT;
+  publicationIdentity(at);
+  for (const part of path.relative(at, parent).split(path.sep).filter(Boolean)) {
+    at = path.join(at, part);
+    publicationIdentity(at);
+  }
+  return parent;
+}
+
+function reconcilePublication(candidate, finalDestination) {
+  const parent = publicationParent(finalDestination);
+  if (!publicationStat(parent)) return;
+  const prefix = path.basename(finalDestination) + '.replacement-';
+  const stages = fs.readdirSync(parent).filter(name => name.startsWith(prefix));
+  if (!stages.length) return;
+  if (stages.length !== 1) throw new Error(`ambiguous publication stages for ${finalDestination}; retained`);
+  const staging = path.join(parent, stages[0]);
+  const stageIdentity = publicationIdentity(staging);
+  const journal = path.join(staging, 'publication.json');
+  const stat = publicationStat(journal);
+  if (!stat || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536) {
+    throw new Error(`unsafe or incomplete publication journal: ${journal}; retained`);
+  }
+  const record = JSON.parse(fs.readFileSync(journal, 'utf8'));
+  if (record.schema !== 1 || record.key !== publicationKey(candidate, finalDestination) ||
+      record.stage !== stageIdentity || !/^[a-f0-9]{64}$/.test(record.nextHash) ||
+      !(record.old === null || (typeof record.old === 'string' && /^[a-f0-9]{64}$/.test(record.oldHash)))) {
+    throw new Error(`foreign or stale publication journal: ${journal}; retained`);
+  }
+  const entries = fs.readdirSync(staging);
+  if (entries.some(name => !['publication.json', 'fixture', 'previous'].includes(name))) throw new Error('foreign publication entries; retained');
+  const fixture = path.join(staging, 'fixture');
+  const previous = path.join(staging, 'previous');
+  const next = publicationIdentity(fixture);
+  const old = publicationIdentity(previous);
+  const final = publicationIdentity(finalDestination);
+  if (next && (next !== record.next || publicationTree(fixture) !== record.nextHash)) throw new Error('unverified publication stage; retained');
+  if (old && old !== record.old) throw new Error('foreign previous fixture; retained');
+  if (old && publicationTree(previous) !== record.oldHash) throw new Error('changed previous fixture; retained');
+  if (!final && old && next) {
+    // Prefer the original (including saves) to completing an interrupted replacement.
+    fs.renameSync(previous, finalDestination);
+    publicationSync(parent);
+    publicationSync(staging);
+  } else if (!final && !old && next && record.old === null) {
+    fs.renameSync(fixture, finalDestination);
+    publicationSync(parent);
+    publicationSync(staging);
+  } else if (final === record.old && next && !old) {
+    if (publicationTree(finalDestination) !== record.oldHash) throw new Error('changed original fixture; retained');
+  } else if (final === record.next && !next) {
+    if (publicationTree(finalDestination) !== record.nextHash) throw new Error('changed published fixture; retained');
+  } else throw new Error(`ambiguous publication state: ${staging}; retained`);
+  fs.rmSync(staging, { recursive: true });
+  publicationSync(parent);
+  console.log(`RECOVER ${candidate.id}: reconciled interrupted publication`);
+}
+
+function journalPublication(candidate, finalDestination, staging, destination) {
+  const parent = publicationParent(finalDestination);
+  const old = publicationIdentity(finalDestination);
+  const record = { schema: 1, key: publicationKey(candidate, finalDestination),
+    stage: publicationIdentity(staging), next: publicationIdentity(destination), old,
+    oldHash: old ? publicationTree(finalDestination, true) : null,
+    nextHash: publicationTree(destination, true) };
+  const fd = fs.openSync(path.join(staging, 'publication.json'), 'wx', 0o600);
+  try { fs.writeFileSync(fd, JSON.stringify(record) + '\n'); fs.fsyncSync(fd); }
+  finally { fs.closeSync(fd); }
+  publicationSync(staging);
+  publicationSync(parent);
+}
+
 async function fetchCandidate(candidate) {
   const fixture = fixtureId(candidate);
   assertSafeRelative(fixture, `${candidate.id}.fixture`);
-  const destination = path.join(ASSET_ROOT, fixture);
+  const finalDestination = path.join(ASSET_ROOT, fixture);
+  let destination = finalDestination;
   if (candidate.fixture && candidate.fixture !== candidate.id) {
     console.log(`SHARED ${candidate.id}: uses fixture ${candidate.fixture}`);
     return { shared: 1 };
   }
+  reconcilePublication(candidate, finalDestination);
   const provenanceFile = path.join(destination, '.candidate-source.json');
   if (prepare) {
     if (!fs.existsSync(destination)) {
@@ -714,11 +890,20 @@ async function fetchCandidate(candidate) {
     console.log(`KEEP   ${candidate.id}: ${path.relative(ROOT, destination)}`);
     return { kept: 1 };
   }
-  if (force && fs.existsSync(destination)) fs.rmSync(destination, { recursive: true, force: true });
-  fs.mkdirSync(destination, { recursive: true });
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), `wa-candidate-${candidate.id}-`));
+  let staging;
+  let backup;
+  let journalled = false;
+  let complete = false;
   const provenance = [];
   try {
+    if (force) {
+      // Keep the replacement on the destination filesystem for rename publication.
+      fs.mkdirSync(path.dirname(finalDestination), { recursive: true });
+      staging = fs.mkdtempSync(`${finalDestination}.replacement-`);
+      destination = path.join(staging, 'fixture');
+    }
+    fs.mkdirSync(destination, { recursive: true });
     for (let index = 0; index < candidate.packages.length; index++) {
       const pkg = candidate.packages[index];
       if (!pkg.url || !/^[0-9a-f]{40}$/.test(pkg.sha1 || '')) {
@@ -747,7 +932,7 @@ async function fetchCandidate(candidate) {
     }
     runPostExtract(candidate, destination);
     writeBrowserManifest(candidate, destination);
-    fs.writeFileSync(provenanceFile, `${JSON.stringify({
+    fs.writeFileSync(path.join(destination, '.candidate-source.json'), `${JSON.stringify({
       id: candidate.id,
       name: candidate.name,
       version: candidate.version,
@@ -755,13 +940,53 @@ async function fetchCandidate(candidate) {
       packages: provenance,
       postExtract: candidate.postExtract || [],
     }, null, 2)}\n`);
-    console.log(`READY  ${candidate.id}: ${path.relative(ROOT, destination)}`);
+    if (force) {
+      journalPublication(candidate, finalDestination, staging, destination);
+      journalled = true;
+      if (fs.lstatSync(finalDestination, { throwIfNoEntry: false })) {
+        const previous = path.join(staging, 'previous');
+        fs.renameSync(finalDestination, previous);
+        backup = previous;
+        publicationSync(staging);
+        publicationSync(path.dirname(finalDestination));
+      }
+      try {
+        fs.renameSync(destination, finalDestination);
+      } catch (error) {
+        if (backup) {
+          try {
+            fs.renameSync(backup, finalDestination);
+            backup = null;
+            publicationSync(staging);
+            publicationSync(path.dirname(finalDestination));
+            journalled = false;
+          } catch (rollbackError) {
+            throw new Error(`${error.message}; rollback failed: ${rollbackError.message}; previous fixture retained at ${backup}`);
+          }
+        }
+        throw error;
+      }
+      // A sync failure after rename must retain the journal and both trees.
+      // Rolling back here could overwrite an already published destination.
+      publicationSync(staging);
+      publicationSync(path.dirname(finalDestination));
+      // Publication succeeded; only now may cleanup remove the previous tree.
+      backup = null;
+    }
+    complete = true;
+    console.log(`READY  ${candidate.id}: ${path.relative(ROOT, finalDestination)}`);
     return { fetched: 1 };
   } catch (error) {
     console.error(`ERROR  ${candidate.id}: ${error.message}`);
     return { failed: 1 };
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
+    // Preserve every journalled failure for restart reconciliation, including
+    // fsync errors and successful rollback followed by a sync error.
+    if (staging && !backup && (!journalled || complete)) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      publicationSync(path.dirname(finalDestination));
+    }
   }
 }
 

@@ -52,3 +52,53 @@ Digital Anvil / Microsoft, 2000. Direct3D 7 space combat, trial version.
 
 The menu loop is heavy at this budget (~21k API calls a batch, ~3 batches/s).
 Evidence: `scratch/runs/20261011T0630Z-starlancer-demo-d10ba697`.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## 2026-10-11: released route review, not a launch-time INI diagnosis
+
+Codex recovered the released `~/slout2/r2.log`, `b0920.png` and `b1120.png`
+from boat bx_c585hr7p into
+`scratch/runs/20261011T1241Z-starlancer-handoff-review/`.
+Both reviewed frames show the **Options menu** (Save/Load, Audio, Control
+Devices, Video, Back/Main Menu/Quit), not Ships and Loadout or mission flight.
+The route's Esc inputs at batches 640/660 and its later supposed launch-arrow
+click therefore need visual revalidation; the evidence does not show which
+earlier input first diverged. The run completed 1125 batches without a trap.
+
+The traced profile-string calls name `C:\\starlancer.ini`; there is no
+`default.txt` match in this log. Integer-profile calls retain pointer arguments,
+so absence of a decoded path is not proof that every integer-profile call
+avoided it. The released INI parking patch may address a generic lazy-file
+consumer gap, but this run does not demonstrate that it fixes mission launch.
+Do not adopt its comment asserting GetPrivateProfileString reads default.txt
+as an established game diagnosis.
+
+Next runtime: visually confirm each transition through briefing and loadout,
+then capture the actual failing file consumer with bounded filesystem/host
+tracing. Preserve licence/approval boundaries; the historical script's clicks
+are evidence of what it did, not authority to replay an acceptance prompt.
+No new launch, gameplay, FPS or audio qualification accompanies this review.
+
+### Recovered earlier loadout route
+
+The retained `20261011T0630Z-starlancer-demo-d10ba697` evidence includes a
+different route: `sl-run17.sh` does **not** press Esc during briefing.
+Its reviewed `07-loadout.png` and `08-loadout-after-launch-attempts.png`
+both show the actual Ships and Loadout hangar with the Predator selected.
+The ship model changes orientation between the frames; flight is still absent.
+This separates a confirmed earlier loadout screen from the later r2 Options
+menu divergence. Prefer visual checkpoints on the earlier no-Esc route when
+resuming; do not assume an arrow click was consumed merely from its coordinates.
+Historical licence clicks remain evidence only, not authority for new acceptance.
+
+The installed fixture remains at
+`/home/user/wine-assembly-web/test/binaries/candidates/starlancer-demo/installed`
+after the old boat expires. `DEFAULT.TXT` is an INI-style `[KeyConfig]` file,
+including arrows for steering, `]` for full throttle, Space for lasers and
+Enter for missiles. Inventory hashes are in
+`scratch/runs/20261011T1400Z-starlancer-fixture-audit/inventory.json`.
+Packed `lancer.exe` has no plain-text default.txt/profile-API match in this
+static scan; the actual runtime reader remains unproven.

@@ -10,16 +10,16 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
-  (func (export "test_dx_surface_new") (param $w i32) (param $h i32) (result i32)
+  (func (export "test_dx_surface_new") (param $w i32) (param $h i32) (param $pitch i32) (result i32)
     (local $surface i32) (local $entry i32)
     (local.set $surface (call $dx_create_com_obj (i32.const 2) (i32.const 0x52000000)))
     (local.set $entry (call $dx_from_this (local.get $surface)))
     (i32.store16 offset=12 (local.get $entry) (local.get $w))
     (i32.store16 offset=14 (local.get $entry) (local.get $h))
     (i32.store16 offset=16 (local.get $entry) (i32.const 8))
-    (i32.store16 offset=18 (local.get $entry) (local.get $w))
+    (i32.store16 offset=18 (local.get $entry) (local.get $pitch))
     (i32.store offset=20 (local.get $entry)
-      (call $g2w (call $dib_alloc (i32.mul (local.get $w) (local.get $h)))))
+      (call $g2w (call $dib_alloc (i32.mul (local.get $pitch) (local.get $h)))))
     (i32.store offset=28 (local.get $entry) (i32.const 4))
     (local.get $surface))
 
@@ -48,6 +48,16 @@ const extraWat = String.raw`
       (local.get $dst) (local.get $dst_rect) (local.get $src) (local.get $src_rect)
       (i32.const 0x01000000) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
+
+  (func (export "test_dx_surface_bltfast")
+    (param $surface i32) (param $x i32) (param $y i32) (param $rect i32)
+    (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
+    (call $gs32 (i32.const 0x30018) (i32.const 0x10))
+    (call $handle_IDirectDrawSurface_BltFast
+      (local.get $surface) (local.get $x) (local.get $y)
+      (local.get $surface) (local.get $rect) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 function writeRect(wat, address, left, top, right, bottom) {
@@ -59,8 +69,8 @@ function writeRect(wat, address, left, top, right, bottom) {
 
 (async () => {
   const { exports: wat } = await bootRenderHarness({ extraWat, fonts: 'none' });
-  const dst = wat.test_dx_surface_new(4, 4) >>> 0;
-  const src = wat.test_dx_surface_new(6, 4) >>> 0;
+  const dst = wat.test_dx_surface_new(4, 4, 4) >>> 0;
+  const src = wat.test_dx_surface_new(6, 4, 6) >>> 0;
   const dstRect = 0x410000;
   const srcRect = 0x410020;
   assert(dst && src, 'surface fixtures should allocate');
@@ -90,6 +100,33 @@ function writeRect(wat, address, left, top, right, bottom) {
   assert.strictEqual(wat.test_dx_surface_get(dst, 3, 0), 6);
 
   console.log('PASS  DirectDraw Blt clips equal-size source and destination rectangles');
+
+  // Complement the pure-JS source-body suite with actual handler dispatch,
+  // metadata/pitch reads and HRESULT once full VM validation is admitted.
+  const self = wat.test_dx_surface_new(7, 6, 12) >>> 0;
+  assert(self, 'padded same-surface fixture allocates');
+  for (const [name, x, y, rect] of [
+    ['up-left', 0, 0, [2,1,7,6]],
+    ['up-right', 1, 0, [0,2,6,6]],
+    ['right', 1, 0, [0,0,6,6]],
+    ['down', 0, 1, [0,0,7,5]],
+    ['down-right', 1, 1, [0,0,6,5]],
+  ]) {
+    const before = Array.from({ length: 6 }, (_, row) =>
+      Array.from({ length: 12 }, (_, col) => col < 7 ? 1 + row * 16 + col : 0xee));
+    const expected = before.map(row => row.slice());
+    for (let row = 0; row < 6; row++) for (let col = 0; col < 12; col++)
+      wat.test_dx_surface_set(self, col, row, before[row][col]);
+    for (let row = 0; row < rect[3] - rect[1]; row++)
+      for (let col = 0; col < rect[2] - rect[0]; col++)
+        expected[y + row][x + col] = before[rect[1] + row][rect[0] + col];
+    writeRect(wat, srcRect, ...rect);
+    assert.equal(wat.test_dx_surface_bltfast(self, x, y, srcRect) >>> 0, 0, name);
+    for (let row = 0; row < 6; row++) for (let col = 0; col < 12; col++)
+      assert.equal(wat.test_dx_surface_get(self, col, row), expected[row][col],
+        `${name} at ${col},${row}, including pitch padding`);
+  }
+  console.log('PASS  DirectDraw BltFast same-surface overlap and padded pitch');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

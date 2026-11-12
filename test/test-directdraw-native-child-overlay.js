@@ -188,3 +188,89 @@ assert.deepStrictEqual(composedPixel(5, 7), [255, 0, 0, 255],
   'the popup must not stretch into the rest of the display');
 
 console.log('PASS  native child GDI pixels overlay exclusive DirectDraw by child rect');
+
+// Native WAT controls need not have a JS window mirror. Half-Life's Software
+// pause menu has only its animated banner in renderer.windows; its buttons
+// and labels live solely in the canonical tree.
+{
+  const r = new Win98Renderer(createCanvas(8, 8));
+  const nodes = [
+    { h: 2, parent: 1, x: 2, y: 3, w: 3, height: 2, visible: true },
+    { h: 3, parent: 1, x: 5, y: 0, w: 2, height: 2, visible: false },
+    { h: 4, parent: 3, x: 5, y: 0, w: 2, height: 2, visible: true },
+  ];
+  const node = h => nodes.find(n => n.h === h);
+  const exports = {
+    get_dx_exclusive_hwnd: () => 1,
+    wnd_next_child_slot: (p, start) => nodes.findIndex((n, i) => i >= start && n.parent === p),
+    wnd_slot_hwnd: s => nodes[s].h,
+    wnd_get_style_export: h => node(h)?.visible ? 0x50000000 : 0x40000000,
+    wnd_window_screen_x: h => node(h)?.x || 0,
+    wnd_window_screen_y: h => node(h)?.y || 0,
+    wnd_screen_w: h => node(h)?.w || 8,
+    wnd_screen_h: h => node(h)?.height || 8,
+  };
+  const w = r.windows[1] = { hwnd: 1, x: 0, y: 0, w: 8, h: 8,
+    visible: true, isChild: false, wasm: { exports } };
+  r.attachWindowSurface(1, dx, true);
+  r.attachWindowSurface(1, gdi, false);
+  gdi._waCanonicalPresentation = { writeSeq: 5,
+    writeRegions: [{ x: 0, y: 0, w: 8, h: 8, writeSeq: 5 }] };
+  w._dxFrameLayer = { canvas: dx, writeSeq: 4 };
+  const read = (canvas, x, y) => Array.from(canvas.getContext('2d').getImageData(x, y, 1, 1).data);
+  for (const stack of [[w], null]) {
+    const source = r._buildExclusivePresentationSource(w, stack, 4);
+    assert.deepStrictEqual(read(source, 3, 3), [0, 255, 0, 255], 'WAT-only control must appear');
+    assert.deepStrictEqual(read(source, 0, 0), [255, 0, 0, 255], 'background must not replace primary');
+    assert.deepStrictEqual(read(source, 5, 0), [255, 0, 0, 255], 'hidden ancestry suppresses controls');
+  }
+  r._drawPresentedCanvas(dx, 0, 0, 8, 8);
+  r._compositeExclusiveSharedChildren(w, null, 4);
+  assert.deepStrictEqual(read(r.canvas, 3, 3), [0, 255, 0, 255]);
+  nodes[0].visible = false;
+  r._drawPresentedCanvas(dx, 0, 0, 8, 8);
+  r._compositeExclusiveSharedChildren(w, null, 4);
+  assert.deepStrictEqual(read(r.canvas, 3, 3), [255, 0, 0, 255], 'hidden native control must disappear');
+  nodes[0].visible = true;
+  r._drawPresentedCanvas(dx, 0, 0, 8, 8);
+  r._compositeExclusiveSharedChildren(w, null, 6);
+  assert.deepStrictEqual(read(r.canvas, 3, 3), [255, 0, 0, 255], 'new primary still covers older native pixels');
+  delete gdi._waCanonicalPresentation;
+}
+console.log('PASS  exclusive overlay includes native WAT-only controls');
+
+// A borderless dialog also owns its painted background, not just the native
+// child rectangles. New uploads show; a later primary must cover them again.
+{
+  const r = new Win98Renderer(createCanvas(8, 8));
+  const w = r.windows[1] = {hwnd:1, x:0, y:0, w:8, h:8, visible:true,
+    isChild:false, style:0x90000040, wasm:{exports:{
+      get_dx_exclusive_hwnd:()=>1, dialog_get_proc_export:()=>0x401000,
+    }}};
+  r.attachWindowSurface(1, dx, true);
+  r.attachWindowSurface(1, gdi, false);
+  gdi._waCanonicalPresentation = {writeSeq:10,
+    writeRegions:[{x:0,y:0,w:8,h:8,writeSeq:10}]};
+  w._dxFrameLayer = {canvas:dx, writeSeq:9};
+  const read = source => Array.from(source.getContext('2d').getImageData(0,0,1,1).data);
+  for (const stack of [[w],null]) {
+    assert.deepStrictEqual(read(r._buildExclusivePresentationSource(w,stack,9)),
+      [0,0,255,255], 'newly painted borderless dialog background covers the paused game');
+    w.style=0x90c80000;
+    assert.deepStrictEqual(read(r._buildExclusivePresentationSource(w,stack,9)),
+      [255,0,0,255], 'captioned GDI chrome must not replace exclusive DirectDraw');
+    w.style=0x90000040;
+  }
+  r._drawPresentedCanvas(dx,0,0,8,8);
+  r._compositeExclusiveSharedChildren(w,null,9);
+  assert.deepStrictEqual(read(r.canvas),[0,0,255,255], 'direct compositor retains dialog background too');
+  w._dxFrameLayer={canvas:dx,writeSeq:11};
+  assert.deepStrictEqual(read(r._buildExclusivePresentationSource(w,[w],11)),
+    [255,0,0,255], 'resumed primary covers older dialog background');
+  gdi._waCanonicalPresentation={writeSeq:12,
+    writeRegions:[{x:2,y:3,w:3,h:2,writeSeq:12}]};
+  assert.deepStrictEqual(read(r._buildExclusivePresentationSource(w,[w],11)),
+    [255,0,0,255], 'a newer child-only upload cannot revive an older full background');
+  delete gdi._waCanonicalPresentation;
+}
+console.log('PASS  borderless dialog background preserves primary/upload ordering');

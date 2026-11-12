@@ -165,6 +165,8 @@
   ;; on first request, 0 before then.
   (region.declare $SYSTEM_MENU_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000010)
     (owner "09c5-menu.wat:$system_menu_cell"))
+  (region.declare $MENU_TRACKING (size 0x00000030) (align 0x00000010)
+    (owner "09c5-menu.wat:$menu_open_hwnd_get"))
   (region.declare $MENU_DATA_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000010)
     (owner "09c0-window-table.wat:$menu_data_reset_slot"))
   (region.declare $WND_DLG_RECORDS (stride 0x20 (count $MAX_WINDOWS)) (align 0x00000010)
@@ -257,15 +259,18 @@
     (owner "01-header.wat:$USER_DIALOG_STRINGS"))
   (region.declare $BROWSE_DIALOG_STRINGS (size 0x00000060) (align 0x00000010)
     (owner "01-header.wat:$BROWSE_DIALOG_STRINGS"))
+  ;; Obsolete synthetic DirectX version storage remains reserved so unrelated
+  ;; allocations do not move. The header retains its symbolic base/size globals;
+  ;; file version APIs read actual named-file resources instead of this block.
   (region.declare $DX_VERSION_INFO (size 0x0000005C) (align 0x00000010)
-    (owner "09a1-comctl-handlers.wat:$handle_GetFileVersionInfoA"))
+    (owner "01-header.wat:$DX_VERSION_INFO"))
   ;; Storage for every string the compiler interns from a `"text"` literal.
   ;; Named by `(string.pool $WATX_STRING_POOL)` in 01-header.wat; without that
   ;; declaration the pool is placed above the last data segment, which in this
   ;; map is the middle of $D3DIM_AUX. Nothing hand-places bytes in here and no
   ;; offset into it is ever written down — that is the entire point. Growing it
   ;; is a one-line edit and the compiler says exactly how many bytes short it is.
-  (region.declare $WATX_STRING_POOL (size 0x00002000) (align 0x00000010)
+  (region.declare $WATX_STRING_POOL (size 0x00002200) (align 0x00000010)
     (owner "01-header.wat:$WATX_STRING_POOL"))
   (region.declare $DI_DIK_VK_TABLE (size 0x00000100) (align 0x00000100)
     (owner "09a8-handlers-directx.wat:$DI_DIK_VK_TABLE"))
@@ -285,6 +290,10 @@
   ;; than pinning another raw address.
   (region.declare $LAST_ACTIVE_POPUP_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000100)
     (owner "09a1-comctl-handlers.wat:$wnd_last_active_popup_addr_for_slot"))
+  ;; Append observation storage without relocating any existing region.
+  (region.declare $PENDING_CONTEXT (size 0x00009000) (align 0x00001000)
+    (owner "01-header.wat:$PENDING_CONTEXT"))
+
   ;; WIDENED 0x100000 -> 0x3EE000 (wave 3). The low heap never fitted in 1MB:
   ;; $heap_low_reserve hands out 1MB chunks and stopped only when the next
   ;; chunk would reach $PAGE_INDEX_ARENA, which the hand-placed map happened to
@@ -440,6 +449,49 @@
   ;; ...and a fourth, committed at once: 0x29040 bytes at 0x05000000 (0x450fc0).
   (region.declare-derived $GUEST_FIXED_POOL_D (base (g2w 0x05000000)) (size 0x0002A000) (align 0x00001000)
     (owner "09a0-handlers-base.wat:$guest_fixed_pool_of"))
+  ;; Exclusive upper bound of slots ever allocated as legacy lights. Shared
+  ;; across WASM instances; never shrinks on release or slot recycling.
+  ;; Declared ahead of $PE_STAGING so the regions after $GUEST_FIXED_POOL_C
+  ;; keep page-aligned bases that no JS fallback constant happens to name.
+  (region.declare $DX_LIGHT_LIMIT (size 0x4) (align 0x4)
+    (owner "09a8-handlers-directx.wat:$dx_alloc"))
+  ;; The hot-block histogram: open-addressed 8-byte {key,count} records, so the
+  ;; record count must stay a power of two. Declared ahead of $PE_STAGING so the
+  ;; guest-visible tables after it stay inside the direct window.
+  (region.declare $HOT_BLOCK_HIST (size 0x00040000) (align 0x00001000)
+    (stride 0x8 (count $HOT_BLOCK_HIST_COUNT)) (size-is-power-of-2)
+    (owner "04-cache.wat:$hot_block_hist_record"))
+  ;; Private callback identity allocator and sixteen thread invocation stacks.
+  ;; The allocator/epoch must survive process resets on the same memory.
+  ;; Declared ahead of $PE_STAGING for the same reason as the text scratches
+  ;; below them.
+  (region.declare $CALLBACK_OWNERSHIP (size 0x00002110) (align 0x00000010)
+    (owner "04-cache.wat:$invocation_new_id"))
+  (region.declare $BEEP_CONTEXTS (size 0x00008000) (align 0x00000010)
+    (owner "09a0b-handlers-base-late.wat:$beep_frame_at"))
+  (region.declare $QSORT_CONTEXTS (size 0x00010000) (align 0x00000010)
+    (owner "09a6-handlers-crt.wat:$qsort_frame_at"))
+  (region.declare $BSEARCH_CONTEXTS (size 0x00010000) (align 0x00000010)
+    (owner "09a6-handlers-crt.wat:$bsearch_frame_at"))
+  (region.declare $CRT_CALLBACK_CONTEXTS (size 0x00010000) (align 0x00000010)
+    (owner "09a6-handlers-crt.wat:$crt_callback_frame_at"))
+  ;; GDI funnel decode scratches. Declared ahead of $PE_STAGING so they fill
+  ;; the hole its 8MB leaves below $GUEST_FIXED_POOL_B: at the end of the map
+  ;; they no longer fit once the window tables hold 4096 slots.
+  ;; WCHAR landing zone for the GDI funnels' ANSI decode (DBCS stage 2):
+  ;; 65536 WCHARs, the largest count the text pipeline accepts anywhere,
+  ;; so a decode never truncates a string the pipeline would have taken
+  ;; whole. WAT-private like $TEXT_SCRATCH.
+  (region.declare $TEXT_DECODE_SCRATCH (size 0x00020000) (align 0x00001000)
+    (owner "10f-gdi-dc.wat:$gdi_native_text_out"))
+  ;; Per-character spacing for a decoded ExtTextOutA call: the guest's
+  ;; lpDx is per BYTE, the pipeline's is per character, so the funnel
+  ;; re-expresses it here, summing each DBCS character's bytes. Sized for
+  ;; the pipeline's largest count at 4 bytes per character; ETO_PDY pairs
+  ;; (2 i32 per character) halve that, and the funnel leaves such an
+  ;; oversized call on its historical path instead of overflowing.
+  (region.declare $TEXT_DX_SCRATCH (size 0x00040000) (align 0x00001000)
+    (owner "10f-gdi-dc.wat:$gdi_native_ext_text_out"))
   (region.declare $PE_STAGING (size 0x00800000) (align 0x00001000)
     (owner "08-pe-loader.wat:$load_pe"))
   ;; Published DLL row count. Mapping serialization is required separately.
@@ -460,6 +512,10 @@
   (region.declare $DLL_STATIC_TLS_TABLE (size 0x00000400) (align 0x00000100)
     (stride 0x10 (count $DLL_TABLE_CAPACITY))
     (owner "08b-dll-loader.wat:$release_dll_static_tls"))
+  (region.declare $KERNEL32_MODULE (size 0x00000010) (align 0x00000010)
+    (owner "08-pe-loader.wat:$kernel32_ensure_locked"))
+  (region.declare $STATIC_SYS_DLL_IMAGES (size 0x00000100) (align 0x00000100)
+    (owner "08-pe-loader.wat:$static_sys_dll_ensure_locked"))
   (region.declare $DLL_SYNTHETIC_REFS (size 0x00000100) (align 0x00000100)
     (owner "09a0-handlers-base.wat:$dll_synthetic_reference"))
   (region.declare $DLL_LIFECYCLE_TABLE (size 0x00001000) (align 0x00000100)
@@ -487,6 +543,9 @@
     (owner "09e-win16-api.wat:$WIN16_BUILTIN_NAMES"))
   (region.declare $WND_THREAD_TABLE (stride 0x4 (count $MAX_WINDOWS)) (align 0x00000100)
     (owner "09c0-window-table.wat:$wnd_thread_addr"))
+  (region.declare $CURSOR_THREAD_STATE (size 0x110) (align 0x10)
+    (stride 0x10 (count 17))
+    (owner "09a-handlers1-user.wat:$cursor_thread_addr"))
   (region.declare $THREAD_MSG_INPUT_FLAGS (size 0x00001000) (align 0x00000100)
     (owner "09a-handlers.wat:$thread_msg_input_flags_addr"))
   (region.declare $THREAD_MSG_QUEUES (size 0x00002080) (align 0x00000100)
@@ -497,6 +556,8 @@
   (region.declare $GDI_NEAREST_CACHE (size 0x00008000) (align 0x00001000)
     (stride 0x8 (count $GDI_NEAREST_CACHE_SLOTS)) (size-is-power-of-2)
     (owner "10g-gdi-raster.wat:$GDI_NEAREST_CACHE"))
+  (region.declare $WIN16_PROCESS_ARENA (size 0x000000D0) (align 0x00000004)
+    (owner "08c-ne-loader.wat:$win16_arena_base"))
   (region.declare $WIN16_THUNK_TABLE (size 0x00002000) (align 0x00001000)
     (stride 0x4 (count $WIN16_THUNK_MAX))
     (owner "08c-ne-loader.wat:$win16_thunk_for"))
@@ -505,6 +566,15 @@
   ;; 8 bytes per API (hash, id); 0x8000 filled up at 4096 APIs (2026-10-06).
   (region.declare $API_HASH_TABLE (size 0x00010000) (align 0x00001000)
     (owner "10-helpers.wat:$lookup_api_id"))
+  ;; CP950 (Microsoft Big5) conversion tables from tools/gen_big5_table.js,
+  ;; generated from the pinned bestfit950.txt: decode is 256 single-byte +
+  ;; 19782 pair u16 entries (20038 u16, 0x9C8C bytes), encode is 20193 u32
+  ;; (0x13B84 bytes, best fit included). The table is frozen by Microsoft's
+  ;; data, so the sizes are the next 4 KB multiple, not growth headroom.
+  (region.declare $BIG5_DECODE_TABLE (size 0x0000A000) (align 0x00001000)
+    (owner "10-helpers.wat:$cp_char_decode"))
+  (region.declare $BIG5_ENCODE_TABLE (size 0x00014000) (align 0x00001000)
+    (owner "10-helpers.wat:$ansi_char_encode"))
   (region.declare $TEXT_SCRATCH (size 0x00000400) (align 0x00001000)
     (owner "01-header.wat:$TEXT_SCRATCH"))
   (region.declare $CONSOLE_TEXT (size 0x00003000) (align 0x00001000)
@@ -518,9 +588,9 @@
   (region.declare $PAGE_WATCH_ROOT (size 0x00001000) (align 0x00001000)
     (owner "03a-page-watch.wat:$page_watch_acquire"))
   (region.declare $DIB_PAGE_USED (size 0x00004000) (align 0x00001000)
-    (owner "10-helpers.wat:$dib_alloc"))
+    (owner "10-helpers.wat:$dib_reserve_locked"))
   (region.declare $DIB_PAGE_RUNS (size 0x00008000) (align 0x00001000)
-    (owner "10-helpers.wat:$dib_alloc"))
+    (owner "10-helpers.wat:$dib_reserve_locked"))
   (region.declare $GDI_REGION_BANDS (size 0x000D0000) (align 0x00001000)
     (owner "10d-gdi-region-path.wat:$gdi_rgn_bands"))
   (region.declare $GDI_REGION_WORK (size 0x00003400) (align 0x00001000)
@@ -640,13 +710,15 @@
     (owner "10b-gdi-font.wat:$GDI_BITMAP_FONT_IO"))
   (region.declare $GDI_BITMAP_FONT_DESC (size 0x00000050) (align 0x00000010)
     (owner "10b-gdi-font.wat:$GDI_BITMAP_FONT_DESC"))
-  (region.declare $GDI_BITMAP_FONT_STATIC (size 0x00000170) (align 0x00000010)
+  (region.declare $GDI_BITMAP_FONT_STATIC (size 0x00000180) (align 0x00000010)
     (owner "10b-gdi-font.wat:$gdi_bitmap_font_face_matches"))
   (region.declare $GDI_BITMAP_FONT_LRU (size 0x000000C0) (align 0x00000100)
     (owner "10b-gdi-font.wat:$GDI_BITMAP_FONT_LRU"))
   (region.declare $GDI_BITMAP_FONT_TABLE (size 0x00000C00) (align 0x00000100)
     (stride $GDI_BITMAP_FONT_STRIDE (count $GDI_BITMAP_FONT_COUNT))
     (owner "10b-gdi-font.wat:$GDI_BITMAP_FONT_TABLE"))
+  (region.declare $TT_RASTER_ERROR (size 0x00000080) (align 0x00000010)
+    (owner "10c-truetype.wat:$TT_RASTER_ERROR"))
   (region.declare $TT_SUBST_TABLE (size 0x00000800) (align 0x00000100)
     (owner "10c-truetype.wat:$TT_SUBST_TABLE"))
   (region.declare $TT_SUBST_ALIAS_TABLE (size 0x00000300) (align 0x00000100)
@@ -664,6 +736,11 @@
   ;; 64-byte line, because every line of LOCK_TABLE is already spoken for.
   (region.declare $DLL_LOAD_LOCK (size 0x00000040) (align 0x00000040)
     (owner "01-header.wat:$DLL_LOAD_LOCK"))
+  (region.declare $GDI_ALLOC_LOCK (size 0x00000040) (align 0x00000040)
+    (owner "01-header.wat:$GDI_ALLOC_LOCK"))
+  ;; Sixteen guest instances plus a distinct host shadow buffer partition.
+  (region.declare $GDI_THREAD_SCRATCH (size 0x00011000) (align 0x00001000)
+    (owner "13-exports.wat:$gdi_thread_scratch_init"))
   (region.declare $CS_TABLE (size 0x00000400) (align 0x00000010)
     (stride 0x4 (count $CS_TABLE_ENTRIES))
     (owner "09a-handlers3-sync.wat:$cs_slot"))
@@ -677,7 +754,7 @@
     (owner "09c2-treeview.wat:$tv_slot_limit"))
   (region.declare $TV_HANDLE_SEQ (size 0x00000004)
     (owner "01-header.wat:$TV_HANDLE_SEQ"))
-  (region.declare $DX_PROCESS_STATE (size 0x00000020) (align 0x00000010)
+  (region.declare $DX_PROCESS_STATE (size 0x00000030) (align 0x00000010)
     (owner "09a8-handlers-directx.wat:$dx_display_w_get"))
   (region.declare $LOOP_PROCESS_STATE (size 0x00000004) (align 0x00000010)
     (owner "07b-loop-match.wat:$LOOP_PROCESS_STATE"))
@@ -820,11 +897,11 @@
   ;; with no glViewport maps through, +0x310 the far-clipped records and at
   ;; +0x400 the lighting normal matrix and per-vertex vectors. 1152 bytes
   ;; used of 2048.
-  (region.declare $GL_SW_SCRATCH (size 0x00000800) (align 0x00001000)
+  (region.declare $GL_SW_SCRATCH (size 0x00001800) (align 0x00001000)
     (owner "09a8g-gl-raster.wat:$gl_sw_scratch"))
   ;; The GL state the software rasterizer decides pixels by: a 64-byte block
   ;; at +0, then sixteen 96-byte glPushAttrib frames at +64 (1600 bytes).
-  (region.declare $GL_SW_STATE (size 0x00000700) (align 0x00000100)
+  (region.declare $GL_SW_STATE (size 0x00001100) (align 0x00000100)
     (owner "09a8g-gl-raster.wat:$gl_sw_st"))
   ;; GL matrix-mirror context records: an atomic claim counter at +0, then from
   ;; +0x40 a 16-byte list node plus the 10832-byte block (09a8f's header),
@@ -850,11 +927,9 @@
     (owner "04-cache.wat:$branch_hist_record_jcc"))
   (region.declare $BRANCH_ALU_M32_RO_JCC_HIST (size 0x00008000) (align 0x00001000)
     (owner "04-cache.wat:$branch_hist_record_jcc"))
-  ;; Both are open-addressed hash tables of 8-byte {key,count} records whose
-  ;; probe masks the slot index, so the record count must stay a power of two.
-  (region.declare $HOT_BLOCK_HIST (size 0x00040000) (align 0x00001000)
-    (stride 0x8 (count $HOT_BLOCK_HIST_COUNT)) (size-is-power-of-2)
-    (owner "04-cache.wat:$hot_block_hist_record"))
+  ;; An open-addressed hash table of 8-byte {key,count} records whose probe
+  ;; masks the slot index, so the record count must stay a power of two
+  ;; ($HOT_BLOCK_HIST, declared ahead of $PE_STAGING, is the other).
   (region.declare $SIB_CONSUMER_HIST (size 0x00010000) (align 0x00001000)
     (stride 0x8 (count $SIB_CONSUMER_HIST_COUNT)) (size-is-power-of-2)
     (owner "04-cache.wat:$sib_consumer_hist_record"))
@@ -886,7 +961,7 @@
   ;; One interface reference count per COM_WRAPPERS_AUX wrapper, by index.
   (region.declare $COM_AUX_REFS (size 0x00010000) (align 0x00001000)
     (owner "09a8-handlers-directx.wat:$dx_aux_ref_add"))
-  (region.declare $DX_VTBL_REGISTRY (size 0x00000138)
+  (region.declare $DX_VTBL_REGISTRY (size 0x0000014c)
     (owner "09a8-handlers-directx.wat:$dx_vtable_registry_reset"))
   (region.declare $VSOCK_TABLE (size 0x00004000) (align 0x00001000)
     (stride $VSOCK_REC_SIZE (count $VSOCK_MAX))
@@ -913,9 +988,14 @@
   (region.declare-fixed $VIRTUAL_BACKING_BASE (base 0x08000000) (size 0x12000000) (align 0x00001000)
     (owner "01-header.wat:$VIRTUAL_BACKING_BASE"))
   (region.declare-fixed $DIB_BACKING_BASE (base 0x1C000000) (size 0x03F00000) (align 0x00001000)
-    (owner "10-helpers.wat:$dib_free_wasm"))
+    (owner "10-helpers.wat:$dib_free_locked"))
   (region.declare-fixed $THREAD_RPC (base 0x1FF00000) (size 0x00100000) (align 0x00001000)
     (owner "13-exports.wat:$run"))
+  ;; JS control-block ABI: 64 i32 words per slot. guest-rpc.js owns words
+  ;; 53..56 (qualified Node wait version, invocation sequence, acknowledgment,
+  ;; reservation sequence) and 28..31/34..37 (SHA-256 metadata agreement).
+  ;; Timestamp/domain travel losslessly in the RPC notification, bound to those
+  ;; words and the slot/handle/timeout. No WAT consumer or region size changes.
   ;; $THREAD_RPC ends at 0x20000000, and the map ends with it. Everything above
   ;; that is the second sparse backing window -- see $virtual_backing_ext_base
   ;; in 10-helpers.wat, which is deliberately NOT a region: a region must fit
@@ -923,6 +1003,7 @@
   ;; that chose to create more than the 8192-page minimum.
 
   ;; ============================================================
+
   ;; SPANS — address-range LIMITS, not storage.
   ;;
   ;; A span names a boundary somebody's arithmetic tests against. It owns no
@@ -1025,7 +1106,7 @@
     (owner "10e-gdi-metafile.wat:$GDI_DISPLAY_STATE"))
 
   ;; Toolhelp heap registry; bucket storage is allocated lazily.
-  (region.declare $TOOLHELP_HEAPS (size 0x00000010) (align 0x00000010)
+  (region.declare $TOOLHELP_HEAPS (size 0x00000020) (align 0x00000010)
     (owner "09a0d-toolhelp.wat:$TOOLHELP_HEAPS"))
 
   ;; Shared immutable descriptors for API entries patched by the guest.
@@ -1042,3 +1123,35 @@
   ;; Immutable launch identity, published before any guest thread starts.
   (region.declare $PROCESS_IMAGE_STATE (size 0x00000090) (align 0x00000010)
     (owner "13-exports.wat:$PROCESS_IMAGE_STATE"))
+
+  ;; FindWindow reconciles unpublished live windows with renderer publication.
+  ;; These bytes belong to shared class/window lifetimes, not JS instances.
+  (region.declare $CLASS_NAME_WIDE (size 64) (align 16)
+    (owner "09c0-window-table.wat:$class_name_is_wide"))
+  (region.declare $WND_LOOKUP_RETIRED (size 256) (align 16)
+    (owner "09c0-window-table.wat:$wnd_lookup_live"))
+  ;; Shared allocation serial followed by one i64 identity per WND slot.
+  ;; Appended so every existing region retains its placement.
+  (region.declare $WND_LOOKUP_GENERATIONS (size 2056) (align 8)
+    (owner "09c0-window-table.wat:$wnd_lookup_generation"))
+
+  ;; Startup show value and one process-wide first-show latch.
+  (region.declare $STARTUP_SHOW_STATE (size 0x00000010) (align 0x00000010)
+    (owner "09a-handlers3-sync.wat:$startup_show_set"))
+
+  ;; Retained CACA000A owners: sixteen thread slots, 64 records of 32 bytes.
+  (region.declare $MM_CALLBACK_CONTEXTS (size 0x00008000) (align 16)
+    (owner "09a-handlers.wat:$MM_CALLBACK_CONTEXTS"))
+
+  ;; Standalone Screen Savers applet strings, appended to preserve allocations.
+  (region.declare $SCRSAVE_TEXT (size 0x00001000) (align 0x00000010)
+    (owner "09ca-screensavers.wat:$SCRSAVE_TEXT"))
+
+
+  ;; Diagnostic main-CPU atomic mirror, one binding per instance lifetime.
+  (region.declare $NATIVE_STORE_SHARED (size 0x00000080) (align 128)
+    (owner "03-registers.wat:$native_store_share"))
+
+  ;; Process writer registry and bounded CPU store records. No object leases.
+  (region.declare $WRITER_SESSION (size 0x00004000) (align 128)
+    (owner "03-registers.wat:$writer_note"))

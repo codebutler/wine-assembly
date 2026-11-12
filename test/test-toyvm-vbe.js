@@ -28,12 +28,184 @@ const os = require('os');
 const path = require('path');
 
 const { runDos } = require('../tools/toyvm/run-dos');
-const { PSP_SEG } = require('../tools/toyvm/dos');
+const { Machine, PSP_SEG, VGA_BASE } = require('../tools/toyvm/dos');
 const fb = require('../tools/toyvm/framebuffer');
 const isa = require('../tools/toyvm/isa');
 
 const fail = [];
 const check = (ok, msg) => { if (!ok) fail.push(msg); console.log(`${ok ? 'PASS' : 'FAIL'}  ${msg}`); };
+
+// UVCONFIG's authentic 2A74:01CE masked test, reconstructed from retained
+// save/clear/read/set/read/restore I/O (run 20261101-constructor-original-startup).
+// Exercise the real Machine port path, including index decoding, rather than
+// assigning the backing register array or inferring a vendor from aliases.
+function graphicsControllerChecks() {
+  const read = (m, index) => { m.portOut(0x3CE, index, 8); return m.portIn(0x3CF, 8); };
+  const write = (m, index, value) => m.portOut(0x3CE, (value << 8) | index, 16);
+  // Authentic UVCONFIG 1B76:01CE save/clear/set/restore test, called with
+  // indexes 31h/32h and mask 3Fh by the tag-24h detector at 07EB:B282.
+  for (const opts of [{}, { svga: 'none' }]) {
+    const label = opts.svga || 'default';
+    const m = new Machine(new Uint8Array(isa.VESA_FB + isa.VESA_FB_SIZE), opts);
+    for (const index of [0x31, 0x32]) {
+      for (const initial of [0, 5, 10, 15]) {
+        write(m, index, initial);
+        const saved = read(m, index);
+        write(m, index, saved & ~0x3F);
+        const clear = read(m, index) & 0x3F;
+        write(m, index, saved | 0x3F);
+        const set = read(m, index) & 0x3F;
+        write(m, index, saved);
+        const restored = read(m, index);
+        console.log(`${label} GC${index.toString(16)}: ${JSON.stringify({ saved, clear, set, restored })}`);
+        check(clear === 0 && set === 15 && restored === initial,
+          `${label}: GC${index.toString(16)} rejects extension mask 3F and restores ${initial}`);
+        check(m.portIn(0x3CE, 8) === (index & 15) && read(m, index & 15) === initial,
+          `${label}: four-bit GC index aliases retain defined low-nibble state`);
+      }
+      write(m, index, 0xFF);
+      check(read(m, index) === 15 && m.vga.gc[index & 15] === 15,
+        `${label}: GC${index.toString(16)} stores only defined bits, reserved read policy zero`);
+      write(m, index, 0);
+      check(read(m, index) === 0, `${label}: defined low-nibble clear test succeeds`);
+      write(m, index, 15);
+      check(read(m, index) === 15, `${label}: defined low-nibble set test succeeds`);
+    }
+    // Scope the policy to GC01/02; leave every other GC register unchanged.
+    for (const index of [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) {
+      write(m, index, 0xA5);
+      check(read(m, index) === 0xA5, `${label}: GC${index.toString(16)} existing data policy preserved`);
+    }
+  }
+  const t = new Machine(new Uint8Array(isa.VESA_FB + isa.VESA_FB_SIZE), { svga: 'trident' });
+  for (const index of [0x31, 0x32]) {
+    write(t, index, 0xBF);
+    check(read(t, index) === 0xBF, 'selected Trident GC data/index policy preserved');
+  }
+}
+
+function sequencerChecks() {
+  const read = (m, index) => { m.portOut(0x3C4, index, 8); return m.portIn(0x3C5, 8); };
+  const write = (m, index, value) => { m.portOut(0x3C4, index, 8); m.portOut(0x3C5, value, 8); };
+  const probe = (m, index, mask) => {
+    const saved = read(m, index);
+    write(m, index, saved & ~mask);
+    const clear = read(m, index) & mask;
+    write(m, index, saved | mask);
+    const set = read(m, index) & mask;
+    write(m, index, saved);
+    const restored = read(m, index);
+    return { saved, clear, set, restored, writable: clear === 0 && set === mask };
+  };
+
+  for (const opts of [{}, { svga: 'none' }]) {
+    const label = opts.svga || 'default';
+    const m = new Machine(new Uint8Array(isa.VESA_FB + isa.VESA_FB_SIZE), opts);
+    const pair = [0xED, 0xEE].map(index => probe(m, index, 0xFF));
+    console.log(`${label} authentic ED/EE masked probes: ${JSON.stringify(pair)}`);
+    check(pair.every(p => !p.writable && p.saved === p.restored),
+      `${label}: unsupported ED/EE both reject the authentic full-byte test and restore`);
+
+    // IBM VGA defines indexes 00..04 and a three-bit address field. Reserved
+    // data indexes have no writable storage; zero is ToyVM's deterministic
+    // absent-register read policy, not a claimed physical bus voltage.
+    for (const index of [5, 6, 7, 0x0D, 0x0E, 0xA7, 0xC5, 0xED, 0xEE]) {
+      const before = Array.from(m.vga.seq.slice(0, 5));
+      const p = probe(m, index, 0xFF);
+      check(!p.writable && p.saved === 0 && p.clear === 0 && p.set === 0 && p.restored === 0,
+        `${label}: absent sequencer ${index.toString(16)} ignores writes and reads zero`);
+      check(JSON.stringify(before) === JSON.stringify(Array.from(m.vga.seq.slice(0, 5))),
+        `${label}: absent sequencer ${index.toString(16)} leaves defined registers intact`);
+    }
+    for (const [index, value, mask] of [[0, 3, 3], [1, 0x21, 0x3D], [2, 5, 15], [3, 0x15, 0x3F], [4, 0x0E, 0x0E]]) {
+      write(m, index, value);
+      const p = probe(m, index, mask);
+      check(p.writable && p.saved === value && p.restored === value,
+        `${label}: defined sequencer ${index} passes its bit test and restores ${value}`);
+      m.portOut(0x3C4, index | 0x88, 8);
+      check((m.portIn(0x3C4, 8) & 7) === index && m.portIn(0x3C5, 8) === value,
+        `${label}: three-bit index aliases to defined sequencer ${index}`);
+    }
+    // Word OUT must still split into the index in AL and data in AH.
+    m.vga.bpp = 8;
+    m.mem[VGA_BASE + 3] = 0x6B;
+    m.portOut(0x3C4, 0x0604, 16);
+    check(m.vga.planar && read(m, 4) === 6 && m.vga.unchainCount === 1
+      && m.mem[isa.VGA_PLANES + 3 * isa.VGA_PLANE_SIZE] === 0x6B,
+    `${label}: word OUT memory mode unchains and carries the picture into planes`);
+    m.portOut(0x3C4, 0x0502, 16);
+    check(read(m, 2) === 5 && m.mem[isa.VGA_CTL_MASK] === 5,
+      `${label}: word OUT map mask reaches the planar write controls`);
+    m.mem[isa.VGA_PLANES + 3 * isa.VGA_PLANE_SIZE] = 0x7C;
+    m.portOut(0x3C4, 0x0E04, 16);
+    check(!m.vga.planar && read(m, 4) === 0x0E && m.mem[VGA_BASE + 3] === 0x7C,
+      `${label}: restoring memory mode rechains the picture`);
+    m.portOut(0x3D4, 0x0C, 8); m.portOut(0x3D5, 0x55, 8);
+    m.portOut(0x3D4, 0x1F, 8);
+    check(m.portIn(0x3D5, 8) !== 0xBF, `${label}: no Trident CRTC signature`);
+  }
+
+  // The explicitly selected model keeps its existing four-bit index and bank
+  // protocol. These are compatibility checks, not authentic SVGA qualification.
+  const t = new Machine(new Uint8Array(isa.VESA_FB + isa.VESA_FB_SIZE), { svga: 'trident' });
+  write(t, 0x0D, 0x69);
+  check(read(t, 0xED) === 0x69 && t.portIn(0x3C4, 8) === 0x0D,
+    'selected Trident retains four-bit sequencer alias/read/write behavior');
+  write(t, 0x0E, 3);
+  check(t.svgaBank === 1 && read(t, 0x0E) === 0x81,
+    'selected Trident retains XOR-2 bank write and version/bank readback');
+  t.portOut(0x3D4, 0x0C, 8); t.portOut(0x3D5, 0x55, 8);
+  t.portOut(0x3D4, 0x1F, 8);
+  check(t.portIn(0x3D5, 8) === 0xBF, 'selected Trident retains its CRTC signature');
+}
+
+// Ferraro, Programmer's Guide (3rd ed.), section 27.5.1, figs. 27.6/27.8:
+// SR0B writes select old controls, reads select new controls; SR0D has two
+// independent definitions. This exercises that access contract only, not a
+// supported chip identity, clocks, old-mode window or complete SVGA adapter.
+function tridentRegisterChecks(MachineClass = Machine, label = 'source') {
+  const make = opts => new MachineClass(new Uint8Array(isa.VESA_FB + isa.VESA_FB_SIZE), opts);
+  const write = (m, i, x) => { m.portOut(0x3C4, i, 8); m.portOut(0x3C5, x, 8); };
+  const read = (m, i) => { m.portOut(0x3C4, i, 8); return m.portIn(0x3C5, 8); };
+  for (const opts of [{}, { svga: 'none' }]) {
+    const m = make(opts);
+    write(m, 0x0B, 0); write(m, 0x0D, 0x17); read(m, 0x0B);
+    check(read(m, 0x0D) === 0 && m.svgaBank === 0,
+      `${label}: default/nonselected VGA rejects extended control storage`);
+  }
+  const m = make({ svga: 'trident' });
+  write(m, 0x0D, 5);                    // existing initial new-control access
+  m.portOut(0x3C4, 0x0B, 8);            // indexing alone must not switch
+  check(read(m, 0x0D) === 5, `${label}: indexing SR0B leaves new control intact`);
+  write(m, 0x0B, 0);                    // byte writes force old controls
+  write(m, 0x0D, 0x17);
+  check(read(m, 0x0D) === 0x17, `${label}: old control retains its written state`);
+  read(m, 0x0B);                        // actual version DATA read selects new
+  check(read(m, 0x0D) === 5, `${label}: SR0B read recovers independent new SR0D`);
+  write(m, 0x0D, 2);
+  read(m, 0x0B);                        // selects new, does not toggle old
+  check(read(m, 0x0D) === 2, `${label}: repeated SR0B reads keep new controls`);
+  write(m, 0x0B, 0xFF);                 // value is not an unlock password
+  check(read(m, 0x0D) === 0x17, `${label}: any SR0B data write recovers old SR0D`);
+  const id = read(m, 0x0B);
+  check(id === 0, `${label}: writes cannot invent a chip identity (still unimplemented)`);
+  check(read(m, 0x0D) === 2, `${label}: new writes leave old SR0D intact`);
+
+  // An SR0D access-bank change must not page or erase the existing 64K window.
+  write(m, 0x0E, 2); m.mem[VGA_BASE] = 0x39; m.mem[VGA_BASE + 0xFFFF] = 0x93;
+  write(m, 0x0E, 3); m.mem[VGA_BASE] = 0x4A; m.mem[VGA_BASE + 0xFFFF] = 0xA4;
+  write(m, 0x0B, 0); write(m, 0x0D, 0x10); read(m, 0x0B);
+  check(m.svgaBank === 1 && m.mem[VGA_BASE] === 0x4A && m.mem[VGA_BASE + 0xFFFF] === 0xA4,
+    `${label}: control-bank selection preserves current window endpoints`);
+  write(m, 0x0E, 2);
+  check(m.mem[VGA_BASE] === 0x39 && m.mem[VGA_BASE + 0xFFFF] === 0x93,
+    `${label}: bank zero persists independently across control selection`);
+  write(m, 0x0E, 3);
+  check(m.mem[VGA_BASE] === 0x4A && m.mem[VGA_BASE + 0xFFFF] === 0xA4,
+    `${label}: bank one persists independently across control selection`);
+  const other = make({ svga: 'trident' });
+  check(read(other, 0x0D) === 0, `${label}: control storage is per machine`);
+}
 
 // Where the guest leaves its answers, in its own segment: one word per call at
 // 0x500 and up, and the BIOS blocks at 0x600. A .COM loads at 0x100 and this
@@ -187,8 +359,42 @@ async function check15(dir) {
   check(r.pixels === 2, `the run reports 2 non-black pixels of the 15bpp picture (${r.pixels})`);
 }
 
+async function graphicsPlanarChecks(dir) {
+  // Real guest OUTs drive the Machine mirror; real A000 accesses execute the
+  // emitted planar pipeline. No direct assignment to GC or plane storage.
+  const bytes = [0xB8, 0x12, 0, 0xCD, 0x10, 0xB8, 0, 0xA0, 0x8E, 0xC0];
+  const gc = (index, value) => bytes.push(0xBA, 0xCE, 3, 0xB8, index, value, 0xEF);
+  const store = value => bytes.push(0x26, 0xC6, 0x06, 0, 0, value);
+  let slot = OUT;
+  const load = () => { bytes.push(0x26, 0xA0, 0, 0, 0xA2, lo(slot), hi(slot)); slot++; };
+  gc(0, 0xA8); gc(0x31, 0xFA); // enable set/reset on planes 1/3, color bit 3
+  store(0x3C);
+  for (let plane = 0; plane < 4; plane++) { gc(4, plane); load(); }
+  gc(7, 15); gc(5, 8); gc(0x32, 0xF8); load(); // compare all planes, color 8 -> C3
+  gc(0x32, 0xFD); load();           // compare color D -> 3C
+  gc(0, 0xA5); gc(0x31, 0xFF); store(0x96); // all planes take set/reset color 5
+  gc(0x32, 0xF5); load();          // matches every pixel
+  gc(0x32, 0xFA); load();          // matches no pixels
+  gc(0x31, 0); store(0x96);        // disable set/reset: all take CPU data
+  gc(0x32, 0); load();
+  gc(0x32, 15); load();
+  bytes.push(0xB8, 0, 0x4C, 0xCD, 0x21);
+  const fixture = Buffer.from(bytes);
+  const com = path.join(dir, 'GCPLANAR.COM');
+  fs.writeFileSync(com, fixture);
+  const r = await runDos({ exe: com, budget: 2e6, log: () => {}, stuckLimit: 0 });
+  const hash = data => require('crypto').createHash('sha256').update(data).digest('hex');
+  console.log(`GC planar fixture SHA256=${hash(fixture)} module SHA256=${hash(r.vm.bytes)}`);
+  const actual = Array.from(r.vm.mem.slice((PSP_SEG << 4) + OUT, (PSP_SEG << 4) + slot));
+  const expected = [0x3C, 0, 0x3C, 0xFF, 0xC3, 0x3C, 0xFF, 0, 0x69, 0x96];
+  check(r.machine.exited && r.machine.exitCode === 0, 'planar GC guest exits successfully');
+  check(JSON.stringify(actual) === JSON.stringify(expected),
+    `GC enable/color compare and CPU-data restoration work through planar reads/writes (${actual})`);
+}
+
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'toyvm-vbe-'));
+  await graphicsPlanarChecks(dir);
   const com = path.join(dir, 'VBE.COM');
   fs.writeFileSync(com, vbeCom());
 
@@ -272,4 +478,24 @@ async function main() {
   process.exit(fail.length ? 1 : 0);
 }
 
+if (process.argv.includes('--trident-only')) {
+  tridentRegisterChecks();
+  if (process.argv.includes('--bundles')) {
+    for (const file of ['toyvm-bundle.js', 'toyvm-jit-bundle.js']) {
+      const holder = {};
+      new Function('self', 'atob', fs.readFileSync(path.join(__dirname, '../docs/dos-corpus/live', file), 'utf8'))(
+        holder, x => Buffer.from(x, 'base64').toString('binary'));
+      tridentRegisterChecks(holder.ToyVM.require('tools/toyvm/dos.js').Machine, file);
+    }
+  }
+  process.exit(fail.length ? 1 : 0);
+}
+if (process.argv.includes('--gc-only')) {
+  graphicsControllerChecks();
+  process.exit(fail.length ? 1 : 0);
+}
+tridentRegisterChecks();
+sequencerChecks();
+if (process.argv.includes('--sequencer-only')) process.exit(fail.length ? 1 : 0);
+graphicsControllerChecks();
 main().catch((e) => { console.error(e.stack || String(e)); process.exit(1); });

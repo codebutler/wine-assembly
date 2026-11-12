@@ -57,7 +57,7 @@
 ;; Point mip ties round upward; linear interpolates adjacent levels. Nonfinite
 ;; LOD/invalid binding returns NaN. Implicit mip TEX requires execution mask15.
 ;; Texture descriptor (36 bytes copied on bind): WASM pixels,width,height,pitch,
-;; format(0 RGBA,21 BGRA,22 BGRX,62 X8L8V8U8), addressU/addressV(1wrap,2mirror,3clamp,4border),
+;; format(0 RGBA,21 BGRA,22 BGRX,62 X8L8V8U8,63 Q8W8V8U8), addressU/addressV(1wrap,2mirror,3clamp,4border),
 ;; filter(1point,2linear), ARGB border. Pixel bytes remain externally retained.
 ;; TEX/TEXCOORD use immutable interpolated t inputs copied at PC0 to v16..v19.
 ;; Missing textures return status-3 before retiring the sampling instruction.
@@ -1035,7 +1035,7 @@
         (i32.or (i32.eqz (local.get $h)) (i32.gt_u (local.get $h) (i32.const 2048))))) (then (return (i32.const 0))))
   (if (i32.or (i32.lt_u (local.get $pitch) (i32.shl (local.get $w) (i32.const 2)))
         (i32.and (i32.ne (local.get $format) (i32.const 0))
-          (i32.and (i32.ne (local.get $format) (i32.const 62)) (i32.and (i32.ne (local.get $format) (i32.const 21)) (i32.ne (local.get $format) (i32.const 22))))))
+          (i32.and (i32.and (i32.ne (local.get $format) (i32.const 62)) (i32.ne (local.get $format) (i32.const 63))) (i32.and (i32.ne (local.get $format) (i32.const 21)) (i32.ne (local.get $format) (i32.const 22))))))
     (then (return (i32.const 0))))
   (if (i32.or (i32.lt_u (i32.load offset=20 (local.get $desc)) (i32.const 1))
         (i32.or (i32.gt_u (i32.load offset=20 (local.get $desc)) (i32.const 4))
@@ -1074,7 +1074,7 @@
   (local.set $format (i32.load offset=12 (local.get $desc)))
   (if (i32.and (i32.ne (local.get $format) (i32.const 0))
     (i32.and (i32.ne (local.get $format) (i32.const 21))
-    (i32.and (i32.ne (local.get $format) (i32.const 22)) (i32.ne (local.get $format) (i32.const 62))))) (then (return (i32.const 0))))
+    (i32.and (i32.ne (local.get $format) (i32.const 22)) (i32.and (i32.ne (local.get $format) (i32.const 62)) (i32.ne (local.get $format) (i32.const 63)))))) (then (return (i32.const 0))))
   (local.set $i (i32.const 16))
   (loop $modes
     (if (i32.or (i32.lt_u (i32.load (i32.add (local.get $desc) (local.get $i))) (i32.const 1))
@@ -1161,7 +1161,7 @@
 ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/texbem---ps
 ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/texbeml---ps
 ;; https://learn.microsoft.com/en-us/windows/win32/direct3d9/bump-map-pixel-formats
-;; X8L8V8U8 uses max(signedByte/127,-1) SNORM policy; exact legacy driver
+;; X8L8V8U8 and Q8W8V8U8 use max(signedByte/127,-1) SNORM policy; exact legacy driver
 ;; conversion rounding remains a native-reference gate. Other signed layouts
 ;; reject at binding rather than being interpreted as unsigned RGBA.
 (func $d3d_shader_vm_bind_bump (export "d3d_shader_vm_bind_bump") (param $ctx i32) (param $stage i32) (param $desc i32) (result i32)
@@ -1219,13 +1219,13 @@
       (local.set $value (i32.and (i32.shr_u (i32.load offset=32 (local.get $desc)) (local.get $byte)) (i32.const 255))))
     (else
       (local.set $format (i32.load offset=16 (local.get $desc)))
-      ;; X8L8V8U8: U,V signed normalized; L unsigned; unused alpha is one.
-      (if (i32.eq (local.get $format) (i32.const 62)) (then
-        (if (i32.eq (local.get $comp) (i32.const 3)) (then (return (f32.const 1))))
+      ;; X8L8V8U8: U,V signed, L unsigned, alpha one. Q8W8V8U8: all signed.
+      (if (i32.or (i32.eq (local.get $format) (i32.const 62)) (i32.eq (local.get $format) (i32.const 63))) (then
+        (if (i32.and (i32.eq (local.get $format) (i32.const 62)) (i32.eq (local.get $comp) (i32.const 3))) (then (return (f32.const 1))))
         (local.set $byte (i32.add (i32.load (local.get $desc))
           (i32.add (i32.mul (local.get $y) (i32.load offset=12 (local.get $desc)))
             (i32.add (i32.shl (local.get $x) (i32.const 2)) (local.get $comp)))))
-        (if (i32.lt_u (local.get $comp) (i32.const 2)) (then
+        (if (i32.or (i32.eq (local.get $format) (i32.const 63)) (i32.lt_u (local.get $comp) (i32.const 2))) (then
           (return (f32.max (f32.const -1) (f32.div (f32.convert_i32_s (i32.load8_s (local.get $byte))) (f32.const 127))))))
         (return (f32.div (f32.convert_i32_u (i32.load8_u (local.get $byte))) (f32.const 255)))))
       (if (i32.and (i32.eq (local.get $format) (i32.const 22)) (i32.eq (local.get $comp) (i32.const 3)))
@@ -1351,6 +1351,12 @@
   (local.set $format (i32.load offset=16 (local.get $desc)))
   (local.set $p (i32.add (i32.load (local.get $desc))
     (i32.add (i32.mul (local.get $y) (i32.load offset=12 (local.get $desc))) (i32.shl (local.get $x) (i32.const 2)))))
+  ;; Q8W8V8U8 maps little-endian U,V,W,Q to signed normalized RGBA.
+  (if (i32.eq (local.get $format) (i32.const 63)) (then
+    (return (f32x4.max (f32x4.splat (f32.const -1))
+      (f32x4.div (f32x4.convert_i32x4_s (i32x4.extend_low_i16x8_s
+        (i16x8.extend_low_i8x16_s (i32x4.splat (i32.load (local.get $p))))))
+        (f32x4.splat (f32.const 127)))))))
   (if (i32.eq (local.get $format) (i32.const 62)) (then
     ;; X8L8V8U8: U,V signed normalized; L unsigned; unused alpha is one.
     (return (f32x4.replace_lane 3 (f32x4.replace_lane 2 (f32x4.replace_lane 1

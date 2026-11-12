@@ -1,0 +1,9 @@
+# Original Maelstrom corrected-deadline observation — 2026-10-24
+
+Historical source last updated, 2026-10-24. Runtime and implementation claims below describe that dated source; see current app notes and source for subsequent changes.
+
+The exact accepted observer produced 14 records: arm, six before/after pairs at batches 36163–36168, and summary. BP readback is 0x007a3362 throughout. No sampled pair reached that head; actual head EDI/EAX/EBP/ESP and breakpoint-vs-pending-yield cause remain UNKNOWN. No head trace line was emitted. Final hit counts are 972 at each address; these are not proof of executed MOV/CALL, nor proof those counts happened during the bounded observation window.
+
+At arm: EIP=0x00688d5b, EDI=32, EAX=0, EBP=1, ESP=122682492, halt=3, reason/flag=0/0; counts 0/0; cache stores/clears/invalidations=5371/2/4552. The first two boundary pairs have reason=0 and halt=3. The final four pairs (36165–36168) are unchanged before/after: EIP=0x075040f8, EDI=0x0052e430, EAX=0x53000001, EBP=5, ESP=0x074ffb18; halt=4, reason=8, flag=0, counts=0/0, cache stores/clears/invalidations=5451/2/4552, blocks=1. All exact intermediate states are in analysis.json and the raw log. The accepted native pending-reason1/halt5↔4 example does not match these reason8 observations and cannot establish this original cause. MOV/CALL execution and historical zero cause remain UNKNOWN.
+
+The historical runner SHA4d7b9587, exports SHA739397dc, wasm SHA8fac3993 and observer SHAfcb1ecac pins and accepted readiness were reused read-only from the prior task (remote commit0672db6f). The adjacent transformed runner remains SHA2afeab8d3c053c8b23935b1b6fcd3ac1f01b1aa2609ce1b1b8a0337c23875f3b. No old boundary-audit transform was layered. The exact command and Node512/linear512MiB/CPU90/wall60/output131072 limits are retained in collected/guest/command.json. BATCH_SIZE1000, 200ms clock, original P input schedule and requested trace/count profile remained unchanged.

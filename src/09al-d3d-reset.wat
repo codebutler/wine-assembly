@@ -157,6 +157,9 @@
   (local.set $shared (i32.load offset=16 (local.get $entry)))
   (store.field DxObject misc0 (local.get $entry) (call $dx_slot_of (call $dx_from_this (i32.load offset=8 (local.get $wa)))))
   (store.field DxObject misc1 (local.get $entry) (i32.load offset=4 (local.get $wa)))
+  (call $d3d9_trace_world (local.get $device) (i32.const 11)
+    (i32.add (local.get $next) (i32.const 2708)) (i32.add (local.get $next) (i32.const 2708))
+    (i32.load offset=4 (local.get $wa)) (i32.add (i32.load offset=4 (local.get $wa)) (i32.const 2708)))
   (i32.store offset=16 (local.get $entry) (i32.load offset=28 (local.get $wa)))
   (call $d3d9_default_output (local.get $device) (i32.load offset=52 (local.get $wa)))
   (call $d3d9_shader_unbind (i32.load (local.get $old))) (call $d3d9_shader_unbind (i32.load offset=4 (local.get $old)))
@@ -170,7 +173,7 @@
   (call $d3d9_color_unbind (i32.load offset=22020 (local.get $old)))
   (call $heap_free (local.get $state)) (call $heap_free (local.get $shared))
   (drop (call $dx_surface_release (i32.load offset=20 (local.get $wa))))
-  (global.set $d3d9_windowed_hwnd (select (i32.load offset=48 (local.get $wa)) (i32.const 0) (i32.load offset=44 (local.get $wa))))
+  (call $d3d9_windowed_hwnd_set (select (i32.load offset=48 (local.get $wa)) (i32.const 0) (i32.load offset=44 (local.get $wa))))
   ;; Host-visible mode/window changes occur only after backend completion.
   (call $dx_coop_hwnd_set (i32.load offset=48 (local.get $wa)))
   (if (i32.load offset=44 (local.get $wa)) (then

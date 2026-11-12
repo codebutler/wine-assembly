@@ -14,6 +14,17 @@ binary fixture pool.
 
 ## Fetch
 
+Original Airstrike pre6a is local only, with no acquisition packages. Use its
+[local preparation and verification recipe](../../docs/re-notes/airstrike-pre6a-local-registration-20261024.md)
+to preserve all 89 exact game/runtime files and the authentic legacy zlib.
+Its local selector/CLI app ID is `airstrike_pre6a`. Registered runtime and
+browser qualification remain separate from the accepted historical gameplay.
+
+SuperTux 0.1.3 uses the pinned original Inno extraction and the standard
+generated local manifest. See [local registration and verification](../../docs/supertux-013-registration.md)
+for recovery, authentic CRT requirements and the source-only verification
+boundary. Its app ID is `supertux_013`; no public desktop entry is added.
+
 Fetch every automatically recoverable package:
 
 ```sh
@@ -138,3 +149,10 @@ II release, so there is no GOG package recipe to maintain yet.
 Fetch with `node tools/fetch-candidate-corpus.js --id=dungeons-of-dredmor`. This is the community-archived Windows Steam beta depot 98811 revision 8, not a demo. The local experimental selector `dungeons_of_dredmor` mounts its complete asset tree, including the original Steam DLL. No compatibility or Steam availability claim is made; the entry is excluded from the public desktop. See [provenance and static dependency notes](../../docs/re-notes/dungeons-of-dredmor.md).
 
 The separate `dungeons-of-dredmor-release` candidate preserves archived public-game Steam depot98801 revision17, alongside beta98811. It requires manual Steam2 archive preparation; `--id=dungeons-of-dredmor-release --prepare` regenerates the manifest after restoration. Local experimental app: `dungeons_of_dredmor_release`. [Release provenance and limitations](../../docs/re-notes/dungeons-of-dredmor-release.md).
+
+Recovery coverage: run `node tools/audit-candidate-recovery.js` for a static recipe inventory. See [remaining recovery work](../../docs/corpus-recovery-status.md); package recipes do not imply installed-game recovery or source availability.
+# Outlaws original demo
+
+Local candidate `outlaws-demo` uses app `outlaws_demo`; see
+[registration and recovery](../../docs/outlaws-demo-registration.md).
+Use its registered app route to preserve `C:\OUTDEMO` and all original mappings.

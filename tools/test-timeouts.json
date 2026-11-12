@@ -1,5 +1,10 @@
 [
   {
+    "test": "test/test-quake3-desktop-web.js",
+    "seconds": 1200,
+    "reason": "Two sequential Quake III guest launches with WebRTC joining and desktop/mobile gameplay checks; measured acceptance takes about eight minutes."
+  },
+  {
     "test": "test/test-darkstone-gameplay.js",
     "seconds": 660,
     "reason": "Authentic installer payload, menu, character creation and responsive town acceptance use a 600-second guest guard; allow 60 seconds for loading and cleanup."

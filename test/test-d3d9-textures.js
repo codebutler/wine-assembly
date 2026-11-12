@@ -150,7 +150,7 @@ const {REGIONS}=require('../lib/region-map.generated.js');
   // L8 (one byte) and L16 (two) are the rest of the luminance family. B&W2's
   // land asks for L16 first and L8 next, and a texture it cannot create is a
   // slot it leaves NULL and then calls through.
-  for(const [format,texel] of [[50,1],[81,2],[23,2],[20,3]]) {
+  for(const [format,texel] of [[50,1],[81,2],[23,2],[20,3],[63,4]]) {
     assert.strictEqual(e.texture(d,8,4,1,out,format),0);
     const lum=e.guest_read32(out)>>>0;
     assert.strictEqual(e.desc(lum,0,desc),0);assert.strictEqual(e.guest_read32(desc),format);
@@ -167,8 +167,21 @@ const {REGIONS}=require('../lib/region-map.generated.js');
   }
   // A format we cannot store must be refused, and CheckDeviceFormat has to say
   // so first: a yes there followed by a refusal here is what left the slot NULL.
+  assert.strictEqual(e.texture(d,512,512,0,out,63),0,'.kkrieger full signed mip chain');
+  const signedTexture=e.guest_read32(out)>>>0;
+  for(let level=0;level<10;level++) {
+    const width=512>>level;
+    assert.strictEqual(e.desc(signedTexture,level,desc),0);
+    assert.strictEqual(e.guest_read32(desc),63);
+    assert.strictEqual(e.lock(signedTexture,level,locked,0),0);
+    assert.strictEqual(e.guest_read32(locked),width*4);
+    const bits=e.guest_read32(locked+4)>>>0;
+    e.guest_write32(bits,0x807f0081);assert.strictEqual(e.guest_read32(bits)>>>0,0x807f0081);
+    assert.strictEqual(e.unlock(signedTexture,level),0);
+  }
+  assert.strictEqual(e.release_texture(signedTexture),0);
   assert.strictEqual(e.texture(d,8,4,1,out,41)>>>0,0x8876086c,'P8 is not stored');
-  for(const format of [20,21,22,23,50,51,62,81,Texture.DXT1,Texture.DXT3,Texture.DXT5])
+  for(const format of [20,21,22,23,50,51,62,63,81,Texture.DXT1,Texture.DXT3,Texture.DXT5])
     assert.strictEqual(e.check_format(0,3,format),0,`CheckDeviceFormat accepts ${format}`);
   for(const format of [41,52,77]) // P8, A4L4, D3DFMT_D24X8
     assert.strictEqual(e.check_format(0,3,format)>>>0,0x8876086a,`CheckDeviceFormat refuses ${format}`);

@@ -1446,6 +1446,37 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
+  ;; Error descriptions accept MMSYSERR 0..21 and WAVERR 32..35. cch is in
+  ;; characters, including the terminator; a zero capacity is a successful no-op.
+  (func $wave_error_text (param $code i32) (param $out i32) (param $cch i32)
+      (param $wide i32) (result i32)
+    (local $wa i32) (local $size i32) (local $result i32)
+    (if (i32.eqz (local.get $out)) (then (return (i32.const 11))))
+    (if (i32.eqz (local.get $cch)) (then (return (i32.const 0))))
+    (if (i32.and (i32.gt_u (local.get $code) (i32.const 21))
+          (i32.gt_u (i32.sub (local.get $code) (i32.const 32)) (i32.const 3)))
+      (then (return (i32.const 9))))
+    ;; Query the exact written prefix; never gather/write unrelated bytes after
+    ;; the terminator when the caller advertises a much larger buffer.
+    (local.set $size (call $host_wave_error_text (local.get $code) (i32.const 0) (i32.const 0) (i32.const 2)))
+    (if (i32.lt_u (local.get $cch) (local.get $size))
+      (then (local.set $size (local.get $cch))))
+    (local.set $size (i32.shl (local.get $size) (local.get $wide)))
+    (local.set $wa (call $guest_span_in (local.get $out) (local.get $size)))
+    (local.set $result (call $host_wave_error_text (local.get $code) (local.get $wa)
+      (local.get $cch) (local.get $wide)))
+    (call $guest_span_writeback (local.get $out) (local.get $wa) (local.get $size))
+    (local.get $result))
+
+  (func $handle_waveOutGetErrorTextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store (global.get $reg_base) (call $wave_error_text (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+  )
+  (func $handle_waveOutGetErrorTextW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store (global.get $reg_base) (call $wave_error_text (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+  )
+
   ;; Store only the bytes present in the caller-sized capability prefix.
   (func $wave_caps_byte (param $wa i32) (param $size i32) (param $offset i32) (param $value i32)
     (if (i32.lt_u (local.get $offset) (local.get $size))
@@ -2659,14 +2690,14 @@
     (local.set $slot (local.get $arg0))
     (if (i32.or (i32.eqz (local.get $slot)) (i32.ge_u (local.get $slot) (i32.const 16)))
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0x106)) ;; MCIERR_INVALID_DEVICE_ID
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x101)) ;; MCIERR_INVALID_DEVICE_ID
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $slot_addr (call $mci_slot_addr (local.get $slot)))
     (local.set $host_id (i32.load (local.get $slot_addr)))
     (if (i32.eqz (local.get $host_id))
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0x106))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x101)) ;; MCIERR_INVALID_DEVICE_ID
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $params_wa
@@ -2789,14 +2820,14 @@
     (local.set $slot (local.get $arg0))
     (if (i32.or (i32.eqz (local.get $slot)) (i32.ge_u (local.get $slot) (i32.const 16)))
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0x106))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x101)) ;; MCIERR_INVALID_DEVICE_ID
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $slot_addr (call $mci_slot_addr (local.get $slot)))
     (local.set $host_id (i32.load (local.get $slot_addr)))
     (if (i32.eqz (local.get $host_id))
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0x106))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x101)) ;; MCIERR_INVALID_DEVICE_ID
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $params_wa
@@ -3418,31 +3449,21 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
-  ;; midiOutLongMsg(hmo, lpMidiHdr, cbMidiHdr) — submit a system-exclusive
-  ;; message. The browser synth consumes channel messages through ShortMsg but
-  ;; has no SysEx transport, so complete a correctly prepared MIDIHDR
-  ;; immediately. Clients such as ScummVM use this for GM/MT-32 reset packets
-  ;; and then continue ordinary note traffic through midiOutShortMsg.
+  ;; midiOutLongMsg validates handle/header ownership through the same host
+  ;; path. Unsupported SysEx transport must fail explicitly, not claim DONE
+  ;; for a buffer whose contents were never consumed.
   (func $handle_midiOutLongMsg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $hdr i32) (local $flags i32)
-    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
+    (local $hdr i32) (local $data i32)
+    (if (local.get $arg1)
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 11)) ;; MMSYSERR_INVALPARAM
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-        (return)))
-    (local.set $hdr (call $g2w (local.get $arg1)))
-    (local.set $flags (i32.load offset=16 (local.get $hdr)))
-    (if (i32.eqz (i32.and (local.get $flags) (i32.const 2))) ;; MHDR_PREPARED
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 64)) ;; MIDIERR_UNPREPARED
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-        (return)))
-    ;; Immediate completion: retain PREPARED/other flags, clear INQUEUE, set DONE.
-    (i32.store offset=16 (local.get $hdr)
-      (i32.or (i32.and (local.get $flags) (i32.const 0xffffffef)) (i32.const 1)))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; MMSYSERR_NOERROR
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-  )
+        (local.set $hdr (call $g2w (local.get $arg1)))
+        (if (i32.load (local.get $hdr))
+          (then (local.set $data (call $g2w (i32.load (local.get $hdr))))))))
+    (i32.store (global.get $reg_base)
+      (call $host_midi_header (local.get $arg0) (local.get $hdr)
+        (local.get $arg1) (local.get $data) (local.get $arg2) (i32.const 3)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+
 
   ;; midiOutReset(hmo) — 1 arg
   (func $handle_midiOutReset (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3467,278 +3488,76 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
-  ;; MIDI streaming uses the same host synth handles as midiOut*. Old WinMM
-  ;; clients submit arrays of MIDIEVENT records through MIDIHDR buffers. Keep
-  ;; the small stream queue on the guest heap instead of stealing a fixed
-  ;; low-memory address (0xD170 is the first SCROLL_TABLE record).
-  (global $midi_stream_handle (mut i32) (i32.const 0))
-  (global $midi_stream_tempo (mut i32) (i32.const 500000))
-  (global $midi_stream_division (mut i32) (i32.const 480))
-  (global $midi_stream_queue_wa (mut i32) (i32.const 0))
-  (global $midi_stream_queue_head (mut i32) (i32.const 0))
-  (global $midi_stream_queue_tail (mut i32) (i32.const 0))
-  (global $midi_stream_running (mut i32) (i32.const 0))
-  (global $midi_stream_due_ms (mut i32) (i32.const 0))
-  (global $midi_stream_event_pending (mut i32) (i32.const 0))
-  (global $midi_stream_paused_at (mut i32) (i32.const 0))
-
-  ;; Advance queued MIDIEVENTs up to `now`. timeGetTime calls this once per
-  ;; game frame, preserving delta-time/tempo ordering without blocking WAT or
-  ;; dumping an entire song into the synth at midiStreamOut time.
+  ;; Stream queues, registrations and clocks live with the host device.
+  ;; No module-global selected stream can overwrite another live handle.
   (func $midi_stream_service (param $now i32)
-    (local $entry i32) (local $hdr i32) (local $data i32)
-    (local $length i32) (local $pos i32) (local $event_ptr i32)
-    (local $delta i32) (local $event i32) (local $event_type i32)
-    (local $long_len i32) (local $delay i32) (local $processed i32)
-    (if (i32.or
-          (i32.eqz (global.get $midi_stream_running))
-          (i32.eq (global.get $midi_stream_queue_head) (global.get $midi_stream_queue_tail)))
-      (then (return)))
-    (if (i32.eqz (global.get $midi_stream_due_ms))
-      (then (global.set $midi_stream_due_ms (local.get $now))))
-    (block $done
-      (loop $events
-        ;; A long run of zero-delta controller events must yield back to the
-        ;; guest periodically; the next timeGetTime continues immediately.
-        (br_if $done (i32.ge_u (local.get $processed) (i32.const 128)))
-        (br_if $done
-          (i32.eq (global.get $midi_stream_queue_head) (global.get $midi_stream_queue_tail)))
-        (local.set $entry (i32.add (global.get $midi_stream_queue_wa)
-          (i32.shl (global.get $midi_stream_queue_head) (i32.const 3))))
-        (local.set $hdr (i32.load (local.get $entry)))
-        (local.set $pos (i32.load offset=4 (local.get $entry)))
-        (local.set $data (call $g2w (i32.load (local.get $hdr))))
-        (local.set $length (i32.load offset=8 (local.get $hdr)))
-        (if (i32.eqz (local.get $length))
-          (then (local.set $length (i32.load offset=4 (local.get $hdr)))))
-        (if (i32.gt_u (i32.add (local.get $pos) (i32.const 12)) (local.get $length))
-          (then
-            ;; MHDR_DONE and no longer MHDR_INQUEUE.
-            (i32.store offset=16 (local.get $hdr)
-              (i32.and
-                (i32.or (i32.load offset=16 (local.get $hdr)) (i32.const 1))
-                (i32.const 0xFFFFFFEF)))
-            (global.set $midi_stream_queue_head
-              (i32.and (i32.add (global.get $midi_stream_queue_head) (i32.const 1)) (i32.const 31)))
-            (global.set $midi_stream_event_pending (i32.const 0))
-            (br $events)))
-        (local.set $event_ptr (i32.add (local.get $data) (local.get $pos)))
-        (local.set $delta (i32.load (local.get $event_ptr)))
-        (local.set $event (i32.load offset=8 (local.get $event_ptr)))
-        (if (i32.eqz (global.get $midi_stream_event_pending))
-          (then
-            ;; milliseconds = ticks * microseconds/quarter / (division * 1000)
-            (local.set $delay (i32.wrap_i64 (i64.div_u
-              (i64.mul
-                (i64.extend_i32_u (local.get $delta))
-                (i64.extend_i32_u (global.get $midi_stream_tempo)))
-              (i64.extend_i32_u
-                (i32.mul (global.get $midi_stream_division) (i32.const 1000))))))
-            (global.set $midi_stream_due_ms
-              (i32.add (global.get $midi_stream_due_ms) (local.get $delay)))
-            (global.set $midi_stream_event_pending (i32.const 1))))
-        (br_if $done (i32.gt_u (global.get $midi_stream_due_ms) (local.get $now)))
-        ;; The callback flag occupies bit 30; it is not part of MEVT_EVENTTYPE.
-        (local.set $event_type
-          (i32.and (i32.shr_u (local.get $event) (i32.const 24)) (i32.const 0x3F)))
-        (if (i32.eqz (local.get $event_type))
-          (then (drop (call $host_midi_out_short_msg
-            (global.get $midi_stream_handle)
-            (i32.and (local.get $event) (i32.const 0x00FFFFFF)))))
-          (else (if (i32.eq (local.get $event_type) (i32.const 1)) ;; MEVT_TEMPO
-            (then
-              (local.set $delay (i32.and (local.get $event) (i32.const 0x00FFFFFF)))
-              (if (local.get $delay)
-                (then (global.set $midi_stream_tempo (local.get $delay))))))))
-        (local.set $pos (i32.add (local.get $pos) (i32.const 12)))
-        (if (i32.and (local.get $event) (i32.const 0x80000000))
-          (then
-            (local.set $long_len (i32.and (local.get $event) (i32.const 0x00FFFFFF)))
-            (local.set $pos (i32.add (local.get $pos)
-              (i32.and (i32.add (local.get $long_len) (i32.const 3)) (i32.const 0xFFFFFFFC))))))
-        (i32.store offset=4 (local.get $entry) (local.get $pos))
-        (global.set $midi_stream_event_pending (i32.const 0))
-        (local.set $processed (i32.add (local.get $processed) (i32.const 1)))
-        (br $events)))
-  )
+    (call $host_midi_stream_service (local.get $now)))
 
   (func $handle_midiStreamOpen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $flags i32) (local $device i32) (local $handle i32)
-    ;; arg5=fdwOpen is the sixth stack argument.
-    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
-    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 11)) ;; MMSYSERR_INVALPARAM
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
-        (return)))
-    (local.set $device (call $gl32 (local.get $arg1)))
-    (local.set $handle (call $host_midi_out_open
-      (local.get $device) (local.get $arg3) (local.get $arg4) (local.get $flags)))
-    (if (i32.eqz (local.get $handle))
-      (then (i32.store offset=0 (global.get $reg_base) (i32.const 2))) ;; MMSYSERR_BADDEVICEID
+    (local $handle i32)
+    (if (i32.or (i32.ne (local.get $arg2) (i32.const 1))
+          (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1))))
+      (then (i32.store (global.get $reg_base) (i32.const 11)))
       (else
-        (call $gs32 (local.get $arg0) (local.get $handle))
-        ;; One process-local stream is sufficient for the Win98-era clients
-        ;; supported here. Queue 32 header pointers (31 usable ring slots).
-        (if (i32.eqz (global.get $midi_stream_queue_wa))
-          (then
-            (global.set $midi_stream_queue_wa
-              (call $g2w (call $heap_alloc (i32.const 256))))
-            (call $zero_memory (global.get $midi_stream_queue_wa) (i32.const 256))))
-        (global.set $midi_stream_handle (local.get $handle))
-        (global.set $midi_stream_tempo (i32.const 500000)) ;; 120 BPM
-        (global.set $midi_stream_division (i32.const 480))
-        (global.set $midi_stream_queue_head (i32.const 0))
-        (global.set $midi_stream_queue_tail (i32.const 0))
-        (global.set $midi_stream_running (i32.const 0))
-        (global.set $midi_stream_due_ms (i32.const 0))
-        (global.set $midi_stream_event_pending (i32.const 0))
-        (global.set $midi_stream_paused_at (i32.const 0))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
-  )
-
-  (func $handle_midiStreamClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_midi_out_close (local.get $arg0)))
-    (if (i32.eq (local.get $arg0) (global.get $midi_stream_handle))
-      (then
-        (global.set $midi_stream_handle (i32.const 0))
-        (global.set $midi_stream_running (i32.const 0))
-        (global.set $midi_stream_queue_head (i32.const 0))
-        (global.set $midi_stream_queue_tail (i32.const 0))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-  )
-
-  (func $handle_midiStreamPause (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (i32.eq (local.get $arg0) (global.get $midi_stream_handle))
-      (then
-        (global.set $midi_stream_running (i32.const 0))
-        (global.set $midi_stream_paused_at (call $host_get_ticks))
-        (drop (call $host_midi_out_reset (local.get $arg0)))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
-      (else (i32.store offset=0 (global.get $reg_base) (i32.const 5)))) ;; MMSYSERR_INVALHANDLE
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-  )
-
-  (func $handle_midiStreamRestart (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $now i32)
-    (if (i32.eq (local.get $arg0) (global.get $midi_stream_handle))
-      (then
-        (local.set $now (call $host_get_ticks))
-        (if (global.get $midi_stream_paused_at)
-          (then
-            (global.set $midi_stream_due_ms
-              (i32.add (global.get $midi_stream_due_ms)
-                (i32.sub (local.get $now) (global.get $midi_stream_paused_at))))
-            (global.set $midi_stream_paused_at (i32.const 0)))
-          (else (if (i32.eqz (global.get $midi_stream_due_ms))
-            (then (global.set $midi_stream_due_ms (local.get $now))))))
-        (global.set $midi_stream_running (i32.const 1))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
-      (else (i32.store offset=0 (global.get $reg_base) (i32.const 5))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
-  )
-
-  ;; midiStreamProperty(hms, lppropdata, dwProperty). Support the tempo and
-  ;; time-division GET/SET properties used by standard MIDI stream players.
-  (func $handle_midiStreamProperty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $prop i32) (local $slot i32)
-    (if (i32.or
-          (i32.ne (local.get $arg0) (global.get $midi_stream_handle))
-          (i32.eqz (local.get $arg1)))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 5))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-        (return)))
-    (local.set $prop (call $g2w (local.get $arg1)))
-    (if (i32.and (local.get $arg2) (i32.const 1))
-      (then (local.set $slot (i32.const 1)))
-      (else (if (i32.and (local.get $arg2) (i32.const 2))
-        (then (local.set $slot (i32.const 2)))
-        (else
-          (i32.store offset=0 (global.get $reg_base) (i32.const 11))
-          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-          (return)))))
-    (if (i32.and (local.get $arg2) (i32.const 0x80000000)) ;; MIDIPROP_SET
-      (then
-        (if (i32.eq (local.get $slot) (i32.const 1))
-          (then (global.set $midi_stream_division (i32.load offset=4 (local.get $prop))))
-          (else (global.set $midi_stream_tempo (i32.load offset=4 (local.get $prop))))))
-      (else (if (i32.and (local.get $arg2) (i32.const 0x40000000)) ;; GET
-        (then
-          (if (i32.eq (local.get $slot) (i32.const 1))
-            (then (i32.store offset=4 (local.get $prop) (global.get $midi_stream_division)))
-            (else (i32.store offset=4 (local.get $prop) (global.get $midi_stream_tempo))))))))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-  )
-
-  (func $handle_midiOutPrepareHeader (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $hdr i32)
-    (if (i32.eqz (local.get $arg1))
-      (then (i32.store offset=0 (global.get $reg_base) (i32.const 11)))
-      (else
-        (local.set $hdr (call $g2w (local.get $arg1)))
-        (i32.store offset=16 (local.get $hdr)
-          (i32.or (i32.load offset=16 (local.get $hdr)) (i32.const 2)))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-  )
-
-  (func $handle_midiOutUnprepareHeader (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $hdr i32)
-    (if (i32.eqz (local.get $arg1))
-      (then (i32.store offset=0 (global.get $reg_base) (i32.const 11)))
-      (else
-        (local.set $hdr (call $g2w (local.get $arg1)))
-        (if (i32.and (i32.load offset=16 (local.get $hdr)) (i32.const 0x10))
-          (then (i32.store offset=0 (global.get $reg_base) (i32.const 65))) ;; MIDIERR_STILLPLAYING
+        (local.set $handle (call $host_midi_stream_open
+          (call $gl32 (local.get $arg1)) (local.get $arg3) (local.get $arg4)
+          (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+        (if (i32.lt_s (local.get $handle) (i32.const 0))
+          (then (i32.store (global.get $reg_base) (i32.sub (i32.const 0) (local.get $handle))))
           (else
-            (i32.store offset=16 (local.get $hdr)
-              (i32.and
-                (i32.or (i32.load offset=16 (local.get $hdr)) (i32.const 1))
-                (i32.const 0xFFFFFFFD))) ;; clear PREPARED
-            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-  )
-
-  ;; midiStreamOut(hms, lpMidiHdr, cbMidiHdr). Queue prepared MIDIHDRs; the
-  ;; timeGetTime service above consumes their MIDIEVENT records at real tempo.
+            (call $gs32 (local.get $arg0) (local.get $handle))
+            (i32.store (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+  (func $handle_midiStreamClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store (global.get $reg_base) (call $host_midi_stream_control (local.get $arg0) (i32.const 0) (call $host_get_ticks)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+  (func $handle_midiStreamPause (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store (global.get $reg_base) (call $host_midi_stream_control (local.get $arg0) (i32.const 1) (call $host_get_ticks)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+  (func $handle_midiStreamRestart (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store (global.get $reg_base) (call $host_midi_stream_control (local.get $arg0) (i32.const 2) (call $host_get_ticks)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+  (func $handle_midiStreamStop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store (global.get $reg_base) (call $host_midi_stream_control (local.get $arg0) (i32.const 3) (call $host_get_ticks)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+  (func $handle_midiStreamProperty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store (global.get $reg_base) (call $host_midi_stream_property (local.get $arg0)
+      (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
+      (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+  (func $handle_midiOutPrepareHeader (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $hdr i32) (local $data i32)
+    (if (local.get $arg1)
+      (then
+        (local.set $hdr (call $g2w (local.get $arg1)))
+        (if (i32.load (local.get $hdr))
+          (then (local.set $data (call $g2w (i32.load (local.get $hdr))))))))
+    (i32.store (global.get $reg_base)
+      (call $host_midi_header (local.get $arg0) (local.get $hdr)
+        (local.get $arg1) (local.get $data) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+  (func $handle_midiOutUnprepareHeader (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $hdr i32) (local $data i32)
+    (if (local.get $arg1)
+      (then
+        (local.set $hdr (call $g2w (local.get $arg1)))
+        (if (i32.load (local.get $hdr))
+          (then (local.set $data (call $g2w (i32.load (local.get $hdr))))))))
+    (i32.store (global.get $reg_base)
+      (call $host_midi_header (local.get $arg0) (local.get $hdr)
+        (local.get $arg1) (local.get $data) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_midiStreamOut (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $hdr i32) (local $next i32) (local $entry i32)
-    (if (i32.or
-          (i32.ne (local.get $arg0) (global.get $midi_stream_handle))
-          (i32.eqz (local.get $arg1)))
+    (local $hdr i32) (local $data i32)
+    (if (local.get $arg1)
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 5))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-        (return)))
-    (local.set $hdr (call $g2w (local.get $arg1)))
-    (if (i32.eqz (i32.and (i32.load offset=16 (local.get $hdr)) (i32.const 2)))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 64)) ;; MIDIERR_UNPREPARED
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-        (return)))
-    (local.set $next
-      (i32.and (i32.add (global.get $midi_stream_queue_tail) (i32.const 1)) (i32.const 31)))
-    (if (i32.eq (local.get $next) (global.get $midi_stream_queue_head))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 4)) ;; MMSYSERR_ALLOCATED / queue full
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-        (return)))
-    (local.set $entry (i32.add (global.get $midi_stream_queue_wa)
-      (i32.shl (global.get $midi_stream_queue_tail) (i32.const 3))))
-    (i32.store (local.get $entry) (local.get $hdr))
-    (i32.store offset=4 (local.get $entry) (i32.const 0))
-    (global.set $midi_stream_queue_tail (local.get $next))
-    ;; Clear DONE and set INQUEUE while the service owns this header.
-    (i32.store offset=16 (local.get $hdr)
-      (i32.or
-        (i32.and (i32.load offset=16 (local.get $hdr)) (i32.const 0xFFFFFFFE))
-        (i32.const 0x10)))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-  )
+        (local.set $hdr (call $g2w (local.get $arg1)))
+        (if (i32.load (local.get $hdr))
+          (then (local.set $data (call $g2w (i32.load (local.get $hdr))))))))
+    (i32.store (global.get $reg_base)
+      (call $host_midi_header (local.get $arg0) (local.get $hdr)
+        (local.get $arg1) (local.get $data) (local.get $arg2) (i32.const 2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; joyGetPos(uJoyID, lpInfo) — Win98 accepts IDs 0..15 and requires an
   ;; output JOYINFO pointer. A well-formed request reaches the absent device.

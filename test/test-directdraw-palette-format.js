@@ -124,6 +124,7 @@ const createSurface = (wat, desc, out, bpp, caps) => {
   }
 
   // GetSurfaceDesc must agree with GetPixelFormat.
+  wat.guest_write32(query, 108); // legacy surface requires DDSURFACEDESC.dwSize
   assert.strictEqual(wat.test_ddpf_get_surface_desc(surf8, query) >>> 0, 0);
   assert.strictEqual(wat.guest_read32(query + 84) >>> 0, 8);
   assert(wat.guest_read32(query + 76) & DDPF_PALETTEINDEXED8,

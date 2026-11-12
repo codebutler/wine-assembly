@@ -1,61 +1,34 @@
 #!/usr/bin/env node
-
 'use strict';
-
 const assert = require('assert');
-const { bootRenderHarness } = require('./render-helper');
-// $GUEST_BASE, from the map declared in src/00-regions.wat.
-const RegionMap = require('../lib/region-map.generated.js');
-
+const {bootRenderHarness} = require('./render-helper');
 (async () => {
-  const { exports: wat, memory } = await bootRenderHarness();
-  const imageBase = wat.get_image_base() >>> 0;
-  const bytes = new Uint8Array(memory.buffer);
-  const toWa = ga => RegionMap.g2w(ga, imageBase);
-
-  const writeAnsi = text => {
-    const ga = wat.guest_alloc(text.length + 2) >>> 0;
-    const wa = toWa(ga);
-    bytes.fill(0, wa, wa + text.length + 2);
-    for (let i = 0; i < text.length; i++) bytes[wa + i] = text.charCodeAt(i);
-    return ga;
+  const {exports:w,memory} = await bootRenderHarness();
+  const b=new Uint8Array(memory.buffer),wa=p=>w.guest_to_wasm(p)>>>0;
+  const alloc=n=>{const p=w.guest_alloc(n);assert(p);b.fill(0,wa(p),wa(p)+n);return p;};
+  const wide=s=>{const p=alloc((s.length+1)*2);b.set(Buffer.from(s+'\0','utf16le'),wa(p));return p;};
+  const dc=w.test_call_CreateCompatibleDC(0),bmi=alloc(40),bitsOut=alloc(4);
+  w.guest_write32(bmi,40);w.guest_write32(bmi+4,80);w.guest_write32(bmi+8,-40);
+  w.guest_write16(bmi+12,1);w.guest_write16(bmi+14,32);
+  w.test_call_SelectObject(dc,w.test_call_CreateDIBSection(0,bmi,0,bitsOut,0,0));
+  w.test_call_SelectObject(dc,w.test_call_CreateFontW(-16,0,0,0,400,0,0,0,0,0,0,0,0,wide('MS Sans Serif')));
+  const bits=wa(w.guest_read32(bitsOut)),tm=alloc(60);
+  assert.strictEqual(w.test_call_GetTextMetricsA(dc,tm),1);
+  const fallback=String.fromCharCode(b[wa(tm)+50]);
+  const draw=(text,ext)=>{
+    b.fill(255,bits,bits+80*40*4);
+    const p=wide(text);
+    assert.strictEqual(ext?w.test_call_ExtTextOutW(dc,8,4,0,0,p,text.length,0):
+      w.test_call_TextOutW(dc,8,4,p,text.length),1);
+    return Buffer.from(b.slice(bits,bits+80*40*4));
   };
-  const writeWide = text => {
-    const ga = wat.guest_alloc((text.length + 1) * 2) >>> 0;
-    const wa = toWa(ga);
-    const dv = new DataView(memory.buffer);
-    for (let i = 0; i < text.length; i++) dv.setUint16(wa + i * 2, text.charCodeAt(i), true);
-    dv.setUint16(wa + text.length * 2, 0, true);
-    return ga;
-  };
-
-  const oddPacked = writeAnsi('My Computer');
-  assert.strictEqual(wat.test_gdi_ext_text_out_w_packed_ansi_len(oddPacked, 6), 11,
-    'Win9x status text packed into six words must recover eleven ANSI bytes');
-
-  const evenPacked = writeAnsi('0123456789');
-  assert.strictEqual(wat.test_gdi_ext_text_out_w_packed_ansi_len(evenPacked, 5), 10,
-    'an even packed string may terminate immediately after the count boundary');
-
-  const paddedPacked = writeAnsi('My Computer\\HKEY_CURRENT_USER\\Control Panel\\Desktop');
-  const paddedWa = toWa(paddedPacked);
-  bytes[paddedWa + 52] = 0x70;
-  bytes[paddedWa + 53] = 0x72;
-  bytes[paddedWa + 54] = 0x48;
-  bytes[paddedWa + 55] = 0xFF;
-  assert.strictEqual(wat.test_gdi_ext_text_out_w_packed_ansi_len(paddedPacked, 30), 51,
-    'a bogus wide count may extend through stack padding after the ANSI terminator');
-
-  const genuineWide = writeWide('My Computer');
-  assert.strictEqual(wat.test_gdi_ext_text_out_w_packed_ansi_len(genuineWide, 11), 0,
-    'ordinary UTF-16 text must stay on the wide path');
-
-  const binary = writeAnsi('AB\x01CD');
-  assert.strictEqual(wat.test_gdi_ext_text_out_w_packed_ansi_len(binary, 3), 0,
-    'arbitrary binary data must not be reinterpreted as packed ANSI text');
-
-  console.log('PASS  ExtTextOutW distinguishes packed Win9x ANSI from genuine UTF-16');
-})().catch(error => {
-  console.error(error);
-  process.exit(1);
-});
+  const expected=draw(fallback,true);
+  assert(expected.some(v=>v===0),'default glyph draws visible ink');
+  for(const ch of ['\u0141','\u4e46','\u4142']){
+    // The latter two have printable low/high bytes and used to be
+    // misidentified as packed ANSI strings. All are outside this FON charset.
+    assert.deepStrictEqual(draw(ch,true),expected,`ExtTextOutW ${ch.charCodeAt(0).toString(16)}`);
+    assert.deepStrictEqual(draw(ch,false),expected,`TextOutW ${ch.charCodeAt(0).toString(16)}`);
+  }
+  console.log('PASS W APIs preserve UCS-2 and FON out-of-charset text uses the default glyph');
+})().catch(error=>{console.error(error);process.exitCode=1;});

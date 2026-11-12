@@ -1,0 +1,5 @@
+ok: firstTopLevelWindow
+ok: boot count
+ok: boot cursor release
+
+PASS test-boot-cursor

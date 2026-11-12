@@ -276,6 +276,520 @@
     (if (i32.gt_s (global.get $cs_depth) (i32.const 0))
       (then (global.set $cs_depth (i32.sub (global.get $cs_depth) (i32.const 1))))))
 
+  ;; Pending context version 1: MDK2 tracked targets, 64 frames, one epoch.
+  ;; Reasons: 1 late/rearm, 2 foreign owner/thread, 3 overflow, 4 bad return,
+  ;; 5 unsupported callback/unwind/coverage, 6 instance lease exhaustion.
+  ;; Capture before changing the reason. The synchronous marker is emitted
+  ;; after latching, so even an import exception cannot leave coverage valid.
+  ;; Its owning import retains the native caller/offset and UTC; getters below
+  ;; cannot arm, clear, repair, or otherwise affect the coverage state.
+  (func $pending_failure (param $reason i32) (param $site i32)
+      (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (param $g i32)
+    (local $p i32) (local $first i32)
+    (if (i32.and (i32.ne (global.get $pending_armed) (i32.const 0))
+          (i32.eqz (global.get $pending_first_reason))) (then
+      (local.set $first (i32.const 1))
+      (if (i32.and (i32.ne (global.get $pending_slot) (i32.const 0))
+            (i32.ne (global.get $pending_depth) (i32.const 0))) (then
+        (local.set $p (i32.add (global.get $pending_slot)
+          (i32.shl (i32.sub (global.get $pending_depth) (i32.const 1)) (i32.const 5))))))
+      (global.set $pending_first_reason (local.get $reason))
+      (global.set $pending_first_site (local.get $site))
+      (global.set $pending_first_eip (global.get $eip))
+      (global.set $pending_first_esp (i32.load offset=16 (global.get $reg_base)))
+      (global.set $pending_first_thread (global.get $current_thread_id))
+      (global.set $pending_first_owner_thread (global.get $pending_thread))
+      (global.set $pending_first_depth (global.get $pending_depth))
+      (global.set $pending_first_epoch (global.get $pending_epoch))
+      (global.set $pending_first_profile (global.get $pending_profile))
+      (global.set $pending_first_image (global.get $image_base))
+      (global.set $pending_first_active (global.get $pending_active))
+      (global.set $pending_first_entries (global.get $pending_callback_entries))
+      (global.set $pending_first_returns (global.get $pending_callback_returns))
+      (global.set $pending_first_compiled_pc (global.get $pending_compiled_pc))
+      (global.set $pending_first_compiled_eip (global.get $pending_compiled_eip))
+      (global.set $pending_first_yield (global.get $yield_reason))
+      (global.set $pending_first_a (local.get $a))
+      (global.set $pending_first_b (local.get $b))
+      (global.set $pending_first_c (local.get $c))
+      (global.set $pending_first_prior_reason (global.get $pending_reason))
+      (global.set $pending_first_frame0 (if (result i32) (local.get $p) (then (i32.load offset=0 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_frame1 (if (result i32) (local.get $p) (then (i32.load offset=4 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_frame2 (if (result i32) (local.get $p) (then (i32.load offset=8 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_frame3 (if (result i32) (local.get $p) (then (i32.load offset=12 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_frame4 (if (result i32) (local.get $p) (then (i32.load offset=16 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_frame5 (if (result i32) (local.get $p) (then (i32.load offset=20 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_frame6 (if (result i32) (local.get $p) (then (i32.load offset=24 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_frame7 (if (result i32) (local.get $p) (then (i32.load offset=28 (local.get $p))) (else (i32.const 0))))
+      (global.set $pending_first_process_epoch_lo (i32.wrap_i64 (global.get $invocation_epoch)))
+      (global.set $pending_first_process_epoch_hi (i32.wrap_i64 (i64.shr_u (global.get $invocation_epoch) (i64.const 32))))
+      (global.set $pending_first_root_lo (i32.wrap_i64 (global.get $invocation_root)))
+      (global.set $pending_first_root_hi (i32.wrap_i64 (i64.shr_u (global.get $invocation_root) (i64.const 32))))
+      (global.set $pending_first_dispatch_ret (local.get $d))
+      (global.set $pending_first_dispatch_thunk_index (local.get $f))
+      (global.set $pending_first_dispatch_metadata (local.get $g))
+      (global.set $pending_first_current_thunk_eip (global.get $current_thunk_eip))
+    ))
+    (global.set $pending_reason (local.get $reason))
+    (if (local.get $first) (then (call $host_log_i32 (i32.const 0x504e4631)))))
+  (func $pending_gap_at (param $site i32) (param $a i32) (param $b i32) (param $c i32)
+      (param $d i32) (param $f i32) (param $g i32)
+    (if (i32.gt_s (global.get $dao_status) (i32.const 0))
+      (then (call $dao_fail (i32.const 8))))
+    (global.set $pending_seen (i32.const 1))
+    (if (global.get $pending_armed) (then
+      (if (i32.eqz (global.get $pending_reason)) (then
+        (call $pending_failure (i32.const 5) (local.get $site)
+          (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $f) (local.get $g)))))))
+  (func $pending_gap
+    (call $pending_gap_at (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+  (func $pending_valid (result i32)
+    (if (i32.and (i32.ne (global.get $pending_armed) (i32.const 0))
+          (i32.ne (global.get $pending_thread) (global.get $current_thread_id)))
+      (then (if (i32.eqz (global.get $pending_reason))
+        (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))))
+    ;; The JS arm precedes PE/thread initialization. Bind its native lifetime
+    ;; at the first execution/compilation, then reject another process/root
+    ;; replacing shared ownership even if this instance's thread ID is unchanged.
+    (if (i32.and (global.get $pending_seen)
+          (i32.and (global.get $pending_armed) (i32.eqz (global.get $pending_reason))))
+      (then
+        (if (i32.and
+              (i32.ne (global.get $pending_image_base) (i32.const 0))
+              (i32.ne (global.get $pending_image_base) (global.get $image_base)))
+          (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i64.eqz (global.get $pending_process_epoch)) (then
+          (global.set $pending_process_epoch (global.get $invocation_epoch))
+          (global.set $pending_root (global.get $invocation_root))))
+        (if (i64.eqz (global.get $pending_process_epoch))
+          (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i64.ne (global.get $pending_process_epoch) (global.get $invocation_epoch))
+          (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i64.ne (global.get $pending_root) (global.get $invocation_root))
+          (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i64.ne (global.get $pending_process_epoch)
+              (i64.atomic.load (region.addr $CALLBACK_OWNERSHIP 8)))
+          (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i64.ne (global.get $pending_root) (i64.atomic.load (global.get $invocation_slot)))
+          (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))))
+    (i32.and (i32.ne (global.get $pending_armed) (i32.const 0))
+      (i32.eqz (global.get $pending_reason))))
+  (func $pending_target (param $target i32) (result i32)
+    ;; Do not union target sets: MDK2's original fixed-target proof keeps its
+    ;; meaning. Stronghold callers must request and verify profile 2.
+    (if (i32.eq (global.get $pending_profile) (i32.const 2)) (then
+      (return (i32.or
+        (i32.eq (local.get $target) (i32.const 0x4e95f0))
+        (i32.or (i32.eq (local.get $target) (i32.const 0x4e9180))
+        (i32.or (i32.eq (local.get $target) (i32.const 0x4e9400))
+        (i32.or (i32.eq (local.get $target) (i32.const 0x4292c0))
+        (i32.or (i32.eq (local.get $target) (i32.const 0x4ea0a0))
+                (i32.eq (local.get $target) (i32.const 0x467b90))))))))))
+    (i32.or (i32.eq (local.get $target) (i32.const 0x44fc40)) (i32.or (i32.eq (local.get $target) (i32.const 0x42c990)) (i32.or (i32.eq (local.get $target) (i32.const 0x42cc80)) (i32.or (i32.eq (local.get $target) (i32.const 0x42bbe0)) (i32.or (i32.eq (local.get $target) (i32.const 0x442370)) (i32.or (i32.eq (local.get $target) (i32.const 0x40daf0)) (i32.or (i32.eq (local.get $target) (i32.const 0x42b0c0)) (i32.or (i32.eq (local.get $target) (i32.const 0x46cb20)) (i32.or (i32.eq (local.get $target) (i32.const 0x42ae70)) (i32.or (i32.eq (local.get $target) (i32.const 0x443070)) (i32.or (i32.eq (local.get $target) (i32.const 0x444f80)) (i32.or (i32.eq (local.get $target) (i32.const 0x44f4a0)) (i32.or (i32.eq (local.get $target) (i32.const 0x4522d0)) (i32.const 0)))))))))))))))
+  (func $pending_entry (param $pc i32) (param $esp i32)
+    (local $p i32)
+    (if (i32.eqz (call $pending_valid)) (then (return)))
+    (if (global.get $pending_depth) (then
+      (local.set $p (i32.add (global.get $pending_slot)
+        (i32.shl (i32.sub (global.get $pending_depth) (i32.const 1)) (i32.const 5))))
+      ;; A native callback RET stays represented through its continuation.
+      (if (i32.eq (i32.load offset=12 (local.get $p)) (i32.const 4)) (then
+        (if (i32.or (i32.ne (local.get $pc) (i32.load offset=4 (local.get $p)))
+              (i32.gt_u (local.get $esp) (i32.load offset=20 (local.get $p))))
+          (then (call $pending_gap_at (i32.const 1) (local.get $pc) (local.get $esp) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return)))
+        (if (i32.eq (local.get $pc) (i32.load offset=16 (local.get $p))) (then
+          (if (i32.ne (local.get $esp) (i32.load offset=20 (local.get $p)))
+            (then (call $pending_gap_at (i32.const 2) (local.get $pc) (local.get $esp) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return)))
+          (global.set $pending_depth (i32.sub (global.get $pending_depth) (i32.const 1))))
+          (else (return)))
+        (return)))
+      ;; A returned loader remains native-owned until its token is resumed.
+      ;; Its sentinel is a checked RET, never an arbitrary EIP/ESP sample.
+      (if (i32.eq (i32.and (i32.load offset=12 (local.get $p)) (i32.const 255)) (i32.const 3))
+        (then
+          (if (i32.or (i32.ne (local.get $pc) (i32.const 0))
+                (i32.ne (local.get $esp) (i32.load offset=20 (local.get $p))))
+            (then (call $pending_gap_at (i32.const 3) (local.get $pc) (local.get $esp) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+          (return)))
+      (if (i32.gt_u (local.get $esp) (i32.load offset=8 (local.get $p)))
+        (then (call $pending_gap_at (i32.const 4) (local.get $pc) (local.get $esp) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return)))))
+    (if (call $pending_target (local.get $pc)) (then
+      (if (i32.eqz (global.get $pending_depth)) (then (call $pending_gap_at (i32.const 5) (local.get $pc) (local.get $esp) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return)))
+      (if (i32.or (i32.ne (i32.load (local.get $p)) (local.get $pc))
+                  (i32.ne (i32.load offset=8 (local.get $p)) (local.get $esp)))
+        (then (call $pending_gap_at (i32.const 6) (local.get $pc) (local.get $esp) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))))))
+
+  ;; Passive Drakan completion observer v1. No imports, guest stores, debug
+  ;; guards, cache flushes or execution-tier switches. Calls/returns are the
+  ;; existing pending_* transfer seams, including fused and compiled paths.
+  ;; One bounded observation per instance; failure and completion are terminal.
+  (global $dao_status (mut i32) (i32.const 0))
+  (global $dao_reason (mut i32) (i32.const 0))
+  (global $dao_base (mut i32) (i32.const 0))
+  (global $dao_object (mut i32) (i32.const 0))
+  (global $dao_actor (mut i32) (i32.const 0))
+  (global $dao_stamp (mut i32) (i32.const 0))
+  (global $dao_thread (mut i32) (i32.const 0))
+  (global $dao_budget (mut i32) (i32.const 0))
+  (global $dao_seen (mut i32) (i32.const 0))
+  (global $dao_drain (mut i32) (i32.const 0))
+  (global $dao_sim (mut i32) (i32.const 0))
+  (global $dao_event (mut i32) (i32.const 0))
+  (global $dao_step (mut i32) (i32.const 0))
+  (global $dao_state (mut i32) (i32.const 0))
+  (global $dao_eventret (mut i32) (i32.const 0))
+  (global $dao_epoch (mut i64) (i64.const 0))
+  (global $dao_root (mut i64) (i64.const 0))
+  (func $dao_fail (param $reason i32)
+    (if (i32.eqz (global.get $dao_reason))
+      (then (global.set $dao_reason (local.get $reason))))
+    (global.set $dao_status (i32.const -1)))
+  ;; Pure direct-window reads only. Reject rather than enter g2w's fault,
+  ;; lazy-readback, or service paths. Drakan's measured objects use this window.
+  (func $dao_read (param $guest i32) (result i32)
+    (local $wa i32)
+    (local.set $wa (i32.add (i32.sub (local.get $guest) (global.get $image_base)) (global.get $GUEST_BASE)))
+    (if (i32.or (i32.lt_u (local.get $wa) (global.get $GUEST_BASE))
+                (i32.gt_u (local.get $wa) (i32.sub (region.end $DIRECT_WINDOW) (i32.const 4))))
+      (then (call $dao_fail (i32.const 3)) (return (i32.const 0))))
+    (i32.load (local.get $wa)))
+  (func $dao_identity (result i32)
+    (if (i32.or (i64.eqz (global.get $dao_epoch))
+        (i32.or (i64.eqz (global.get $dao_root))
+        (i32.or
+          (i64.ne (global.get $dao_epoch) (i64.atomic.load (region.addr $CALLBACK_OWNERSHIP 8)))
+          (i64.ne (global.get $dao_root) (i64.atomic.load (global.get $invocation_slot))))))
+      (then (call $dao_fail (i32.const 2))))
+    (if (i32.or (i32.ne (global.get $image_base) (i32.const 0x400000))
+        (i32.or (global.get $code16)
+        (i32.or (i32.ne (global.get $current_thread_id) (global.get $dao_thread))
+        (i32.or (i64.ne (global.get $invocation_epoch) (global.get $dao_epoch))
+                (i64.ne (global.get $invocation_root) (global.get $dao_root))))))
+      (then (call $dao_fail (i32.const 2))))
+    (if (i32.or
+          (i32.ne (call $dao_read (i32.const 0x47b700)) (global.get $dao_object))
+          (i32.or
+            (i32.ne (call $dao_read (i32.add (global.get $dao_object) (i32.const 0xa0))) (global.get $dao_actor))
+            (i32.or
+              (i32.ne (call $dao_read (i32.add (global.get $dao_actor) (i32.const 0x58))) (global.get $dao_object))
+              (i32.ne (call $dao_read (global.get $dao_actor))
+                      (i32.add (global.get $dao_base) (i32.const 0x150b20))))))
+      (then (call $dao_fail (i32.const 2))))
+    (i32.eqz (global.get $dao_reason)))
+  (func $dao_down (result i32)
+    (if (i32.or
+          (i32.ne (call $dao_read (i32.add (global.get $dao_base) (i32.const 0x15e584))) (global.get $dao_stamp))
+          (i32.or
+            (i32.ne (call $dao_read (i32.add (global.get $dao_actor) (i32.const 0x70))) (i32.const 1))
+            (i32.eqz (i32.and (call $dao_read (i32.add (global.get $dao_actor) (i32.const 0x78))) (i32.const 1)))))
+      (then (call $dao_fail (i32.const 4))))
+    (i32.eqz (global.get $dao_reason)))
+  (func $dao_tick (result i32)
+    (if (i32.or (i32.le_s (global.get $dao_status) (i32.const 0))
+                (i32.eq (global.get $dao_status) (i32.const 12)))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (global.get $dao_budget))
+      (then (call $dao_fail (i32.const 5)) (return (i32.const 0))))
+    (global.set $dao_budget (i32.sub (global.get $dao_budget) (i32.const 1)))
+    (global.set $dao_seen (i32.add (global.get $dao_seen) (i32.const 1)))
+    (call $dao_identity))
+  (func (export "drakan_actor_observer_version") (result i32) (i32.const 1))
+  (func (export "drakan_actor_observer_arm")
+    (param $base i32) (param $object i32) (param $actor i32)
+    (param $stamp i32) (param $budget i32) (result i32)
+    (if (i32.ne (global.get $dao_status) (i32.const 0))
+      (then (call $dao_fail (i32.const 1)) (return (i32.const 0))))
+    (global.set $dao_status (i32.const 1))
+    (global.set $dao_base (local.get $base))
+    (global.set $dao_object (local.get $object))
+    (global.set $dao_actor (local.get $actor))
+    (global.set $dao_stamp (local.get $stamp))
+    (global.set $dao_budget (local.get $budget))
+    (global.set $dao_thread (global.get $current_thread_id))
+    (global.set $dao_epoch (global.get $invocation_epoch))
+    (global.set $dao_root (global.get $invocation_root))
+    (if (i32.or (i32.eqz (local.get $stamp))
+                (i32.or (i32.eqz (local.get $budget)) (i32.gt_u (local.get $budget) (i32.const 100000))))
+      (then (call $dao_fail (i32.const 1)) (return (i32.const 0))))
+    (call $dao_identity))
+  (func (export "drakan_actor_observer_cancel")
+    (call $dao_fail (i32.const 7)))
+  (func (export "drakan_actor_observer_get") (param $field i32) (result i32)
+    (if (i32.gt_s (global.get $dao_status) (i32.const 0))
+      (then (drop (call $dao_identity))))
+    (if (i32.eq (local.get $field) (i32.const 0)) (then (return (global.get $dao_status))))
+    (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $dao_reason))))
+    (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $dao_seen))))
+    (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $dao_drain))))
+    (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $dao_sim))))
+    (if (i32.eq (local.get $field) (i32.const 5)) (then (return (global.get $dao_event))))
+    (if (i32.eq (local.get $field) (i32.const 6)) (then (return (global.get $dao_step))))
+    (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $dao_state))))
+    (if (i32.eq (local.get $field) (i32.const 8)) (then (return (global.get $dao_stamp))))
+    (if (i32.eq (local.get $field) (i32.const 9)) (then (return (global.get $dao_eventret))))
+    (i32.const -1))
+  (func $dao_advance (param $stage i32)
+    (if (i32.eqz (global.get $dao_reason)) (then (global.set $dao_status (local.get $stage)))))
+  (func $dao_call (param $target i32) (param $ret i32) (param $esp i32)
+    (if (i32.eqz (call $dao_tick)) (then (return)))
+    (if (i32.and (i32.eq (global.get $dao_status) (i32.const 1))
+           (i32.and (i32.eq (local.get $target) (i32.const 0x405770)) (i32.eq (local.get $ret) (i32.const 0x407a9a))))
+      (then
+
+        (global.set $dao_drain (local.get $esp))
+        (call $dao_advance (i32.const 2))
+        (return)))
+    (if (i32.and (i32.eq (global.get $dao_status) (i32.const 3))
+           (i32.and (i32.eq (local.get $target) (i32.const 0x40a090)) (i32.eq (local.get $ret) (i32.const 0x407abf))))
+      (then
+        (if (i32.ne (i32.load offset=4 (global.get $reg_base)) (i32.const 0x47b490)) (then (call $dao_fail (i32.const 2))))
+        (global.set $dao_sim (local.get $esp))
+        (call $dao_advance (i32.const 4))
+        (return)))
+    (if (i32.and (i32.eq (global.get $dao_status) (i32.const 4))
+           (i32.and (i32.eq (local.get $target) (i32.add (global.get $dao_base) (i32.const 0x4b320))) (i32.or (i32.eq (local.get $ret) (i32.const 0x40a12d)) (i32.eq (local.get $ret) (i32.const 0x40a178)))))
+      (then
+        ;; Other actors share this handler. They neither qualify nor poison
+        ;; this owner's pending simulation.
+        (if (i32.ne (call $dao_read (i32.add (local.get $esp) (i32.const 4))) (global.get $dao_object))
+          (then (return)))
+        (if (i32.ne (call $dao_read (i32.add (local.get $esp) (i32.const 8))) (i32.const 4))
+          (then (call $dao_fail (i32.const 2))))
+        (global.set $dao_eventret (local.get $ret))
+        (global.set $dao_event (local.get $esp))
+        (call $dao_advance (i32.const 5))
+        (return)))
+    (if (i32.and (i32.eq (global.get $dao_status) (i32.const 5))
+           (i32.and (i32.eq (local.get $target) (i32.add (global.get $dao_base) (i32.const 0x4c310))) (i32.eq (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4b370)))))
+      (then
+        (if (i32.ne (i32.load offset=4 (global.get $reg_base)) (global.get $dao_actor)) (then (call $dao_fail (i32.const 2))))
+        (global.set $dao_step (local.get $esp))
+        (call $dao_advance (i32.const 6))
+        (return)))
+    (if (i32.and (i32.eq (global.get $dao_status) (i32.const 6))
+           (i32.and (i32.eq (local.get $target) (i32.add (global.get $dao_base) (i32.const 0x4da10))) (i32.eq (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4c4ae)))))
+      (then
+        (if (i32.ne (i32.load offset=4 (global.get $reg_base)) (global.get $dao_actor)) (then (call $dao_fail (i32.const 2)))) (drop (call $dao_down))
+        (global.set $dao_state (local.get $esp))
+        (call $dao_advance (i32.const 7))
+        (return)))
+    ;; Another drain cannot replace the causally selected one.
+    (if (i32.eq (local.get $target) (i32.const 0x405770))
+      (then (call $dao_fail (i32.const 6)))))
+  (func $dao_ret (param $ret i32) (param $esp i32)
+    (if (i32.eqz (call $dao_tick)) (then (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 2))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_drain))
+                    (i32.eq (local.get $ret) (i32.const 0x407a9a)))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_drain))
+                        (i32.ne (local.get $ret) (i32.const 0x407a9a)))
+              (then (call $dao_fail (i32.const 6)) (return)))
+            (drop (call $dao_down)) (call $dao_advance (i32.const 3))
+            (return)))
+        (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 7))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_state))
+                    (i32.eq (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4c4ae))))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_state))
+                        (i32.ne (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4c4ae))))
+              (then (call $dao_fail (i32.const 6)) (return)))
+            (drop (call $dao_down)) (call $dao_advance (i32.const 8))
+            (return)))
+        (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 8))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_step))
+                    (i32.eq (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4b370))))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_step))
+                        (i32.ne (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4b370))))
+              (then (call $dao_fail (i32.const 6)) (return)))
+             (call $dao_advance (i32.const 9))
+            (return)))
+        (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 9))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_event))
+                    (i32.eq (local.get $ret) (global.get $dao_eventret)))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_event))
+                        (i32.ne (local.get $ret) (global.get $dao_eventret)))
+              (then (call $dao_fail (i32.const 6)) (return)))
+             (call $dao_advance (i32.const 10))
+            (return)))
+        (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 10))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_sim))
+                    (i32.eq (local.get $ret) (i32.const 0x407abf)))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_sim))
+                        (i32.ne (local.get $ret) (i32.const 0x407abf)))
+              (then (call $dao_fail (i32.const 6)) (return)))
+             (call $dao_advance (i32.const 12))
+            (return)))
+        (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 4))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_sim))
+                    (i32.eq (local.get $ret) (i32.const 0x407abf)))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_sim))
+                        (i32.ne (local.get $ret) (i32.const 0x407abf)))
+              (then (call $dao_fail (i32.const 6)) (return)))
+            (call $dao_fail (i32.const 6))
+            (return)))
+        (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 5))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_event))
+                    (i32.eq (local.get $ret) (global.get $dao_eventret)))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_event))
+                        (i32.ne (local.get $ret) (global.get $dao_eventret)))
+              (then (call $dao_fail (i32.const 6)) (return)))
+            (call $dao_fail (i32.const 6))
+            (return)))
+        (return)))
+    (if (i32.eq (global.get $dao_status) (i32.const 6))
+      (then
+        (if (i32.or (i32.ge_u (local.get $esp) (global.get $dao_step))
+                    (i32.eq (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4b370))))
+          (then
+            (if (i32.or (i32.ne (local.get $esp) (global.get $dao_step))
+                        (i32.ne (local.get $ret) (i32.add (global.get $dao_base) (i32.const 0x4b370))))
+              (then (call $dao_fail (i32.const 6)) (return)))
+            (call $dao_fail (i32.const 6))
+            (return)))
+        (return)))
+  )
+
+  (func $pending_push (param $target i32) (param $ret i32) (param $esp i32)
+    (if (global.get $dao_status)
+      (then (call $dao_call (local.get $target) (local.get $ret) (local.get $esp))))
+    (if (i32.eqz (call $pending_valid)) (then (return)))
+    (if (i32.eqz (call $pending_target (local.get $target))) (then (return)))
+    (drop (call $pending_frame_push (local.get $target) (local.get $ret) (local.get $esp) (i32.const 0))))
+  (func $pending_frame_push (param $target i32) (param $ret i32) (param $esp i32)
+      (param $kind i32) (result i32)
+    (local $p i32)
+    (if (i32.ge_u (global.get $pending_depth) (i32.const 64))
+      (then (call $pending_failure (i32.const 3) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return (i32.const 0))))
+    (local.set $p (i32.add (global.get $pending_slot)
+      (i32.shl (global.get $pending_depth) (i32.const 5))))
+    (i32.store (local.get $p) (local.get $target))
+    (i32.store offset=4 (local.get $p) (local.get $ret))
+    (i32.store offset=8 (local.get $p) (local.get $esp))
+    (i32.store offset=12 (local.get $p) (local.get $kind))
+    (i64.store offset=16 (local.get $p) (i64.const 0))
+    (i64.store offset=24 (local.get $p) (i64.const 0))
+    (global.set $pending_depth (i32.add (global.get $pending_depth) (i32.const 1)))
+    (local.get $p))
+  ;; An internal IO retry retains the dispatcher's original API frame. It is
+  ;; neither a guest CALL nor a RET. Authenticate the io_block event against
+  ;; this invocation before preserving (without pushing/popping) its history.
+  (func $pending_dispatch_io_retry (param $entry_eip i32) (param $return_eip i32)
+      (param $parent_esp i32) (param $entry_esp i32) (param $thunk i32)
+    (if (i32.eqz (global.get $pending_armed)) (then (return)))
+    ;; Legacy profiles retain their redirect rejection.
+    (if (i32.ne (global.get $pending_profile) (i32.const 2)) (then
+      (call $pending_dispatch_callback (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp))
+      (return)))
+    (if (i32.eqz (call $pending_valid)) (then (return)))
+    (if (i32.or
+          (i32.or (i32.ne (global.get $eip) (local.get $thunk))
+                  (i32.ne (global.get $current_thunk_eip) (local.get $thunk)))
+          (i32.or
+            (i32.or (i32.ne (i32.load offset=16 (global.get $reg_base)) (local.get $entry_esp))
+                    (i32.ne (call $gl32 (local.get $entry_esp)) (local.get $return_eip)))
+            (i32.or
+              (i32.or (i32.ne (global.get $yield_reason) (i32.const 12))
+                      (i32.eqz (global.get $yield_flag)))
+              (i32.or (i32.ne (global.get $steps) (i32.const 0))
+                      (i32.eqz (global.get $handler_set_eip))))))
+      (then (call $pending_gap_at (i32.const 109)
+        (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp)
+        (local.get $entry_esp) (local.get $thunk) (i32.const 0)))))
+
+  ;; Native dispatch owns the callback stack it has just built. Extend the
+  ;; shadow CALL/RET history with that exact child, rather than declaring an
+  ;; unexplained EIP change covered. Legacy profile 1 still rejects redirects.
+  (func $pending_dispatch_callback (param $entry_eip i32) (param $return_eip i32) (param $parent_esp i32)
+    (local $esp i32) (local $ret i32) (local $th i32) (local $metadata i32) (local $p i32)
+    (if (i32.eqz (global.get $pending_armed)) (then (return)))
+    (if (i32.ne (global.get $pending_profile) (i32.const 2)) (then
+      (if (i32.and (i32.ne (global.get $eip) (local.get $entry_eip))
+          (i32.ne (global.get $eip) (local.get $return_eip))) (then (call $pending_gap_at (i32.const 101) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata))))
+      (return)))
+    (if (i32.eqz (call $pending_valid)) (then (return)))
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (if (global.get $pending_depth) (then
+      (local.set $p (i32.add (global.get $pending_slot)
+        (i32.shl (i32.sub (global.get $pending_depth) (i32.const 1)) (i32.const 5))))))
+    (if (if (result i32) (local.get $p)
+          (then (i32.eq (i32.load offset=12 (local.get $p)) (i32.const 4))) (else (i32.const 0)))
+      (then
+        ;; This continuation was reached by the recorded child's exact RET.
+        (if (i32.ne (local.get $entry_eip) (i32.load offset=4 (local.get $p)))
+          (then (call $pending_gap_at (i32.const 102) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata)) (return)))
+        (local.set $return_eip (i32.load offset=16 (local.get $p)))
+        (local.set $parent_esp (i32.load offset=20 (local.get $p)))
+        (global.set $pending_depth (i32.sub (global.get $pending_depth) (i32.const 1)))
+        (if (i32.eq (global.get $eip) (local.get $return_eip)) (then
+          (if (i32.ne (local.get $esp) (local.get $parent_esp)) (then (call $pending_gap_at (i32.const 103) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata))))
+          (return))))
+      (else
+        (if (i32.or (i32.eq (global.get $eip) (local.get $entry_eip))
+              (i32.eq (global.get $eip) (local.get $return_eip))) (then (return)))
+        (if (i32.lt_s (local.get $parent_esp) (i32.const 0)) (then (call $pending_gap_at (i32.const 104) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata)) (return)))))
+    (local.set $ret (call $gl32 (local.get $esp)))
+    (if (i32.ne (local.get $ret) (local.get $return_eip)) (then
+      (if (i32.or (i32.lt_u (local.get $ret) (global.get $thunk_guest_base))
+            (i32.ge_u (local.get $ret) (global.get $thunk_guest_end)))
+        (then (call $pending_gap_at (i32.const 105) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata)) (return)))
+      (local.set $th (i32.shr_u (i32.sub (local.get $ret) (global.get $thunk_guest_base)) (i32.const 3)))
+      (if (i32.or (i32.ne (i32.and (local.get $ret) (i32.const 7)) (i32.const 0))
+            (call $thunk_patch_changed (local.get $th))) (then (call $pending_gap_at (i32.const 106) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata)) (return)))
+      (local.set $metadata (i32.load (call $thunk_metadata_addr (local.get $th))))
+      (if (i32.ne (i32.and (local.get $metadata) (i32.const 0xFFFF0000)) (i32.const 0xCACA0000))
+        (then (call $pending_gap_at (i32.const 107) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata)) (return)))))
+    (if (i32.or (i32.eqz (global.get $eip)) (i32.ge_u (local.get $esp) (local.get $parent_esp)))
+      (then (call $pending_gap_at (i32.const 108) (local.get $entry_eip) (local.get $return_eip) (local.get $parent_esp) (local.get $ret) (local.get $th) (local.get $metadata)) (return)))
+    (local.set $p (call $pending_frame_push (global.get $eip) (local.get $ret) (local.get $esp) (i32.const 1)))
+    (if (local.get $p) (then
+      (i32.store offset=16 (local.get $p) (local.get $return_eip))
+      (i32.store offset=20 (local.get $p) (local.get $parent_esp))
+      (global.set $pending_callback_entries (i32.add (global.get $pending_callback_entries) (i32.const 1))))))
+  (func $pending_pop (param $ret i32) (param $esp i32)
+    (local $p i32) (local $entry i32)
+    (if (global.get $dao_status)
+      (then (call $dao_ret (local.get $ret) (local.get $esp))))
+    (if (i32.eqz (call $pending_valid)) (then (return)))
+    (if (i32.eqz (global.get $pending_depth)) (then (return)))
+    (local.set $p (i32.add (global.get $pending_slot)
+      (i32.shl (i32.sub (global.get $pending_depth) (i32.const 1)) (i32.const 5))))
+    (local.set $entry (i32.load offset=8 (local.get $p)))
+    ;; Nested untracked calls return below the tracked entry. A return to the
+    ;; recorded PC from a different ESP is never accepted as that return.
+    (if (i32.or (i32.ge_u (local.get $esp) (local.get $entry))
+                (i32.eq (local.get $ret) (i32.load offset=4 (local.get $p))))
+      (then
+        (if (i32.or (i32.ne (local.get $esp) (local.get $entry))
+                    (i32.ne (local.get $ret) (i32.load offset=4 (local.get $p))))
+          (then (call $pending_failure (i32.const 4) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return)))
+        (if (i32.ne (i32.load offset=12 (local.get $p)) (i32.const 0))
+          (then (global.set $pending_callback_returns (i32.add (global.get $pending_callback_returns) (i32.const 1)))))
+        (if (i32.eq (i32.load offset=12 (local.get $p)) (i32.const 1))
+          (then (i32.store offset=12 (local.get $p) (i32.const 4)))
+          (else (if (i32.eq (i32.and (i32.load offset=12 (local.get $p)) (i32.const 255)) (i32.const 2))
+          (then (i32.store offset=12 (local.get $p)
+            (i32.or (i32.and (i32.load offset=12 (local.get $p)) (i32.const 0xFFFFFF00)) (i32.const 3))))
+          (else (global.set $pending_depth (i32.sub (global.get $pending_depth) (i32.const 1))))))))))
+
   (func $th_nop (param $op i32) (local $nx_fn i32) (local $nx_op i32) (dispatch-next))
   ;; 1: skip next word
   (func $th_next_word (param $op i32) (local $nx_fn i32) (local $nx_op i32) (drop (read-thread-word)) (dispatch-next))
@@ -513,8 +1027,24 @@
     (dispatch-next))
 
   ;; --- Stack ---
+  ;; Protected execution cannot enter g2w's sentinel, trap or reentrant SEH
+  ;; path after changing architectural state. Validate every byte first,
+  ;; including unaligned page boundaries and 32-bit address wrap. A rejected
+  ;; instruction retains EIP/ESP and can be retried after the mapping is fixed.
+  ;; The unarmed fault personality remains the ordinary memory helper's job.
+  (func $scalar_store_preflight (param $addr i32) (param $width i32)
+    (local $i i32)
+    (loop $bytes
+        (if (i32.eqz (call $guest_addr_mapped (i32.add (local.get $addr) (local.get $i))))
+          (then (unreachable)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $bytes (i32.lt_u (local.get $i) (local.get $width)))))
+
   (func $th_push_r (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $v i32)
+    (if (global.get $rep_store_step) (then
+      (call $scalar_store_preflight
+        (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (i32.const 4))))
     (local.set $v (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $op) (i32.const 2)))))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $v))
@@ -621,13 +1151,50 @@
     (local $target i32) (local.set $target (read-thread-word))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $op))
+    (call $pending_push (local.get $target) (local.get $op) (i32.load offset=16 (global.get $reg_base)))
     (call $cs_push (local.get $op))
     (global.set $eip (local.get $target))
     (return_call $branch_end))
+  ;; CALL operands must not trigger a lazy DIB readback or enter a missing
+  ;; mapping's fault/SEH path. Check all bytes, including wrap/page crossings,
+  ;; before loading the target or changing the return stack.
+  (func $memory_call_preflight (param $addr i32)
+    (local $i i32)
+    (call $scalar_store_preflight (local.get $addr) (i32.const 4))
+    (loop $bytes
+      (if (i32.lt_u
+            (i32.sub (i32.add (local.get $addr) (local.get $i)) (global.get $DIB_GUEST_BASE))
+            (global.get $DIB_GUEST_CAPACITY)) (then (unreachable)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $bytes (i32.lt_u (local.get $i) (i32.const 4)))))
   (func $th_call_ind (param $op i32)
-    (local $mem_addr i32) (local $target i32)
+    (local $mem_addr i32) (local $target i32) (local $stack i32)
     (local.set $mem_addr (call $read_addr))
+    (if (global.get $rep_store_step) (then
+      (local.set $stack (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+      (call $memory_call_preflight (local.get $mem_addr))
+      (call $memory_call_preflight (local.get $stack))))
     (local.set $target (call $gl32 (local.get $mem_addr)))
+    (if (global.get $rep_store_step) (then
+      ;; NULL exits, direct native-wndproc markers, unmapped code and DIB
+      ;; readback entries are not audited instruction targets. Reject them
+      ;; before the CALL store rather than entering a service on the next run.
+      (if (i32.or (i32.eqz (local.get $target))
+                  (i32.ge_u (local.get $target) (i32.const 0xFFFE0000)))
+        (then (unreachable)))
+      (call $memory_call_preflight (local.get $target))
+      ;; An x86 CALL and its API service are distinct observation boundaries.
+      ;; Never inline dispatch after this instruction's sole guest store.
+      ;; The next protected run refuses thunk entry before any run effects;
+      ;; disarming resumes the ordinary dispatcher with this exact frame.
+      (call $gs32 (local.get $stack) (local.get $op))
+      (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+      (if (i32.eqz (thunk-contains (local.get $target)))
+        (then (call $pending_push (local.get $target) (local.get $op) (i32.load offset=16 (global.get $reg_base)))
+    (call $cs_push (local.get $op))))
+      (global.set $eip (local.get $target))
+      (global.set $block_budget (i32.const 0))
+      (return)))
     ;; Check thunk zone (guest-space bounds)
     (if (thunk-contains (local.get $target))
       (then
@@ -640,6 +1207,7 @@
     ;; Regular indirect call
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $op))
+    (call $pending_push (local.get $target) (local.get $op) (i32.load offset=16 (global.get $reg_base)))
     (call $cs_push (local.get $op))
     (global.set $eip (local.get $target))
     (return_call $branch_end))
@@ -658,16 +1226,32 @@
         (unreachable))))
 
   (func $th_ret (param $op i32)
+    (local $ret i32) (local $esp i32)
     (call $th_ret_guard16)
-    (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $ret (call $gl32 (local.get $esp)))
+    (call $null_transfer_record (i32.const 2) (local.get $ret)
+      (i32.add (local.get $esp) (i32.const 4)) (local.get $esp) (local.get $ret)
+      (i32.const 0) (i32.const 0))
+    (global.set $eip (local.get $ret))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $pending_pop (local.get $ret) (local.get $esp))
     (call $cs_pop)
+    (if (global.get $callback_feed_enabled) (then (call $callback_feed_ret (local.get $ret))))
     (return_call $branch_end))
   (func $th_ret_imm (param $op i32)
+    (local $ret i32) (local $esp i32)
     (call $th_ret_guard16)
-    (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $ret (call $gl32 (local.get $esp)))
+    (call $null_transfer_record (i32.const 3) (local.get $ret)
+      (i32.add (local.get $esp) (i32.add (i32.const 4) (local.get $op)))
+      (local.get $esp) (local.get $ret) (i32.const 0) (i32.const 0))
+    (global.set $eip (local.get $ret))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.add (i32.const 4) (local.get $op))))
+    (call $pending_pop (local.get $ret) (local.get $esp))
     (call $cs_pop)
+    (if (global.get $callback_feed_enabled) (then (call $callback_feed_ret (local.get $ret))))
     (return_call $branch_end))
 
   ;; --- Stack runs (07-decoder.wat $try_emit_stack_run) ---
@@ -774,8 +1358,50 @@
       (br $items)))
     (i32.store offset=16 (global.get $reg_base) (local.get $cur))
     (i32.const 0))
+  ;; Keep data-stack runs fused. If any push can touch code, execute only
+  ;; the first original PUSH and let the instruction-boundary continuation
+  ;; decode the remaining bytes again. Skip the unused immediate words so a
+  ;; fallback returns through its normal resume trampoline.
+  (func $stack_run_smc_first (param $op i32) (param $extra i32) (param $pc i32) (result i32)
+    (local $cur i32) (local $len i32) (local $n i32) (local $k i32)
+    (local $code i32) (local $v i32) (local $first i32)
+    (local.set $cur (i32.load offset=16 (global.get $reg_base)))
+    (local.set $len
+      (i32.shl (i32.add (i32.shr_u (local.get $op) (i32.const 28)) (local.get $extra)) (i32.const 2)))
+    (if (i32.eqz (call $store_span_touches_code (i32.sub (local.get $cur) (local.get $len)) (local.get $len)))
+      (then (return (i32.const 0))))
+    (local.set $first (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 15)))
+    (local.set $v
+      (if (result i32) (i32.eq (local.get $first) (i32.const 4))
+        (then (local.get $cur))
+        (else (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $first) (i32.const 7)) (i32.const 2)))))))
+    (local.set $n (i32.and (local.get $op) (i32.const 15)))
+    (loop $immediates
+      (local.set $code (i32.and
+        (i32.shr_u (local.get $op) (i32.add (i32.const 4) (i32.shl (local.get $k) (i32.const 2))))
+        (i32.const 15)))
+      (if (i32.eq (local.get $code) (i32.const 8))
+        (then
+          (if (i32.eqz (local.get $k))
+            (then (local.set $v (read-thread-word)))
+            (else (drop (read-thread-word))))))
+      (local.set $k (i32.add (local.get $k) (i32.const 1)))
+      (br_if $immediates (i32.lt_u (local.get $k) (local.get $n))))
+    (local.set $cur (i32.sub (local.get $cur) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $cur))
+    (call $gs32 (local.get $cur) (local.get $v))
+    (if (call $stack_run_faulted) (then (return (i32.const 2))))
+    (global.set $store_fused_resume_pc (local.get $pc))
+    (i32.const 1))
+
+  ;; PUSH run payload starts with its first original successor PC, followed
+  ;; by the immediate words consumed by the existing run body.
   (func $th_push_run (param $op i32)
-    (local $nx_fn i32) (local $nx_op i32)
+    (local $nx_fn i32) (local $nx_op i32) (local $first_pc i32) (local $smc i32)
+    (local.set $first_pc (read-thread-word))
+    (local.set $smc (call $stack_run_smc_first (local.get $op) (i32.const 0) (local.get $first_pc)))
+    (if (i32.eq (local.get $smc) (i32.const 2)) (then (return)))
+    (if (local.get $smc) (then (dispatch-next)))
     (if (call $stack_run_push (local.get $op) (i32.const 0)) (then (return)))
     (dispatch-next))
   (func $th_pop_run (param $op i32)
@@ -785,7 +1411,14 @@
   ;; ... PUSH items, then CALL rel32: next words are the return address and
   ;; the target, after the items' immediates.
   (func $th_push_run_call (param $op i32)
-    (local $ret i32) (local $target i32) (local $cur i32)
+    (local $first_pc i32) (local $smc i32) (local $ret i32) (local $target i32) (local $cur i32)
+    (local.set $first_pc (read-thread-word))
+    (local.set $smc (call $stack_run_smc_first (local.get $op) (i32.const 1) (local.get $first_pc)))
+    (if (i32.eq (local.get $smc) (i32.const 2)) (then (return)))
+    (if (local.get $smc)
+      (then
+        (global.set $store_fused_resume_pc (i32.const 0))
+        (return_call $th_block_retired (local.get $first_pc))))
     (if (call $stack_run_push (local.get $op) (i32.const 1)) (then (return)))
     (local.set $ret (read-thread-word))
     (local.set $target (read-thread-word))
@@ -794,23 +1427,30 @@
     (if (global.get $sr_fast)
       (then (i32.store (i32.add (local.get $cur) (global.get $sr_delta)) (local.get $ret)))
       (else (call $gs32 (local.get $cur) (local.get $ret))))
+    (call $pending_push (local.get $target) (local.get $ret) (local.get $cur))
     (call $cs_push (local.get $ret))
     (global.set $eip (local.get $target))
     (return_call $branch_end))
   ;; ... POP items, then RET / RET imm16 (the next word, 0 for C3).
   (func $th_pop_run_ret (param $op i32)
-    (local $imm i32) (local $cur i32)
+    (local $imm i32) (local $cur i32) (local $ret i32)
     (local.set $imm (read-thread-word))
     (if (call $stack_run_pop (local.get $op) (i32.const 1)) (then (return)))
     (call $th_ret_guard16)
     (local.set $cur (i32.load offset=16 (global.get $reg_base)))
-    (global.set $eip
+    (local.set $ret
       (if (result i32) (global.get $sr_fast)
         (then (i32.load (i32.add (local.get $cur) (global.get $sr_delta))))
         (else (call $gl32 (local.get $cur)))))
+    (call $null_transfer_record (i32.const 4) (local.get $ret)
+      (i32.add (local.get $cur) (i32.add (i32.const 4) (local.get $imm)))
+      (local.get $cur) (local.get $ret) (i32.const 0) (i32.const 0))
+    (global.set $eip (local.get $ret))
     (i32.store offset=16 (global.get $reg_base)
       (i32.add (local.get $cur) (i32.add (i32.const 4) (local.get $imm))))
+    (call $pending_pop (local.get $ret) (local.get $cur))
     (call $cs_pop)
+    (if (global.get $callback_feed_enabled) (then (call $callback_feed_ret (local.get $ret))))
     (return_call $branch_end))
   ;; H43's operand word is emitted as 0 at all three decoder sites and read by
   ;; nothing, so it is the whole 32 bits of chain slot: epoch in the high half,
@@ -2587,7 +3227,8 @@
 
   ;; 266: CALL rel16 — push 16-bit return addr, jump to 16-bit target
   (func $th_call_rel16 (param $op i32)
-    (local $target i32) (local.set $target (read-thread-word))
+    (local $target i32) (call $pending_gap)
+    (local.set $target (read-thread-word))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF)))
     (global.set $eip (local.get $target)))
@@ -3444,7 +4085,13 @@
     (dispatch-next))
   ;; REP MOVSW
   (func $th_rep_movsw (param $op i32)
-     (local $nx_fn i32) (local $nx_op i32) (block $d (loop $l
+     (local $nx_fn i32) (local $nx_op i32)
+    (if (i32.and (i32.eqz (global.get $rep_store_step)) (call $rep_precise (i32.const 2) (i32.const 1)))
+      (then (if (call $rep_fault_checked (i32.const 2) (i32.const 1) (local.get $op)) (then (return))) (dispatch-next)))
+    (if (global.get $rep_store_step) (then
+      (if (call $rep_store_step_do (i32.const 2) (i32.const 1)) (then (return)))
+      (dispatch-next)))
+    (block $d (loop $l
       (br_if $d (i32.eqz (i32.load offset=4 (global.get $reg_base))))
       (call $gs16 (i32.load offset=28 (global.get $reg_base)) (call $gl16 (i32.load offset=24 (global.get $reg_base))))
       (if (global.get $df)
@@ -3456,7 +4103,13 @@
       (br $l))) (dispatch-next))
   ;; REP STOSW
   (func $th_rep_stosw (param $op i32)
-     (local $nx_fn i32) (local $nx_op i32) (block $d (loop $l
+     (local $nx_fn i32) (local $nx_op i32)
+    (if (i32.and (i32.eqz (global.get $rep_store_step)) (call $rep_precise (i32.const 2) (i32.const 0)))
+      (then (if (call $rep_fault_checked (i32.const 2) (i32.const 0) (local.get $op)) (then (return))) (dispatch-next)))
+    (if (global.get $rep_store_step) (then
+      (if (call $rep_store_step_do (i32.const 2) (i32.const 0)) (then (return)))
+      (dispatch-next)))
+    (block $d (loop $l
       (br_if $d (i32.eqz (i32.load offset=4 (global.get $reg_base))))
       (call $gs16 (i32.load offset=28 (global.get $reg_base)) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
       (if (global.get $df)

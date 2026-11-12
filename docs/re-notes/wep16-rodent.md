@@ -11,6 +11,46 @@ the original remains the desktop edition and the remake is separately
 selectable as `rodent2000`. See [rodent2000.md](rodent2000.md) for the remake's
 OLE picture startup fix and gameplay command.
 
+## Starting-level textbox (fixed 2026-10-14)
+
+The original Options > Level form created `ThunderTextBox` with title `1`,
+but native control class 0 and no caret. Ordinary click/type/OK left the
+game at level 1. This was not a VB control-array failure: VBRUN100 obtains
+EDIT's procedure through USER.404 GetClassInfo and chains textbox messages
+through USER.122 CallWindowProc. The trace showed the saved procedure as
+`FFFE:0102`, our internal Win32 system-class marker. Win16 native adoption
+recognizes a per-class far thunk instead, so the calls reached generic
+DefWindowProc without ever initializing EDIT state.
+
+GetClassInfo now returns that callable per-class Win16 thunk for built-in
+classes, matching GetWindowLong(GWL_WNDPROC); guest-registered procedures
+still round-trip unchanged. No Rodent-specific state or class-name mapping
+was added. The original textbox becomes class 2, receives text and owns its
+real caret. The game itself accepts `25`, changes its title to `[25]`, draws
+the corresponding board, and initializes a reopened level form with `25`.
+
+`test-win16-class-info-edit.js` exercises the actual Win16 GetClassInfo and
+CallWindowProc adapters, adoption, preserved guest wndproc/control id, typed
+text, far-buffer readback and Pascal stack cleanup. It fails before the fix
+with class 0 instead of 2. `test-win16-vb-rodent-level.js` drives the original
+EXE with renderer clicks/keys: type 25, OK, reopen 25, edit, Cancel; it also
+fails on the baseline artifact. Both pass after the fix, along with the
+GetText far-pointer, native superclass and WEPUTIL score-caret regressions.
+
+Reviewed Chrome captures and reproducible browser script are under
+`scratch/runs/20261014-rodent-level-before` and
+`scratch/runs/20261014-rodent-level-after`. Browser input uses Options/Level,
+click, Home/Delete, type `25`, OK, then reopen/Cancel. Baseline f3125a1ca
+WASM SHA-256 is `2158338e146bb30e5f3fc628b64462935cfdc066ee149dfba7fce29bfefbe29f`;
+final main 487e2c013 plus this patch is
+`70c6d329d51eee5db553715f53ffc47f3e6e2491b54ae5327f1b8b012427d655`.
+The final base also includes the unrelated sparse-heap fix; the failing
+focused regression and successful initial Rodent retest isolate the Win16
+change. Final build gates pass. Browser evidence is cooperative Chrome on
+Linux, 900x700, not physical iPhone/Safari keyboard verification. Rodent has
+no candidate-corpus manifest entry, so these bundles use `evidence.json`
+rather than inventing a dashboard candidate ID.
+
 ## Shared USER queue scratch overrun (2026-09-16)
 
 The 2026-09-15 queue-unification commit `7d4342eb` made ordinary same-thread

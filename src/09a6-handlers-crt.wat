@@ -736,11 +736,13 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
-  (func $crt_strtod_simple (param $nptr i32) (result f64)
+  (func $crt_strtod_simple (param $nptr i32) (param $endptr i32) (result f64)
     (local $s i32) (local $ch i32) (local $val i32)
     (local $neg i32) (local $digits i32) (local $exp_neg i32) (local $exp i32)
     (local $fval f64) (local $frac f64)
+    (local $start i32) (local $exp_start i32) (local $exp_digits i32)
     (local.set $s (call $g2w (local.get $nptr)))
+    (local.set $start (local.get $s))
     (block $space_done (loop $skip_space
       (local.set $ch (i32.load8_u (local.get $s)))
       (br_if $space_done (i32.eqz (call $crt_is_space (local.get $ch))))
@@ -778,6 +780,7 @@
         (local.set $ch (i32.load8_u (local.get $s)))
         (if (i32.or (i32.eq (local.get $ch) (i32.const 0x65)) (i32.eq (local.get $ch) (i32.const 0x45)))
           (then
+            (local.set $exp_start (local.get $s))
             (local.set $s (i32.add (local.get $s) (i32.const 1)))
             (local.set $ch (i32.load8_u (local.get $s)))
             (if (i32.or (i32.eq (local.get $ch) (i32.const 0x2D)) (i32.eq (local.get $ch) (i32.const 0x2B)))
@@ -787,9 +790,15 @@
             (block $ex_done (loop $ex
               (local.set $val (call $crt_digit_value (i32.load8_u (local.get $s))))
               (br_if $ex_done (i32.or (i32.lt_s (local.get $val) (i32.const 0)) (i32.gt_u (local.get $val) (i32.const 9))))
+              ;; Saturate to keep arbitrarily long exponents bounded.
               (local.set $exp (i32.add (i32.mul (local.get $exp) (i32.const 10)) (local.get $val)))
+              (if (i32.gt_u (local.get $exp) (i32.const 4096))
+                (then (local.set $exp (i32.const 4096))))
+              (local.set $exp_digits (i32.add (local.get $exp_digits) (i32.const 1)))
               (local.set $s (i32.add (local.get $s) (i32.const 1)))
               (br $ex)))
+            (if (i32.eqz (local.get $exp_digits))
+              (then (local.set $s (local.get $exp_start))))
             (block $scale_done (loop $scale
               (br_if $scale_done (i32.eqz (local.get $exp)))
               (if (local.get $exp_neg)
@@ -797,18 +806,29 @@
                 (else (local.set $fval (f64.mul (local.get $fval) (f64.const 10)))))
               (local.set $exp (i32.sub (local.get $exp) (i32.const 1)))
               (br $scale)))))))
+    (if (local.get $endptr)
+      (then (call $gs32 (local.get $endptr)
+        (if (result i32) (local.get $digits)
+          (then (i32.add (local.get $nptr) (i32.sub (local.get $s) (local.get $start))))
+          (else (local.get $nptr))))))
     (if (local.get $neg) (then (return (f64.neg (local.get $fval)))))
     (local.get $fval))
 
+  ;; abs(int) — cdecl. Two's-complement INT_MIN remains INT_MIN, as on x86.
+  (func $handle_abs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base)
+      (if (result i32) (i32.lt_s (local.get $arg0) (i32.const 0))
+        (then (i32.sub (i32.const 0) (local.get $arg0)))
+        (else (local.get $arg0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
   (func $handle_atof (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $fpu_push (call $crt_strtod_simple (local.get $arg0)))
+    (call $fpu_push (call $crt_strtod_simple (local.get $arg0) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   (func $handle_strtod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $fpu_push (call $crt_strtod_simple (local.get $arg0)))
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (local.get $arg0))))
+    (call $fpu_push (call $crt_strtod_simple (local.get $arg0) (local.get $arg1)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
@@ -1250,6 +1270,101 @@
     (call $crt_stream_link (local.get $rec))
     (local.get $file))
 
+  ;; Bounded fdopen grammar: [rwa](b[+]?|[+]b), with text/default
+  ;; recognized but explicitly unsupported (-1). Malformed strings return 0.
+  ;; Positive result: FILE flags in low byte, append request in bit 8.
+  (func $crt_fdopen_mode (param $mode i32) (result i32)
+    (local $first i32) (local $c i32) (local $i i32)
+    (local $flags i32) (local $translation i32) (local $plus i32)
+    (if (i32.eqz (local.get $mode)) (then (return (i32.const 0))))
+    (local.set $first (call $gl8 (local.get $mode)))
+    (if (i32.eq (local.get $first) (i32.const 114))
+      (then (local.set $flags (i32.const 1)))
+      (else
+        (if (i32.or (i32.eq (local.get $first) (i32.const 119))
+                     (i32.eq (local.get $first) (i32.const 97)))
+          (then (local.set $flags (i32.const 2)))
+          (else (return (i32.const 0))))))
+    (local.set $i (i32.const 1))
+    (block $done (loop $scan
+      (local.set $c (call $gl8 (i32.add (local.get $mode) (local.get $i))))
+      (br_if $done (i32.eqz (local.get $c)))
+      (if (i32.ge_u (local.get $i) (i32.const 3)) (then (return (i32.const 0))))
+      (if (i32.eq (local.get $c) (i32.const 43))
+        (then
+          (if (local.get $plus) (then (return (i32.const 0))))
+          (local.set $plus (i32.const 1)))
+        (else
+          (if (i32.or (i32.eq (local.get $c) (i32.const 98))
+                       (i32.eq (local.get $c) (i32.const 116)))
+            (then
+              (if (local.get $translation) (then (return (i32.const 0))))
+              (local.set $translation (local.get $c)))
+            (else (return (i32.const 0))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (if (i32.ne (local.get $translation) (i32.const 98)) (then (return (i32.const -1))))
+    (i32.or
+      (select (i32.const 128) (local.get $flags) (local.get $plus))
+      (select (i32.const 256) (i32.const 0) (i32.eq (local.get $first) (i32.const 97)))))
+
+  ;; Return NULL with errno, including safe OOM when no errno cell exists yet.
+  (func $crt_fdopen_error (param $error i32) (result i32)
+    (if (i32.eqz (global.get $msvcrt_errno_ptr))
+      (then (global.set $msvcrt_errno_ptr (call $heap_alloc (i32.const 4)))))
+    (if (global.get $msvcrt_errno_ptr)
+      (then (call $gs32 (global.get $msvcrt_errno_ptr) (local.get $error))))
+    (i32.const 0))
+
+  (func $crt_fdopen (param $fd i32) (param $mode i32) (param $name_ptr i32) (result i32)
+    (local $parsed i32) (local $state i32) (local $rights i32) (local $append i32)
+    (local $rec i32) (local $rec_w i32) (local $file i32) (local $error i32)
+    (local.set $parsed (call $crt_fdopen_mode (local.get $mode)))
+    (if (i32.eqz (local.get $parsed)) (then (return (call $crt_fdopen_error (i32.const 22)))))
+    (if (i32.eq (local.get $parsed) (i32.const -1))
+      (then (call $crash_unimplemented (local.get $name_ptr)) (unreachable)))
+    (local.set $state (call $host_fs_crt_descriptor_query (local.get $fd)))
+    (if (i32.eqz (local.get $state)) (then (return (call $crt_fdopen_error (i32.const 9)))))
+    (local.set $append (i32.ne (i32.and (local.get $parsed) (i32.const 256)) (i32.const 0)))
+    ;; Never silently translate text/default descriptors as binary, nor invent
+    ;; append flag mutation. Append mode needs an existing _O_APPEND fd.
+    (if (i32.or (i32.eqz (i32.and (local.get $state) (i32.const 8)))
+          (i32.and (local.get $append) (i32.eqz (i32.and (local.get $state) (i32.const 64)))))
+      (then (call $crash_unimplemented (local.get $name_ptr)) (unreachable)))
+    (local.set $rights
+      (if (result i32) (i32.and (local.get $parsed) (i32.const 128))
+        (then (i32.const 6))
+        (else (select (i32.const 2) (i32.const 4) (i32.and (local.get $parsed) (i32.const 1))))))
+    (if (i32.ne (i32.and (local.get $state) (local.get $rights)) (local.get $rights))
+      (then (return (call $crt_fdopen_error (i32.const 13)))))
+    (local.set $rec (call $heap_alloc (i32.const 48)))
+    (if (i32.eqz (local.get $rec)) (then (return (call $crt_fdopen_error (i32.const 12)))))
+    (local.set $file (i32.add (local.get $rec) (i32.const 16)))
+    (local.set $rec_w (call $g2w (local.get $rec)))
+    (i32.store offset=4 (local.get $rec_w) (local.get $fd))
+    (i32.store offset=8 (local.get $rec_w) (local.get $file))
+    ;; Append remains in the descriptor: no separate seek RPC before writes.
+    (i32.store offset=12 (local.get $rec_w) (i32.const 0))
+    (call $crt_file_init (local.get $file) (local.get $fd)
+      (i32.and (local.get $parsed) (i32.const 255)))
+    ;; Revalidate live identity/access and reserve unique FILE ownership AFTER
+    ;; allocation. No list lock spans this synchronous main-host operation.
+    (local.set $error (call $host_fs_crt_descriptor_adopt
+      (local.get $fd) (local.get $rights) (local.get $append) (local.get $file)))
+    (if (local.get $error)
+      (then
+        (call $heap_free (local.get $rec))
+        (if (i32.eq (local.get $error) (i32.const -1))
+          (then (call $crash_unimplemented (local.get $name_ptr)) (unreachable)))
+        (return (call $crt_fdopen_error (local.get $error)))))
+    (call $crt_stream_link (local.get $rec))
+    (local.get $file))
+
+  (func $handle__fdopen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base)
+      (call $crt_fdopen (local.get $arg0) (local.get $arg1) (local.get $name_ptr)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
   ;; The _iob table: stdin, stdout, stderr as three consecutive FILEs, each
   ;; with a standard-stream record. Created once per process.
   (func $crt_iob_ensure (result i32)
@@ -1296,6 +1411,41 @@
         (call $heap_free (local.get $recs))
         (call $heap_free (local.get $iob))
         (return (local.get $winner))))
+    (local.get $iob))
+
+  ;; CRTDLL and MSVCR70 export _iob as a FILE array, not a callable accessor.
+  ;; Other vendors must still resolve normally. Both loader paths pass linear
+  ;; string pointers. Binding this data to a thunk lets freopen overwrite
+  ;; adjacent thunk metadata (GLTron's redirected stdout corrupted abs).
+  ;; The shared publisher above owns allocation, initialization and list links;
+  ;; no loader-private table or per-thread replica may be introduced here.
+  (func $resolve_crtdll_iob_import (param $dll_wa i32) (param $name_wa i32) (result i32)
+    (local $iob i32)
+    (if (i32.eqz (call $str_eq (local.get $name_wa) "_iob"))
+      (then (return (i32.const 0))))
+    (if (i32.and
+          (i32.eq (i32.or (i32.load (local.get $dll_wa)) (i32.const 0x20202020)) (i32.const 0x6376736d))
+          (i32.and
+            (i32.eq (i32.or (i32.load offset=4 (local.get $dll_wa)) (i32.const 0x20202020)) (i32.const 0x2e303772))
+            (i32.eq (i32.or (i32.load offset=8 (local.get $dll_wa)) (i32.const 0x00202020)) (i32.const 0x006c6c64))))
+      (then
+        (local.set $iob (call $crt_iob_ensure))
+        (if (i32.eqz (local.get $iob)) (then (unreachable)))
+        (return (local.get $iob))))
+    (if (i32.ne (i32.or (i32.load (local.get $dll_wa)) (i32.const 0x20202020))
+                 (i32.const 0x64747263)) ;; crtd
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.or (i32.load offset=4 (local.get $dll_wa)) (i32.const 0x20202020))
+                 (i32.const 0x642e6c6c)) ;; ll.d
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.or (i32.load16_u offset=8 (local.get $dll_wa)) (i32.const 0x2020))
+                 (i32.const 0x6c6c)) ;; ll
+      (then (return (i32.const 0))))
+    (if (i32.load8_u offset=10 (local.get $dll_wa))
+      (then (return (i32.const 0))))
+    (local.set $iob (call $crt_iob_ensure))
+    ;; Allocation failure must not fall back to a callable thunk for data.
+    (if (i32.eqz (local.get $iob)) (then (unreachable)))
     (local.get $iob))
 
   ;; A standard stream that was never reopened talks to the console.
@@ -1395,7 +1545,7 @@
   ;; "Invalid cursor file" in the browser and only there.
   (func $crt_file_read (param $file i32) (param $buf i32) (param $len i32) (result i32)
     (local $rec i32) (local $flags i32) (local $handle i32) (local $read i32)
-    (local $bytes_ga i32) (local $bytes_wa i32) (local $err i32)
+    (local $bytes_ga i32) (local $bytes_wa i32) (local $err i32) (local $pending i32)
     (local.set $rec (call $crt_stream_lookup (local.get $file)))
     (if (i32.eqz (local.get $rec)) (then (return (i32.const -1))))
     (local.set $flags (call $crt_file_flags (local.get $file)))
@@ -1409,22 +1559,32 @@
         (return (i32.const 0))))
     (local.set $flags (i32.or (local.get $flags) (i32.const 0x01)))
     (call $crt_file_set_flags (local.get $file) (local.get $flags))
-    (call $crt_file_reset_buffer (local.get $file))
     (if (i32.eqz (local.get $len)) (then (return (i32.const 0))))
+    ;; ungetc uses the real FILE buffer, also visible to an inline getc.
+    ;; Keep it pending until host I/O succeeds: a parked fread retries whole.
+    (if (i32.gt_s (call $gl32 (i32.add (local.get $file) (i32.const 4))) (i32.const 0))
+      (then
+        (local.set $pending (i32.const 1))
+        (i32.store8 (call $g2w (local.get $buf))
+          (i32.load8_u (call $g2w (call $gl32 (local.get $file)))))
+        (if (i32.eq (local.get $len) (i32.const 1))
+          (then (call $crt_file_reset_buffer (local.get $file)) (return (i32.const 1))))))
     (local.set $handle (call $crt_stream_handle (local.get $rec)))
     (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
     (i32.store (local.get $bytes_wa) (i32.const 0))
     (local.set $err (if (result i32) (local.get $handle)
       (then (call $host_fs_read_file_result
-        (local.get $handle) (local.get $buf) (local.get $len) (local.get $bytes_ga)))
+        (local.get $handle) (i32.add (local.get $buf) (local.get $pending))
+        (i32.sub (local.get $len) (local.get $pending)) (local.get $bytes_ga)))
       (else (i32.const 6)))) ;; ERROR_INVALID_HANDLE
     (if (i32.eq (local.get $err) (i32.const 997)) (then (return (global.get $CRT_READ_PARKED))))
+    (call $crt_file_reset_buffer (local.get $file))
     (if (local.get $err)
       (then
         (call $crt_file_set_flags (local.get $file) (i32.or (local.get $flags) (i32.const 0x20)))
-        (return (i32.const 0))))
-    (local.set $read (i32.load (local.get $bytes_wa)))
+        (return (local.get $pending))))
+    (local.set $read (i32.add (i32.load (local.get $bytes_wa)) (local.get $pending)))
     (if (i32.lt_u (local.get $read) (local.get $len))
       (then (call $crt_file_set_flags (local.get $file) (i32.or (local.get $flags) (i32.const 0x10)))))
     (local.get $read))
@@ -1572,6 +1732,55 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  ;; setbuf(FILE*, buf) is setvbuf(file, buf, buf ? _IOFBF : _IONBF,
+  ;; BUFSIZ), with MSVCRT BUFSIZ = 512. Share setvbuf's immediate-I/O
+  ;; policy: never advertise a guest buffer that our stdio does not fill or
+  ;; drain. No output bytes are pending; input pushback is preserved and the
+  ;; caller buffer is not retained.
+  ;; Invalid/closed streams leave memory alone and report EINVAL via errno.
+  (func $handle_setbuf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $saved_eax i32) (local $rec i32) (local $rw i32)
+    (local $flags i32) (local $expected_fd i32) (local $base i32)
+    (local.set $saved_eax (i32.load (global.get $reg_base)))
+    (block $invalid
+      (local.set $rec (call $crt_stream_lookup (local.get $arg0)))
+      (br_if $invalid (i32.eqz (local.get $rec)))
+      (local.set $rw (call $g2w (local.get $rec)))
+      (local.set $flags (call $crt_file_flags (local.get $arg0)))
+      (br_if $invalid (i32.eqz (i32.and (local.get $flags) (i32.const 0x83))))
+      (br_if $invalid (i32.and (local.get $flags) (i32.const 0x148)))
+      ;; A copied FILE does not transfer the private descriptor or buffer.
+      (local.set $expected_fd (i32.load offset=4 (local.get $rw)))
+      (if (i32.eqz (local.get $expected_fd))
+        (then
+          (br_if $invalid (i32.eqz (i32.and (i32.load offset=12 (local.get $rw)) (i32.const 2))))
+          (local.set $expected_fd (i32.shr_u
+            (i32.sub (local.get $arg0) (i32.atomic.load offset=12 (global.get $CRT_STREAM_STATE)))
+            (i32.const 5)))))
+      (br_if $invalid (i32.ne (call $gl32 (i32.add (local.get $arg0) (i32.const 16))) (local.get $expected_fd)))
+      (local.set $base (call $gl32 (i32.add (local.get $arg0) (i32.const 8))))
+      (if (local.get $base)
+        (then (br_if $invalid (i32.ne (local.get $base) (i32.add (local.get $arg0) (i32.const 20)))))
+        (else
+          (br_if $invalid (call $gl32 (local.get $arg0)))
+          (br_if $invalid (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))))
+      (call $handle_setvbuf (local.get $arg0) (local.get $arg1)
+        (select (i32.const 0) (i32.const 4) (local.get $arg1))
+        (i32.const 512) (i32.const 0) (local.get $name_ptr))
+      ;; _iob starts without a buffer. Preserve main's canonical inline FILE
+      ;; layout while leaving an existing ungetc byte and pointer untouched.
+      (if (i32.eqz (local.get $base))
+        (then
+          (call $gs32 (local.get $arg0) (i32.add (local.get $arg0) (i32.const 20)))
+          (call $gs32 (i32.add (local.get $arg0) (i32.const 8)) (i32.add (local.get $arg0) (i32.const 20)))
+          (call $gs32 (i32.add (local.get $arg0) (i32.const 24)) (i32.const 2))))
+      (call $crt_file_set_flags (local.get $arg0) (i32.or (local.get $flags) (i32.const 4)))
+      ;; setvbuf already consumed the return address. setbuf returns void.
+      (i32.store (global.get $reg_base) (local.get $saved_eax))
+      (return))
+    (drop (call $crt_fdopen_error (i32.const 22)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
   ;; setvbuf(FILE*, buf, mode, size) -> 0, or -1 (cdecl). msvcrt refuses a
   ;; stream it does not know, a mode other than _IOFBF 0 / _IOLBF 0x40 /
   ;; _IONBF 4, and for a buffered mode a size outside 2..INT_MAX. Every stream
@@ -1608,6 +1817,7 @@
   ;; end-of-file or an error comes before any byte was stored.
   (func $handle_fgets (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $count i32) (local $ch i32) (local $got i32) (local $result i32)
+    (local $pending i32) (local $pushed i32)
     (local.set $result (local.get $arg0))
     (if (i32.or
           (i32.or (i32.eqz (local.get $arg0)) (i32.le_s (local.get $arg1) (i32.const 0)))
@@ -1616,13 +1826,23 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (return)))
+    (if (i32.gt_s (call $gl32 (i32.add (local.get $arg2) (i32.const 4))) (i32.const 0))
+      (then
+        (local.set $pending (i32.const 1))
+        (local.set $pushed (call $gl8 (call $gl32 (local.get $arg2))))))
     (block $done (loop $read
       (br_if $done (i32.ge_u (local.get $count) (i32.sub (local.get $arg1) (i32.const 1))))
       (local.set $got (call $crt_file_read (local.get $arg2)
         (i32.add (local.get $arg0) (local.get $count)) (i32.const 1)))
       (if (i32.eq (local.get $got) (global.get $CRT_READ_PARKED))
         (then
-          (call $crt_file_unread (local.get $arg2) (local.get $count))
+          (call $crt_file_unread (local.get $arg2)
+            (i32.sub (local.get $count) (local.get $pending)))
+          (if (local.get $pending)
+            (then
+              (call $crt_file_reset_buffer (local.get $arg2))
+              (call $gs8 (call $gl32 (local.get $arg2)) (local.get $pushed))
+              (call $gs32 (i32.add (local.get $arg2) (i32.const 4)) (i32.const 1))))
           (call $crt_park)
           (return)))
       (if (i32.ne (local.get $got) (i32.const 1))
@@ -1694,6 +1914,53 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  ;; rewind for this CRT's owned unbuffered disk FILEs. No pending output
+  ;; exists in that representation; do not discard an unknown/custom buffer.
+  ;; Like fseek(...,0,SEEK_SET), reset update direction and buffer pointers;
+  ;; unlike fseek, clear BOTH EOF and error, even when the seek fails.
+  (func $crt_rewind (param $file i32) (param $name_ptr i32)
+    (local $rec i32) (local $flags i32) (local $handle i32)
+    (local $charbuf i32) (local $error i32) (local $result_w i32)
+    (block $unsupported
+      (local.set $rec (call $crt_stream_lookup (local.get $file)))
+      (br_if $unsupported (i32.eqz (local.get $rec)))
+      (local.set $handle (i32.load offset=4 (call $g2w (local.get $rec))))
+      ;; Console stdin's keyboard-discard semantics are a separate contract.
+      (br_if $unsupported (i32.eqz (local.get $handle)))
+      (br_if $unsupported (i32.ne (call $gl32 (i32.add (local.get $file) (i32.const 16))) (local.get $handle)))
+      (local.set $flags (call $crt_file_flags (local.get $file)))
+      (br_if $unsupported (i32.eqz (i32.and (local.get $flags) (i32.const 0x83))))
+      (br_if $unsupported (i32.eqz (i32.and (local.get $flags) (i32.const 4))))
+      (br_if $unsupported (i32.and (local.get $flags) (i32.const 0x148)))
+      (br_if $unsupported (call $gl32 (i32.add (local.get $file) (i32.const 4))))
+      (local.set $charbuf (i32.add (local.get $file) (i32.const 20)))
+      (br_if $unsupported (i32.ne (call $gl32 (local.get $file)) (local.get $charbuf)))
+      (br_if $unsupported (i32.ne (call $gl32 (i32.add (local.get $file) (i32.const 8))) (local.get $charbuf)))
+      (br_if $unsupported (i32.ne (call $gl32 (i32.add (local.get $file) (i32.const 24))) (i32.const 2)))
+      ;; Private result scratch below the caller frame; keep void EAX intact.
+      ;; No stream-list lock spans the synchronous host call.
+      (local.set $result_w (call $g2w (i32.sub
+        (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+      (local.set $error (call $host_fs_seek_result (local.get $handle)
+        (i32.const 0) (i32.const 0) (i32.const 0) (local.get $result_w)))
+      (local.set $flags (i32.and (local.get $flags) (i32.const -49)))
+      (if (i32.and (local.get $flags) (i32.const 0x80))
+        (then (local.set $flags (i32.and (local.get $flags) (i32.const -4)))))
+      (call $crt_file_set_flags (local.get $file) (local.get $flags))
+      (call $crt_file_reset_buffer (local.get $file))
+      (if (local.get $error)
+        ;; Same existing errno cell as fdopen. Bad/closed fd -> EBADF;
+        ;; other failed seeks -> EINVAL. Success leaves errno untouched.
+        (then (drop (call $crt_fdopen_error
+          (select (i32.const 9) (i32.const 22) (i32.eq (local.get $error) (i32.const 6)))))))
+      (return))
+    (call $crash_unimplemented (local.get $name_ptr)))
+
+  (func $handle_rewind (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_rewind (local.get $arg0) (local.get $name_ptr))
+    ;; void, cdecl: pop only the return address and preserve EAX.
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
   (func $crt_open_access (param $flags i32) (result i32)
     (if (result i32) (i32.and (local.get $flags) (i32.const 2)) ;; _O_RDWR
       (then (i32.const 0xC0000000)) ;; GENERIC_READ | GENERIC_WRITE
@@ -1718,18 +1985,10 @@
 
   (func $handle__open (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
-    (local.set $handle (call $host_fs_create_file
-      (call $g2w (local.get $arg0))
-      (call $crt_open_access (local.get $arg1))
-      (call $crt_open_creation (local.get $arg1))
-      (i32.const 0x80)
-      (i32.const 0)))
-    (if (i32.eq (local.get $handle) (i32.const -1))
-      (then (local.set $handle (i32.const -1)))
-      (else
-        (if (i32.and (local.get $arg1) (i32.const 8)) ;; _O_APPEND
-          (then (drop (call $host_fs_set_file_pointer
-            (local.get $handle) (i32.const 0) (i32.const 2)))))))
+    ;; Publish only after the process-owned VFS has retained the CRT flags.
+    ;; The same broker operation runs for main and Worker calls.
+    (local.set $handle (call $host_fs_crt_open
+      (call $g2w (local.get $arg0)) (local.get $arg1)))
     (i32.store offset=0 (global.get $reg_base) (local.get $handle))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
@@ -1745,7 +2004,7 @@
   (func $handle__dup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $duplicate i32)
     (local.set $duplicate (call $host_fs_duplicate_handle (local.get $arg0)
-      (i32.const 0) (i32.const 0) (i32.const 2)))
+      (i32.const 0) (i32.const 0) (i32.const 2) (i32.const 1)))
     (if (i32.le_s (local.get $duplicate) (i32.const 0))
       (then
         (if (i32.eqz (global.get $msvcrt_errno_ptr))
@@ -1758,6 +2017,14 @@
       (select (local.get $duplicate) (i32.const -1)
         (i32.gt_s (local.get $duplicate) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; MSVCRT remove(filename) has the same file deletion and cdecl contract as
+  ;; _unlink. Keep deletion in the owning VFS, including read-only policy.
+  ;; The current boolean host interface supplies no detailed errno value.
+  (func $handle_remove (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle__unlink (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   (func $handle__unlink (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1881,6 +2148,27 @@
         (i32.eq (local.get $read) (i32.const 1))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
+
+  ;; One byte of pushback in the existing unbuffered FILE's _charbuf.
+  ;; EOF and rejected streams leave both flags and buffered input untouched.
+  (func $handle_ungetc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $flags i32) (local $result i32)
+    (local.set $result (i32.const -1))
+    (block $done
+      (br_if $done (i32.eq (local.get $arg0) (i32.const -1)))
+      (br_if $done (i32.eqz (call $crt_stream_lookup (local.get $arg1))))
+      (local.set $flags (call $crt_file_flags (local.get $arg1)))
+      (br_if $done (i32.eqz (i32.and (local.get $flags) (i32.const 0x81))))
+      (br_if $done (i32.and (local.get $flags) (i32.const 0x42)))
+      (br_if $done (call $gl32 (i32.add (local.get $arg1) (i32.const 4))))
+      (local.set $result (i32.and (local.get $arg0) (i32.const 255)))
+      (call $crt_file_reset_buffer (local.get $arg1))
+      (call $gs8 (call $gl32 (local.get $arg1)) (local.get $result))
+      (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (i32.const 1))
+      (call $crt_file_set_flags (local.get $arg1)
+        (i32.and (i32.or (local.get $flags) (i32.const 1)) (i32.const -17))))
+    (i32.store (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; fgetc(FILE*) — msvcrt's getc is this function, not a macro over it.
   (func $handle_fgetc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3205,89 +3493,213 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  ;; Retained bsearch frames: sixteen thread partitions, 64 x 64-byte frames.
+  ;; ret/key/base/size/compar/low/high/mid at 0..28, parent/child/root at
+  ;; 32/40/48, expected cdecl return ESP at 56. Lifetime matches qsort's:
+  ;; explicit host-quiescent root reset retires abandoned frames lazily.
+  (global $BSEARCH_CONTEXTS i32 (region.addr $BSEARCH_CONTEXTS 0))
+  (global $BSEARCH_CONTEXTS_SIZE i32 (region.size $BSEARCH_CONTEXTS))
+  (global $bsearch_owner (mut i64) (i64.const 0))
+  (global $bsearch_depth (mut i32) (i32.const 0))
+
+  (func $bsearch_frame_at (param $index i32) (result i32)
+    (i32.add (region.addr $BSEARCH_CONTEXTS 0)
+      (i32.add
+        (i32.shl (i32.sub (global.get $invocation_tid) (i32.const 1)) (i32.const 12))
+        (i32.shl (local.get $index) (i32.const 6)))))
+
+  (func $bsearch_frame (result i32)
+    (local $frame i32)
+    (call $invocation_validate)
+    (if (i64.ne (global.get $bsearch_owner) (global.get $invocation_root)) (then (unreachable)))
+    (if (i32.eqz (global.get $bsearch_depth)) (then (unreachable)))
+    (if (i32.gt_u (global.get $bsearch_depth) (i32.const 64)) (then (unreachable)))
+    (local.set $frame (call $bsearch_frame_at (i32.sub (global.get $bsearch_depth) (i32.const 1))))
+    (if (i64.ne (i64.load offset=48 (local.get $frame)) (global.get $invocation_root))
+      (then (unreachable)))
+    (local.get $frame))
+
+  (func $bsearch_finish (param $result i32)
+    (local $frame i32)
+    (local.set $frame (call $bsearch_frame))
+    (if (i64.ne (i64.load offset=40 (local.get $frame)) (i64.const 0)) (then (unreachable)))
+    (if (i64.ne (i64.load offset=32 (local.get $frame)) (call $invocation_current))
+      (then (unreachable)))
+    (i32.store (global.get $reg_base) (local.get $result))
+    (global.set $eip (i32.load (local.get $frame)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (global.set $bsearch_depth (i32.sub (global.get $bsearch_depth) (i32.const 1))))
+
   ;; bsearch(key, base, nmemb, size, compar) — cdecl, guest-callback comparator.
   ;; Drives the binary search step-by-step: each probe pushes (key, elem) on the
   ;; stack plus the CACA000C return thunk, then jumps to compar. The continuation
   ;; handler in 09b-dispatch.wat narrows [low, high) based on the returned eax and
   ;; re-enters this helper until the range collapses or a match is found.
   (func $bsearch_probe
-    (local $mid i32) (local $elem i32)
+    (local $mid i32) (local $elem i32) (local $frame i32)
+    (local.set $frame (call $bsearch_frame))
     ;; range empty → return NULL to caller
-    (if (i32.ge_u (global.get $bsearch_low) (global.get $bsearch_high))
+    (if (i32.ge_u (i32.load offset=20 (local.get $frame)) (i32.load offset=24 (local.get $frame)))
+      (then (call $bsearch_finish (i32.const 0)) (return)))
+    (if (i64.eqz (i64.load offset=40 (local.get $frame)))
       (then
-        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-        (global.set $eip (global.get $bsearch_ret))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-        (return)))
-    (local.set $mid (i32.div_u
-      (i32.add (global.get $bsearch_low) (global.get $bsearch_high))
-      (i32.const 2)))
-    (global.set $bsearch_mid (local.get $mid))
-    (local.set $elem (i32.add (global.get $bsearch_base)
-      (i32.mul (local.get $mid) (global.get $bsearch_size))))
+        (if (i64.ne (i64.load offset=32 (local.get $frame)) (call $invocation_current))
+          (then (unreachable)))
+        (i64.store offset=40 (local.get $frame) (call $invocation_enter)))
+      (else
+        (if (i64.ne (i64.load offset=40 (local.get $frame)) (call $invocation_current))
+          (then (unreachable)))))
+    ;; low + (high-low)/2 avoids an overflowing unsigned bound sum.
+    (local.set $mid (i32.add (i32.load offset=20 (local.get $frame))
+      (i32.shr_u (i32.sub (i32.load offset=24 (local.get $frame))
+        (i32.load offset=20 (local.get $frame))) (i32.const 1))))
+    (i32.store offset=28 (local.get $frame) (local.get $mid))
+    (i32.store offset=56 (local.get $frame)
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (local.set $elem (i32.add (i32.load offset=8 (local.get $frame))
+      (i32.mul (local.get $mid) (i32.load offset=12 (local.get $frame)))))
     ;; Push compar args (cdecl: right-to-left) then return thunk.
-    ;; [esp-4]=thunk, [esp-8]=key, [esp-12]=elem
+    ;; At comparator entry: [esp]=thunk, [esp+4]=key, [esp+8]=elem.
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $elem))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $bsearch_key))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.load offset=4 (local.get $frame)))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $bsearch_thunk))
-    (global.set $eip (global.get $bsearch_compar))
+    (global.set $eip (i32.load offset=16 (local.get $frame)))
     (global.set $steps (i32.const 0))
   )
 
+  (func $bsearch_continue
+    (local $frame i32)
+    (local.set $frame (call $bsearch_frame))
+    ;; Reject stale roots/children or a malformed cdecl return before mutation.
+    (if (i32.ne (i32.load offset=16 (global.get $reg_base))
+          (i32.load offset=56 (local.get $frame))) (then (unreachable)))
+    (call $invocation_leave (i64.load offset=40 (local.get $frame)))
+    (i64.store offset=40 (local.get $frame) (i64.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (if (i32.eqz (i32.load (global.get $reg_base)))
+      (then
+        (call $bsearch_finish (i32.add (i32.load offset=8 (local.get $frame))
+          (i32.mul (i32.load offset=28 (local.get $frame)) (i32.load offset=12 (local.get $frame)))))
+        (return)))
+    (if (i32.lt_s (i32.load (global.get $reg_base)) (i32.const 0))
+      (then (i32.store offset=24 (local.get $frame) (i32.load offset=28 (local.get $frame))))
+      (else (i32.store offset=20 (local.get $frame)
+        (i32.add (i32.load offset=28 (local.get $frame)) (i32.const 1)))))
+    (call $bsearch_probe))
+
   (func $handle_bsearch (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $depth i32) (local $frame i32) (local $ret i32) (local $parent i64) (local $child i64)
     ;; arg0=key, arg1=base, arg2=nmemb, arg3=size, arg4=compar. cdecl → caller
     ;; pops the 5 args; we only save the return address and leave args in place.
-    (global.set $bsearch_ret    (call $gl32 (i32.load offset=16 (global.get $reg_base))))
-    (global.set $bsearch_key    (local.get $arg0))
-    (global.set $bsearch_base   (local.get $arg1))
-    (global.set $bsearch_size   (local.get $arg3))
-    (global.set $bsearch_compar (local.get $arg4))
-    (global.set $bsearch_low    (i32.const 0))
-    (global.set $bsearch_high   (local.get $arg2))
     ;; Empty array or NULL comparator → return NULL immediately.
     (if (i32.or (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg4)))
       (then
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (return)))
+    (call $invocation_ensure)
+    (local.set $depth (select (global.get $bsearch_depth) (i32.const 0)
+      (i64.eq (global.get $bsearch_owner) (global.get $invocation_root))))
+    (if (i32.ge_u (local.get $depth) (i32.const 64)) (then (unreachable)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $parent (call $invocation_current))
+    (local.set $child (call $invocation_enter))
+    (local.set $frame (call $bsearch_frame_at (local.get $depth)))
+    (global.set $bsearch_owner (global.get $invocation_root))
+    (global.set $bsearch_depth (i32.add (local.get $depth) (i32.const 1)))
+    (i32.store (local.get $frame) (local.get $ret))
+    (i32.store offset=4 (local.get $frame) (local.get $arg0))
+    (i32.store offset=8 (local.get $frame) (local.get $arg1))
+    (i32.store offset=12 (local.get $frame) (local.get $arg3))
+    (i32.store offset=16 (local.get $frame) (local.get $arg4))
+    (i32.store offset=20 (local.get $frame) (i32.const 0))
+    (i32.store offset=24 (local.get $frame) (local.get $arg2))
+    (i64.store offset=32 (local.get $frame) (local.get $parent))
+    (i64.store offset=40 (local.get $frame) (local.get $child))
+    (i64.store offset=48 (local.get $frame) (global.get $invocation_root))
     (call $bsearch_probe)
   )
+
+  ;; Private retained qsort contexts: sixteen thread partitions, 64 frames of
+  ;; 64 bytes each. Frames keep return/base/count/size/compar/pass/index/ESP at
+  ;; 0..28, parent invocation at 32, expected child at 40, and root at 48.
+  ;; They outlive run slices. A nested comparator's qsort owns a separate frame.
+  (global $QSORT_CONTEXTS i32 (region.addr $QSORT_CONTEXTS 0))
+  (global $QSORT_CONTEXTS_SIZE i32 (region.size $QSORT_CONTEXTS))
+  (global $qsort_owner (mut i64) (i64.const 0))
+  (global $qsort_depth (mut i32) (i32.const 0))
+
+  (func $qsort_frame_at (param $index i32) (result i32)
+    (i32.add (region.addr $QSORT_CONTEXTS 0)
+      (i32.add
+        (i32.shl (i32.sub (global.get $invocation_tid) (i32.const 1)) (i32.const 12))
+        (i32.shl (local.get $index) (i32.const 6)))))
+
+  (func $qsort_frame (result i32)
+    (local $frame i32)
+    (call $invocation_validate)
+    (if (i64.ne (global.get $qsort_owner) (global.get $invocation_root)) (then (unreachable)))
+    (if (i32.eqz (global.get $qsort_depth)) (then (unreachable)))
+    (if (i32.gt_u (global.get $qsort_depth) (i32.const 64)) (then (unreachable)))
+    (local.set $frame (call $qsort_frame_at (i32.sub (global.get $qsort_depth) (i32.const 1))))
+    (if (i64.ne (i64.load offset=48 (local.get $frame)) (global.get $invocation_root))
+      (then (unreachable)))
+    (local.get $frame))
 
   ;; qsort(base, nmemb, size, compar) — cdecl. A callback-driven adjacent sort
   ;; is intentionally simple but complete; the guest comparator defines the
   ;; ordering, and byte swaps remain correct when an element crosses sparse
   ;; guest-page backing boundaries.
   (func $qsort_finish
+    (local $frame i32)
+    (local.set $frame (call $qsort_frame))
+    (if (i64.ne (i64.load offset=40 (local.get $frame)) (i64.const 0)) (then (unreachable)))
+    (if (i64.ne (i64.load offset=32 (local.get $frame)) (call $invocation_current))
+      (then (unreachable)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
-    (global.set $eip (global.get $qsort_ret))
+    (global.set $eip (i32.load (local.get $frame)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (global.set $qsort_depth (i32.sub (global.get $qsort_depth) (i32.const 1)))
   )
 
   (func $qsort_probe
-    (local $limit i32) (local $left i32) (local $right i32)
+    (local $limit i32) (local $left i32) (local $right i32) (local $frame i32)
+    (local.set $frame (call $qsort_frame))
     (if (i32.or
-          (i32.or (i32.lt_u (global.get $qsort_count) (i32.const 2))
-                  (i32.eqz (global.get $qsort_size)))
-          (i32.eqz (global.get $qsort_compar)))
+          (i32.or (i32.lt_u (i32.load offset=8 (local.get $frame)) (i32.const 2))
+                  (i32.eqz (i32.load offset=12 (local.get $frame))))
+          (i32.eqz (i32.load offset=16 (local.get $frame))))
       (then (call $qsort_finish) (return)))
-    (if (i32.ge_u (global.get $qsort_pass)
-                   (i32.sub (global.get $qsort_count) (i32.const 1)))
+    (if (i32.ge_u (i32.load offset=20 (local.get $frame))
+                   (i32.sub (i32.load offset=8 (local.get $frame)) (i32.const 1)))
       (then (call $qsort_finish) (return)))
     (local.set $limit
-      (i32.sub (global.get $qsort_count) (global.get $qsort_pass)))
-    (if (i32.ge_u (i32.add (global.get $qsort_index) (i32.const 1))
+      (i32.sub (i32.load offset=8 (local.get $frame)) (i32.load offset=20 (local.get $frame))))
+    (if (i32.ge_u (i32.add (i32.load offset=24 (local.get $frame)) (i32.const 1))
                    (local.get $limit))
       (then
-        (global.set $qsort_pass (i32.add (global.get $qsort_pass) (i32.const 1)))
-        (global.set $qsort_index (i32.const 0))
+        (i32.store offset=20 (local.get $frame) (i32.add (i32.load offset=20 (local.get $frame)) (i32.const 1)))
+        (i32.store offset=24 (local.get $frame) (i32.const 0))
         (call $qsort_probe)
         (return)))
-    (local.set $left (i32.add (global.get $qsort_base)
-      (i32.mul (global.get $qsort_index) (global.get $qsort_size))))
-    (local.set $right (i32.add (local.get $left) (global.get $qsort_size)))
+    ;; First probe already owns the child allocated transactionally at API
+    ;; entry. Each subsequent comparator receives a distinct fresh identity.
+    (if (i64.eqz (i64.load offset=40 (local.get $frame)))
+      (then
+        (if (i64.ne (i64.load offset=32 (local.get $frame)) (call $invocation_current))
+          (then (unreachable)))
+        (i64.store offset=40 (local.get $frame) (call $invocation_enter)))
+      (else
+        (if (i64.ne (i64.load offset=40 (local.get $frame)) (call $invocation_current))
+          (then (unreachable)))))
+    (i32.store offset=28 (local.get $frame)
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (local.set $left (i32.add (i32.load offset=4 (local.get $frame))
+      (i32.mul (i32.load offset=24 (local.get $frame)) (i32.load offset=12 (local.get $frame)))))
+    (local.set $right (i32.add (local.get $left) (i32.load offset=12 (local.get $frame))))
     ;; compar(left, right), cdecl: push right-to-left and leave its two args
     ;; for CACA002D to discard after the callback's plain RET.
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
@@ -3296,32 +3708,41 @@
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $left))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $qsort_thunk))
-    (global.set $eip (global.get $qsort_compar))
+    (global.set $eip (i32.load offset=16 (local.get $frame)))
     (global.set $steps (i32.const 0))
   )
 
   (func $qsort_continue
-    (local $left i32) (local $right i32) (local $i i32) (local $byte i32)
+    (local $left i32) (local $right i32) (local $i i32) (local $byte i32) (local $frame i32)
+    (local.set $frame (call $qsort_frame))
+    ;; Validate the retained child and exact cdecl return stack BEFORE either
+    ;; popping ownership or touching guest arguments/data. A fabricated/stale
+    ;; CACA002D continuation cannot silently complete the current invocation.
+    (if (i32.ne (i32.load offset=16 (global.get $reg_base))
+          (i32.load offset=28 (local.get $frame))) (then (unreachable)))
+    (call $invocation_leave (i64.load offset=40 (local.get $frame)))
+    (i64.store offset=40 (local.get $frame) (i64.const 0))
     ;; The comparator's RET consumed the thunk; discard its cdecl arguments.
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (if (i32.gt_s (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
       (then
-        (local.set $left (i32.add (global.get $qsort_base)
-          (i32.mul (global.get $qsort_index) (global.get $qsort_size))))
-        (local.set $right (i32.add (local.get $left) (global.get $qsort_size)))
+        (local.set $left (i32.add (i32.load offset=4 (local.get $frame))
+          (i32.mul (i32.load offset=24 (local.get $frame)) (i32.load offset=12 (local.get $frame)))))
+        (local.set $right (i32.add (local.get $left) (i32.load offset=12 (local.get $frame))))
         (block $done (loop $swap
-          (br_if $done (i32.ge_u (local.get $i) (global.get $qsort_size)))
+          (br_if $done (i32.ge_u (local.get $i) (i32.load offset=12 (local.get $frame))))
           (local.set $byte (call $gl8 (i32.add (local.get $left) (local.get $i))))
           (call $gs8 (i32.add (local.get $left) (local.get $i))
             (call $gl8 (i32.add (local.get $right) (local.get $i))))
           (call $gs8 (i32.add (local.get $right) (local.get $i)) (local.get $byte))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $swap)))))
-    (global.set $qsort_index (i32.add (global.get $qsort_index) (i32.const 1)))
+    (i32.store offset=24 (local.get $frame) (i32.add (i32.load offset=24 (local.get $frame)) (i32.const 1)))
     (call $qsort_probe)
   )
 
   (func $handle_qsort (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $depth i32) (local $frame i32) (local $ret i32) (local $parent i64) (local $child i64)
     (if (i32.or
           (i32.or (i32.lt_u (local.get $arg1) (i32.const 2))
                   (i32.eqz (local.get $arg2)))
@@ -3330,13 +3751,27 @@
         (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (return)))
-    (global.set $qsort_ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
-    (global.set $qsort_base (local.get $arg0))
-    (global.set $qsort_count (local.get $arg1))
-    (global.set $qsort_size (local.get $arg2))
-    (global.set $qsort_compar (local.get $arg3))
-    (global.set $qsort_pass (i32.const 0))
-    (global.set $qsort_index (i32.const 0))
+    (call $invocation_ensure)
+    (local.set $depth (select (global.get $qsort_depth) (i32.const 0)
+      (i64.eq (global.get $qsort_owner) (global.get $invocation_root))))
+    (if (i32.ge_u (local.get $depth) (i32.const 64)) (then (unreachable)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $parent (call $invocation_current))
+    ;; Capacity/identity exhaustion fails before publishing a retained frame.
+    (local.set $child (call $invocation_enter))
+    (local.set $frame (call $qsort_frame_at (local.get $depth)))
+    (global.set $qsort_owner (global.get $invocation_root))
+    (global.set $qsort_depth (i32.add (local.get $depth) (i32.const 1)))
+    (i32.store (local.get $frame) (local.get $ret))
+    (i32.store offset=4 (local.get $frame) (local.get $arg0))
+    (i32.store offset=8 (local.get $frame) (local.get $arg1))
+    (i32.store offset=12 (local.get $frame) (local.get $arg2))
+    (i32.store offset=16 (local.get $frame) (local.get $arg3))
+    (i32.store offset=20 (local.get $frame) (i32.const 0))
+    (i32.store offset=24 (local.get $frame) (i32.const 0))
+    (i64.store offset=32 (local.get $frame) (local.get $parent))
+    (i64.store offset=40 (local.get $frame) (local.get $child))
+    (i64.store offset=48 (local.get $frame) (global.get $invocation_root))
     (call $qsort_probe)
   )
 
@@ -3430,47 +3865,138 @@
       (return (local.get $fn))))
     (i32.const 0))
 
-  ;; Continue a normal exit() sequence. Callbacks are cdecl void(void), so the
-  ;; only stack word pushed here is their continuation return address.
-  (func $crt_atexit_run_next
-    (local $fn i32)
-    (local.set $fn (call $crt_atexit_pop))
-    (if (local.get $fn) (then
-      (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-      (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $atexit_ret_thunk))
-      (global.set $eip (local.get $fn))
-      (global.set $steps (i32.const 0))
-      (return)))
-    (call $crt_stream_close_all)
-    (call $host_exit (global.get $atexit_exit_code))
-    (global.set $eip (i32.const 0))
-    (global.set $yield_flag (i32.const 1))
-    (global.set $yield_reason (i32.const 2))
-    (global.set $steps (i32.const 0))
-  )
-
+  ;; Retained init/exit frames: mode 0=_initterm, 1=exit, 2=_cexit.
+  ;; 0 ret, 4 cursor, 8 end, 12 mode, 16 exit code, 20 expected ESP;
+  ;; 32 parent, 40 expected child, 48 root. Sixteen independent partitions.
+  (global $CRT_CALLBACK_CONTEXTS i32 (region.addr $CRT_CALLBACK_CONTEXTS 0))
+  (global $CRT_CALLBACK_CONTEXTS_SIZE i32 (region.size $CRT_CALLBACK_CONTEXTS))
+  (global $crt_callback_owner (mut i64) (i64.const 0))
+  (global $crt_callback_depth (mut i32) (i32.const 0))
   (global $crt_cexit_thunk (mut i32) (i32.const 0))
 
-  ;; The original _cexit return address stays on the guest stack throughout
-  ;; cleanup. A nested _cexit therefore has its own return frame automatically;
-  ;; no singleton saved EIP can be overwritten by a guest callback.
-  (func $crt_cexit_run_next
-    (local $fn i32) (local $sp i32) (local $ret i32)
-    (local.set $fn (call $crt_atexit_pop))
-    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
-    (if (local.get $fn)
+  (func $crt_callback_frame_at (param $index i32) (result i32)
+    (i32.add (region.addr $CRT_CALLBACK_CONTEXTS 0)
+      (i32.add (i32.shl (i32.sub (global.get $invocation_tid) (i32.const 1)) (i32.const 12))
+        (i32.shl (local.get $index) (i32.const 6)))))
+
+  (func $crt_callback_frame (result i32)
+    (local $frame i32)
+    (call $invocation_validate)
+    (if (i64.ne (global.get $crt_callback_owner) (global.get $invocation_root)) (then (unreachable)))
+    (if (i32.eqz (global.get $crt_callback_depth)) (then (unreachable)))
+    (if (i32.gt_u (global.get $crt_callback_depth) (i32.const 64)) (then (unreachable)))
+    (local.set $frame (call $crt_callback_frame_at (i32.sub (global.get $crt_callback_depth) (i32.const 1))))
+    (if (i64.ne (i64.load offset=48 (local.get $frame)) (global.get $invocation_root)) (then (unreachable)))
+    (local.get $frame))
+
+  ;; Locate a non-null slot without consuming registry/table state. Entry can
+  ;; then reserve its child identity before committing any callback state.
+  (func $crt_callback_slot (param $mode i32) (param $ptr i32) (param $end i32) (result i32)
+    (local $n i32)
+    (if (i32.eqz (local.get $mode))
       (then
-        (if (i32.eqz (global.get $crt_cexit_thunk))
-          (then (global.set $crt_cexit_thunk (call $com_cont_thunk (i32.const 0xCACA0038)))))
-        (local.set $sp (i32.sub (local.get $sp) (i32.const 4)))
-        (call $gs32 (local.get $sp) (global.get $crt_cexit_thunk))
-        (i32.store offset=16 (global.get $reg_base) (local.get $sp))
-        (call $com_jump (local.get $fn)))
+        (block $done (loop $scan
+          (br_if $done (i32.ge_u (local.get $ptr) (local.get $end)))
+          (if (call $gl32 (local.get $ptr)) (then (return (local.get $ptr))))
+          (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
+          (br $scan))))
       (else
-        (call $crt_stream_close_all)
-        (local.set $ret (call $gl32 (local.get $sp)))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $sp) (i32.const 4)))
-        (call $com_jump (local.get $ret)))))
+        (local.set $n (global.get $atexit_count))
+        (block $done (loop $scan
+          (br_if $done (i32.eqz (local.get $n)))
+          (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+          (local.set $ptr (i32.add (global.get $atexit_table) (i32.shl (local.get $n) (i32.const 2))))
+          (if (call $gl32 (local.get $ptr)) (then (return (local.get $ptr))))
+          (br $scan)))))
+    (i32.const 0))
+
+  (func $crt_callback_complete (param $mode i32) (param $ret i32) (param $sp i32) (param $code i32)
+    (if (local.get $mode)
+      (then
+        (global.set $atexit_count (i32.const 0))
+        (call $crt_stream_close_all)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (if (i32.eq (local.get $mode) (i32.const 1))
+      (then
+        (call $host_exit (local.get $code))
+        (global.set $eip (i32.const 0))
+        (global.set $yield_flag (i32.const 1))
+        (global.set $yield_reason (i32.const 2))
+        (global.set $steps (i32.const 0)))
+      (else (call $com_jump (local.get $ret)))))
+
+  (func $crt_callback_launch (param $frame i32) (param $slot i32)
+    (local $thunk i32) (local $fn i32) (local $sp i32)
+    (local.set $fn (call $gl32 (local.get $slot)))
+    (if (i32.eqz (i32.load offset=12 (local.get $frame)))
+      (then
+        (i32.store offset=4 (local.get $frame) (i32.add (local.get $slot) (i32.const 4)))
+        (local.set $thunk (global.get $initterm_thunk)))
+      (else
+        ;; Pop before entering guest code: nested cleanup cannot repeat this callback.
+        (global.set $atexit_count (i32.shr_u (i32.sub (local.get $slot) (global.get $atexit_table)) (i32.const 2)))
+        (local.set $thunk (global.get $atexit_ret_thunk))
+        (if (i32.eq (i32.load offset=12 (local.get $frame)) (i32.const 2))
+          (then
+            (if (i32.eqz (global.get $crt_cexit_thunk))
+              (then (global.set $crt_cexit_thunk (call $com_cont_thunk (i32.const 0xCACA0038)))))
+            (local.set $thunk (global.get $crt_cexit_thunk))))))
+    (local.set $sp (i32.sub (i32.load offset=20 (local.get $frame)) (i32.const 4)))
+    (call $gs32 (local.get $sp) (local.get $thunk))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (call $com_jump (local.get $fn)))
+
+  (func $crt_callback_begin (param $mode i32) (param $ptr i32) (param $end i32) (param $code i32)
+    (local $slot i32) (local $sp i32) (local $ret i32) (local $depth i32) (local $frame i32)
+    (local $parent i64) (local $child i64)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $ret (call $gl32 (local.get $sp)))
+    (local.set $sp (i32.add (local.get $sp) (i32.const 4)))
+    (local.set $slot (call $crt_callback_slot (local.get $mode) (local.get $ptr) (local.get $end)))
+    (if (i32.eqz (local.get $slot))
+      (then (call $crt_callback_complete (local.get $mode) (local.get $ret) (local.get $sp) (local.get $code)) (return)))
+    (call $invocation_ensure)
+    (local.set $depth (select (global.get $crt_callback_depth) (i32.const 0)
+      (i64.eq (global.get $crt_callback_owner) (global.get $invocation_root))))
+    (if (i32.ge_u (local.get $depth) (i32.const 64)) (then (unreachable)))
+    (local.set $parent (call $invocation_current))
+    (local.set $child (call $invocation_enter))
+    (local.set $frame (call $crt_callback_frame_at (local.get $depth)))
+    (global.set $crt_callback_owner (global.get $invocation_root))
+    (global.set $crt_callback_depth (i32.add (local.get $depth) (i32.const 1)))
+    (i32.store (local.get $frame) (local.get $ret))
+    (i32.store offset=4 (local.get $frame) (local.get $ptr))
+    (i32.store offset=8 (local.get $frame) (local.get $end))
+    (i32.store offset=12 (local.get $frame) (local.get $mode))
+    (i32.store offset=16 (local.get $frame) (local.get $code))
+    (i32.store offset=20 (local.get $frame) (local.get $sp))
+    (i64.store offset=32 (local.get $frame) (local.get $parent))
+    (i64.store offset=40 (local.get $frame) (local.get $child))
+    (i64.store offset=48 (local.get $frame) (global.get $invocation_root))
+    (call $crt_callback_launch (local.get $frame) (local.get $slot)))
+
+  (func $crt_callback_continue (param $mode i32)
+    (local $frame i32) (local $slot i32)
+    (local.set $frame (call $crt_callback_frame))
+    (if (i32.ne (local.get $mode) (i32.load offset=12 (local.get $frame))) (then (unreachable)))
+    (if (i32.ne (i32.load offset=16 (global.get $reg_base)) (i32.load offset=20 (local.get $frame))) (then (unreachable)))
+    (if (i32.eqz (global.get $invocation_depth)) (then (unreachable)))
+    (if (i64.ne (i64.load offset=32 (local.get $frame))
+          (i64.load (i32.add (global.get $invocation_slot)
+            (i32.add (i32.const 16) (i32.shl (i32.sub (global.get $invocation_depth) (i32.const 1)) (i32.const 3))))))
+      (then (unreachable)))
+    (call $invocation_leave (i64.load offset=40 (local.get $frame)))
+    (i64.store offset=40 (local.get $frame) (i64.const 0))
+    (if (i64.ne (call $invocation_current) (i64.load offset=32 (local.get $frame))) (then (unreachable)))
+    (local.set $slot (call $crt_callback_slot (local.get $mode) (i32.load offset=4 (local.get $frame)) (i32.load offset=8 (local.get $frame))))
+    (if (local.get $slot)
+      (then
+        (i64.store offset=40 (local.get $frame) (call $invocation_enter))
+        (call $crt_callback_launch (local.get $frame) (local.get $slot)))
+      (else
+        (global.set $crt_callback_depth (i32.sub (global.get $crt_callback_depth) (i32.const 1)))
+        (call $crt_callback_complete (local.get $mode) (i32.load (local.get $frame))
+          (i32.load offset=20 (local.get $frame)) (i32.load offset=16 (local.get $frame))))))
 
   ;; atexit(fn) — cdecl, so the caller retains the argument word.
   (func $handle_atexit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3563,6 +4089,12 @@
 
   ;; The CRT-only overrides: an api id when $name_wa is one, else -1.
   (func $crt_override_api_id (param $name_wa i32) (result i32)
+    ;; surface_gray in original LBreakout copies each pixel through memcpy
+    ;; twice. Keep the existing sparse-safe native copy when a real MSVCRT
+    ;; is present too; copying bytes owns no CRT locale, heap or FILE state.
+    ;; This list is consulted only for MSVCRT/MSVCR7x with a real export.
+    (if (call $str_eq (local.get $name_wa) "memcpy")
+      (then (return (call $lookup_api_id "memcpy"))))
     (if (i32.or
           (i32.or
             (i32.or (call $str_eq (local.get $name_wa) "wcslen")
@@ -3789,3 +4321,12 @@
       (i32.load offset=20 (global.get $reg_base)))
     (unreachable)
   )
+  ;; _fpreset(void) — x86 CRT reset: all exceptions masked, nearest rounding,
+  ;; 53-bit precision (027F), unlike FNINIT's 64-bit precision (037F).
+  ;; The empty stack retains its physical payload bytes. This resets only the
+  ;; calling thread's live environment; no process-wide state is changed.
+  (func $handle__fpreset (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_trace_exc (i32.and (global.get $fpu_sw) (i32.const 0xFF)) (i32.const 0))
+    (call $fpu_reset (i32.const 0x027F))
+    ;; void cdecl: preserve EAX; consume only the return address.
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))

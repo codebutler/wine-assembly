@@ -151,7 +151,7 @@ function fpuReg(esc, b) {
 // recorded off an 8088, so conformance runs must stay at 8086 level or they
 // will "pass" instructions the real part does not have. Demos, on the other
 // hand, routinely assume a 186 or later, so the runner raises it.
-// Levels are the bare model numbers -- 86, 186, 386 -- so `cpuLevel < 186`
+// Levels are the bare model numbers -- 86, 186, 386, 486 -- so `cpuLevel < 186`
 // reads the way it should. (Writing 8086 for the base level made that test
 // false and let every 80186 encoding through.)
 let cpuLevel = 86;
@@ -882,12 +882,14 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
       // INVD and WBINVD (486). There are no caches here to invalidate or write
       // back, so both are exactly a no-op -- but they are not a no-op to the
       // decoder, and refusing them stopped COLORS.EXE inside its own setup.
-      // CLTS clears the task-switched bit of a CR0 that nothing here reads.
-      if (op2 === 0x08 || op2 === 0x09 || op2 === 0x06) { words.push(H.nop); break; }
+      // CLTS must really clear TS after a hardware task switch.
+      if (op2 === 0x06) { words.push(H.clts); break; }
+      if (op2 === 0x08 || op2 === 0x09) { if (cpuLevel < 486) return null; words.push(H.nop); break; }
       // CMPXCHG (486). Same shape as XADD below, and like it the memory form
       // is a read-modify-write, so writesMem has to be set or a program that
       // spins on one against its own code would not see the block invalidated.
       if (op2 === 0xB0 || op2 === 0xB1) {
+        if (cpuLevel < 486) return null;
         const w = (op2 & 1) ? opsize : 8;
         const m = modrm();
         if (m.isReg) words.push(H[`cmpxchg_rr${w}`], (m.rm & 7) | ((m.reg & 7) << 4));
@@ -896,6 +898,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
       }
       // XADD (486).
       if (op2 === 0xC0 || op2 === 0xC1) {
+        if (cpuLevel < 486) return null;
         const w = (op2 & 1) ? opsize : 8;
         const m = modrm();
         if (m.isReg) words.push(H[`xadd_rr${w}`], (m.rm & 7) | ((m.reg & 7) << 4));
@@ -906,7 +909,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
       // in a modrm byte. Only the 32-bit form is architecturally defined --
       // 66-prefixed BSWAP is undefined on real silicon and nothing emits it.
       if (op2 >= 0xC8 && op2 <= 0xCF) {
-        if (opsize !== 32) return null;
+        if (cpuLevel < 486 || opsize !== 32) return null;
         words.push(H.bswap32, op2 & 7);
         break;
       }
@@ -977,7 +980,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
     // The memory forms are a 6-way arithmetic group plus load/store, indexed by
     // the ModRM reg field; the register forms are a flat table off the second
     // byte. WAIT (0x9B) in front of any of them is the "wait for the
-    // coprocessor" pairing and means nothing here, so it decodes as NOP above.
+    // coprocessor" pairing; paged execution checks CR0.MP/TS before WAIT.
     case 0xD8: case 0xD9: case 0xDA: case 0xDB:
     case 0xDC: case 0xDD: case 0xDE: case 0xDF: {
       const esc = op & 7;
@@ -1019,7 +1022,11 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
     case 0x2F: words.push(H.das); break;
     case 0x37: words.push(H.aaa); break;
     case 0x3F: words.push(H.aas); break;
-    case 0xD4: words.push(H.aam, imm8(), wip(start + n)); break;
+    case 0xD4: {
+      const radix = imm8();
+      words.push(H.aam, radix, wip(cpuLevel >= 286 ? start : start + n));
+      break;
+    }
     case 0xD5: words.push(H.aad, imm8()); break;
     // SALC: undocumented, no operands, sets AL from CF.
     case 0xD6: words.push(H.salc); break;
@@ -1039,17 +1046,15 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
         else { writesMem = true; words.push(H[`${nm}_m${w}`], packEa(m), m.disp); }
       } else {
         const nm = ['mul', 'imul', 'div', 'idiv'][m.reg - 4];
-        // DIV and IDIV can fault, and a fault pushes the address of the
-        // instruction ITSELF, not the next one -- the 8086 restarts it.
+        // DIV/IDIV #DE restarts at the first prefix on a 286 or later.
+        // The 8086/80186 instead save the following instruction's address.
         const faults = nm[nm.length - 1] === 'v';
         if (m.isReg) words.push(H[`${nm}_r${w}`], m.rm & 7);
         else words.push(H[`${nm}_m${w}`], packEa(m), m.disp);
         // Not endsBlock: a divide that does not fault falls through normally,
         // and one that does sets the step budget negative and returns before
         // the rest of the block can run.
-        // The 8086 pushes the address of the NEXT instruction on a divide
-        // error -- it does not restart the divide the way a 286 does.
-        if (faults) words.push(wip(start + n));
+        if (faults) words.push(wip(cpuLevel >= 286 ? start : start + n));
       }
       break;
     }
@@ -1169,7 +1174,7 @@ function decodeOne(rd, cs, ip, base = (cs << 4), mask = 0xFFFFF, d32 = false, be
   // this one); see IFEN in compile.js. Not endsBlock: the block ends one
   // instruction later.
   return { words, nextIp: wip(start + n), length: n, fixups, endsBlock, writesMem, bulkWrite, operands,
-    sti: op === 0xFB, ssLoad };
+    sti: op === 0xFB, ssLoad, x87: op >= 0xD8 && op <= 0xDF, wait: op === 0x9B };
 }
 
 // How many instruction bytes each operand kind is read from, and the word

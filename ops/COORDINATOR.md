@@ -1,0 +1,116 @@
+# Wine Ops coordinator operating policy
+
+This policy records the user-directed worker, context, and compute workflow.
+Apply it to the host coordinator instructions and worker launch prompts; a file
+in Git alone does not change a running session. User instructions and enforced
+access controls take precedence. Public deployment needs its existing authorization.
+
+## Dispatch and context
+
+- Target builds are pinned by hashes of the game files actually run, with the
+  manifest and executable identity recorded in the game's notes. Owner decision
+  2026-10-31: a multi-GB compilation container is not the target or a download
+  prerequisite. Preserve the distinction between an owner-designated local pin
+  and an independently compared upstream package. Blood II uses the local
+  DEMO V1.0A (BUILD 109) pin in `docs/re-notes/blood2-demo.md`; do not download
+  `Win98_Games-A-D.7z`. Apply this rule to every lane.
+- The coordinator assigns games and bounded tasks. Use at most **four** production
+  workers (owner decision 2026-11-03 22:45Z); the ceiling is not a target. Prefer
+  filling eligible slots with independent, high-value lanes while quota remains.
+  Respect laptop and other agents' ownership.
+- Check immediately before **each** worker launch: `MemAvailable` must be at
+  least **1.5 GB** and root filesystem free space at least **5 GB**. Run fewer
+  workers when either gate fails. These launch gates supersede the older
+  two-worker cap and lower disk launch floors; the 8 GB cleanup target remains.
+- At most **one** Chrome/browser or heavy CLI runtime may run on this coordinator
+  box at a time. Put other heavy runtimes on separate leased `bx_*` test boxes;
+  independent lanes there may run concurrently. Serialize shared integration and
+  every full build with `flock /tmp/wine-build.lock bash tools/build.sh`.
+- Start a fresh worker for each new task; same-task clarification is allowed.
+  Workers do not spawn agents or refill the queue.
+- Worker automatic compaction is **200,000 total-context tokens**. Coordinator
+  compaction is **48,000 tokens of growth after the carried prefix**. These are
+  compaction triggers, not spending budgets or instructions to stop a task.
+- Verify launcher flags and runtime behavior. On the current host, native child
+  spawn inherited the coordinator threshold despite role configuration; use the
+  independent `scratch/usage-watch/start-worker.py` launcher until corrected and
+  verified. Do not claim config inspection proves runtime inheritance.
+- Each task names its exact input revision, owned paths, outcome, relevant tests,
+  resource allocation, dependencies, completion notification, and stop condition.
+  Runtime tasks must also name the box, expiry, and shutdown owner before launch.
+
+## Evidence storage
+
+- Owner directive 2026-11-03: Git is the source archive. Record the exact commit SHA and a binary Git diff for relevant uncommitted changes, including owned new files. Do not snapshot source trees into run archives.
+- Never tar `scratch/`, `docs/`, or `test/binaries/` into evidence. Stage only small run-specific inputs; reference existing game media by path and SHA-256 instead of copying it. Preserve unique logs, captures and tested modules.
+- Released source archives may be removed only after proving their contents recoverable from a recorded main commit plus recorded diff and preserved non-Git inputs. Leave a replacement note with commit, diff path, original SHA-256 and size; keep any archive that cannot be proved reproducible.
+
+## Wait for outcomes
+
+The worker launcher writes `result.json` and `final.txt`, then queues completion
+to the coordinator. `notification.json` records delivery success or failure.
+
+After dispatch, record the worker ID, task, output directory, expected completion
+or next check time, and return to an interruptible completion wait. Keep the goal
+active while useful work runs. A live worker is not a blocked goal. Do not end
+minute-long turns with "still running" and immediately start another goal turn.
+Use the host's supported wait mechanism within its tool limits.
+
+- Wake for worker completion, user/Telegram input, a changed dependency, or an
+  overdue-worker check. Do not repeatedly reread full logs, source, the backlog,
+  disk measurements, or unchanged receipts while waiting.
+- If completion delivery is unavailable, use a narrow fallback check no more
+  often than every **10 minutes**, unless a task deadline, safety condition, or
+  user request requires sooner. Check result existence, notification failure,
+  process liveness, and bounded new output before deciding whether to intervene.
+- Read Telegram entries after the cursor on wake. Background inbox monitoring
+  and the existing watchdog remain enabled; do not create model turns solely to
+  read an unchanged cursor.
+- Review each result once. Reuse exact-revision evidence already accepted; rerun
+  checks when inputs change, evidence is missing, or a specific concern warrants
+  it. Independent review should target correctness gaps, not repeat packaging.
+- Send status updates for material progress or changed blockers. A queued
+  instruction is delivered, not necessarily consumed: require acknowledgement
+  before relying on a live worker to change a destructive lifecycle action.
+
+## Test-box lifecycle and build failures
+
+The **coordinator owns shutdown**. A worker must leave its assigned test box
+running on completion, a recoverable failure, or handoff, unless its original
+task explicitly delegates shutdown or an emergency requires stopping. Include
+this rule in the launch prompt rather than correcting it after the task starts.
+
+Keep the same running box through bounded repair and retest when practical.
+Before another expensive build, run available cheap prerequisite checks against
+the exact candidate; do not call their success a full build or gameplay result.
+Record the first real failure, fix that dependency, and retest. Preserve useful
+staging and artifacts across handoffs instead of rebuilding the environment.
+
+The coordinator snapshots/stops when work is complete, no useful authorized
+follow-up exists, the failure cannot be resolved in the current allocation, or
+expiry is imminent. Retain a finite TTL and a shutdown checkpoint; do not leave
+compute running indefinitely. Verify actual box state before assigning it.
+
+A denied `sandbox.resume` applies to that operation. Do not retry it unchanged,
+alter credentials to evade it, or treat it as evidence that all runtime work is
+forbidden. A separately authorized fresh box is a distinct task allocation:
+prepare the concrete task first, verify permitted creation/exec, and record its
+new identity. Never assume an old access receipt proves current availability.
+
+## Blockers, publication, and efficiency
+
+Record each blocker's diagnostic, affected tasks, owner, and observable resume
+condition. Keep user holds separate from technical errors. A Git host-key error
+needs trusted-host/authentication repair, not a blanket publication ban; retain
+strict verification. Existing commit/push/merge authorization still requires
+review, relevant checks, current remote-main reconciliation, and verified refs.
+Do not force-push shared branches or treat a local commit as remote backup.
+
+The 30-minute usage review should compare concrete outcomes with coordinator
+requests, repeated waits, setup retries, and duplicate reviews. Cached input is
+a subset of input, not an additional count or free work. Report quota with its
+sample time; do not convert a percentage into an invented token balance.
+
+If status-only turns recur, correct waiting behavior immediately. If no eligible
+work remains after checking dependencies, record one concise checkpoint and wait
+for a dependency/user event; do not repeatedly rebuild the same blocker report.

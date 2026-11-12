@@ -1,5 +1,68 @@
 # Organic Art / D3DRM screensavers (Plus! 98)
 
+## October 31: lower-right rectangle belongs to the native logo path
+
+The original `scr_oasaver` rectangle is associated with an unavailable logo
+input; **no emulator rendering defect has been demonstrated**. The older
+empty-scene diagnoses below are historical, superseded by the rendered scenes
+in [plus98-dx-screensavers.md](plus98-dx-screensavers.md). In particular, that
+note's older “stray white box gone” capture does not establish a permanent
+repair: the saver changes scenes and can hide its logo during a run.
+
+Read these retained investigations before repeating the experiment:
+
+- `20261030T2340Z-screensaver-browser-batch`: original animated OrganicArt
+  scenes and the rectangle on software and WebGL.
+- `20261031T0046Z-organicart-logo`: native `DisableCALogo` DWORD 0/1
+  comparison, both reaching scenes by 45 seconds and continuing to 210.
+  Enabled captures at 45/150 seconds contain the rectangle; disabled captures
+  at 45/150/210 do not. Enabled 210 also lacks it. The saved DirectDraw layer
+  contains 3,060 white pixels in `[550,434,640,468)` with the logo enabled,
+  versus zero with it disabled. Native tracing records missing `CALogo`
+  override and `SearchPath("CALogo.gif") -> NOT FOUND`. Its earlier native
+  `CALogo=BOLD6.GIF` diagnostic textured the same area, but that deliberately
+  substituted image is not an authentic logo recovery or a production repair.
+- `20261031T0058Z-organicart-recovery`: no authentic logo or verified original
+  installation defaults recovered. Checked 538 ZIP indexes, 104 TAR/TGZ
+  listings, one ISO listing and 380 settings/scene files. Forty-seven unrelated
+  InstallShield CABs could not be enumerated; compressed/encoded resources
+  remain unexcluded. The executable has no named CALogo resource or GIF
+  signature. The unavailable `/Volumes/PLUS98/PLUS98.CAB` source lead does
+  not prove that the logo is a member.
+
+The concrete dependency is source-verified original Plus! 98 installation
+media/metadata or an installed logo/settings export matching this package.
+An executable fallback is not proof of installation defaults. Do not synthesize
+a logo, substitute another image, or ship `DisableCALogo=1` as a renderer fix.
+The intended logo appearance and behavior with a complete original install
+remain unverified. See also the detailed retained recovery recipe and
+[corpus findings](../gl-d3d-corpus-status.md).
+
+Run `20261031T0145Z-organic-rectangle` reviewed all three investigations first,
+then ran short, unchanged registered `scr_oasaver /s` browser launches on
+software and WebGL. Each ran for 65 seconds with scene/layer captures at
+20/45/65 seconds. No registry overrides, substitute assets or guest patches
+were applied. Both native traces report `DisableCALogo` and `CALogo` absent
+and `SearchPath("CALogo.gif", path=".;.\\") -> NOT FOUND`; the native disable
+flag reads zero. Inspected scenes reproduce the rectangle on both routes.
+Software's 65-second layer has no rectangle despite the zero disable flag;
+the 20/45-second scenes contain it. Disappearance during ordinary execution
+therefore also occurs on software; the logo timeout itself was not measured.
+WebGL's 20/45-second scenes contain the rectangle; its 65-second layer is
+uniform white during a transition and is excluded from scene findings.
+
+Both launches use retained module SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`, complete source unknown), Chrome 151/ANGLE SwiftShader,
+and guest threads off. The 85 executable/scene pins per launch match the prior
+original pins exactly. Current served JavaScript bytes are retained by hash;
+all 460 responses and 192 retained screensaver-file hashes verify.
+this does not certify current-main WASM or same-frame parity. Evidence and
+reproduction instructions are in the run's `verification.json`,
+`investigation.json` and `recovery.txt`. Only this run's browsers, controllers,
+ports and profiles were closed; no Boat/test box was used (ID/state/expiry
+not applicable). No production code or content change was justified.
+
 `test/binaries/screensavers/{ARCHITEC,FALLINGL,GEOMETRY,JAZZ,OASAVER,ROCKROLL,SCIFI}.SCR`
 
 Seven Direct3D Retained Mode savers that share one engine. Each one is a `.SCR`

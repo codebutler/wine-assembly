@@ -1,5 +1,221 @@
 # Shared graphics render Worker
 
+## Common submission queue (2026-10-21)
+
+`RenderWorker.SubmissionQueue` now owns packet admission credits, FIFO waiting,
+ordered asynchronous execution, draining and sticky execution failures for
+OpenGL and Glide. Legacy D3D/software GL uses its synchronous reservation and
+completion interface around the existing atomic acknowledgements. All paths
+continue through the same process Manager and globally ordered render Worker.
+There is one queue implementation, with per-producer capacity accounts; guest
+Workers cannot share JavaScript queue objects with the page broker.
+
+Admission happens before copying or leasing input. The queue distinguishes the
+value returned at acceptance from the promise that retires payload readers.
+Failed execution retains its capacity ticket and storage lease; a successful
+acknowledgement releases capacity only after any readback copy-back. Explicit
+GPU fences remain API operations. Closing rejects new admissions and drains
+existing waiters. Waiting metadata is bounded to 1,024 entries per queue.
+
+OpenGL retains two pending packets and its ordered GDI/query barriers. Glide
+retains three slots and exclusive oversized packets, including the synchronous
+fast acknowledgement used by pipelined draws/swaps. Legacy atomic producers
+retain three slots and their existing 75%-full/idle-consumer batching. Packet
+sizes, command formats, WASM and dispatch thresholds were unchanged by that
+queue refactor. The subsequent default GL dispatch threshold is 512 KiB (below).
+
+D3D8/9's neutral resource/receipt queue remains a separate higher-level layer
+on the common process transport. Its resident texture ownership and generation
+rules are not replaced by transient packet credits. This change unifies packet
+submission machinery; it does not claim a single binary encoding or an FPS gain.
+
+Validation covers FIFO/exclusive admission, capacity before snapshot, rollback
+before publication, failure quarantine, stale tickets, bounded waiters, draining
+close and ordered readbacks. Existing GL, Glide, legacy readiness, software GL,
+D3D9 and process lifecycle regressions pass. Actual Chrome mixed-backend testing
+passes with one Worker, one heap adoption, and both Glide WebGL/native software
+routes wrapping all three slots with readbacks. This is functional validation,
+not a new WC3 gameplay performance measurement.
+
+## Shared packet ownership (2026-10-20)
+
+The first migration implements common packet ownership, not a common opcode
+format or a replacement scheduler. `RenderWorker.SharedPacketPool` registers
+bounded shared spans and provides immutable identity leases. It rejects overlap,
+double claims, stale releases and retirement with live leases. API adapters
+originally owned admission, publication, completion and error handling; the
+common submission queue above now supplies the reusable lifecycle. Registration
+uses the canonical shared buffer, not independently cloned SAB wrappers.
+
+OpenGL now optionally encodes directly into three allocator-owned 2 MiB WASM
+slots. The two extra slots are lazy (4 MiB per active producer); allocation
+failure retains the original single-buffer copied path. The existing two-pending
+limit releases the oldest slot before acknowledging the third publication.
+Only safe asynchronous batches use leases; queries, borrowed inputs and software
+paths retain their barriers. Worker replies follow pending-geometry flush, so
+slot release does not invalidate deferred vertex views. Publication carries
+offset/length into the already-shared memory, not the entire memory buffer.
+`?gl-copy` retains the copied transport for comparisons.
+
+As of 2026-10-21, the GL encoder submits at a soft 512 KiB watermark while
+retaining 2 MiB slots. Generic records flush preceding work before crossing
+the watermark; packed draws submit after the complete record and software
+consumption. Large records can exceed the watermark. Query/finish barriers and
+lease ownership are unchanged. This promotes the exact WC3 active-movement
+candidate (`5812db90…`); see the gameplay notes for measured FPS and limitations.
+
+Legacy D3D uses the same helper around its existing three shared buffers and
+atomic replay acknowledgements. Glide uses three 1 MiB shared snapshot slots:
+credit is reserved before copying guest bytes, and the Worker reads the shared
+snapshot without a second transport copy. Full pools park producers; oversized
+LFB packets reserve all credits and wait for completion. Readback copies back
+before releasing storage, close drains admitted work, and failed requests
+quarantine leases until endpoint retirement.
+
+D3D8/9 neutral commands are not migrated. Their backend retains some texture
+pixel arrays for later draws; recycling those packets after one execution would
+corrupt resident textures. Transient vertex/index uploads and resident texture
+ownership need separate lifetime rules before adopting the pool.
+
+WC3 gameplay runs `20261020-wc3-packets-{copy,shared}` used identical dispatch
+boundaries and WASM `cd3b43cf…`. Shared transport recorded 3,304 leased batches
+and zero batch-copy bytes; copied transport recorded 4,230,062,784 copied bytes.
+These counters cover launch through the end of capture, not just the timed
+window. The 20-second samples measured 25.85 versus 27.03 presents/s with unequal
+host load; this is functional/copy-removal evidence, not a confirmed FPS win.
+Matching ARM64 V8/SpiderMonkey review is in
+`20261020-wc3-shared-packets-native`; init frames and the Ion flush frame grow.
+
+The actual browser regression `test/test-shared-render-worker-web.js` also
+exercises Glide WebGL and native software alongside GL/D3D9. Each Glide route
+wraps all three shared slots, parks a fourth submission, poisons reused guest
+input, checks RGB565 readback and presentation pixels, then closes without
+retiring peer endpoints. One physical Worker and one final heap adoption remain.
+Evidence: `20261020-common-packets-browser` (synthetic backend test, not gameplay).
+
+### Remaining transport design
+
+The following design describes further unification beyond the implemented pool.
+The process already shares a physical Worker, renderer WASM instance,
+scheduler and heap retirement. The remaining duplication is producer-side
+storage, admission, acknowledgements and error handling. Keep the API
+encoders and execution adapters; share the machinery beneath them.
+
+### Current paths
+
+| Path | Storage and publication | Important constraint |
+| --- | --- | --- |
+| OpenGL | Three optional WASM slots, offset-only publication and completion leases. Queries/borrowed inputs block. | Two pending acknowledgements protect the next producer slot. |
+| Glide | Process-locked WAT stream copied into three shared snapshot slots. | Admission precedes snapshot; direct WAT encoding remains future work. |
+| Legacy D3D/software GL | `d3d-command-stream.js` rotates three 2 MiB shared buffers with atomic replay acknowledgement. | Snapshots still copy into the pool; native replay copies into private WAT scratch. |
+| D3D8/9 neutral commands | The same file also contains `CommandQueue`: copied object payloads, resource leases, generations and receipts. Worker publication structured-clones them again. | This is a separate transport, not the legacy buffer pool. The synchronous trusted-owned shortcut is not a general asynchronous ownership contract. |
+
+`render-worker.js` already owns endpoint lifecycle and global admission limits;
+`d3d-render-worker.js` serializes execution to protect native scratch across
+APIs. Preserve those owners. Do not create another physical worker or bypass
+the shared scheduler to obtain a faster producer path.
+
+### Shared contract
+
+Extract API-independent admission/lifecycle rules from `CommandQueue`, rather
+than forcing every API through its current D3D opcode whitelist. Combine them
+with reusable buffer slots derived from the legacy pool. A slot ring is a
+simpler first implementation than a variable-length byte ring: existing WAT
+records expect contiguous storage, and large records must not straddle wrap.
+
+The proposed descriptor carries endpoint, owner, generation, sequence,
+encoding version, slot lease, offset and length. Adapters validate their own
+record format and return values. The common layer supplies:
+
+- Capacity reservation **before** snapshotting or retaining data, including
+  producer-side queues. Account for storage once across reserved, queued and
+  active ownership; bound command metadata and total per-process allocation.
+- Explicit slot leases: free → writing → published → released → free.
+  Publish only complete records, with atomic ordering on shared memory.
+  Validate range, sequence and generation; handle counter rollover explicitly.
+- Separate acceptance, payload release, API execution and explicit fence
+  completion. A message being received is not permission to reuse its bytes.
+  Ordinary draw completion also does not universally mean GPU completion.
+- Resource-version leases distinct from packet storage leases. Preserve
+  resource lifetime until the adapter's relevant completion point.
+- Worker-side atomic waits and page-side Promise-based waits. Never block the
+  browser main thread with `Atomics.wait`, and never return a Promise through
+  an existing synchronous cooperative WASM import.
+- Sticky failures, waking blocked producers, generation-safe late replies,
+  and retirement only after execution/termination proves storage is unused.
+  Endpoint close must preserve peers and the existing single heap handoff.
+
+The existing neutral receiver sends `consumed` **before** invoking its
+executor. That is an ownership acknowledgement for an already-cloned object;
+it must not become a shared-slot release signal unchanged. Likewise legacy
+`COMPLETED` means ordinary replay retirement, with separate materialization
+fences. Use explicit payload-release acknowledgements in the new protocol.
+
+### Removing copies and preserving overlap
+
+For Glide's next phase, follow GL and allocate leased slots inside shared WASM linear memory and
+encode directly into the current slot. The WAT encoders cannot directly write
+an unrelated JavaScript `SharedArrayBuffer`; simply extracting D3D's existing
+external pool would still require a whole-stream copy. Use allocator-owned,
+validated spans rather than new hard-coded memory-map addresses. Allocation
+is lazy and charged against a process budget; do not reserve three large
+buffers for every idle guest thread.
+
+Publishing then sends a small descriptor, not a copied command buffer.
+Initially preserve the existing broker/control route; direct producer
+notification is a later optimization that must retain cross-endpoint ordering,
+context ownership, GDI/readback barriers and shutdown coordination. Binary
+D3D9 uploads can use the same leases while small structured metadata remains
+API-specific. Guest inputs still require snapshots when the game may mutate
+them immediately, and native software replay may still need private scratch.
+This removes redundant transport copies, not every data copy in rendering.
+
+An adapter releases a slot only when no pending draw, software continuation
+or upload references it. GL's `enqueuePacked` retains typed-array views until
+`flushPendingDraw`; removing the current end-of-batch geometry flush therefore
+also requires retaining the corresponding slot leases. Bound that retention
+and flush pending geometry when necessary to release capacity, or the pool
+can deadlock. A storage boundary should not automatically be a GPU finish.
+
+Dispatch policy is separate from storage. Legacy D3D already submits when
+its consumer catches up, in addition to a size threshold. Evaluate a bounded
+size/age/consumer-idle policy for the common path, without polling per vertex
+or issuing a message for every draw. Worker wakeups should be coalesced with
+a protocol that cannot lose an empty-to-nonempty notification. A GPU flush,
+where needed to submit work, remains distinct from a blocking GPU finish.
+
+The WC3 experiment in `20261020-wc3-gl-dispatch-{control,512k}` demonstrated
+renderer replay starting about 16 ms earlier and a median finish wait falling
+from 4.4 to 1.2 ms, but no FPS benefit in the measured pair. Use that as evidence
+for available overlap, not evidence that a pool or smaller batches are faster.
+
+### Migration and validation
+
+1. Extract and test common admission, ownership milestones and failure rules;
+   retain existing encoders and API barriers. Include pre-post backlog limits.
+2. Add bounded shared slots and migrate GL first, keeping borrowed/query
+   handling conservative. Compare copied versus leased packets with identical
+   dispatch boundaries before changing batching policy.
+3. Migrate Glide under its existing process lock, preserving swap pacing,
+   result-bearing calls and LFB readback. Reuse the same storage and lifecycle
+   tests; then migrate legacy D3D buffers and D3D9 binary payloads.
+4. Tune earlier dispatch and cross-batch geometry combining independently.
+   Only then consider bypassing the page for descriptor wakeups.
+
+Tests must cover delayed consumption with producer overwrite attempts, pool
+exhaustion/wrap, stale generations, failed enqueue, blocked-producer shutdown,
+API query results, readback/GDI ordering, shared software scratch, pending
+geometry retaining a slot, cross-API resource fences and one heap retirement.
+Build on `test-d3d-neutral-command-stream.js`, `test-shared-render-worker.js`,
+`test-gl-shared-render-worker.js`, `test-glide-render-worker.js`,
+`test-d3d9-shared-render-worker.js` and `test-render-worker-lifecycle.js`.
+Browser validation should exercise mixed endpoints and representative gameplay
+sequentially. Record copied bytes, submissions/wakeups, pool-full wait time,
+first replay relative to finish, render time, frame pacing and matched audio
+work. Keep cooperative and software behavior in the regression matrix.
+
+## Existing implementation
+
 Threaded browser processes now own one render Worker. D3D 5–7, D3D8/9,
 OpenGL and Glide use independent endpoints on that owner. Both WebGL and
 software devices execute there; the main thread retains window composition.

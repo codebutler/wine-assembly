@@ -889,6 +889,27 @@ and ut2004_demo at the root manifest, with `exeGuestPath`/`workingDirectory` set
 
 Evidence: `scratch/runs/20261010T2335Z-ut2004-fresh-fetch-app-w5`.
 
+## Unreal Special Edition: headless single-player route (2026-10-01)
+
+(Recovered from branch archive cbfe9895, Oct 2026.) A plain Node route past
+the SoftDrv flyby, using the stock command-line override:
+
+```
+node test/run.js --app=unreal_special_demo --args='Nyleve.unr?game=UnrealI.SinglePlayer -window' \
+  --no-threads --quiet-api --no-close --stuck-after=0 --batch-size=200000 \
+  --tick-ms-per-batch=25 --repaint-every=10 --branch-clock --max-batches=2101 \
+  --input=1490:click:300:250,1550:di-keydown:38,1550:keydown:38,1750:di-keyup:38,1750:keyup:38,1800:di-keydown:39,1800:keydown:39,1950:di-keyup:39,1950:keyup:39
+```
+
+(The original also pinned `--wall-clock-ms=1790673326000`; the `--input` list
+is reconstructed from the described route, not copied from its command.)
+The click at `(300,250)` focuses the viewport and fires. Up/Right are the INI's
+`MoveForward`/`TurnRight`; the route sent both the DirectInput and the window
+keydown and was not minimized. Checkpoints: batch 1500 first-person weapon,
+100 health, 49 ammo; 1760 `YOU GOT A FLARE` with inventory icon; 2000 turned
+view. The starting room looks like the prison interior, so the URL is not proof
+of the loaded map. 7,350,053 API calls, byte-identical PNGs across two builds.
+
 ## Unreal Special menu labels (2026-10-11, TEST-FILES-OBJECT-ENTRIES)
 
 The menu bar showed raw `ID_FileMenu ID_ViewMenu ID_WindowMenu`. The menu
@@ -954,3 +975,974 @@ the candidate changes registry JS separately, with tracked WAT and renderer
 sources unchanged from the preceding `3540d8304` checkout. This does not certify
 a fresh current-main build. All owned processes/groups were confirmed absent;
 movement/reverse/idle and browser/WebGL/audio/network/FPS remain untested.
+
+## UT2003 registered browser startup retest (2026-10-31)
+
+`scratch/runs/20261031T0306Z-ut2003-webgl` mounted the registered client's
+879 original data files and launched its unchanged `-d3d -window -nosound`
+arguments in threaded Chrome. The reviewed `webgl-2.png` shows the game's own
+crash dialog: `LockRect failed: D3DERR_INVALIDCALL`, with
+`UD3DRenderDevice::ReadPixels <- Present <- UGameEngine::Draw` in its history.
+This reproduces the readback failure on a fresh browser run; it establishes
+neither a menu/world render nor gameplay progress.
+
+The URL requested WebGL, but the live renderer executor was not independently
+attested, so this is not a qualified WebGL backend result. Actual module SHA-256
+was `8333a35b1efa694462033e87f62ce4a3f5497941d1423540b39a590c9d31134a`;
+its compiled source commit is unknown. Observed checkout `016de3e789` is recorded
+separately and must not be treated as that module's source identity.
+
+`verification.json` confirms 881 unchanged original input entries (including
+the executable and manifest), 105 valid served-file snapshots, and closure of
+the owned browser, profile and server port. `result.json`, console logs and
+worker diagnostics retain the failure baseline. No Boat was used. The next
+causal step is to trace the rejected surface, rectangle and lock flags through
+the readback call; the dialog alone does not identify which validation failed.
+No API behavior or fixture was changed for this run.
+
+The follow-up `20261031T0310Z-ut2003-lock-trace` used the same module with
+current CLI host code, rather than the browser's frozen host snapshots. Its
+60-second software D3D run reached an inspected UT2003/NVIDIA splash
+(`cli-final.png`). `GetBackBuffer` and `GetDesc` succeeded. Read-only
+`LockRect` calls used flags `0x10` and identical surface/output/rectangle
+addresses on reentry. The trace's alternating raw EAX error/success values
+must not be counted as alternating guest-visible failures: the backbuffer
+handler initializes EAX to `INVALIDCALL`, parks for rendering, then re-enters
+to finish the call. The CLI recorded 23 render waits. This is not a browser
+repair, menu result, or gameplay acceptance.
+
+The original browser console also records `WebGL sampler LOD
+bias/MAXMIPLEVEL is not implemented` before the crash dialog. This is a
+separate concrete lead; causation between that error and the failed readback
+is not established. A console-only metadata observer in
+`20261031T0315Z-ut2003-sampler-observer` preserved the rejecting check but
+ended its observation before device creation, capturing no sampler metadata.
+Its reviewed final frame is a blank startup window; its browser and server
+closed. Capture the rejected texture/sampler state and completed readback
+result before choosing a production change. Both follow-ups used local
+processes, with no Boat.
+
+The longer observer run `20261031T0320Z-ut2003-sampler-cause` ran from
+03:18:27 to 03:22:26 UTC with nine captures. The reviewed final frame still
+shows a blank original UT2003 window; no rejected sampler metadata was
+captured. All 881 original input hashes and 105 frozen host snapshots passed
+verification, and the owned browser, profile and server closed. This does
+not strengthen the sampler-causation claim. Do not repeat this observer
+unchanged; establish that the diagnostic execution reaches the relevant draw
+before another sampler capture. No production source changed.
+
+### First completed readback failure on exact source (2026-10-31)
+
+`20261031T0531Z-ut2003-readback` establishes the causal chain on UTorigin's
+retained locked build, SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`,
+with its exact 295-file source/host snapshot, seven compiler files and original
+build log. This includes the window-origin repair published as `fb698d57e`.
+It uses neither the unknown-source `8333a35b` module nor mixed current-host
+CLI evidence. All 881 original entries (879 data files, executable and manifest)
+verify unchanged before/after; 107 served snapshots match the retained pins.
+The original registered `-d3d -window -nosound` startup is unchanged.
+
+Unlike the earlier observers, this single serialized native browser execution
+reaches device creation, actual draws and the game's original crash dialog
+(`startup-15.png`, personally inspected). The live render worker attests endpoint
+1, API `neutral`, backend **`webgl`**, device `0x18721038`, generation 1.
+This establishes this endpoint's identity, without qualifying gameplay or backend
+parity. The capped diagnostic wraps existing WASM import hooks and bridge
+methods through CDP/page evaluation; production served source bytes are intact.
+
+The first LockRect is Surface8 `0x18832010`, DX slot 6, output `0x179ff76c`,
+rectangle pointer `0x179ff75c` containing `(0,0,1,1)`, flags `0x10`, return
+address `0x11ae7d78`. It resolves to the live device's lockable 640×480
+backbuffer, pitch 2560, format 22. Source admission succeeds: it captures the
+valid output/rectangle and submits backbuffer readback `0x30016` with descriptor
+`0x014656d4` (device program state `0x11d53004`).
+
+At 05:32:47.020 UTC, the initial handler exit has raw EAX `0x8876086c`, token
+`-3`, yield reason 16 and unchanged ESP `0x179ff71c`: **parked, not completed**.
+At 05:32:47.031, the same call re-enters and polls `0x30007/-3`; the completed
+request carries `QueueError: D3D9 draw: WebGL sampler LOD bias/MAXMIPLEVEL is not
+implemented`. Poll returns `-1`. At 05:32:47.035, token/yield are zero, ESP is
+`0x179ff730` (+20), EAX remains `0x8876086c`, and the output words are unchanged.
+This is the first completed guest failure. `d3d9_backbuffer_lock` takes its
+post-poll `result != 1` branch and clears the reserved lock; none of its initial
+surface/flag/rectangle/output gates rejected this call.
+
+The rejecting command precedes that readback: **DRAW sequence 29** on the same
+device/generation, after the contiguous successful prefix 1–28. Its sampler
+snapshots have LOD bias `-0.5`, MAXMIPLEVEL **0**, min/mag 2, mip filter 1.
+Stage 0 is a 512×512 ten-level 2D image; stage 1 is a 128×128 eight-level cube
+image. The retained backend routes used biased 2D stages through
+`Shader.withMipSampling`, explicitly excludes cube images from those stages,
+and rejects nonzero bias in ordinary `uploadTexture` unless the image has one
+level and matching min/mag filters. Thus stage 1's multi-level cube satisfies
+the rejecting condition; this stage attribution follows from that source path
+and captured command metadata. **READBACK sequence 48**, token `-3`, inherits
+the same poisoned-queue error; readback does not originate it. Later rejected
+draw fences are propagation, not additional independently executed failures.
+
+`check-cause.cjs` passes exact completion/ESP/token/argument/endpoint/sequence
+checks and exercises the retained production `uploadTexture` rejection with
+the observed cube metadata. `post-failure-state.json` records the surviving
+surface/device/program state separately: its stack rectangle has already been
+reused and must not replace the entry-hook rectangle evidence. The final
+05:35 capture shows the game window gone, not a menu or world.
+
+At this checkpoint no source repair was made: this is a concrete unsupported multi-level cube LOD
+bias path, not an invalid rectangle or a demonstrated small lock-handler bug.
+Removing the rejection would silently sample the wrong mip; the existing 2D
+atlas explicitly cannot handle cube sampling. Next work is correct generic
+cube sampler LOD support with mip-selection pixel regressions, then a matched
+original startup/menu/play retest. Native DM-Antalus gameplay remains blocked.
+No guest/assets/clock/startup changes or swallowed errors were used.
+
+The run retains `RECOVERY.md`, helpers, source/compiler manifests, original
+pins, command metadata, closure checks and captures. A harness preflight path
+error closed before any guest launch and is separately preserved under
+`preflight-failure/`; it is not a second native execution. Chrome `1599903`
+exited zero; owned controller/lock holder, HTTP 40325/CDP 36417, profile and
+watchers closed. No Boat was allocated (ID/state/expiry N/A); other workers'
+runtimes, laptop fonts and Heroes were untouched. Focused evidence checks and
+helper syntax pass; no new full build is claimed because production source is
+unchanged and the tested module is the exact previously locked build above.
+
+### Cube LOD repair and original native DM-Antalus (2026-10-31)
+
+Run `20261031T0542Z-ut2003-cube-lod` first reran the predecessor's
+`check-cause.cjs`: the retained DRAW29 cube rejection and inherited READBACK48
+error pass the causal checks. The generic repair extends the WebGL mip atlas
+and shader lowering to cube images. All six supplied face chains remain
+available; sampler bias, MAXMIPLEVEL, resident base LOD, partial-chain clamps,
+point/bilinear min/mag filtering and point/trilinear mip filtering use the
+existing native-reference policy. Face selection uses X/Y/Z tie order. Quad
+helper directions are projected onto the receiving fragment's face before
+computing the footprint, preventing artificial LOD jumps across face edges.
+Filtering clamps taps within that face. Keyed textures and GPU resource levels
+retain their existing caching/revision and feedback checks.
+
+This lowering explicitly requires six square CLAMP faces and a supported atlas
+size; invalid LOD/filter/chain metadata and missing WebGL1 derivative support
+still reject. The ordinary upload admission check remains in place: biased
+sampling needs the corresponding shader lowering. No queue errors are cleared,
+validation removed, mip chains shortened, assets edited, guest sampler state
+changed or alternative backend selected.
+
+`test/test-d3d9-cube-lod-web.js` passes **8,880 actual WebGL1/2 pixel checks**
+with distinct face, mip and texel colors. It covers fixed/programmed pixel
+shaders, stages 0/1, positive/negative/zero bias, MAXMIPLEVEL beyond the chain,
+all mip modes, distinct min/mag filters, partial/resident/keyed chains, GPU
+resource faces and adjacent lanes crossing a face edge. The same regression
+rejects the saved old source at its original LOD error. Existing fixed cube
+(48 cases), single-level cube (288), shader/native-IR/2D-atlas and software-mip
+tests pass. The optional Node headless-GL partial-mip test skips because its
+native dependencies are absent; browser partial cube chains are exercised by
+the new regression. `flock /tmp/wine-build.lock bash tools/build.sh` passes.
+
+The fresh build remains WASM SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`
+because the repair is in JavaScript. This run retains its own exact 295-file
+source/host snapshot, seven compiler files, dirty patch and full build log;
+107 served snapshots match those pins. All **881 original input entries**
+verify unchanged before and after the single native execution. Registered
+`-d3d -window -nosound` startup is preserved. Endpoint 1 is neutral/WebGL,
+device `0x18721038`, generation 1. A bounded live executor observer additionally
+records a real `WebGL2RenderingContext`, 21,049 successfully completed backend
+draws, and original 128×128/eight-level cube samplers with bias −0.5/MAXMIPLEVEL
+0 on stages 0–2. It preserves return values/exceptions and is restored afterward.
+
+DRAW29 now completes through sequence 29 with the predecessor's exact cube
+sampler state; READBACK48 completes through 48. The identical first LockRect
+arguments/rectangle/flags first park on ticket −4, then complete with **EAX 0**,
+token/yield zero, ESP +20 and output pitch 2560/nonzero pixels. Twenty completed
+successful locks are retained. `check-repair.cjs` verifies this transition
+against the saved original failure. No bridge rejection/error is recorded;
+the final capture's queue has completed through 121100.
+
+Personally inspected captures show the original main menu, Instant Action's
+selected DM-Antalus preview, native `open DM-Antalus` typed into the game's own
+console, loading screen, first-person Fire prompt, and spawned HUD. Native
+Control (the original Jump binding) joins the match; W/S move, mouse movement
+changes the view, and held left mouse fire reduces ammo **150 → 146**, health
+**100** (`join-settled.png`, `forward-settled.png`, `mouse-fire-settled.png`). All
+88 recorded native key/button events are trusted. Menu PLAY activation was not
+established; gameplay uses the explicitly recorded native console route.
+This establishes basic native DM-Antalus movement/look/fire, without an audio,
+performance, kill or match-completion claim. No next graphics-operation failure
+was observed.
+
+`RECOVERY.md` preserves replay/cleanup commands and the source/compiler/input
+closure. The controller/lock holder unexpectedly ended with status 143 during
+final shutdown, before its finalizer; the signal sender is unknown. The owned
+Chrome was recovered and closed via its retained CDP endpoint under a reacquired
+browser lock, with native input/end pins saved first. All tracked owned PIDs,
+HTTP 43345/CDP 34225 and profile are verified gone. No Boat was allocated
+(ID/state/expiry N/A); other runtimes and protected files were untouched.
+
+## UT2003 frozen SOFTWARE attempt: isolation prerequisite failed (2026-10-31)
+
+`20261031T1533Z-ut2003-software-antalus` stopped at its first execution
+prerequisite, before guest input. It does **not** close the missing original
+SOFTWARE gameplay evidence. The preceding `5fa12b1be`/0542Z Antalus run remains
+WebGL evidence only; neither run establishes full-27 qualification.
+
+The single browser launched at 15:35:48 UTC after Diablo II's new 15:34:16
+FULLRELEASE for runtime 15:24:30–15:32:47, plus an independent actual whole-Chrome,
+global crashpad and profile PID/start gate. Free disk was 2,318,245,888 bytes.
+The run retains the exact 0542Z 295-file source snapshot, seven compiler inputs
+and module SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`.
+All 881 original files, retained source/compiler/module and 102 pinned responses
+served in this execution verify unchanged; all 107 predecessor served pins also
+match the frozen closure. No current host source was substituted. The original
+registration and `-d3d -window -nosound` arguments were unchanged. Only the normal
+host GPU selector changed to Software before Launch; the guest-worker default
+was retained, with a 1024×768 browser viewport.
+
+The first capture (`01-startup.json`/`.png`) reports **Software selected,
+`crossOriginIsolated=false`, `guestWorker=false`**, despite Threads being checked.
+Its inspected NVIDIA intro and toolbar “not isolated” state corroborate that
+failure. The actual main-thread bridge has backend/kind `software`, device
+410128440, generation 1, submitted/consumed/completed **85/85/85**, no inflight
+operations and no queue error; `01-startup-executor.json` has no render-worker
+executor. These completed startup operations are outside the required default
+guest-worker configuration, not qualifying gameplay or a software graphics
+failure.
+
+The cause is in this run's harness: its custom frozen-response handler omitted
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`. `first-dependency-http.json` retains
+the completed HTTP 200 response without either header. The static server's
+`crossOriginIsolated: true` option applies those headers only to responses it
+serves itself; a completed custom response returns earlier. The fallback
+isolation-service-worker request was refused as unpinned. The 0542Z driver
+explicitly included both headers in its custom responder; this adaptation
+accidentally omitted them. This is an identified harness prerequisite failure,
+not an established emulator defect. No retry was made. The next attempt must
+restore those response headers and assert isolation
+and an active default guest worker before guest input, then perform the
+prepared ordinary menu PLAY route, allowing its documented no-Present load
+period. Menu PLAY remains open; the explicitly labelled native-console
+`open DM-Antalus` fallback was not used here.
+
+Only the host Launch click occurred; no guest movement/look/fire, health/ammo/
+clock progression, audio, FPS, benchmark or match-completion claim follows.
+The controller cooperatively quit at 15:36:27. Durable Python `Popen.wait()`
+receipts record Chrome/controller/wrapper/monitor exit 0; the monitor sent no
+signals. Three PID/start-qualified holders retained FD9 on
+`/tmp/wine-browser.lock` during runtime. Cleanup verifies all owned processes
+and crashpads absent, both ports closed, profile gone, held inputs empty and
+the full flock available. FULLRELEASE was posted at 15:37:07. No Boat was
+allocated (ID/state/expiry N/A). `RECOVERY.md`, `verification.json` and
+`focused-check.json` preserve the precise prerequisite, identity and cleanup
+checks. No production files changed.
+
+## UT2003 isolated SOFTWARE Antalus entry: disk stop before join (2026-10-31)
+
+`20261031T1543Z-ut2003-software-isolated` repairs the preceding harness
+omission in a **new scratch helper only**. Both COOP `same-origin` and COEP
+`require-corp` are set before every custom-response branch, including rejected
+unpinned URLs. Actual HTTP checks of HTML, host JS, WASM and a custom 404 retain
+both headers. Before any guest input, `firstlaunch-gate.json` verifies
+`crossOriginIsolated=true`, `wine.guestWorker=true`, Threads enabled, Software
+selected and a 1024×768 viewport. Every subsequent completed action rechecks
+isolation, worker and backend. The original 0542Z/1533Z frozen sources remain
+unchanged.
+
+This single execution uses the exact 0542Z module SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`,
+295-file source snapshot and seven compiler inputs. All 881 original inputs,
+107 predecessor served pins and this run's 107 served pins verify unchanged
+before/after. Registration and `-d3d -window -nosound` remain original; only
+the normal host selector changes to Software. Read-only executor inspection
+finds an actual software `Device`, its native software exports, accumulated
+completed samples and `gpu=false`; no draw/input wrappers are installed.
+
+Inspected captures show NVIDIA startup, the main menu, native console and
+**DM-Antalus with “Press FIRE to start!” / “Press [Fire] to join the match!”**
+(`21-antalus-load-settled.png`). Menu navigation did not establish Instant
+Action or PLAY; those remain open. Entry explicitly used the ordinary native
+console: Backquote, trusted keyboard typing `open DM-Antalus`, then Enter.
+Captures immediately after input lagged the settled display; the typed-command
+capture is partial, while the later Antalus view establishes map entry. A
+logged `.PAG <- .PAX` C++ throw during loading was followed by that rendered
+map, so it does not establish a terminal guest failure. The last bridge
+snapshot completes **12,389 / 12,391 submitted operations**, with no queue
+error; remaining work is pending, not a completed graphics failure.
+
+The first unmet continuation prerequisite is **free disk**. Prelaunch had
+2,311,340,032 bytes free. At 15:48:45 UTC the monitor observed
+**2,093,572,096 bytes**, below the mandated 2.1 GB early-stop threshold, and
+cooperatively quit. No deletion or retry was attempted. The requested native
+join and following capture timed out after shutdown and are **unexecuted**;
+there is no spawned HUD, inspected movement/look/fire, or health/ammo/clock
+progression evidence. This run closes the isolation prerequisite and proves
+Software map entry, while the SOFTWARE gameplay gap and full-27 qualification
+remain open. The preceding 0542Z success remains WebGL evidence only.
+
+Runtime 15:43:37–15:48:47 followed both predecessor FULLRELEASE records and an
+independent actual whole-Chrome/global-crashpad/profile PID/start gate. The
+wrapper/controller/monitor inherited FD9 for the full browser lifetime; Python
+`Popen.wait()` receipts record exit 0, and the monitor sent no signals. Cleanup
+verifies all owned runtime processes absent, both ports closed, profile removed,
+inputs balanced/released and the full flock available. FULLRELEASE was posted
+at 15:50:01. No Boat was allocated (ID/state/expiry N/A). `RECOVERY.md`,
+`verification.json`, `focused-check.json` and the saved cleanup audit retain
+the bounded result. No production source, assets, INI, clock, save bytes or
+guest memory changed. Next work needs enough disk for a fresh bounded run,
+then native join and inspected gameplay under the same proven configuration.
+
+### SOFTWARE join follow-up: launch reserve unavailable (2026-10-31)
+
+`20261031T1603Z-ut2003-software-join` stopped before browser launch at the
+requested disk prerequisite. The required new Diablo II FULLRELEASE arrived
+at 16:03:08 UTC for its sole 15:51:57–16:01:44 execution. At 16:03:23, an
+independent process/PID-start scan under an exclusive FD9 browser flock found
+no actual Chrome or global crashpad processes and confirmed the predecessor
+profile absent. Free disk was **2,542,460,928 bytes**, **57,539,072 bytes short**
+of the required **2,600,000,000-byte** prelaunch reserve. The saved
+`post-predecessor-gate.json` records that first dependency. No browser retry,
+guest input, queued join or gameplay capture occurred, and no existing evidence
+was removed.
+
+Cheap preparation verifies the exact 0542Z module
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`,
+295 frozen source files, seven compiler files, 881 original inputs and 107
+predecessor served pins. New scratch helpers retain the repaired custom
+COOP/COEP responses, isolation/default-worker checks before guest input,
+1024×768 viewport, original `-d3d -window -nosound` registration and normal
+Software selector. Helper syntax and focused prerequisite checks pass; this
+is preparation evidence only. No production files changed; no Boat was
+allocated (ID/state/expiry N/A).
+
+The next execution requires the disk reserve, a fresh sole-browser release
+gate and the same frozen identity. Use the authorized native console
+`open DM-Antalus`, then ordinary FIRE to join and inspect the actual HUD,
+movement/look/fire and health/ammo/clock response. Software gameplay remains
+unverified, and menu PLAY remains open. The preceding WebGL gameplay and
+Software pre-join screenshot do not supply those missing observations.
+
+### SOFTWARE join and native gameplay verified (2026-10-31)
+
+`20261031T1612Z-ut2003-software-join-reserve` closes that bounded Software
+gameplay gap. Personally inspected `12-antalus-settled.png` shows original
+Antalus and Fire-to-join after ordinary Backquote, typed `open DM-Antalus`,
+and Enter. Native left click `(350,430)` starts the countdown in frame 14;
+`15-joined-settled.png` shows the joined weapon/crosshair HUD, **health 100
+and ammo 150**. No menu PLAY attempt was repeated; that issue remains open.
+
+Native W held **2,200 ms** moves from the overlook onto the lower path in
+`17-forward-settled.png`. Mouse motion to `(430,400)` in eight steps turns
+the view toward the rock wall (`19-look-settled.png`). A **2,300 ms** native
+left-button hold reduces ammo **150 → 148** (`21-fire-settled.png`); health
+stays **100**. Native F1 opens the scoreboard, identifying **DeathMatch in
+Antalus**, frag limit 25, player score/deaths 0/0, and elapsed time **00:24**
+(`23-scoreboard.png`). A later inspected capture shows **00:33**
+(`24-scoreboard-clock-later.png`). The ordinary HUD has no visible countdown
+clock; these are the native scoreboard's elapsed-time readings. F1 dismisses
+scores, and S held **1,800 ms** moves backward in `27-final-gameplay.png`,
+still health 100/ammo 148. No damage, enemy-hit, kill, FPS, audio, match
+completion or full-27 qualification is claimed.
+
+This uses exact0542Z WASM SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`,
+**295 frozen source files, seven compiler files, 881 original inputs and
+107 served pins**, verified before/after. Original `-d3d -window -nosound`
+registration is unchanged. The normal host selector alone chooses Software;
+the repaired custom COOP/COEP responder and first-input isolation/default
+guestWorker gates pass, with the browser consistently **1024×768**. Actual
+Software Device inspection finds `gpu=false`, native software exports and
+completed samples advancing from **199,850,535** at the joined HUD to
+**301,598,102** at final gameplay. Final queue evidence records **25,202
+completed / 25,220 submitted**, error null and empty bridge lastError;
+18 pending operations are not completed failures. All sampled queues have
+no error. The load-time `.PAG <- .PAX` diagnostic was followed by the
+inspected match. No draw/input wrappers, guestworker disable, validation
+removal, current-host mixing, asset/INI/clock/save/memory edits or cheats
+were used.
+
+The fresh whole-Chrome/global-crashpad/profile PID/start gate ran under
+exclusive lifetime FD9 after Diablo FULLRELEASE16:03:08. The **2.8 GB**
+prelaunch assertion passed; the first monitor sample, before profile PIDs
+appeared, had **2,968,604,672 bytes** free. Minimum sampled free space was
+**2,701,918,208 bytes**, above both the 2.1 GB stop and 2 GB floor. The
+browser ran **16:12:10–16:16:11 UTC**, within fresh 17/18/19-minute bounds.
+Python actual `Popen.wait()` receipts record wrapper/controller/monitor exits
+zero, and the Chrome exit receipt records zero; no monitor signals were sent.
+Cleanup verifies owned PID/start identities absent, both ports closed,
+profile removed, inputs released and full flock available. **63 trusted
+balanced native events**, **17 PNGs**, frozen identity and focused evidence
+checks pass. No production files changed, public deployment or Boat
+allocation occurred (ID/state/expiry N/A). `RECOVERY.md`, `verification.json`,
+`focused-check.json` and saved cleanup receipts retain this completed
+execution; predecessor unexecuted join requests remain unexecuted.
+
+### Original visible menu PLAY reaches SOFTWARE gameplay (2026-10-31)
+
+`20261031T1628Z-ut2003-native-menu-play` closes the remaining ordinary
+menu-to-gameplay gap in one fresh bounded browser execution. This is separate
+from the completed console route in `950e4940e`; **no console was opened or
+command typed in this run**. No generic emulator defect was demonstrated and
+no production code changed.
+
+Cheap inspection first distinguished native routing, the shared DirectInput
+ring, guest execution and graphics completion. The frozen renderer's existing
+`onInputTrace` hook records routing without a wrapper; read-only worker
+inspection records registers, RPC counters and the ring at the base supplied
+by that frozen `RegionMap`. The guest's `di_mouse_event_take` advances its
+head. A drained edge proves emulator consumption, not acceptance by a
+particular Unreal widget. The historical no-Present loading interval above
+remains relevant: the menu picture alone cannot diagnose activation failure.
+
+Personally inspected captures show the original intro, main menu and
+**Instant Action | Select Map, DM-Antalus** (`10-map-page.png`). Native click
+`(350,538)` selects Instant Action; Enter opens it. After hover at visible
+PLAY `(637,663)`, native left down/up held **1,200 ms** is recorded as action
+13. Both edges route to game hwnd `0x10005`, with `dispatched=1` on down and
+matching DOWN on up. The DirectInput head/tail progresses **46/46 → 46/47 →
+47/47 → 47/48 → 48/48**, and the Windows input queue drains. PLAY's normal
+help text appears in `14-play-progress-12s.png`; that capture still retains
+the menu while guest EIP/RPC counters progress. The `.PAG <- .PAX` diagnostic
+at **16:33:46 UTC** precedes the next Enter (**16:33:50**). Enter (action 15)
+and another native click on the established PLAY tooltip (17, **16:34:18**)
+were also completed during this interval. These extra inputs are preserved;
+this run does not attribute joining to one particular press.
+
+By **16:34:39**, `18-play-loading-progress-20s.png` shows **"The match has
+begun!"**, joined weapon/crosshair HUD, **health 100 / ammo 150**. This is
+original menu gameplay, not an inference from queued commands or an unchanged
+menu frame. W **1,800 ms**, mouse motion to `(430,400)` in eight steps, and S
+**1,800 ms** complete; inspected frames 22/24/30 show changed views. A native
+left-button hold **2,300 ms** produces **ammo 148, health 100** in
+`24-fire-settled.png`. Native F1 shows **AVERAGE DeathMatch in Antalus**, six
+scoreboard rows including Player and bots, frag limit 25, and **remaining
+time 14:46 → 14:42** (`26-scoreboard-clock.png`,
+`27-scoreboard-clock-later.png`). No player hit, kill, audio, FPS, match
+completion or full-27 qualification is claimed. The observed continuation
+resolves the visible-menu failure report without a speculative source fix.
+
+Exact0542Z module SHA-256 remains
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`.
+All **295 frozen source / seven compiler / 881 original inputs / 107 actual
+served pins** and 107 predecessor served pins verify unchanged. The original
+`-d3d -window -nosound` registration, normal Software selector,
+`defaultViewport:null`, stable **1024×768**, default guestWorker and isolation
+are retained. Actual HTTP 200 and custom 404 responses have COOP `same-origin`
+and COEP `require-corp`, asserted before guest input. The real executor is a
+Software Device with **gpu=false**, native software exports and completed
+samples **137,600,200 → 192,718,184** between frames 18 and 30. Final queue
+**12,159 completed / 12,188 submitted** has error null; every sampled bridge
+lastError is empty. The 29 pending operations are not failed completions.
+There were no draw/input wrappers, forced menu enablement, guestworker disable,
+input bypass, current-host mixing, asset/INI/save/memory/clock edits or cheats.
+
+Launch **16:31:24 UTC** followed the required NEW Diablo2 den-route FULLRELEASE
+**16:31:03**, for sole runtime **16:17:54–16:30:23**, plus independent actual
+whole-Chrome/global-crashpad/profile PID/start scans and the lifetime FD9 gate.
+The 2.6 GB prelaunch reserve passed; minimum sampled disk was
+**2,677,112,832 bytes**. All **246 active profile samples** show wrapper,
+controller and monitor holding FD9. Explicit quit ended Chrome/controller at
+**16:36:08**, within target **16:48:24**, hard **16:49:24**, cleanup
+**16:50:24**. Durable Python `Popen.wait()` receipts record wrapper/controller/
+monitor zero; Chrome exits zero and the monitor sends no signals. Cleanup
+checks all owned PID/start identities and helpers absent, both ports closed,
+profile gone, inputs empty and full flock available. No watcher was launched.
+FULLRELEASE was posted **16:36:32**. **25 focused checks**, **59 trusted balanced
+native events**, **32 PNGs**, helper syntax and document diff checks pass.
+`RECOVERY.md`, `cheap-inspection.json`, `input-state.jsonl`, `focused-check.json`
+and saved cleanup preserve the exact route and its limits. No Boat was
+allocated (ID/state/expiry N/A), no build was needed for this docs-only change,
+and no further browser, heavy CLI, deployment, worker or successor was launched.
+
+### Original visible menu WebGL arm: prelaunch reserve dependency (2026-10-31)
+
+Run `20261031T1642Z-ut2003-webgl-native-menu` prepared the matching ordinary
+visible-menu WebGL arm; **no browser, guest or native input was launched**.
+The accepted `62ee90c86` SOFTWARE result above remains unchanged. This run
+adds no WebGL gameplay or input-failure claim and demonstrates no generic
+emulator defect. No production source changed.
+
+The required **NEW Diablo2 unexplored-den FULLRELEASE at 16:48:03 UTC**,
+for sole runtime **16:40:02–16:47:00**, arrived before the independent gate.
+At **16:48:21**, the actual whole-Chrome/global-crashpad PID/start scan and
+active-profile scan were clear under exclusive **FD9** on
+`/tmp/wine-browser.lock`. Free disk was **2,798,702,592 bytes**, below the
+required **2,800,000,000-byte prelaunch reserve** by **1,297,408 bytes**.
+This is the first concrete dependency; no launch, retry, evidence removal,
+foreign signal, console route or speculative source repair followed. The
+older UT and Diablo releases were not used as authorization.
+
+Cheap preparation verified the immutable exact0542Z module SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`,
+**295 matching frozen source files, seven compiler files, 881 original inputs
+and 107 predecessor served pins** retained through the accepted 1612Z/1628Z
+closure. There are no new served pins, HTTP launch assertions, completed
+WebGL operations or screenshots in this unlaunched run. The scratch-only
+controller was prepared for the normal WebGL selector, default guestWorker,
+actual HTTP isolation headers, stable 1024×768/defaultViewport null, native
+visible-menu input and read-only inspection of endpoint-owned devices and
+receiver completion streams. Preparation is not execution evidence.
+
+`RECOVERY.md`, `first-dependency.json`, `independent-prelaunch-gate.json`,
+`predecessor-releases.json`, `verification.json` and `focused-check.json`
+preserve the dependency and cheap checks. Helper syntax, frozen identities,
+no-runtime checks and documentation diff checks pass. No build, heavy CLI,
+public deployment, worker/agent/successor or Boat allocation occurred
+(ID/state/expiry N/A). Ownership and the transient gate lock are released.
+Next work requires sufficient sustained disk reserve and a fresh serialized
+ordinary-menu WebGL execution with actual completed executor/gameplay evidence;
+this run does not close that backend arm.
+
+### Original visible menu WebGL gameplay completed (2026-10-31)
+
+Run `20261031T1653Z-ut2003-webgl-menu-execution` completes the requested
+WebGL backend arm in **one original ordinary-menu execution**. This adds
+backend coverage for UT2003, not another title. The coordinator's revised
+**2.6 GB launch reserve** replaces the preceding run's 2.8 GB gate; no evidence
+was deleted. No production code changed or generic emulator defect was found.
+
+Personally inspected captures follow the original NVIDIA intro, main menu,
+**Instant Action / selected DM-Antalus** (`09-map-settled.png`), visible PLAY
+(`12-play.png`), actual Antalus loading (`13-loading.png`) and native **Press
+[Fire] to join** (`15-loaded.png`). Click `(350,538)` plus two Enter presses
+opened Instant Action. After hover, PLAY `(637,663)` received a native
+1,200 ms down/up; no extra Enter or click was sent during map loading.
+Fire-to-join `(350,440)` produced `17-joined.png`: **The match has begun!**,
+weapon/crosshair HUD, **health 100 / ammo 150**. Native W **1,800 ms** moves
+into the arena (`19-forward-settled.png`); mouse motion to `(430,400)` in
+eight steps changes the view as it settles (`21-look-settled.png` through
+`23-fire-settled.png`). A native fire hold **2,300 ms** reduces ammo to **149**,
+health stays **100**. S **1,800 ms** moves backward (`29-final.png`). Native
+F1 shows Player and five bots in **AVERAGE DeathMatch in Antalus**, frag limit
+25, with remaining time **14:51 → 14:48** (`25-clock.png`,
+`26-clock-later.png`). No hit/kill, FPS, audio or match-completion claim follows.
+
+Read-only CDP inspection traverses the actual render endpoint's adapter and
+receiver closures. Endpoint **1**, neutral/WebGL, owns device **410128440**,
+generation **1**. Both the D3D device and its GPU object match the frozen
+WebGL constructors; the real **WebGL2RenderingContext** is not lost. The
+640×480 drawing/presentation buffer is distinct from the **1024×768** browser
+viewport and 684×570 desktop canvas. Chrome uses ANGLE SwiftShader; this
+establishes the WebGL API route without a hardware-GPU claim. The final
+receiver has sequence **19,248**, pending **0**, failed **false**. Frozen
+adapter/receiver source confirms completion follows actual executor return,
+not queue submission (`executor-provenance.json`). The later page snapshot
+records **19,283 completed / 19,284 submitted**, error null and empty bridge
+lastError; the remaining pending command is not a failed completion. There
+are no draw or input wrappers.
+
+The unchanged exact0542Z WASM SHA-256 is
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`.
+**295 frozen source/host files, seven compiler files, 881 original inputs,
+107 predecessor and 107 actual served pins** pass before/after verification.
+Original `-d3d -window -nosound`, normal WebGL selector, default guestWorker,
+`defaultViewport:null` and stable 1024×768 are retained. Actual HTTP responses,
+including a custom 404, carry COOP `same-origin` and COEP `require-corp`;
+isolation/default-worker checks precede all guest input. No console, asset,
+INI, save, guest-memory or clock edits, cheats or worker bypass occurred.
+
+Launch **16:52:57 UTC** followed NEW Diablo FULLRELEASE **16:48:03** for
+sole runtime 16:40:02–16:47:00 and independent entire actual Chrome/global
+crashpad/profile PID/start scans, repeated under lifetime FD9. All **261 active
+profile samples** show wrapper/controller/monitor holding that lock. Minimum
+free disk **2,521,784,320 bytes** stays above the 2.1 GB early-stop threshold.
+Atomic temp-file/rename command handoff avoided partially parsed JSON. One
+request helper timed out waiting for action 14; the controller subsequently
+recorded that action's successful completion before the next command.
+**All 30 issued commands completed**, including explicit quit at **16:58:02**.
+Chrome/controller/wrapper/monitor exit zero, with no monitor signals. Actual
+PID/start-qualified cleanup confirms owned helpers absent, both ports closed,
+profile gone, held inputs empty and full flock available. NEW FULLRELEASE was
+posted **16:58:19** for the waiting successor.
+
+**24 focused checks, 40 trusted balanced native events, 30 PNG signatures/
+hashes**, helper syntax and documentation diff checks pass. `RECOVERY.md`,
+`focused-check.json`, `commands.jsonl`, `completed-commands.jsonl`, executor
+snapshots and cleanup receipts preserve the execution. No build was required
+for this documentation-only change; no further browser, heavy CLI, public
+deployment, agent or worker was launched. Boat ID/state/expiry are N/A.
+
+## UT2004 explicit CLI renderer startup check (2026-10-31)
+
+Run `20261031T0327Z-ut2004-startup` reached an inspected black game window
+and logged 43,060 `D3D9 requires a GPU window` messages. This command omitted
+`--d3d9-renderer=software`: the CLI defaults to WebGL unless the registration
+opts into software, and this invocation provided no GPU context. This is a
+route prerequisite failure, not evidence of a new guest defect.
+
+The corrected original-input run `20261031T0330Z-ut2004-software` selected
+software explicitly and reached an inspected NVIDIA intro frame. It exited
+zero at the 45-second limit (405,812 batches, 45.107 seconds), without those
+GPU-window errors or a crash signature. Both runs used `--no-build
+--no-threads --quiet-api --quiet-blocks --max-seconds=45
+--max-batches=1000000 --stuck-after=1000000 --no-close`; their result records
+retain the exact commands. All 998 original-input hashes and four module/host
+file hashes remained unchanged across both runs. Module `7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`
+has unknown compiled-source identity. Both runner sessions ended; no browser,
+server or Boat was created. These startup observations do not qualify menu,
+input, gameplay or software/WebGL parity. No production source changed.
+
+The live-control follow-up `20261031T0337Z-ut2004-live-input` delivered
+Escape down/up at batches 29,431/29,432 rather than relying on an unreachable
+batch schedule. At its 120-second guard (432,213 batches, 119.980 seconds),
+the inspected final frame showed the original animated title background with
+a scrolling game-mode strip. Earlier captures showed a blank startup window.
+A second Escape was also delivered; this evidence does not isolate which
+input caused the transition or establish menu interaction or gameplay. All
+998 original inputs and four module/host hashes remained unchanged, using the
+same `7f9da4e9` module with unknown compiled-source identity. The runner exited
+zero and loopback control port 18127 closed; no Boat was used. Exact command,
+snapshots, input replies and validation remain in the run folder.
+
+## UT2004 original DM-Rankin movement/fire retest (2026-10-31)
+
+Run `scratch/runs/20261031T0427Z-ut2004-match/` reached an inspected,
+playable original DeathMatch through the registered title/menu route. The
+software CLI ran 8,425 batches in 636.949 seconds and exited zero. This is
+fresh gameplay evidence; the September route above remains a historical
+control, and the earlier October CLI title result alone did not qualify it.
+
+Personally inspected captures:
+
+- `38-after-enter.png`: textured DM-Rankin with **Press [Fire] to join the match!**.
+- `44-player-hud.png`, batch 8,185: assault rifle, health **100**, ammo **100**,
+  clock **19:59**, and **The match has begun!**; bot entry messages are visible.
+- `45-forward.png`, batch 8,265: position changed from the ramp into the
+  adjacent brick/concrete corner after ordinary **W** down/up at 8,185/8,245.
+- `46-fired.png`, batch 8,330: bullet marks/ejected cases and ammo **96** after
+  normal viewport mouse down/up at 8,265/8,315. Subsequent ammo reached **94**.
+- `47-retreat-look.png`, batch 8,400: changed position/view after **S**
+  down/up at 8,330/8,380 and relative mouse motion `90,-40`. Clock reads **19:54**.
+
+These readable world/HUD images establish ordinary player movement, look and
+fire. No enemy hit/kill or completed match is claimed. An additional short
+press at 8,400/8,415 did not establish another shot before the final capture.
+This does not qualify browser Worker operation, WebGL parity, audio or
+real-time performance.
+
+### Route and input recovery
+
+`launch.json` preserves the exact invocation: registered `--app=ut2004_demo`,
+unchanged `-d3d -window -nosound`, `--no-build`, retained `--wasm`,
+`--no-threads --d3d9-renderer=software`, `--batch-size=200000`,
+`--tick-ms-per-batch=25`, `--frozen --control=18128`, quiet API/block logs,
+`--trace-input-dispatch`, and a 900-second internal guard. No asset, INI,
+guest state, or production source was patched.
+
+Startup was inspected before Escape, and the menu was inspected at batch
+2,475. The default host capture clipped the window bottom; the existing
+`canvas-resize:800:600` input expanded the capture. Instant Action was reached
+using native menu navigation/Enter; the Gametype page was inspected at 3,620.
+Normal mouse down/up at `(195,214)` selected DeathMatch, and the Select Map
+page showed the original **DM-Rankin** by batch 4,050.
+
+Do not replay old coordinates/timing blindly. Current read-only geometry was
+outer window `(20,20,648,488)`, client `(24,44,640,460)`. The visible PLAY
+label was around `(450,494)`, but clicks there did not establish activation.
+After the historical relative-mouse sync (move to client origin, step; move
+to `(300,300)`, step; move to target, step), target `(450,514)` with a
+DirectInput button hold highlighted PLAY. Enter down/up at 7,752/7,803 was
+also delivered. The join prompt was inspected at 7,849; the evidence does
+not isolate whether Enter was necessary or loading was already proceeding.
+No input-mapping production defect is diagnosed from this sequence.
+
+Loading retained the menu image while sampled Engine addresses and batches
+advanced. A read-only SEH walk was finite, without the historical self-cycle.
+Those stale menu captures were not sufficient to diagnose rendering failure.
+The **normal viewport** mouse down/up at `(340,280)`, batches 8,005/8,065,
+triggered the join countdown. The preceding DirectInput-only button hold
+at 7,904/7,954 had not joined. Use normal mouse input for this recovered
+route. Full commands, actual replies and dispatch observations are in
+`input-log.jsonl`/`runtime.log`; `RECOVERY.md` explains bounded stepping and
+cancelling an outstanding step before issuing another. Several exploratory
+step requests were deliberately cancelled; one overlapping step was refused.
+
+### Identity, checks and cleanup
+
+The original executable remains SHA-256
+`2a95e2fa8c22ae94eb1c361fdb49ea8ec44c5e2a93faa00831308c01e951db8d`.
+All **998 original inputs** matched the earlier original manifest; all
+**1,283 pinned input/runtime/source files** passed the after-run comparison.
+All 39 PNGs passed signature/hash checks. The live backend reported
+`software`, with no bridge error at the sampled player frame.
+
+Module SHA-256 was
+`8459597c8d66e098d727fb4ab53e1cf46332241dc7eef2e158f3c475a78b1676`,
+matching the retained ReVolt locked after-build module. Its 292-entry source
+manifest had zero current drift (`module-provenance.json`). Observed initial
+checkout `849d6a527` is recorded separately; it is not asserted to be the
+compiled module's source commit. No rebuild or source repair was needed.
+
+Before launch, process inspection found no active game Chrome/CLI runtime;
+the previous Deus Ex runtime had ended. `/tmp/wine-browser.lock` serialized
+the entire CLI lifetime. Explicit quit left owned runtime 1524823 and
+controller 1524815 absent, control port 18128 closed, and exit status zero
+(`cleanup.json`). The waiting Forsaken worker acquired the released lock;
+its processes were not touched. No browser, server, Boat or test box was
+created; box ID/state/expiry are N/A. Free disk stayed above 2 GB (about
+4.5 GiB at cleanup). Next useful extension is a separately serialized default
+Worker browser replay of this inspected native route; no successor launched.
+
+## UT2004 original default Worker browser gameplay (2026-10-31)
+
+Run `scratch/runs/20261031T0451Z-ut2004-browser/` qualifies the original
+registered demo in the **default guestWorker browser**, with the **software**
+renderer. Personally inspected browser screenshots show:
+
+- `deathmatch-windowed-origin-result.png`: DeathMatch maps, original DM-Rankin.
+- `rankin-load-progress2.png`: textured Rankin and the Fire-to-join prompt.
+- `player-hud-first.png`: assault rifle, health **100**, ammo **100**, and
+  **The match has begun!** after an ordinary viewport mouse press.
+- `native-forward-settled.png`: the player advanced down the corridor after
+  native **W** down/up held 2,200 ms.
+- `native-fire-settled.png`: ammo **99** after a native left-button hold;
+  `native-look-settled.png` subsequently shows **98**, with a changed view
+  after native mouse motion from `(340,400)` to `(430,360)`.
+- `native-retreat-settled.png`: the player retreated to the doorway after
+  native **S** down/up held 2,200 ms; health remains **100**, ammo **98**.
+
+`player-hud-workers.json` and `final-gameplay-workers.json` record a running
+`ut2004_demo` with `guestWorker: true`, an instantiated guest Worker, and a
+live render endpoint whose options specify `backend: "software"`. The page
+host bridge independently reports software with `lastError: null`. This is
+actual browser transport/gameplay evidence, beyond the earlier CLI result.
+It does not qualify WebGL, audio, throughput, enemy hits/kills or completion.
+
+### Native route and presentation limitation
+
+The registered executable, DLLs, manifest and `-d3d -window -nosound`
+arguments were unchanged. Escape reached the title. Tab/Enter selected
+Instant Action; early uncalibrated pointer attempts selected Assault.
+Ctrl+Shift+Tab returned from Select Map to Gametype, where a calibrated
+ordinary mouse press selected DeathMatch and the original DM-Rankin page.
+PLAY was selected by native mouse, loading was inspected, then a normal
+viewport left-button hold joined. `commands.jsonl`, screenshot-side JSON and
+`native-input.json` preserve commands and trusted key/button events. Capture
+names describe intended actions; only inspected outcomes above are claims.
+
+There is a measured **24-pixel horizontal / 44-pixel vertical presentation
+offset** in this pinned default Worker software route. Menu headers and the
+upper/left HUD are cropped, while the world, weapon, health and ammo remain
+readable. Native pointer targets needed the visible position plus `(24,44)`:
+DeathMatch `(204,380)`, PLAY `(459,674)`. These are calibrated browser input
+coordinates, not a guest-state or startup-route patch.
+
+The first cause is recorded in `presentation-geometry-workers.json` and
+`presentation-owner-state-eval.json`. The live guest instance reports
+`get_d3d9_windowed_hwnd() == 65541`, with client origin `(24,44)`. The page
+presentation owner's `hostCtx.exports` reports windowed hwnd **0** and main
+hwnd **0**, but shared `get_dx_present_hwnd()` correctly finds **65541**;
+the render Worker also reports windowed hwnd 0. In the frozen
+`lib/host-imports.js`, `_presentDxSurfaceToMainWindow` consequently starts
+the surface at screen `(0,0)`, then clips it against the correct client
+rectangle. The surviving source starts at `(24,44)`, explaining the lost
+headers and input offset. No production repair was attempted. The narrow
+next repair is to carry the windowed device origin to the page presentation
+owner, with a focused default Worker/software regression, then repeat the
+same original route. Retained menu frames during loading were separate:
+execution/RPC observations advanced before the world appeared.
+
+### Frozen identity, checks and cleanup
+
+Module SHA-256 remains
+`8459597c8d66e098d727fb4ab53e1cf46332241dc7eef2e158f3c475a78b1676`.
+The browser served the matching ReVolt0403Z **292-file source-after** snapshot,
+including host bytes; observed checkout `08b6288f2` is recorded separately
+and is not its compiled-source identity. All **998 original inputs**, all
+292 retained source files and **107 served snapshots** passed before/after
+or retained-byte comparisons; all **106 PNGs** passed signature/hash checks.
+The original EXE remains SHA-256
+`2a95e2fa8c22ae94eb1c361fdb49ea8ec44c5e2a93faa00831308c01e951db8d`.
+Unpinned application code was refused; optional `/build-info.js` returned
+404. Font-substitution bytes were separately frozen and hashed. No assets,
+guest memory, production code or registry entries were changed; no build
+was required for this documentation-only result.
+
+Chrome **151.0.7922.108**, headless at **1024x768**, used a loopback isolated
+server; the default Threads setting was untouched. The runtime lock and
+process gate serialized launch after Deus Ex closed. At shutdown the
+controller **1555850** unexpectedly exited **143**, with finalizer unfinished;
+its cause is unknown. Chrome **1555861** remained alive. Explicit delegated
+cleanup re-acquired the lock and used CDP `Browser.close`; both PIDs were
+then absent, HTTP **33513** and CDP **42377** closed, and the owned profile
+and watcher were removed/stopped. The waiting Pirates process gate refused
+the orphan interval, so no overlapping game runtime started. Cleanup and
+verification JSON preserve this limitation rather than claiming a clean
+controller exit. Free disk was about **4.4 GiB**. No Boat/test box was
+allocated; box ID/state/expiry are N/A. The bounded task finished within
+30 minutes and launched no successor.
+
+## UT2004 windowed presentation origin repair (2026-10-31)
+
+Run `scratch/runs/20261031T0514Z-ut2004-origin/` repairs the measured
+default guestWorker/software origin loss and repeats the original DM-Rankin
+route on a freshly built, matched candidate. Personally inspected
+`deathmatch-visible-result.png` shows the complete **Instant Action | Select
+Map** header and tabs. Native clicks at the **visible** DeathMatch label
+`(204,380)` and PLAY label `(459,674)` selected DeathMatch/DM-Rankin and
+started loading. Those labels now occupy those positions; no additional
+`(24,44)` pointer correction was used. An early title-pointer attempt opened
+Join Game; ordinary Escape and Shift+Tab/Enter returned to Instant Action.
+The settled map-page clicks, rather than that early attempt, establish the
+pointer/presentation alignment.
+
+`rankin-loading-3.png` shows the original world and Fire-to-join prompt.
+After normal viewport Fire, `player-hud-first.png` shows the complete top
+HUD, including clock **19:58**, health **100**, ammo **100**, and **The match
+has begun!** Native W advanced along the corridor
+(`native-forward-settled.png`); a native left-button hold reduced ammo to
+**98** (`native-fire-settled.png`). Mouse motion `(340,400)` to `(430,360)`
+changed the view (`native-look-settled.png`), and S returned to the doorway
+(`native-retreat-settled.png`). The final frame retains the full clock/score
+area, health **100** and ammo **98**. No WebGL, audio, throughput, enemy
+hit/kill or match-completion qualification is claimed.
+
+### Cause and ownership
+
+Before production edits, current main still declared
+`$d3d9_windowed_hwnd` as an instance-local mutable global in
+`src/09ad-handlers-d3d9.wat`; CreateDevice and Reset wrote it and the exported
+getter read it. The page compositor correctly resolved shared window 65541,
+but could not observe that device state. Its existing client clipping then
+discarded source pixels `(24,44)`, exactly as the earlier frozen evidence
+showed. That frozen module is a historical comparison, not current-build
+acceptance.
+
+The authoritative windowed HWND now occupies atomic word **+32** of the
+existing shared `DX_PROCESS_STATE`. Successful CreateDevice and committed
+Reset publish the windowed HWND, or zero for fullscreen. All WAT readers and
+`get_d3d9_windowed_hwnd` read that same shared word. The region grows from
+32 to 48 bytes, with the generated JS layout updated. Guest, page and render
+Worker instances already share this memory, so no extra JS state or message
+protocol is needed. `lib/host-imports.js` remains byte-unchanged: its existing
+getter-based distinction still places DirectDraw primaries in screen
+coordinates and explicitly windowed D3D at the device client origin.
+
+Live `final-owner-state-eval.json` reports page windowed HWND **65541**,
+page main HWND **0**, shared target **65541**, client origin **(24,44)**,
+software backend and no bridge error. `final-gameplay-workers.json` confirms
+default guestWorker and an actual software render endpoint; guest and render
+instances both read windowed HWND **65541**.
+
+### Regression, identity and cleanup
+
+`test/test-d3d-windowed-origin-worker.js` creates a real D3D device and uses
+separate guest/page/render WASM instances over shared memory. It checks the
+page's local main HWND remains zero, the shared target is nonzero, both
+client-edge pixel markers survive, chrome remains transparent, and fullscreen
+clears the shared windowed state. The identical regression rejects saved
+pre-edit production source with page getter **0**, expected **65541**
+(`reject-old-final.log`), and passes the repair. The initial fixture omitted
+its window record and failed earlier; `before-regression.log` is retained
+but is not the intended old-source rejection. Existing DirectDraw placement,
+GPU layer origin, browser Worker presentation and direct/Worker D3D Reset
+regressions pass. Full `flock /tmp/wine-build.lock bash tools/build.sh`
+passes (`build-final.log`); no broad suite or benchmark was substituted.
+
+The tested module is SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`.
+The loopback browser served this build with **295 frozen current source/host
+files**, a retained compiler manifest and the dirty shared-checkout diff.
+Observed checkout is recorded separately from compiled-source identity.
+All **998 original inputs**, **295 retained source files**, **107 served
+snapshots** and **34 trusted native key/button events** passed checks;
+all 48 PNGs, including the explicitly historical comparison, passed hash and
+signature checks. No executable, asset, argument, font, guest-state or clock
+patch was applied; no public deployment occurred.
+
+Chrome 151 at 1024x768 ran from 05:17 to 05:25 UTC under the full-lifetime
+browser lock, after the prior Pirates browser closed. Explicit quit exited
+Chrome **1583479** zero; controller **1583452**, holder **1583451** and owned
+crashpad processes were absent, HTTP **45739** and CDP **36791** closed, and
+the profile was removed (`cleanup-verified.json`). The board watcher was
+also stopped. Free disk remained above 2 GB (about 4.2 GiB at cleanup).
+No Boat/test box was allocated; ID/state/expiry are N/A. The repair and
+original software browser route are verified; other backends remain separate
+work if requested.
+
+## UT2004 original default Worker WebGL gameplay (2026-10-31)
+
+Run `scratch/runs/20261031T0629Z-ut2004-webgl/` supplies the missing
+**WebGL** arm on current main containing the window-origin and cube-LOD
+repairs. One original startup followed visible title → Instant Action →
+DeathMatch → DM-Rankin → PLAY → Fire-to-join. An early Escape opened the
+ordinary quit prompt; Escape canceled it before successful menu selection.
+Native clicks used visible Instant Action `(410,522)`, DeathMatch
+`(204,380)` and PLAY `(459,674)`, without an added coordinate offset.
+`gametype-settled.png`, `deathmatch-map.png` and `rankin-loading-5.png`
+were personally inspected; the last shows the textured world and native
+Fire-to-join prompt, rather than retained loading backing.
+
+Personally inspected `player-hud-first.png` shows full clock **20:00**,
+health **100**, ammo **100**, weapon and **The match has begun!** Native W
+held 2,200 ms advances up the ramp (`native-forward-settled.png`, clock
+19:56). A 2,300 ms left-button hold reduces ammo to **99**, then **98** as
+the queued input settles. Native mouse motion `(340,400)` → `(430,360)`
+changes the view toward the ceiling and right-hand room
+(`native-look-settled.png`, clock 19:52, health 98/ammo 98). Native S held
+2,200 ms moves backward (`native-retreat-settled.png`, clock **19:51**,
+health **96**, ammo **98**). These frames retain readable top clock/score
+and bottom health/ammo HUD. Health changed during the live match; this run
+makes no enemy-hit, kill, FPS, audio or match-completion claim.
+
+### Actual endpoint, dimensions and command evidence
+
+This is the unchanged default **guestWorker** route. Browser viewport is
+**1024×768**, emulated desktop/presentation canvas **684×570**, and actual
+guest/render drawing buffer **640×480**. `final-owner-eval.json` and
+`final-workers.json` confirm shared windowed HWND **65541**, client origin
+**(24,44)** in guest/page/render instances, and no bridge error. The desktop
+canvas begins at browser `(10,160)`, placing the guest client at `(34,204)`.
+The viewport size is not a claim of a 1024×768 guest render target.
+
+`executor-restore.json` records an actual **WebGL2RenderingContext**, context
+not lost, **68,545 completed backend draws** and **68,885 completed actual
+GL draw calls**, with zero observed executor failures. The last observed
+`drawElements(TRIANGLES,114,UNSIGNED_SHORT,0)` belongs to adapter 1,
+command **69959**, device **410128432**, generation **1**. The same adapter
+belongs to render endpoint **1**, whose actual options are neutral/WebGL.
+Chrome 151 uses ANGLE SwiftShader; this establishes the WebGL API route,
+without a hardware-GPU or throughput claim. The bounded observer preserves
+returns/exceptions and was restored; helper checks verify ownership,
+successful-call counting and restoration.
+
+Startup/readback diagnostics are retained. The first LockRect parks with
+token −7/yield 16, then resumes with **EAX 0**, token/yield zero, ESP +20,
+pitch 2560 and nonzero pixels. The temporary parked EAX is not a completed
+API failure. Twenty completed successful locks are recorded. All sampled
+bridge error/rejection lists are empty. The final owner capture samples
+queue completed **69672**, submitted **69682**, with ten pending commands
+and no error; the later executor observation above advances further.
+No first completed graphics/API failure was observed, so no new source
+repair was justified.
+
+### Frozen identity, checks and cleanup
+
+Pre-runtime checkout HEAD was `3d04b4841d5ec3744bb4f124073f0bf4dafcc356`;
+the exact build/launch snapshot HEAD was
+`bf9c495b6b83049342347155f3954d0f971a4eac` after concurrent documentation
+publication. The fresh locked canonical build yields WASM SHA-256
+`9b4e39a22c9c3abe4608e5f55e2db0eb5818da59cec04bc7b7406a0b8504d1b8`.
+Its matching **295 current source/host files**, **seven compiler files**,
+shared dirty/status records, runtime identities and helpers are retained.
+The current JavaScript cube repair is included; the equal historical WASM
+hash does not authorize mixing old host files.
+
+All **998 original inputs** verify unchanged before and after, including
+the EXE SHA-256
+`2a95e2fa8c22ae94eb1c361fdb49ea8ec44c5e2a93faa00831308c01e951db8d`.
+Retained source/compiler hashes, **107 served snapshots**, **41 PNG
+signatures/hashes**, **26 trusted native events**, observer/evidence checks
+and documentation diff checks pass. Registered `-d3d -window -nosound`,
+assets, INI, guest state, clock, shaders, validation and queues were not
+patched or bypassed. No protected fonts/Heroes II files were touched.
+
+The full-lifetime browser lock serialized this execution after Forsaken;
+the actual process/profile gate was clean. Quit at 06:43 UTC exited Chrome
+**1670515** zero. Controller **1670055**, holder **1661318**, wrapper and
+all tracked descendants/crashpads are absent; HTTP **44079**, CDP **40213**
+are closed and the profile is gone. `cleanup-under-lock.json` verifies
+cleanup before releasing the lock; `cleanup-verified.json` checks actual
+PID/port/profile absence afterward. The board watcher was also stopped.
+Free disk stayed above 2 GB. No Boat/test box was allocated
+(ID/state/expiry N/A), public deployment or successor launch occurred.
+`RECOVERY.md`, `result.json` and `final.txt` retain replay and limitations.

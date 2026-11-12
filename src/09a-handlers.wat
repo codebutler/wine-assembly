@@ -267,6 +267,96 @@
             (i32.load offset=16 (local.get $slot))
             (i32.mul (local.get $periods) (local.get $interval)))))))
 
+  ;; BEGIN MM CALLBACK OWNERSHIP
+  ;; Private retained records, independent of the mutable guest save frame.
+  ;; token:i64, return ESP:i32, prior guard:i32, prior resume:i32, audio:i32,
+  ;; root:i64. DispatchMessage may nest inside a timer or an audio callback.
+  (global $MM_CALLBACK_CONTEXTS i32 (region.addr $MM_CALLBACK_CONTEXTS 0))
+  (global $MM_CALLBACK_CONTEXTS_SIZE i32 (region.size $MM_CALLBACK_CONTEXTS))
+  (global $mm_callback_owner (mut i64) (i64.const 0))
+  (global $mm_callback_depth (mut i32) (i32.const 0))
+
+  (func $mm_callback_frame_at (param $depth i32) (result i32)
+    (i32.add (global.get $MM_CALLBACK_CONTEXTS)
+      (i32.add (i32.shl (i32.sub (global.get $invocation_tid) (i32.const 1)) (i32.const 11))
+        (i32.shl (local.get $depth) (i32.const 5)))))
+
+  ;; Admission precedes polling (which can signal event timers), consumption,
+  ;; guest stack writes, and wait/guard changes. Production loaders establish
+  ;; the root; a retired instance must never bootstrap a replacement here.
+  (func $mm_callback_begin (param $esp i32) (param $audio i32)
+    (local $depth i32) (local $frame i32) (local $child i64)
+    (call $pending_gap)
+    (call $invocation_validate)
+    (local.set $depth (select (global.get $mm_callback_depth) (i32.const 0)
+      (i64.eq (global.get $mm_callback_owner) (global.get $invocation_root))))
+    (if (i32.ge_u (local.get $depth) (i32.const 64)) (then (unreachable)))
+    ;; Mode 2 is DispatchMessage's MM_TIMER adapter: its interrupted API frame
+    ;; completes before saving the callback return CPU.
+    (call $callback_feed_emit (select (i32.const 6) (i32.const 1)
+      (i32.eq (local.get $audio) (i32.const 2))))
+    (local.set $child (call $invocation_enter))
+    (local.set $frame (call $mm_callback_frame_at (local.get $depth)))
+    (i64.store (local.get $frame) (local.get $child))
+    (i32.store offset=8 (local.get $frame) (local.get $esp))
+    (i32.store offset=12 (local.get $frame) (global.get $mm_timer_in_cb))
+    (i32.store offset=16 (local.get $frame)
+      (select (global.get $mm_timer_resume_yield) (i32.const 0) (global.get $mm_timer_in_cb)))
+    (i32.store offset=20 (local.get $frame) (i32.eq (local.get $audio) (i32.const 1)))
+    (i64.store offset=24 (local.get $frame) (global.get $invocation_root))
+    (global.set $mm_callback_owner (global.get $invocation_root))
+    (global.set $mm_callback_depth (i32.add (local.get $depth) (i32.const 1))))
+
+  (func $mm_callback_frame (result i32)
+    (local $frame i32)
+    (call $invocation_validate)
+    (if (i64.ne (global.get $mm_callback_owner) (global.get $invocation_root)) (then (unreachable)))
+    (if (i32.or (i32.eqz (global.get $mm_callback_depth))
+          (i32.gt_u (global.get $mm_callback_depth) (i32.const 64))) (then (unreachable)))
+    (local.set $frame (call $mm_callback_frame_at (i32.sub (global.get $mm_callback_depth) (i32.const 1))))
+    (if (i64.ne (i64.load offset=24 (local.get $frame)) (global.get $invocation_root)) (then (unreachable)))
+    (local.get $frame))
+
+  ;; No due callback: release only the provisional child. Polling may have
+  ;; legitimately served event timers; no caller save frame was created.
+  (func $mm_callback_cancel
+    (local $frame i32)
+    (local.set $frame (call $mm_callback_frame))
+    (call $invocation_leave (i64.load (local.get $frame)))
+    (global.set $mm_callback_depth (i32.sub (global.get $mm_callback_depth) (i32.const 1)))
+    (call $callback_feed_emit (i32.const 5)))
+
+  (func $mm_callback_check (result i32)
+    (local $frame i32)
+    (local.set $frame (call $mm_callback_frame))
+    (if (i32.ne (i32.load offset=16 (global.get $reg_base))
+          (i32.load offset=8 (local.get $frame))) (then (unreachable)))
+    (if (i64.ne (i64.load (local.get $frame)) (call $invocation_current)) (then (unreachable)))
+    (if (i32.eqz (global.get $invocation_depth)) (then (unreachable)))
+    (local.get $frame))
+
+  (func $mm_callback_finish
+    (local $frame i32)
+    (local.set $frame (call $mm_callback_check))
+    ;; Validate the retained child before ANY completion mutation.
+    (call $invocation_leave (i64.load (local.get $frame)))
+    (call $restore_caller_regs)
+    ;; A nested DispatchMessage timer must not restore its outer audio wait.
+    (if (i32.load offset=20 (local.get $frame)) (then (call $wave_callback_restore_wait)))
+    (if (global.get $mm_timer_resume_yield)
+      (then
+        (global.set $yield_reason (global.get $mm_timer_resume_yield))
+        (global.set $steps (i32.const 0))))
+    (global.set $mm_timer_in_cb (i32.load offset=12 (local.get $frame)))
+    (global.set $mm_timer_resume_yield (i32.load offset=16 (local.get $frame)))
+    (global.set $mm_callback_depth (i32.sub (global.get $mm_callback_depth) (i32.const 1)))
+    (call $callback_feed_emit (i32.const 4)))
+  (func $mm_timer_thread_check
+    (call $invocation_validate)
+    (if (i32.and (i64.eq (global.get $mm_callback_owner) (global.get $invocation_root))
+          (i32.ne (global.get $mm_callback_depth) (i32.const 0))) (then (unreachable))))
+  ;; END MM CALLBACK OWNERSHIP
+
   ;; Address of multimedia-timer slot $i.
   (func $mm_timer_slot (param $i i32) (result i32)
     (i32.add (global.get $MM_TIMER_TABLE)
@@ -380,6 +470,9 @@
   (func $mm_timer_thread_step
     (local $slot i32) (local $esp i32) (local $thunk i32) (local $wait i32)
     (local $id i32) (local $dwuser i32) (local $cb i32)
+    ;; CACA003B is not a return for a live CACA000A frame. An audio callback
+    ;; interrupting this thread must finish its own retained frame first.
+    (call $mm_timer_thread_check)
     (local.set $thunk (i32.load offset=8 (global.get $MM_TIMER_THREAD)))
     (local.set $esp (i32.load offset=12 (global.get $MM_TIMER_THREAD)))
     (if (i32.eqz (local.get $esp))
@@ -403,6 +496,12 @@
         (call $io_apc_push (local.get $id))
         (call $io_apc_push (local.get $thunk))
         (global.set $eip (local.get $cb))
+        ;; $steps only unwinds the interpreter stack; run() refills it while
+        ;; its block budget remains. Hand control to the scheduler before
+        ;; entering this callback, so a just-completed callback cannot
+        ;; immediately reacquire a section ahead of a parked application
+        ;; thread. The callback frame and consumed timer phase stay intact.
+        (global.set $yield_flag (i32.const 1))
         (return)))
     ;; Nothing due: Sleep until the next deadline, re-entering here. With no
     ;; timer at all the thread idles in 50ms sleeps, as winmm's does.

@@ -647,7 +647,6 @@
   ;; Run after CHANGED returns, whether it used Win32 synchronous dispatch or
   ;; the Win16 far continuation. Never paint ahead of the guest notification.
   (func $windowpos_finish_paint (param $arg0 i32) (param $uFlags i32)
-    (local $dlg_rec i32)
     (if (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
       (then (return)))
     (call $windowpos_queue_ncpaint (local.get $arg0) (local.get $uFlags))
@@ -665,13 +664,9 @@
       (then
         (drop (call $control_wndproc_dispatch
           (local.get $arg0) (i32.const 0x000F) (i32.const 0) (i32.const 0)))))
-    (if (i32.eqz (i32.and (local.get $uFlags) (i32.const 0x0008))) ;; !SWP_NOREDRAW
-      (then
-        (local.set $dlg_rec (call $dlg_record_for_hwnd (local.get $arg0)))
-        (if (i32.and
-              (i32.and
-                (i32.ne (local.get $dlg_rec) (i32.const 0))
-                (i32.ne (i32.load offset=4 (local.get $dlg_rec)) (i32.const 0)))
-              (i32.lt_s (call $wnd_get_class_slot (local.get $arg0)) (i32.const 0)))
-          (then (drop (call $dialog_send_erase (local.get $arg0)))))))
+    ;; Dialog backgrounds belong to WM_ERASEBKGND/BeginPaint, including
+    ;; ordinary #32770 dialogs with an application DLGPROC. Filling BTNFACE
+    ;; here overwrites the owner's drawing after position notifications.
+    ;; Uplink's Video submenu is such a dialog: returning from Video Modes
+    ;; moves it to its existing bounds and must preserve its background.
   )

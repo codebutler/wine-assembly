@@ -812,6 +812,28 @@
 ;; stage pointers are zero; callers supply the independently bound guest stage.
 (func $d3d_fixed_compile (export "d3d_fixed_compile") (param $desc i32) (result i32)
   (call $d3d_fixed_compile_stages (local.get $desc) (i32.const 3) (i32.const 0)))
+;; Shared executor profile 1: FLOAT4 POSITIONT + diffuse + UV0, texture0,
+;; MODULATE(texture,diffuse) for RGB and alpha. Constants remain immutable DEF
+;; records in the returned DFB1 IR. Both executors run the clip-space VS; do
+;; not set the software-only screen-space flag16 for this contract.
+;; Identity viewport depth only. The bridge additionally admits only in-range
+;; POSITIONT vertex depths (vertices are not part of this compiler descriptor).
+;; Other depth ranges retain the established per-executor fixed fallback.
+(func (export "d3d_fixed_compile_positiont") (param $desc i32) (result i32)
+  (if (i32.eqz (call $d3d_shader_vm_range (local.get $desc) (i32.const 288))) (then (return (i32.const 0))))
+  (if (i32.eqz (i32.and (f32.eq (f32.load offset=84 (local.get $desc)) (f32.const 0))
+    (f32.eq (f32.load offset=88 (local.get $desc)) (f32.const 1)))) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=8 (local.get $desc)) (i32.const 15)) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=24 (local.get $desc)) (i32.const 4)) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=28 (local.get $desc)) (i32.const 2)) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=32 (local.get $desc)) (i32.const 0)) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=36 (local.get $desc)) (i32.const 4)) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=40 (local.get $desc)) (i32.const 2)) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=44 (local.get $desc)) (i32.const 0)) (then (return (i32.const 0))))
+  (if (i32.ne (i32.load offset=56 (local.get $desc)) (i32.const 1)) (then (return (i32.const 0))))
+  (if (i32.load offset=60 (local.get $desc)) (then (return (i32.const 0))))
+  (if (i32.load offset=64 (local.get $desc)) (then (return (i32.const 0))))
+  (call $d3d_fixed_compile (local.get $desc)))
 (func (export "d3d_fixed_compile_vertex") (param $desc i32) (param $uv0_required i32) (result i32)
   (call $d3d_fixed_compile_stages (local.get $desc) (i32.const 1) (local.get $uv0_required)))
 (func (export "d3d_fixed_compile_pixel") (param $desc i32) (result i32)

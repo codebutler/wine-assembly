@@ -226,6 +226,9 @@
   ;; The guest address a CPU fault touched, for the access-violation record's
   ;; ExceptionInformation[1]. Set by whoever raises 0xC0000005.
   (global $fault_address (mut i32) (i32.const 0))
+  ;; Precise REP preflight supplies read/write intent for its access violation.
+  ;; Other legacy fault producers retain their existing read classification.
+  (global $rep_fault_write (mut i32) (i32.const 0))
   (global $seh_raw_thunk (mut i32) (i32.const 0))
 
   ;; Does $seh_rec carry an MSVC __except_handler3 extended record? Its +8 is
@@ -259,6 +262,7 @@
     (if (i32.eq (local.get $code) (i32.const 0xC0000005))
       (then
         (call $gs32 (i32.add (local.get $rec) (i32.const 16)) (i32.const 2))
+        (call $gs32 (i32.add (local.get $rec) (i32.const 20)) (global.get $rep_fault_write))
         (call $gs32 (i32.add (local.get $rec) (i32.const 24)) (global.get $fault_address))))
     ;; CONTEXT (x86): CONTEXT_FULL, segments, integer registers, control.
     (call $gs32 (local.get $ctx) (i32.const 0x10007))
@@ -291,6 +295,7 @@
 
   ;; Put the thread back exactly as the CONTEXT at $ctx describes it.
   (func $seh_load_context (param $ctx i32)
+    (call $pending_gap)
     (i32.store offset=28 (global.get $reg_base) (call $gl32 (i32.add (local.get $ctx) (i32.const 0x9c))))
     (i32.store offset=24 (global.get $reg_base) (call $gl32 (i32.add (local.get $ctx) (i32.const 0xa0))))
     (i32.store offset=12 (global.get $reg_base) (call $gl32 (i32.add (local.get $ctx) (i32.const 0xa4))))
@@ -321,7 +326,15 @@
     (if (i32.eq (local.get $disp) (i32.const 1))
       (then
         (global.set $fault_raising (i32.const 1))
+        ;; The next frame sees the same access violation the first one did.
+        ;; $rep_fault_write was cleared when the raise returned, and any fault
+        ;; since may have moved $fault_address: take both from the record.
+        (if (i32.eq (call $gl32 (local.get $rec)) (i32.const 0xC0000005))
+          (then
+            (global.set $rep_fault_write (call $gl32 (i32.add (local.get $rec) (i32.const 20))))
+            (global.set $fault_address (call $gl32 (i32.add (local.get $rec) (i32.const 24))))))
         (call $seh_walk_from (call $gl32 (local.get $rec)) (call $gl32 (local.get $frame)))
+        (global.set $rep_fault_write (i32.const 0))
         (global.set $fault_raising (i32.const 0))
         (return)))
     (call $seh_terminate_unhandled (i32.or (i32.const 0xDE00) (call $gl32 (local.get $rec)))))
@@ -394,10 +407,24 @@
     (local $pg_desc i32) (local $pg_chunk_cap i32) (local $pg_desc_cap i32)
     (local $ctx i32) (local $rec i32) (local $sp i32) (local $frame i32)
     (local $handler i32) (local $rounds i32) (local $ok i32) (local $guard i32)
-    (local $io_fills i32)
+    (local $io_fills i32) (local $io_ready i32)
+    (local $expected_child i64) (local $expected_parent i64) (local $expected_root i64)
+    (local $expected_depth i32) (local $expected_inv_depth i32)
+    (call $pending_gap)
     (if (i32.or (global.get $fault_sync_active)
                 (i32.eqz (global.get $sync_msg_ret_thunk)))
       (then (return (i32.const 0))))
+    ;; Own this entire synchronous fault walk before touching the interrupted
+    ;; context or guest stack. Pin the actual suspended $ip once, not a prior
+    ;; filter's spill stream on CONTINUE_SEARCH. Slices/IO/handler visits all
+    ;; belong to this child; a foreign replacement must never be popped.
+    (call $invocation_ensure)
+    (local.set $expected_parent (call $invocation_current))
+    (local.set $expected_root (global.get $invocation_root))
+    (call $sync_depth_enter)
+    (local.set $expected_child (call $invocation_current))
+    (local.set $expected_depth (global.get $sync_msg_depth))
+    (local.set $expected_inv_depth (global.get $invocation_depth))
     (global.set $fault_sync_active (i32.const 1))
     (global.set $fault_sync_epoch (i32.add (global.get $fault_sync_epoch) (i32.const 1)))
     (global.set $fault_raising (i32.const 1))
@@ -445,6 +472,9 @@
     (call $gs32 (local.get $rec) (i32.const 0xC0000005))
     (call $gs32 (i32.add (local.get $rec) (i32.const 12)) (local.get $old_eip))
     (call $gs32 (i32.add (local.get $rec) (i32.const 16)) (i32.const 2))
+    ;; Read/write kind: a REP element offered by $rep_fault_sync names it;
+    ;; every scalar $g2w_miss offer keeps the read classification.
+    (call $gs32 (i32.add (local.get $rec) (i32.const 20)) (global.get $rep_fault_write))
     (call $gs32 (i32.add (local.get $rec) (i32.const 24)) (local.get $ga))
     (call $gs32 (local.get $ctx) (i32.const 0x10007))
     (call $gs32 (i32.add (local.get $ctx) (i32.const 0x9c)) (local.get $old_edi))
@@ -479,18 +509,22 @@
           (global.set $steps (i32.const 0))
           (global.set $yield_reason (i32.const 0))
           (global.set $yield_flag (i32.const 0))
-          ;; The suspended frame is the faulting block, whose $ip is $old_ip.
-          ;; After a filter that returned CONTINUE_SEARCH, $ip still holds
-          ;; wherever that filter's nested run stopped -- often the decoded-code
-          ;; spill -- and $sync_depth_enter would pin the spill for a frame that
-          ;; is not in it (Serious Sam, timer on: pin mask 1 at batch 5395).
-          ;; $run looks its own $ip up, so the nested run does not read this.
+          ;; The child was acquired with the faulting block's $ip, before any
+          ;; filter could leave it in the spill. $run looks its own $ip up.
           (global.set $ip (local.get $old_ip))
-          (call $sync_depth_enter)
           (local.set $rounds (i32.const 0))
           (local.set $io_fills (i32.const 0))
           (block $ran (loop $run_more
             (call $run (i32.const 1000000))
+            ;; invocation_current also validates thread, epoch and live root.
+            (if (i64.ne (call $invocation_current) (local.get $expected_child))
+              (then (unreachable)))
+            (if (i64.ne (global.get $invocation_root) (local.get $expected_root))
+              (then (unreachable)))
+            (if (i32.ne (global.get $sync_msg_depth) (local.get $expected_depth))
+              (then (unreachable)))
+            (if (i32.ne (global.get $invocation_depth) (local.get $expected_inv_depth))
+              (then (unreachable)))
             (br_if $ran (i32.eqz (global.get $eip)))
             ;; The filter parked a ReadFile on a lazily loaded file (io_wait).
             ;; A yield here only returns to this loop, so no host turn would
@@ -505,7 +539,17 @@
                          (i32.and (i32.ne (global.get $guest_can_block) (i32.const 0))
                                   (i32.lt_u (local.get $io_fills) (i32.const 4096))))
               (then
-                (if (call $host_io_fill_sync (global.get $current_thread_id))
+                (local.set $io_ready (call $host_io_fill_sync (global.get $current_thread_id)))
+                ;; A host boundary must be checked even when it reports no fill.
+                (if (i64.ne (call $invocation_current) (local.get $expected_child))
+                  (then (unreachable)))
+                (if (i64.ne (global.get $invocation_root) (local.get $expected_root))
+                  (then (unreachable)))
+                (if (i32.ne (global.get $sync_msg_depth) (local.get $expected_depth))
+                  (then (unreachable)))
+                (if (i32.ne (global.get $invocation_depth) (local.get $expected_inv_depth))
+                  (then (unreachable)))
+                (if (local.get $io_ready)
                   (then
                     (local.set $io_fills (i32.add (local.get $io_fills) (i32.const 1)))
                     (global.set $yield_reason (i32.const 0))
@@ -515,7 +559,6 @@
             (local.set $rounds (i32.add (local.get $rounds) (i32.const 1)))
             (br_if $ran (i32.ge_u (local.get $rounds) (i32.const 64)))
             (br $run_more)))
-          (call $sync_depth_leave)
           ;; The handler never came back: give up on this fault.
           (br_if $walked (i32.ne (global.get $eip) (i32.const 0)))
           (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
@@ -523,6 +566,28 @@
           (br_if $walked (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 1)))))
       (local.set $frame (call $gl32 (local.get $frame)))
       (br $walk)))
+    ;; Legacy bounded timeout still returns 0 and restores the interrupted
+    ;; context, but only while this exact child/root/depth remains owned.
+    (if (i64.ne (call $invocation_current) (local.get $expected_child))
+      (then (unreachable)))
+    (if (i64.ne (global.get $invocation_root) (local.get $expected_root))
+      (then (unreachable)))
+    (if (i32.ne (global.get $sync_msg_depth) (local.get $expected_depth))
+      (then (unreachable)))
+    (if (i32.ne (global.get $invocation_depth) (local.get $expected_inv_depth))
+      (then (unreachable)))
+    (call $sync_depth_leave)
+    ;; Check the retained parent before restoring any interrupted CPU/page state.
+    (if (i64.ne (call $invocation_current) (local.get $expected_parent))
+      (then (unreachable)))
+    (if (i64.ne (global.get $invocation_root) (local.get $expected_root))
+      (then (unreachable)))
+    (if (i32.ne (global.get $sync_msg_depth)
+          (i32.sub (local.get $expected_depth) (i32.const 1)))
+      (then (unreachable)))
+    (if (i32.ne (global.get $invocation_depth)
+          (i32.sub (local.get $expected_inv_depth) (i32.const 1)))
+      (then (unreachable)))
     (global.set $eip (local.get $old_eip))
     (i32.store offset=16 (global.get $reg_base) (local.get $old_esp))
     (i32.store offset=0 (global.get $reg_base) (local.get $old_eax))
@@ -604,6 +669,7 @@
   (func $rtl_unwind_begin (param $target i32) (param $rec_in i32) (param $retval i32) (param $ret i32)
     (local $esp i32) (local $s i32) (local $i i32) (local $rec i32) (local $ctx i32)
     (local $flags i32)
+    (call $pending_gap)
     (if (i32.eqz (global.get $rtl_unwind_thunk))
       (then (global.set $rtl_unwind_thunk (call $com_cont_thunk (i32.const 0xCACA0039)))))
     (local.set $esp (i32.load offset=16 (global.get $reg_base)))
@@ -732,6 +798,7 @@
     (local $trylevel i32) (local $scopetable i32) (local $entry i32)
     (local $filter i32) (local $filter_wa i32) (local $except_body i32)
     (local $filter_result i32) (local $first_byte i32)
+    (call $pending_gap)
     ;; Every path out of here that returns has replaced $eip, so claim the
     ;; redirect up front rather than at each of the four exits. $run clears it.
     (global.set $eip_redirected (i32.const 1))

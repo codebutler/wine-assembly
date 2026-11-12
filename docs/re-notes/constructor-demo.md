@@ -24,8 +24,9 @@ The payload is an ignored local fixture. On `bx_yqnspudj`, acquisition and
 source-only scan artifacts are under
 `/home/user/constructor-preflight-20261013/`; the extracted tree is under
 `corpus/test/binaries/dos-games/constructor-demo`. Local metadata does not imply
-the payload has been copied onto the dashboard host. The coordinator's
-`test/binaries/dos-games/constructor-demo/GAME.EXE` is absent. The dashboard now
+the payload has been copied onto the dashboard host. At the initial preflight the
+coordinator's `test/binaries/dos-games/constructor-demo/GAME.EXE` was absent;
+see the 2026-11-01 recovery below for current local state. The dashboard now
 checks the local entry of blocked titles too, reporting this missing path
 separately from the retained compatibility blockers. That presence check is
 not a full payload hash verification.
@@ -496,3 +497,1001 @@ default passive capture, two Trident captures, generated driver hashes and
 bytes, static branches, existing-model conformance test and reviewed
 console images. All22 independently checked PID/groups are absent.
 No additional emulator change is proposed from these experiments alone.
+
+## 2026-11-01 original fixture recovery and next executable dependency
+
+Run: `scratch/runs/20261101-constructor-original-fixture-recovery/`.
+Static/acquisition assignment only; Urban owns runtime/source/build. The fresh
+public `DESKTOP_APPS` export in `lib/apps.js` has 46 entries and no Constructor
+entry (full list, source hash and HEAD retained in `public-list.json`). This
+checks the current public picker definition, not a remote deployed website.
+
+The exact original URL above returned HTTP 200 after one Archive redirect in
+5.193630 seconds, with no retries. Actual downloaded bytes are **32,062,553**
+and SHA-256 **`5d764f6d2f536d6aae6fd18122bc9bf2be20e84f101cbcdeafb1bcbd20eeed18`**.
+Every ZIP member was checked before persistence: no absolute/traversing paths,
+backslashes, drive prefixes, symlinks or special files; the 28 regular names
+exactly equal the checked-in manifest. ZIP CRC, size and SHA-256 checks pass
+for every file, totaling **63,205,318 bytes**. Directory names/case are original;
+the five `DATA.FIL` resources and both `DOS4GW.EXE` paths remain separate.
+`GAME.EXE` matches `d0ac2f05b9a813dc723f170f7418fbfd9af269abcbce8905062c3b63f27dc587`;
+its MZ/LE identity and original sound-setup batch also match the earlier notes.
+No substituted executable, generated configuration or retail payload was used.
+
+The complete fixture is now persistent at
+`test/binaries/dos-games/constructor-demo/`, with all 28 local sizes/hashes
+rechecked after writing. Transfer waited for Urban's exact author
+`2026-11-01T20:42:58+00:00 RELEASE runtime/source/build` statement, terminal
+receipts and direct absence checks of its reported runtime PIDs. Free disk was
+about 2.18 GB before transfer and **2,113,626,112 bytes** immediately afterward,
+above the 2 GB floor. No thresholds or other owners' artifacts were changed.
+Only the verified payload persists; the downloaded archive's own tmpfs copy
+was removed after local verification. The two bounded release-watch helpers
+were explicitly interrupted and reaped (exit130; actual waits84.975262 and
+27.330045 seconds); the final watcher predicate/receipt accepts the explicit
+author RELEASE without waiting for its later note-publication DONE. An initial
+persist attempt failed before creating files because the `dos-games` parent
+was absent; creating the required parent corrected this acquisition-only issue.
+
+Current source review (hashes in `source-review.json`) changes the interpretation
+of the early dependency list:
+
+- `tools/toyvm/dos.js` `resolvePath`/`hostKey`/`hostPath` preserve relative
+  directories and reject host symlinks. The old flat-basename blocker is
+  historical. The existing pure-JS `test/test-toyvm-dos-paths.js` passes all
+  24 groups across Node and both shipped bundles, including distinct resources.
+  Reading all 28 restored files through the actual current `Machine` host API
+  reproduces every manifest hash; a root `DATA.FIL` lookup correctly misses.
+- The environment-MCB, contiguous PSP resize, EXEC overlay and held-allocation
+  fixes described above are present. `test/test-toyvm-exec-boundaries.js`
+  passes eight handler-contract groups without executing guest instructions.
+  Static LE/DOS4GW detection is an identity/dependency fact, not evidence that
+  DPMI absence is the next failure. The historical original reached UVCONFIG;
+  this assignment has made no current runtime attempt.
+- `tools/toyvm/live.js` `bindInput` forwards absolute mouse coordinates, buttons
+  and deltas to INT33 polling state, and `site.js` installs that binding. The
+  earlier focus-only observation is historical. Existing mouse-input and
+  chord-repair DOM/state regressions pass without guest/Wasm/browser execution.
+  Callbacks, custom ranges and actual Constructor controls remain unqualified.
+- **First remaining actionable compatibility boundary: credible UniVBE chipset
+  detection and hardware behavior.** Current `vesaCallImpl` still reports VBE
+  1.2, serves banked modes and omits 4F0A; `portOut` still masks sequencer
+  indexes to 0Fh, aliasing A7/C5 to 07/05. The optional Trident model still
+  consists of ROM identity, CRTC readback and bank selection, without the
+  extended register model described above. These source facts preserve the
+  relevance of the historical default "No Graphics hardware" exit and the
+  optional run's wrong InteGraphics identity. The exact cause of that wrong
+  selection is still unproven. Raising the VBE version or using the Trident
+  option alone is not a justified repair.
+
+Once the fixture is persistent and a future runtime assignment is authorized,
+the existing CLI can mount its directory from the executable's parent:
+
+```sh
+timeout --signal=TERM --kill-after=5s 90s node tools/toyvm/run-dos.js \
+  test/binaries/dos-games/constructor-demo/GAME.EXE \
+  --dispatches=200000000 --seconds=30
+```
+
+This is a proposed bounded **default-hardware startup diagnostic**, unexecuted
+here. It needs the ordinary ToyVM runner dependencies and serialized runtime
+ownership; it does not need a replacement EXE or a new registry entry. The
+existing focused graphics regression is `test/test-toyvm-vbe.js` (guest/native,
+**not run here**): it checks served/refused VBE modes and rendered banked pixels,
+but does not qualify UniVBE chip identification or extended sequencer banks.
+A future hardware correction also needs focused detection/extended-register
+coverage and the unchanged original startup. Only after credible graphics is
+the original `MUSIC/SNDSETUP.EXE` workflow the next sound-configuration
+dependency; `SETSND.CFG` is absent from this authentic manifest. No setup was run.
+
+`node tools/toyvm-dos-corpus.js --check --only=constructor-demo` passes: 28 files,
+60.3 MiB, generated metadata up to date. Its `extender,flat-fs-collision` labels
+remain the stored static assessment; the collision label contradicts current
+directory-aware source and the passing real-payload host API check. These labels
+were not rewritten in this note-only assignment and are not new runtime results.
+
+Recovery recipe from the repository root (only after the live runtime owner's
+exact release and with disk staying above 2,000,000,000 bytes). Check ownership
+first; preserve any existing destination. Keep the archive on tmpfs and persist
+only fully verified members; no compilation container is involved:
+
+```sh
+constructor_stage=$(mktemp -d /dev/shm/constructor-original.XXXXXX)
+curl --fail --location --max-redirs 5 --connect-timeout 15 --max-time 180 \
+  --max-filesize 33000000 --retry 0 \
+  --output "$constructor_stage/CONSTRUC.zip" \
+  https://archive.org/download/CONSTRUC/CONSTRUC.zip
+python3 - "$constructor_stage/CONSTRUC.zip" <<'PY'
+import hashlib, json, os, stat, sys, zipfile
+from pathlib import Path, PurePosixPath
+archive = Path(sys.argv[1])
+assert archive.stat().st_size == 32062553
+assert hashlib.sha256(archive.read_bytes()).hexdigest() == \
+    '5d764f6d2f536d6aae6fd18122bc9bf2be20e84f101cbcdeafb1bcbd20eeed18'
+pins = json.loads(Path('test/toyvm-dos-corpus/files/constructor-demo.json').read_text())['files']
+expected = {f['path']: f for f in pins}
+assert len(expected) == 28 and sum(f['size'] for f in pins) == 63205318
+dest = Path('test/binaries/dos-games/constructor-demo')
+assert not dest.exists() and not dest.is_symlink(), 'Preserve existing files'
+assert all(not p.is_symlink() for p in dest.parents)
+def free():
+    s = os.statvfs('.')
+    return s.f_bavail * s.f_frsize
+with zipfile.ZipFile(archive) as z:
+    for i in z.infolist():
+        p = PurePosixPath(i.filename)
+        assert not p.is_absolute() and '..' not in p.parts
+        assert not any(c in i.filename for c in ['\\', ':', '\0'])
+        assert stat.S_IFMT(i.external_attr >> 16) in (0, stat.S_IFREG, stat.S_IFDIR)
+    entries = [i for i in z.infolist() if not i.is_dir()]
+    assert len(entries) == 28 and {i.filename for i in entries} == set(expected)
+    for i in entries:
+        f = expected[i.filename]
+        data = z.read(i)  # checks CRC and complete decompression
+        assert len(data) == i.file_size == f['size']
+        assert hashlib.sha256(data).hexdigest() == f['sha256']
+    assert free() > 2000000000 + 63205318 + 16*1024*1024
+    dest.mkdir(parents=True)
+    for i in entries:
+        assert free() > 2000000000 + i.file_size + 1024*1024
+        out = dest / i.filename
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open('xb') as stream:
+            stream.write(z.read(i)); stream.flush(); os.fsync(stream.fileno())
+        assert hashlib.sha256(out.read_bytes()).hexdigest() == expected[i.filename]['sha256']
+assert free() > 2000000000
+print('Verified authentic 28-file closure, 63205318 bytes')
+PY
+# After successful verification only, remove this acquisition's own tmpfs copy.
+rm -- "$constructor_stage/CONSTRUC.zip"
+rmdir -- "$constructor_stage"
+```
+
+Run-local acquisition headers/timings, all 28 verification rows, static source
+pins, pure contract logs and actual helper waits are retained under the run ID.
+No guest run, build, browser, boat, deployment, EULA, gameplay, FPS, audio or
+qualification claim. Box ID/state/expiry: N/A; coordinator lifecycle untouched.
+
+## Restored original default startup (2026-11-01)
+
+Run `20261101-constructor-original-startup` executes the restored original
+once on local native Node **v24.18.1**, after Urban's exact `058aed059` author
+release, terminal launcher exit0 and fresh direct absence checks for all40
+reported PIDs. The runtime/source/build claim was serialized; the other worker
+was restricted to synthetic inspector tests. No source, test, registry or build
+file was changed, and no project build was run.
+
+**Observed boundary: UVCONFIG returns6 with “No Graphics hardware detected by
+UniVBE! (0x0)”; GAME.EXE then exits1 at `0549:26EB`.** The CLI reports43.3M
+dispatches (rounded),113802 handbacks and4.32 guest seconds, ending in mode3.
+Its OS process exits0 because the runner completed normally; that is distinct
+from the guest's failure. `startup.png` was emitted and visually reviewed: the
+80x25 text console contains the graphics error followed by initialization/SFX
+messages. Text overlaps on the first two lines, as recorded in both PNG and
+console dump. There is no usable menu, intro or gameplay screen, and no inputs
+were supplied. No FPS or audio result follows from the runner's counters.
+
+Identity was pinned before guest execution and rechecked afterward:
+
+- Source checkpoint `f23123e6cf47d9eaae1d939690a0ac0e141f0ee3`;378 actual
+  source/support/manifest files match before and after. The existing default
+  ToyVM tailcall module is generated in memory by the ordinary runner; this
+  does not use `build/wine-assembly.wasm`.
+- A scratch-only `--require` observer wraps the existing `compileWat`, hashes
+  its original WAT and returned bytes, checks the source pins, and returns
+  those same bytes. Before execution, actual module SHA-256 is
+  `03495d5463de5ee69a82104a0d37d35e7ce9d2662c26f5d06278312c159e080b`
+  (343736bytes); emitted WAT SHA-256 is
+  `29bdf4e754aa46d8e2f083b5bbb8e9fb9c9f2725c4b2503a25b11786234dfbc0`.
+  `actual-module.json` also records loaded JS hashes and compile options.
+- All28 authentic files retain the manifest's exact sizes/SHA-256 values,
+  totaling63205318bytes, including GAME.EXE's pinned `d0ac2f05...dc587`.
+  The complete on-disk file set remains exactly those28 originals. Guest-created
+  `settings/hang.log` and `settings/SYSTEM.INI` stayed in the in-memory overlay;
+  no generated driver/configuration was persisted into the fixture.
+- Freshly requiring current `lib/apps.js` yields46 public `DESKTOP_APPS`, none
+  matching Constructor. Its source SHA-256 is recorded in `prerequisites.json`.
+  Runner/compiler imports and `pngjs` resolve without installation. An initial
+  inline prerequisite command had a syntax typo before imports; the corrected
+  check passed before this sole original launch.
+
+The actual command in `command.json` retains the documented default hardware,
+`timeout --signal=TERM --kill-after=5s 90s`, `--dispatches=200000000` and
+`--seconds=30`, adding only the identity observer and existing diagnostics:
+`--trace-int --trace-fault --trace-entry=40 --trace-entry-regs
+--trace-io=3c4,3c5 --report --text --png=.../startup.png`.
+No alternate EXE, `--svga`, VBE-version substitution or guest patch was used.
+
+The trace narrows the dependency beyond a generic VBE failure. All five
+controller queries `INT10/AX=4F00` and both mode-info queries (100h/101h)
+return AX=004Fh. There is no4F02 mode-set or4F0A request. The original EXECs
+`./UVCONFIG.EXE` (309382bytes) with `-gen -p.\settings\`; the child returns6
+via `INT21/AX=4C06` from `0EFE:0163`, resuming the parent at `0549:10B7`.
+The parent's4D00 call obtains6; its final4C01 is at `0549:26EB`.
+Missing-file diagnostics for settings/univbe.drv and settings/UVCONFIG.EXE
+therefore do not mean the packaged root UVCONFIG was absent or never ran.
+Other unhandled-call/decoder diagnostics remain in the log; none is established
+as the causal failure by this run.
+
+At41.6272–41.6278M dispatches the child probes sequencer indexesA7/C5 through
+port3C4 and reads/writes3C5 using helpers `2B5D:0001`/`2B5D:0028`. C5 readback
+follows writes0/FF; A7 receives87. Current unchanged source masks the index
+with0Fh, so these accesses address07/05 internally. This is an observed probe
+sequence plus a source-backed aliasing fact, **not proof of a chipset identity
+or of which conditional makes detection fail**. In particular it does not
+validate the historical optional Trident/InteGraphics selection.
+
+The first remaining dependency is a graphics hardware/register model that the
+original UniVBE detector can correctly recognize and then drive. The justified
+next diagnostic is to map the caller and conditional branches around this
+A7/C5 probe sequence in the original UVCONFIG code, correlating expected
+readbacks with the captured values. Use that decision to specify a focused
+extended-register/alias regression before implementing hardware behavior.
+Do not infer a vendor from successful readback or repair this by raising the
+advertised VBE version. This task makes no further original attempt.
+
+The matching recovery-run directory/path, EXEC-boundary and mouse contract
+evidence was reused: all10 recorded source/test hashes still match, with four
+small logs copied into this run and origin recorded in
+`static-evidence-reuse.json`. No broad corpus rerun occurred.
+`test/test-toyvm-vbe.js` was not run: the actual original already distinguishes
+successful VBE queries from later detection rejection, and that mode-rendering
+test cannot identify the failed chipset branch.
+
+The supervisor caps logs at8000000bytes and stops the original at free disk
+2020000000bytes. Actual output is147446bytes; minimum observed free disk was
+2108801024bytes, no guard fired, and disk remained above2GB. GNU timeout owned
+the Node child and reaped it; the Python supervisor actually waited for timeout
+PID4171289 (exit0, total4.739611s, final wait0.000111s). Its board watcher
+PID4171288 received TERM and was reaped with exit-15 (wait0.001469s).
+Node4171290, timeout, watcher and supervisor4171287 were directly absent after
+completion. Separate publication-watch termination/wait is retained in
+`publication-watch-oswait.json`. Shutdown of this task's own processes was
+explicitly delegated; no coordinator/foreign runtime was stopped.
+
+Recovery: keep the authentic fixture untouched and use the earlier verified
+archive recovery recipe only if it is actually missing, under new ownership
+and the stated disk guard. No download occurred here. To inspect this result,
+read `result.json`, `startup.log`, `startup.png`, identity manifests and wait/
+cleanup receipts under `scratch/runs/20261101-constructor-original-startup/`;
+regenerate no configuration and do not relaunch the original merely to view
+the evidence. `run.py` is the bounded execution recipe, not authorization for
+a second run. Local box ID/state/expiry: N/A. Browser, boat, EULA, deployment,
+sound setup and ordinary gameplay remain unperformed.
+
+### 2026-11-01 authentic UVCONFIG probe branches (static only)
+
+Run `20261101-constructor-uvconfig-probe-branches` maps the retained original
+startup to a concrete generic sequencer false-positive contract and the
+subsequent exit6 memory gate. A7/C5 rejection alone is not the exit6 cause.
+No original or emulator was executed, and no source, tests or build changed.
+The I/O is observed; intermediate registers and branches below are reconstructed
+from those observations and pinned executable bytes, not an instruction/stack
+capture. Detector names are the executable's labels, not identified hardware.
+
+Inputs: unchanged authentic28-file closure (63205318bytes), manifest
+`test/toyvm-dos-corpus/files/constructor-demo.json`, and its309382-byte
+`UVCONFIG.EXE`, SHA256
+`3a37035f71c213d4dfff0b752415815584f49af1b156afc48f0255b2f993a815`.
+The retained input is `20261101-constructor-original-startup/startup.log`
+(147446bytes), with that run's identity/module provenance unchanged. Read-only
+source input `tools/toyvm/dos.js` hashes to
+`eb60e2775196edd80113836830a36482ac50a1d425f3e505d09c4bac68b0f4bc`.
+`analysis.json` pins these inputs, the manifest's28 files, the ten matching
+reused contract source/test files, recovery pin record, Python interpreter and
+GNU objdump. No unchanged contract was rerun. `analyze.py` uses only Python
+stdlib byte/trace assertions and `/usr/bin/objdump -D -b binary -m i8086 -M intel`
+on entry-aligned slices; it never imports the emulator or executes guest code.
+
+The MZ header is2A00h bytes with2403 relocations. For original segment S and
+offset O, file offset is `2A00h + 10h*S + O`. This child's load segment is0EFEh;
+add that to original segment operands. This gives the caller chain:
+
+| Function | Original segment:offset | Retained runtime segment:offset |
+| --- | --- | --- |
+| main's detector call | 36BE:0872 | 45BC:0872 |
+| initialization/detector wrapper | 07EB:DAAA | 16E9:DAAA |
+| dispatcher called at DC90 | 07EB:BFFF | 16E9:BFFF |
+| A7/C5 detector, called at C068 | 07EB:5B28 | 16E9:5B28 |
+| indexed read / write / masked test | 1B76:0000 / 0032 / 01CE | 2A74:0000 / 0032 / 01CE |
+| raw input / output entry | 1C5F:0001 / 0028 | 2B5D:0001 / 0028 |
+
+Raw IN is actually at0009 and OUT at0031; the trace's `near` positions name
+their entries. Far segment operands are relocation-checked in the executable.
+Before detector dispatch,149F checks INT10h AX=1A00h VGA presence, including
+AL=1Ah and display-type checks. The retained original reaches the probes; its
+VBE query success does not establish a vendor-specific register implementation.
+
+The shared masked test at2A74:01CE saves the register, writes
+`saved & ~mask`, reads `clear & mask`, writes `saved | mask`, reads `set & mask`,
+then restores the saved byte. At0244/0248 it rejects nonzero clear bits; at
+024D/0250 it rejects set bits unequal to the mask. It returns AX=1 only when
+both checks pass, otherwise0. Both C5 calls use mask00FFh. The retained30 I/O
+rows at41.6272–41.6278M give:
+
+| A7 state | Saved C5 | Write/read clear | Write/read set | Restored C5 | Test AX |
+| --- | --- | --- | --- | --- | --- |
+| 00h | 00h | 00h / 00h | FFh / FFh | 00h | 1 |
+| 87h | 00h | 00h / 00h | FFh / FFh | 00h | 1 |
+
+Detector5B28 is tag0Dh, whose string table says **Macronix** (pointer table
+file45770h, string46533h). It saves A7, writes00h, tests C5 at5B95, writes87h,
+then tests C5 at5BBA. Three PCI searches can accept independently: vendor10D9h
+with devices0066h,8888h,8625h; each AX != FFFFh jumps to5C65. The three retained
+INT1Ah AX=B101h/CX=10D9h attempts and later A7 restoration are consistent with
+all misses. PCI helper2B3B:0112 checks mechanisms1/2 then BIOS presence; an
+absent PCI service is not itself a generic hardware defect.
+
+Without that override, `analysis.json` records the computed file offsets and asserts
+`83 7e fa 00 0f 85 74 02 83 7e f8 00 0f 84 6c 02` at07EB:5C55.
+These decode to `CMP [bp-6],0; JNE 5ED1; CMP [bp-8],0; JE 5ED1`.
+Thus the required pair is **0,1**, not1,1. The captured pair takes5C59 to5ED1,
+restores A7=00h, and returns AX=1 at5EE2 (continue searching). The dispatcher
+compares AX with1 atC070. A preselected tag0Dh can skip this test, but this
+trace contains both probes. No vendor identity follows from register aliasing.
+
+The later26 I/O rows at42.9872–42.9877M match a different detector:
+16E9:76E8, dispatched atC45F for tag17h. The executable labels17h **Hualon**
+(table file45798h, string4659Bh). At7718/772F it tests EDh and EEh with00FFh;
+772B/7742 jump to failure782D if either test returns0. Both captured tests
+save00h, read00h after clearing and FFh after setting, restore00h, hence pass.
+7749 stores tag17h. With memory unspecified,77B0 reads E7h; observed00h makes
+`TEST AL,10h` at77B8 / `JE 77C7` take the256KiB assignment
+`ES:[BX+4]=0100h` at77CA. A set bit would assign0200h at77BF.
+The remaining calls0FFE/04C5 update mode/capability tables; the detector
+returns AX=2 at7828. The dispatcher comparison atC467 therefore returns that
+result viaC5C4 rather than trying later detectors.
+
+Wrapper DC99 tests AX=2. DCA4 then compares memory `[+4]` with0200h
+(512KiB); DCAA `JGE DCB2` is not taken for0100h. **DCAC sets AX=6** and
+DCAF returns viaDE5F. In main,087A decrements the status and the six-word
+switch at0BA0 maps status6 to089C (status1 instead maps088B, the distinct
+no-supported-chip error). The status6 path reaches0981 `PUSH 6`,0983 far call
+0000:505B, C-runtime cleanup5001, then0000:015A. At015C–0161, AH=4Ch and
+AL=argument6 reach INT21h. This matches the retained child exit6 and
+`0EFE:0163 AX=4C06`, then parent resumption0549:10B7. The parent's final
+“No Graphics hardware” text alone did not distinguish this false detection
+and memory gate from the child's no-supported-chip path.
+
+The first demonstrated wrong **generic emulation contract** is unrestricted
+sequencer writability exposing unsupported extension probes as successful.
+In the pinned source, the default model is `svga='none'`;3C4 uses
+`seqIndex=value&0Fh`,3C5 reads the16-byte array, and `vgaSeqWrite` unconditionally
+stores the byte. Thus ED/EE become freely writable0D/0E, while E7 becomes07.
+The observed A7/C5 aliases07/05 by themselves did not prove causation or
+Macronix hardware. The later ED/EE probe and explicit memory gate identify
+the concrete false-positive route. Making C5 obey an invented A7 unlock in
+the default model would select another detector rather than establish a fix.
+
+Proposed minimal next change: a pure-JS default-Machine contract regression
+that performs the executable's save/clear/read/set/read/restore00FFh test
+through3C4/3C5 for EDh and EEh. It must not report both as implemented writable
+extensions with `svga='none'`; current code gives1,1 and fails that assertion.
+The focused fix should make this test pass while preserving defined VGA
+sequencer behavior (especially map mask and memory mode), register restoration,
+and existing explicitly selected model contracts. Implementation belongs in
+the model-specific index-decode/read/write policy in `tools/toyvm/dos.js`, with
+normal generated copies afterward. Determine the unimplemented-register read
+value and legitimate alias policy from the intended default adapter contract;
+do not replace the16-byte array with256 writable registers or assume FFh reads
+without that evidence. This task proposes the regression; no new-pass emulator
+result is claimed. Further valid supported-SVGA detection, at least512KiB,
+and its real memory/banking behavior remain prerequisites for successful
+configuration. Neither a VBE version bump, E7 bit fabrication, speculative
+Trident identity nor hardware/executable substitution follows from this map.
+
+Evidence:15 focused `.bin`/`.disasm` pairs,14 pinned instruction-byte checks,
+switch/label/relocation checks, line-numbered retained trace excerpts and
+`analysis.json` in the named run. All28 fixture hashes and exact file closure,
+all ten reused contract pins, and note whitespace checks pass. No broad tests
+or build are appropriate for this documentation-only change. Original runtime
+ownership was never acquired; local box/state/expiry N/A. Only this analysis
+watcher's shutdown is delegated and directly waited, with cleanup receipts
+retained. No menu/gameplay/FPS/audio/full27 conclusion is made.
+
+### 2026-11-01 default sequencer contract repair
+
+Run `20261101-constructor-sequencer-default-contract` repairs the demonstrated
+generic false positive in `tools/toyvm/dos.js`. The input source is the exact
+`d12f0d1e1` source, SHA256
+`eb60e2775196edd80113836830a36482ac50a1d425f3e505d09c4bac68b0f4bc`.
+No original game/configurator was executed, and its fixture was untouched.
+
+The existing model declares default `svga='none'` to be plain VGA.
+[IBM's September 1992 Video Subsystems technical reference](https://bitsavers.trailing-edge.com/pdf/ibm/pc/ps2/42G2193_PS2_Hardware_Interface_Technical_Reference_Video_Subsystems_Sep92.pdf),
+printed page 2-45, figures 2-25/2-26, defines sequencer address bits 2–0 and
+five data registers, indexes 00h–04h. Higher address bits are reserved, with
+unspecified readback. The register map does **not** specify data-port reads
+at absent indexes 5–7. Consequently zero here is an explicit deterministic
+ToyVM policy retaining the previous initial read value, **not** a hardware
+measurement or an IBM guarantee. No FFh bus-read assumption is made.
+
+The default now decodes three index bits, ignores data writes to absent
+indexes 5–7 and reads those indexes as zero. Thus EDh/EEh decode to absent
+05h/06h instead of writable backing slots 0Dh/0Eh. Defined register storage,
+map-mask updates, memory-mode transitions and word OUT splitting retain their
+existing behavior. The shared sixteen-byte storage and explicit selected
+Trident four-bit decoding, XOR-2 bank writes, version/bank readback and CRTC
+signature remain unchanged. This adds no chipset identity or memory claim.
+
+`test/test-toyvm-vbe.js --sequencer-only` exercises actual `Machine.portIn`/
+`portOut`, using the retained authentic save/clear/read/set/read/restore test
+with mask FFh. Before the source change both default ED/EE probes report
+clear=00h, set=FFh, writable=true, restored=00h; the regression exits1.
+Afterward both report clear=00h, set=00h, writable=false, restored=00h and
+all69 focused checks pass. Coverage includes omitted/default and explicit
+`none`, other absent indexes, defined register bit tests/restoration, index
+aliases, word OUT, actual planar/rechained pixel preservation, map-mask
+controls, absent default vendor signature and selected-model negatives.
+
+Full VBE passes102 checks, including its existing guest mode/banked-pixel
+checks. Existing DAC-default, retrace and Node-only browser-bundle tests pass;
+no browser was launched. The mandatory
+`flock /tmp/wine-build.lock bash tools/build.sh` passes, including generated
+bundle reproducibility. Both committed ToyVM bundles were regenerated normally.
+
+Evidence retains the old failure, new passes, exact commands/waits, policy
+reference, retained authentic trace/analysis, source pins and recovery recipe.
+The95 pinned ToyVM/support/generated/test files are unchanged during tests;
+the compiler observer records actual module bytes and synthetic COM hashes.
+VBE uses ToyVM module SHA256
+`03495d5463de5ee69a82104a0d37d35e7ce9d2662c26f5d06278312c159e080b`
+(343736 bytes); the repair is in host JS, so that module matches the earlier
+startup's module. The mandatory project build is a separate artifact.
+
+Only this generic contract is repaired. Supported SVGA detection, real
+memory/banking and the original configuration remain unverified; no playable
+Constructor claim follows. No E7 bit, model switch, VBE-version change,
+download, deployment or broad corpus run occurred. Disk remained above2GB;
+bounded task processes are waited/reaped and no foreign artifact is deleted.
+Local box ID/state/expiry: N/A; coordinator lifecycle is untouched.
+
+### 2026-11-01 original startup after the default sequencer repair
+
+Run `20261101-constructor-repaired-default-startup` executes the authentic
+default `GAME.EXE` once after repair `77a0cea88`. **UVCONFIG now exits0;
+the parent reports `Problem reading SETSND.CFG (0x0)` and exits1 at
+`0549:26EB`.** The inspected `startup.png` is an 80x25 text console with
+overlapping configurator output, the sound-configuration error and subsequent
+initialization/SFX messages. No menu, intro, ordinary input or gameplay was
+reached. This is changed-source startup progress, not validated SVGA support.
+
+The exact GTA recovery worker's author release `124d0bda1`, terminal launcher
+exit0/final and fresh direct absence checks for all seven reported helper PIDs
+preceded the runtime/source/build claim. Box ID/state/expiry are N/A; own
+helper/game shutdown was delegated. No source/build changes occurred here.
+
+Before and after the run, all28 authentic manifest files match sizes/SHA256
+(63205318bytes), and the directory's complete file set is exactly those28.
+The fresh actual public `DESKTOP_APPS` list contains46 entries and excludes
+Constructor. Source checkpoint `124d0bda1745b544faeafbb6f23f087fac23d6ae`
+has378 unchanged source/support/manifest pins; repaired `tools/toyvm/dos.js`
+SHA256 is `5fad1c4e4a64ca69e54c088884b1fe313a61a99300dd6b852095fc579ee0f9c4`.
+All95 accepted regression pins still match. The focused69/fullVBE102 checks,
+DAC/retrace/bundle checks and mandatory build from the repair run were reused,
+without rerunning synthetic suites or building.
+
+Native Node v24.18.1 runs the existing default ToyVM tailcall module. The
+identity-only compiler observer returns the original bytes, recording actual
+module SHA256
+`03495d5463de5ee69a82104a0d37d35e7ce9d2662c26f5d06278312c159e080b`
+(343736bytes) and WAT SHA256
+`29bdf4e754aa46d8e2f083b5bbb8e9fb9c9f2725c4b2503a25b11786234dfbc0`.
+The module matches the earlier run because the repair is host JS. This route
+does not load the project `build/wine-assembly.wasm`.
+
+The single command retains default hardware and original executable, with
+`--dispatches=200000000 --seconds=30`, supported interrupt/fault/entry tracing,
+`--trace-io=3c4,3c5 --report --text --png=.../startup.png`, and GNU timeout90s.
+No selected Trident/model, VBE bump, E7 fabrication, alternate executable or
+guest patch was used. Actual log size190150bytes is below the2000000-byte cap.
+
+The relevant comparison is the retained `20261101-constructor-original-startup`
+probe/exit evidence and its accepted static branch mapping. Previously ED/EE
+both passed writable-register tests, E7 read00h reconstructed256KiB, and
+UVCONFIG exited6. Here ED's save/clear/read/set/read/restore sequence at
+42.9877–42.9880M dispatches reads00h after both00h and FFh writes. There is
+no EE or E7 probe in the captured port trace, consistent with the mapped
+early rejection at the first failed Hualon test. No intermediate instruction
+trace is claimed. The new child executes the same `-gen -p.\settings\`
+command and returns0 via `INT21/AX=4C00` at `0EFE:0163`; parent `4D00`
+obtains0. Twelve VBE controller queries and two mode-info queries succeed;
+there is no4F02 mode-set or4F0A request. The configurator also attempts legacy
+BIOS modes, as retained in the log; those attempts do not establish correct
+geometry, banking or visible graphics.
+
+The runner reports creation of `settings/UVCONFIG.DAT` and `settings/univbe.drv`
+and the parent reads the generated driver. These remain in the in-memory
+overlay and were neither persisted into the fixture nor separately exported.
+The visible label says `InteGraphics IGA168x Internal Clock`; **this is a
+configurator label, not proof of an InteGraphics adapter or a valid driver**.
+The accepted branch mapping only explains rejection of the old Hualon path;
+it does not establish why a later detector accepts. The next graphics
+dependency is to map that new acceptance against genuine default register/
+BIOS contracts and validate its rejection or real implementation before
+accepting supported SVGA. No second original attempt was made.
+
+The first explicit parent configuration error is the genuinely absent
+`settings/setsnd.cfg`; the authentic manifest contains no such file.
+`SETSOUND.BAT` still invokes `MUSIC/SNDSETUP.EXE` from MUSIC and returns to
+the parent directory. Once graphics behavior is credible, that original
+ordinary setup workflow is the concrete sound-configuration dependency.
+No synthetic configuration, sound setup or audio bypass was attempted.
+Other unhandled-call and six aggregate decoder-giveup sites remain retained;
+their chronology/causal role in the final exit is not established here.
+
+The parent completes158.3M rounded dispatches and15.81 guest seconds, ending
+in mode3; these are not FPS/audio measurements. OS runner completion is0,
+distinct from guest parent exit1 and child exit0. The supervisor actually
+waits for timeout PID33912 (exit0,5.898180s total), which owns/reaps Node33913.
+Board watcher33911 is terminated and waited (exit-15); supervisor33637 and
+all runtime PIDs are directly absent afterward. Runtime disk minimum is
+2030686208bytes with the unchanged2020000000-byte stop threshold; a separate
+independent floor guard also covers preparation/publication above2GB.
+Own helper cleanup receipts are retained; foreign processes/artifacts and
+coordinator lifecycle are untouched.
+
+Evidence and recovery recipe are under the named run: `result.json`, actual
+screen/log, `boundary-excerpts.log`, source/fixture/module identities, accepted
+regression reuse, GTA release gate and separate OS-wait/cleanup receipts.
+Use retained evidence without relaunching. No download, browser, boat, EULA,
+deployment, registry/TODOS/STATUS edit, general SVGA, full27, FPS, audio or
+playability claim follows from this run.
+
+### 2026-11-01 later InteGraphics detector: static acceptance contract
+
+Run `20261101-constructor-later-detector-contract`, input revision
+`3ce0c5dad7c16a8ee07052597931a3f0e3c269d2`, identifies another default
+register false positive. **The later acceptance is a chipset probe accepting
+ordinary VGA register aliases, not a demonstrated generic VBE fallback.**
+This is reconstruction from authentic bytes, current source and the retained
+repaired-startup trace; no guest or synthetic suite was executed here.
+
+All28 authentic files (63205318bytes) and exact directory closure match the
+manifest. UVCONFIG remains309382bytes, SHA256
+`3a37035f71c213d4dfff0b752415815584f49af1b156afc48f0255b2f993a815`;
+`tools/toyvm/dos.js` remains
+`5fad1c4e4a64ca69e54c088884b1fe313a61a99300dd6b852095fc579ee0f9c4`.
+The retained actual ToyVM module is343736bytes, SHA256
+`03495d5463de5ee69a82104a0d37d35e7ce9d2662c26f5d06278312c159e080b`.
+Its loaded source pins and all95 accepted regression pins still match; reuse
+the repair's69 focused/102 VBE checks, DAC/retrace/bundle checks and build.
+Those passes do not cover the newly identified reserved-bit contract.
+
+UVCONFIG file offsets remain `2A00h + 10h*original_segment + offset`;
+the retained child adds0EFEh to relocated segment operands. The detector
+is original `07EB:B282`, retained runtime `16E9:B282`. Dispatch atC56A
+compares the requested tag with24h, C575 callsB282, and C57D/C580 returns
+any result other than1 viaC5C4. Tag24h's authentic string-table entry is
+at file457CCh and points to file465E5h, `InteGraphics`.
+
+| Instruction boundaries in original segment07EB | Exact predicate or action |
+| --- | --- |
+| B2AC/B2B0 | A preselected24h skips probes; otherwise continue to B2B2. |
+| B2B2–B2C0; B2C3/B2C5 | Call indexed test `1B76:01CE` with port03CEh, index31h, mask003Fh; zero result rejects atB4D8. |
+| B2C9–B2D7; B2DA/B2DC | Same test, index32h and mask003Fh; zero rejects atB4D8. |
+| B2E3 | Store detected tag24h after both tests pass. |
+| B326/B32C/B32F; B35B/B361/B364; B390/B396/B399 | Try PCI vendor10EAh, devices1680h/1682h/1683h. All misses leave subtype unspecified; they do not undo the register acceptance. |
+| B3D3/B3D8; B3DA–B411 | If memory is unspecified, read index72h at03CEh and use low two bits:0/1/2 assign1024/2048/4096KiB;3 leaves it unchanged. |
+| B44F/B455 | Read index91h at03CEh into descriptor+3Eh. |
+| B4D3 / B4D8 | Return AX=2 on acceptance, AX=1 on rejection. |
+
+The shared test saves the byte, writes `saved & ~3Fh`, reads masked clear
+bits, writes `saved | 3Fh`, reads masked set bits, and restores the byte.
+At `1B76:0244/0248` clear bits must equal0; at024D/0250 set bits must
+equal003Fh. Current `dos.js:3340–3354` decodes `gcIndex=value&0Fh`
+and stores the entire data byte; `dos.js:3080` reads it unchanged.
+Thus31h/32h alias01h/02h and **both tests return1 for any saved byte**:
+clear&3Fh=0, set&3Fh=3Fh, original storage restored. Index72h also
+aliases02h, and91h aliases01h. These are graphics-controller index aliases,
+not sequencer ED/EE and not the sound-only ISA port alias in `isaAlias`.
+
+Observation limits matter: the retained command traces only03C4h/03C5h.
+It captures repaired ED reads00h/00h, then later three INT1Ah/B101h
+attempts with CX=10EAh, child exit0 and parent sound error. **It does not
+capture03CEh/03CFh reads, intermediate AX values, descriptor memory or
+the detector's instruction pointer.** The authentic three-device sequence,
+dispatcher, source-predicted tests and label make this the explained later
+acceptance path, but its branch-by-branch execution remains inferred.
+The three PCI attempts are consistent with all misses and an unspecified
+subtype. A72h read with low bits0 would fabricate a1024KiB descriptor from
+ordinary GC02h; that particular read value is inferred, not measured.
+The wrapper's512KiB gate atDCA4/DCAA would accept1024KiB. The actual child
+exit0 establishes completion without establishing its descriptor contents.
+
+The primary [IBM September1992 Video Subsystems reference](https://bitsavers.trailing-edge.com/pdf/ibm/pc/ps2/42G2193_PS2_Hardware_Interface_Technical_Reference_Video_Subsystems_Sep92.pdf),
+printed pages2-76/2-78/2-79, figures2-64/65/67/68, defines a four-bit
+graphics-controller index and registers00h–08h. GC01h (Enable Set/Reset)
+and GC02h (Color Compare) have four functional low bits; upper bits must
+be written zero and have undefined readback. Four-bit index aliasing alone
+therefore does not prove a defect. The unsupported capability is letting
+reserved bits4/5 act as independent writable extension state. IBM does
+not promise zero readback or a particular physical result for this probe.
+
+**Next implementable contract:** in the default plain-VGA graphics-controller
+data read/write policy, retain only the defined low nibble of GC01h/GC02h
+and explicitly choose deterministic zero for their reserved-bit readback.
+Zero is an emulator policy, not an IBM hardware measurement. Preserve
+four-bit index decoding, defined plane enable/color compare behavior and
+register restoration; do not globally discard GC bit masks or selected-model
+extensions. A focused future Machine-port regression should perform these
+authentic31h/32h save/clear/set/restore3Fh probes, require rejection while
+low-nibble tests succeed, and check defined planar write/read behavior.
+With that policy, set&3Fh can only reach0Fh, so B2C5 rejects this detector.
+This task writes no such source/test and claims no new emulator pass.
+
+Rejecting this false positive is the next repair, not sufficient SVGA for
+Constructor. `dos.js:835–841` explicitly makes default `none` plain VGA;
+there is no implemented InteGraphics model. Existing BIOS VBE1.2 controller
+responses (`dos.js:3988` onward) explain successful query calls, but this
+accepting detector tests ports and constructs a vendor descriptor without
+requiring a successful generic VBE mode set. Retained12 controller/two
+mode-info successes and absent4F02/4F0A cannot validate the generated driver.
+After truthful rejection, a genuinely supported adapter's detection, memory,
+bank/window and mode/pixel contracts remain a hardware prerequisite. No
+particular later detector result or new startup outcome is predicted here.
+
+Sound setup is statically ready for a later ordinary setup assignment once
+graphics is credible. Authentic `SETSOUND.BAT` is exactly `@cd music`,
+`@.\sndsetup.exe`, `@cd ..` (CRLF, no arguments).
+`MUSIC/SETUP.INI` contains `[PROGRAM]` and
+`ConfigFile = ..\settings\setsnd.cfg`, resolving from MUSIC to the parent's
+missing `settings/setsnd.cfg`. Authentic `MUSIC/SNDSETUP.EXE` is an LE DOS
+program with `setup.ini` at file22004h and `ConfigFile` at22A74h. Its bounded
+unrelocated object1 slice at relative15C0h selects PROGRAM;162Eh–1648h
+passes ConfigFile and destination6CD8h to the lookup routine. The save slice
+at2176h/2198h/21E1h reuses that destination as a path and includes distinct
+create/open/write-error branches. These are static file/object offsets,
+not observed runtime addresses or proof that saving succeeded. The INI also
+names digital/MIDI tests and supplied HMI support files; `test.wav` is not
+in the authentic28-file closure, so digital test-sample availability remains
+an explicit later setup limitation. No sound setup, fabricated SETSND.CFG,
+alternate hardware/executable or original rerun occurred.
+
+Evidence: `analysis.json` pins authentic inputs, actual retained module and
+accepted tests;13 instruction-byte checks, relocation checks, six bounded
+disassembly slices, source excerpts and line-numbered retained interrupt/port
+excerpts distinguish observed facts from inferred branches. `sound-inputs.txt`
+retains the authentic invocation/INI. Recovery is static: rerun only
+`analyze.py` against those unchanged files, never the original run recipe.
+No build/suite rerun was appropriate for this note-only change. Runtime/
+source/build ownership was never acquired; GTA's lane is untouched. Box ID,
+state and expiry are N/A; guest exit is N/A for this task (retained child0,
+parent1). **Resource failure:** the independent guard recorded1975025664bytes
+free, below the required2000000000-byte floor, after15 samples. Its watcher
+was terminated and actually waited (exit-15); the guard exited0 and both
+PIDs43755/43757 were directly absent. This violation was discovered during
+finalization, after the static analysis above had completed; the guard's early
+exit did not interrupt the analysis driver. No sustained-headroom success is
+claimed. Further analysis stopped on discovery, without retry, cleanup of
+foreign files or a runtime launch. The guard needs a live driver abort signal
+in a future assignment. Evidence/publication only follows; no RAM gate,
+browser/boat or gameplay/audio claim is involved.
+
+### 2026-11-01 GC defined-bit repair: tested WIP, build aborted
+
+Run `20261101-constructor-gc-defined-bits-repair`, assigned input
+`c2105cd0d10645199ec59dda8ece6d5a1dd1209b`, prepared the next default-VGA
+contract above. **The repair remains uncommitted WIP; the mandatory build did
+not finish.** Only this investigation note is published. WIP paths are
+`tools/toyvm/dos.js`, `test/test-toyvm-vbe.js`, and the two existing generated
+`docs/dos-corpus/live/toyvm{,-jit}-bundle.js` files.
+
+The proposed data-write policy stores `value & 0Fh` in GC01h/02h only when
+the selected model is plain VGA (`none`, including the default). Reads then
+return zero for reserved bits. This is deterministic emulator policy; IBM
+September1992 pages2-76/2-78/2-79 specify undefined reserved-bit readback,
+not guaranteed physical zero. Four-bit index decoding, other GC data policies
+and explicit Trident behavior remain unchanged. Both bundles were regenerated;
+the build's reproducibility check accepted them before the later abort.
+
+The real Machine-port regression performs the authentic GC31h/32h mask3Fh
+save/clear/read/set/read/restore sequence with initial low nibbles0/5/A/F.
+On the unchanged old source it exits1 with20 failed and54 passed assertions;
+with the repair it exits0 with74 passed assertions. Both default and explicit
+`none` return clear00h/set0Fh and restore the saved low nibble, rejecting the
+extension predicate while preserving low-nibble functionality. Word OUT,
+index aliases, other GC registers and the selected-model compatibility checks
+are included. This is synthetic port evidence, not an observed original
+UVCONFIG branch execution or a qualified SVGA model.
+
+The affected combined VBE suite passes178 assertions, including the existing
+69 sequencer and33 VBE assertions and two new guest-planar checks. A synthetic
+COM configures ports and executes real A000 planar memory reads/writes to
+check enable-set/reset planes, matching/nonmatching color comparison and
+restoration to CPU-data writes. Its SHA256 is
+`d760de7e6c38f2755bf18fdffa4cc054d61e25d667014fb6aa3abb1183222d5a`;
+the actual emitted module remains
+`03495d5463de5ee69a82104a0d37d35e7ce9d2662c26f5d06278312c159e080b`.
+An initial fixture omitted Color Don't Care and failed one assertion; the
+corrected fixture explicitly compares all four planes. Both logs are retained.
+No DAC/retrace/bundle execution suite or original was run in this assignment.
+
+**First blocking prerequisite:** `flock /tmp/wine-build.lock bash tools/build.sh`
+was actively terminated when free `/home` disk reached1988030464bytes,
+below the retained stricter2020000000-byte stop threshold and required2GB
+floor. The command supervisor sent TERM to build process group62297, actually
+waited for its driver (exit-15), and killed remaining group children. Direct
+inspection found no remaining group members. The persistent independent
+monitor also latched that same minimum and exited0, actually waited; no
+sustained-headroom success is claimed. Unlike the previous guard failure,
+this breach interrupted the active task driver. The build reached combined
+WAT generation, so it cannot be reported as a completed compile/build.
+Implementation and tests stopped without retry, floor reduction or foreign
+cleanup. The separately prepared injected-breach self-test was not executed.
+
+Evidence includes baseline hashes, actual test/module/fixture identities,
+old/new/fixed logs, guarded-command wait receipts and the latched abort.
+Restore sustained headroom and assign a fresh continuation before resuming;
+inspect the preserved WIP, run affected remaining checks and the mandatory
+locked build, and commit these code paths only after all required checks pass.
+The current passing synthetic checks do not establish playable Constructor.
+A genuinely supported adapter's truthful detection, memory capacity,
+bank/window access and mode/pixel behavior remain prerequisites before any
+separately assigned original or authentic sound-setup run. No hardware switch,
+fabricated memory/E7/vendor identity or setup bypass was introduced. Box ID,
+state and expiry are N/A; no test box or original game was started.
+
+### 2026-11-01 GC final validation: checks pass, runner dependency blocks publication
+
+Run `20261101-constructor-gc-final-validation` resumed after the GTA checkpoint
+worker's final result, author release and direct absence of its nine reported
+processes. All four GC source/test/bundle SHA256 pins still matched the
+preserved repair. The accepted source-suite result remains178 passing
+assertions; that unchanged suite was not repeated.
+
+The remaining DAC-default and retrace suites both exit0. Each preserved bundle
+also passes the74 GC port assertions through its own bundled Machine, and
+executes the existing synthetic COM bundle test to print `HI` and exit. Both
+embed byte-identical repaired `dos.js`. These are Node-hosted bundle execution
+checks, not a browser or original-game run. The injected disk-guard self-test
+actively terminated its driver and child, actually waited and verified their
+absence. Real validation commands stayed above2338738176bytes available;
+the unchanged stop threshold is2020000000bytes and floor2000000000bytes.
+
+**Concrete unresolved dependency:** GTA left its tested checkpoint repair in
+uncommitted `tools/toyvm/run-dos.js` and `test/test-toyvm-runner-input.js`.
+Comparing every embedded module in each preserved bundle against current
+source finds exactly one mismatch: `tools/toyvm/run-dos.js`. The preceding GTA
+mandatory locked build failed at that reproducibility gate (retained in
+`scratch/runs/20261101-gta1-checkpoint-capture-fix/build.log`). No unchanged
+build retry was made here. Regeneration would incorporate that foreign runner
+repair; publishing those bundle changes without its source would leave main
+inconsistent. This task explicitly excludes the runner/test WIP, so the four
+GC code/test/bundle paths remain unchanged and uncommitted. Only this note is
+published; the mandatory build still has no passing result.
+
+The next continuation must reconcile ownership/publication of the runner and
+generated bundles, then pass `flock /tmp/wine-build.lock bash tools/build.sh`
+with at least2150000000bytes entry headroom and the active disk guard before
+committing code. Reserved-bit zero readback remains deterministic emulator
+policy, not an IBM physical guarantee. Supported SVGA detection, capacity,
+banking, mode pixels and Constructor gameplay remain unproved. No original,
+browser, box, download or deployment was started; box ID/state/expiry are N/A.
+
+## Combined GC/checkpoint implementation outcome, 2026-11-01
+
+Run `20261101-toyvm-gc-checkpoint-coherent-build` adopts the six released
+source/test/bundle paths together and resolves the runner dependency above.
+Both bundles are regenerated from the repaired GC and checkpoint runner;
+all embedded modules match source after shebang normalization. Each passes
+74 GC assertions, real HI COM execution, once-only checkpoint keyboard input,
+no-input equivalence, session bounds, stop, deadline and terminal checks.
+Exact source/test hashes retain the accepted 178-pass source VBE result,
+DAC/retrace PASS and native checkpoint/keyboard PASS from the preceding runs.
+`flock /tmp/wine-build.lock bash tools/build.sh` now passes in full, including
+bundle reproducibility. Evidence and recovery instructions are in this run.
+
+GC01/02 store only their defined low nibble for default/none SVGA; reserved-bit
+zero readback is emulator policy. IBM reserved reads are undefined, so this
+does not establish physical zero readback. Selected Trident behavior and other
+GC registers retain their existing policy. No original was executed here;
+supported SVGA detection/capacity/banking/mode pixels and gameplay remain
+unproved. Build entry was2335780864bytes available and its minimum2335588352,
+above the active2020000000-byte stop and2000000000-byte floor, with no RAM gate.
+Box ID/state/expiry are N/A; runtime is released after publication for the next
+authorized original test.
+
+## Original default startup after GC repair, 2026-11-01
+
+Run `20261101-constructor-post-gc-startup` makes one original default launch
+after published GC repair `a416f0142`, on `37791d8f1` (the subsequently
+published checkpoint/stdin repair). **Graphics detection now rejects the
+default VGA: UVCONFIG exits1 and GAME.EXE exits1.** The inspected
+`startup.png` shows “No supported SuperVGA chip detected!” and
+“Error = No Graphics hardware detected by UniVBE! (0x0)”. This is the first
+changed-source original failure; no sound setup, menu, input or gameplay was
+reached. The earlier apparent InteGraphics acceptance and missing-SETSND.CFG
+boundary no longer occur.
+
+The checkpoint worker's launcher exit0, final/result, published author release
+and fresh direct absence of all19 reported helper PIDs preceded acquisition
+of native runtime ownership. No emulator source, test or build was edited or
+run here. Its accepted focused/keyboard/bundle/parity/build results are
+retained in `dependency.json`; the GC host source is byte-identical to
+`a416f0142` (SHA256
+`6b8d9420c7d6fd2653838d1720d3acfe16f499e059bee13d9e44dfc8cc00dd85`).
+
+All28 authentic files, totaling63205318bytes, match the retained manifest
+before and after execution, with exactly that file closure. GAME.EXE remains
+994161bytes, SHA256
+`d0ac2f05b9a813dc723f170f7418fbfd9af269abcbce8905062c3b63f27dc587`.
+The manifest itself matches the retained archive-verification record; that
+record pins the32062553-byte archive to
+`5d764f6d2f536d6aae6fd18122bc9bf2be20e84f101cbcdeafb1bcbd20eeed18`.
+The archive has been removed locally, so this is reuse of its recorded
+verification, not a fresh archive hash or download. All378 runtime/support/
+manifest source pins remain unchanged during execution. The identity-only
+compiler observer returns the original bytes and records actual module
+SHA256 `03495d5463de5ee69a82104a0d37d35e7ce9d2662c26f5d06278312c159e080b`
+(343736bytes), matching the retained module; the GC repair is host JS.
+
+The sole command uses the original GAME.EXE, default hardware, no command
+tail,200M dispatch/30 guest-second limits and an outer90-second timeout.
+Existing interrupt/fault/entry and3C4/3C5/3CE/3CF port diagnostics, text/report
+and PNG capture are enabled. No DEMO route, model/vendor/memory/E7 override,
+forced configuration or binary patch is used. The CLI reports2.86seconds,
+43.7M rounded dispatches and4.36 guest seconds; these are not gameplay or FPS
+measurements. The timeout/Node host completes normally (actually waited,
+code0), distinct from both guest failures: child `INT21/4C01` at `0EFE:0163`,
+parent `4D00` obtains1, and final `4C01` at `0549:26EB`.
+
+At43.2197–43.2199M dispatches, the captured GC31h save/clear/set/restore
+sequence reads00h, writes00h and reads00h, writes3Fh and reads0Fh, then
+restores00h. No GC32h probe follows. This observed port behavior matches
+the authentic detector's mapped early rejection predicate; no instruction
+pointer or descriptor capture is claimed. Five VBE controller and two
+mode-info queries succeed, but there is no4F02 mode set. The text console
+and final mode3 do not establish supported SVGA, capacity or banking.
+
+The concrete next work is a separately owned complete adapter contract that
+the original detector genuinely supports: derive its identity/register and
+capacity checks from authentic UVCONFIG code, implement real bank/window
+access and mode behavior, and verify bank-crossing pixels before another
+original startup. Detector acceptance alone cannot qualify an adapter.
+Default plain VGA rejection must remain truthful.
+
+The conditional sound follow-up was not triggered. Original SETSOUND.BAT and
+MUSIC/SETUP.INI contracts are retained in `sound-inputs.txt`; no SETSND.CFG
+was fabricated. **Correction to the older missing-test.wav note:** the
+retained archive manifest and current authentic closure contain
+`MUSIC/TEST.WAV` (67024bytes, SHA256
+`d972ec69430baa17b93b10bf13871ff913de41963257e004eea3249f5e506852`).
+Runtime sample availability and audio playback remain untested limitations;
+no asset was synthesized or setup/audio success claimed.
+
+Evidence, identity checks, command/wait receipts, boundary excerpts and
+recovery instructions are in the named scratch run. Original-command free
+disk minimum was2312757248bytes, above the active2020000000-byte abort and
+2000000000-byte floor; no RAM gate applies. Local box ID/state/expiry are N/A;
+no box lifecycle action occurred. Own helpers are actually waited and their
+direct absence checked before final release/publication handoff.
+
+
+### 2026-11-01: bounded optional Trident SR0B/SR0D access repair
+
+Run `20261101-constructor-trident-register-contract` follows the released
+GTA input task `52165cda8`. This is a synthetic port-contract repair, with
+**zero original GAME/UVCONFIG executions and no gameplay claim**. It does
+not establish why the earlier optional Trident run selected InteGraphics.
+Default and explicitly nonselected VGA still reject extended sequencer
+storage; merely selecting `svga=trident` is not supported-adapter evidence.
+
+The missing contract is independent old/new SR0D control storage: writing
+sequencer **data** SR0B selects old controls; reading its data selects new
+controls. Selecting index 0B alone has no effect, and repeated reads select
+new controls rather than toggling. The original register descriptions are
+Richard Ferraro, *Programmer's Guide to the EGA, VGA, and Super VGA Cards*,
+3rd edition, section 27.5.1, pp. 1366–1368, figures 27.6/27.8 and listings
+27.3/27.4 ([text reference](https://dokumen.pub/programmers-guide-to-the-ega-vga-and-super-vga-cards-3rd-edition-3nbsped-0201624907-9780201624908.html)).
+The hardware-driver primary source also explicitly enters new mode by
+reading SR0B: Linux `drivers/video/fbdev/tridentfb.c`, `enable_mmio` and
+`disable_mmio` ([upstream driver](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/tridentfb.c)).
+These are a programming reference and an actual hardware driver, not a
+newly obtained manufacturer datasheet or an inferred UVCONFIG trace.
+
+The optional model now stores old SR0D separately from its existing new
+SR0D and applies SR0B's access side effects. SR0B data writes cannot invent
+a version; reads return zero as an absent-identity policy, **not a qualified
+TVGA8900 version**. The test uses valid old/new control-bit values and
+checks data access versus index selection, repeated selection, independent
+machine state, unchanged default/nonselected negatives, and persistence at
+both endpoints of existing video banks 0 and 1. Against the saved old source,
+the exact final focused test fails three assertions: two independent SR0D
+readbacks and prevention of writable chip identity. The repaired source and
+both regenerated bundles pass all 13 checks each. Full VBE/sequencer/GC,
+default DAC and retrace regressions pass. Both bundles match every embedded
+source module (44 interpreter, 43 JIT) and each executes the existing real
+COM test to print HI. Commands, old-fail/new-pass logs, bundle parity and
+actual wait receipts are retained in the named scratch run.
+
+This deliberately does **not** qualify a supported Trident adapter. Only
+SR0D's independent storage is repaired, not its clock/mode effects or the
+full old/new sequencer register bank. SR0B's real chip version is absent;
+the pre-existing TVGA8900 ROM string, synthetic SR0E high-bit readback and
+CRTC1F XOR signature are not identity/capacity validation. SR0E still uses
+the existing 64 KiB XOR-2 bank implementation even after old selection;
+real old-mode 128 KiB windows/control behavior are missing. The generic
+1 MiB backing has not been tied to a real chip's installed memory, CRTC
+capacity programming or wraparound. Four-bit sequencer-index aliases and
+extended timing, clocks, DAC and mode-pixel behavior remain unqualified.
+A complete advertised identity/capacity/banking/mode-pixel contract remains
+necessary before any original retry. The truthful default VGA rejection
+from `cf7ba641a` remains the last original Constructor result.
+
+No box was allocated (ID/state/expiry N/A); coordinator lifecycle ownership
+is unchanged. Evidence remains under `scratch/runs/`, outside git. No assets,
+configuration, binary patches, deployment or worker launch accompanied this
+repair. The mandatory locked build and final publication receipt are
+recorded in the run evidence.
+
+### 2026-11-01: old-mode SR0E/window research stopped at unresolved semantics
+
+Run `20261101-constructor-trident-old-window` starts from published
+`995c90daf`. **No hardware repair is claimed:** the references inspected do
+not justify a coherent old/new CPU bank/window contract. Source, tests and
+both bundles are unchanged by this task; no synthetic signature or chip
+identity was added. No GAME/UVCONFIG execution occurred. The GTA batch task's
+`4f8051361` final/result, terminal-wait evidence and exact author release were
+read, and all31 reported helper PIDs were directly absent before owning this
+note. No foreign WIP was adopted.
+
+The actual [SVGAlib TVGA8900 driver](https://sources.debian.org/src/svgalib/1%3A1.4.1-2/src/tvga8900.c/),
+`saveregs`/`setregs`, saves/restores independent old/new SR0E alongside SR0D.
+Its `setpage` explicitly selects new controls and writes the page XOR2;
+saved new SR0E readback is also XOR2 before restoration. The
+[Xorg bank driver](https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-trident/blob/master/src/trident_bank.c)
+uses identical SR0E values for its read, write and combined bank setters.
+Neither supplies an old-mode CPU banking routine or a memory test across
+SR0B selection. These sources support register independence and the new
+register write/readback convention, but do not settle the old window.
+
+The unresolved behavior is concrete:
+
+- **Old bank base:** Ferraro section27.5.1/table27.5 describes old SR0E
+  bits2:1 as selecting256KiB banks with128KiB pages, while
+  [VGADOC3](https://bearstrong.net/tekst97/data/programmering/vgadoc3/trident/)
+  labels the same bits128KiB bank numbers. For old SR0E=02h, those
+  descriptions alone leave a128KiB versus256KiB backing offset unresolved
+  for the intended packed-pixel configuration. Planar addressing and old
+  SR0D bit4 paging enable must be accounted for.
+- **Selection versus mapping:** independent old/new registers do not alone
+  establish whether SR0B access immediately remaps CPU memory to the saved
+  SR0E value, or only changes register access until the next SR0E write.
+  The inspected hardware drivers do not access memory between these steps.
+- **Window decoding:** the interaction with GC06 memory-map selection and
+  disabled paging, including whether B0000h–BFFFFh is excluded or aliases
+  the lower window in new mode, has not been established for a selected
+  real chip. A larger host copy alone would not validate these boundaries.
+- **PAGE inversion:** Ferraro section27.5.2 prose distinguishes CPU read
+  and write bank values, while its displayed read/write listings both
+  XOR2. The1992 `trident.doc` also distinguishes operations; SVGAlib and
+  Xorg use one new bank setter for both. Register readback inversion must
+  not be mistaken for separate CPU read/write bank semantics.
+
+The [Trident TVGA8900D manufacturer datasheet](https://www.dosdays.co.uk/media/trident/Trident%20TVGA8900D%20Super%20VGA%20Controller.pdf)
+was retained and visually surveyed as a23-page scan, with page5 read at full
+size. It describes the bus/memory interface, but supplies no SR0D/SR0E
+programming definition that resolves these questions. Its capacity overview
+does not qualify ToyVM's installed memory. A later GUI9420 register-document
+URL was inaccessible (HTTP401). MAME was inspected as a secondary emulator
+only; importing its old-bank mask and new-window offset alias would not be
+hardware validation. Firsthand
+[CRT Terminator conformance results](https://oummg.com/manual/adapters.html)
+also report differing old/new banking on two8800CS boards; that evidence
+does not define a8900 contract.
+
+The next requirement is a manufacturer programming reference or reproducible
+real-chip memory trace resolving the bank stride, paging/decode prerequisites,
+SR0B transition effects and upper-window behavior for one explicit pixel
+configuration. Until then, boundary/persistence expectations would encode
+assumptions. Under this task's reference-blocker stop condition, no new
+old-fail/new-pass tests, bundle regeneration, VBE/DAC/retrace runs or locked
+build were performed. Earlier passing checks remain earlier evidence, not
+validation of a repaired old window. Identity, installed capacity, mode
+pixels and authentic UVCONFIG support remain unqualified; default VGA's
+last original rejection remains the applicable result.
+
+Retained sources, hashes, failed retrievals, static baseline pins and detailed
+questions are in the named scratch run. Box ID/state/expiry are N/A; no box
+lifecycle action or emulator runtime acquisition occurred.

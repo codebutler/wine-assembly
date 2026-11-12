@@ -9,6 +9,9 @@ const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
 const { PNG } = require('pngjs');
+// The dev server reads this switch at module load. Without isolation this
+// test silently ran cooperatively despite the desktop's default Threads mode.
+if (!process.argv.includes('--isolate')) process.argv.push('--isolate');
 const { createServer } = require('../tools/dev-server');
 
 const ROOT = path.join(__dirname, '..');
@@ -33,6 +36,8 @@ const FAIL_COUNT = Number(process.env.WA_DIABLO_FAIL || 0);
 // worker fetches, so it cannot produce an in-game wait on its own).
 const DELAY_MS = Number(process.env.WA_DIABLO_DELAY_MS || 0);
 const PROFILE = process.env.WA_DIABLO_PROFILE || '';
+// Exercise closing/reopening the custom name dialog and check stale pixels.
+const REPAINT = !!process.env.WA_DIABLO_REPAINT;
 const failState = { armed: false, left: FAIL_COUNT, failed: 0, retries: 0, dialogs: 0 };
 
 // The in-game wait window, when showing its error body: capture it once and
@@ -116,10 +121,28 @@ async function capture(page, name, bytes) {
   else await page.screenshot({ path: file });
   const info = { name, titles: await titles(page), file,
     windows: await page.evaluate(() => Object.values(sharedRenderer.windows)
-      .filter(w => w && w.visible).map(w => w.className)) };
+      .filter(w => w && w.visible).map(w => {
+        const e = w.wasm.exports;
+        return { hwnd: w.hwnd, className: w.className, style: w.style,
+          proc: e.wnd_get_proc_export(w.hwnd), dialogProc: e.dialog_get_proc_export(w.hwnd),
+          client: w.clientRect };
+      })) };
   fs.writeFileSync(path.join(OUT, `${name}.json`), JSON.stringify(info, null, 2));
   console.log(`captured ${name}: ${info.titles.join(', ')}`);
   return PNG.sync.read(fs.readFileSync(file));
+}
+
+async function waitBlackPrimaryRect(page, rect) {
+  await page.waitForFunction(([x, y, w, h]) => {
+    const win = Object.values(sharedRenderer.windows).find(w => w.className === 'DIABLO');
+    const frame = win && sharedRenderer._overlayFrameLayer(win);
+    if (!frame) return false;
+    const pixels = frame.canvas.getContext('2d').getImageData(x, y, w, h).data;
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] || pixels[i + 1] || pixels[i + 2]) return false;
+    }
+    return true;
+  }, { timeout: 10000 }, rect);
 }
 
 function changedPixels(a, b) {
@@ -196,7 +219,7 @@ async function main() {
   const base = BASE_URL || `http://127.0.0.1:${server.address().port}`;
   const browser = await puppeteer.launch({
     executablePath: CHROME, headless: true, protocolTimeout: 240000,
-    args: ['--no-sandbox', '--no-first-run', '--disable-gpu'],
+    args: ['--no-sandbox', '--no-first-run', ...(process.env.WA_DIABLO_GPU ? [] : ['--disable-gpu'])],
     ...(PROFILE ? { userDataDir: PROFILE } : {}),
   });
   const startedAt = Date.now();
@@ -204,11 +227,17 @@ async function main() {
   let page;
   try {
     page = await browser.newPage();
+    page.on('console', message => fs.appendFileSync(path.join(OUT, 'console.log'), message.text() + '\n'));
     await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 1 });
     const errors = [];
     page.on('pageerror', e => errors.push(e.stack || String(e)));
     // Keep every spawn.mpq range request in the receipt (default buffer: 250).
     await page.evaluateOnNewDocument(() => performance.setResourceTimingBufferSize(100000));
+    if (process.env.WA_DIABLO_TRACE_API) {
+      await page.evaluateOnNewDocument(names => {
+        window.__waTraceApiNames = new Set(names.split(','));
+      }, process.env.WA_DIABLO_TRACE_API);
+    }
     if (THROTTLE) {
       const [kbps, latency] = THROTTLE.split(':').map(Number);
       const cdp = await page.target().createCDPSession();
@@ -259,6 +288,11 @@ async function main() {
     await page.mouse.click(ix, iy);
     await page.waitForFunction(() => runningApps.some(a => a && a.name === 'diablo_shareware' &&
       a.wine && a.wine.running), { timeout: 150000 });
+    if (!QUERY.includes('no-threads')) {
+      assert(await page.evaluate(() => runningApps.some(a => a.name === 'diablo_shareware' &&
+        a.wine.threadManager && a.wine.threadManager.backend === 'worker')),
+      'desktop regression must actually run with Worker threads');
+    }
 
     await wait(3000);
     assert(!(await titles(page)).includes('Single Player'), 'intro was skipped before capture');
@@ -334,6 +368,8 @@ async function main() {
     { timeout: 15000 });
 
     await clickGuest(page, 320, 213);
+    await wait(2000);
+    await capture(page, '03c-single-player');
     await waitDialogs(page, 2);
     await wait(1500);
     await clickGuest(page, 420, 298); // Warrior
@@ -355,6 +391,23 @@ async function main() {
     { timeout: 120000 });
     await clickGuest(page, 425, 331);
     await page.keyboard.type('GAL');
+    if (REPAINT) {
+      await wait(1500);
+      // The previous Warrior label must be erased above the name field.
+      await waitBlackPrimaryRect(page, [330, 282, 180, 26]);
+      await capture(page, '04b-name-entry');
+      await clickGuest(page, 530, 446); // Cancel back to class selection
+      await wait(1500);
+      // No letters from an earlier Cancel rendering may survive to its right.
+      await waitBlackPrimaryRect(page, [570, 427, 30, 35]);
+      await capture(page, '04c-name-cancelled');
+      await clickGuest(page, 348, 446);
+      await page.waitForFunction(() => Object.values(sharedRenderer.windows)
+        .some(w => w && w.visible && w.className === 'DIABLOEDIT'),
+      { timeout: 120000 });
+      await clickGuest(page, 425, 331);
+      await page.keyboard.type('GAL');
+    }
     await clickGuest(page, 348, 446);
     if (FAIL_COUNT || DELAY_MS) {
       const until = Date.now() + 120000;

@@ -274,7 +274,8 @@ class LiveRun {
     // and the headless runner have to agree about this or a program that needs
     // a hardware interrupt behaves differently in the two.
     vm.setAll({ cs: info.cs, ip: info.ip, ss: info.ss, sp: info.sp, ds: info.ds, es: info.es,
-      flags: isa.FLAGS_RESERVED | (1 << isa.F.IF) });
+      // Use this CPU's reserved bits: the 8086 F002 mask would set 386 NT.
+      flags: vm.exports.mget_f_res() | (1 << isa.F.IF) });
     // The stack must hold a return address: a .COM-style `ret` exit lands on
     // the PSP's INT 20h. An EXE that ends with INT 21h/4C never touches it.
     vm.set('sp', (info.sp - 2) & 0xFFFF);
@@ -508,7 +509,7 @@ class LiveRun {
     this.paint();
     this.frames++;
     if (s.done) {
-      if (this.machine.exited) this.releaseKeys();
+      if (this.machine.exited) { this.releaseKeys(); this.releaseMouse(); }
       this.running = false;
       this.onStatus({
         state: this.machine.exited ? 'exited' : 'waiting',
@@ -573,6 +574,28 @@ class LiveRun {
     if (this.pressedKeys) this.pressedKeys.clear();
   }
 
+  // Host absolute input feeds the existing INT33 polling state. No callback
+  // interrupts, pointer lock, wheel, sensitivity or custom range emulation.
+  mouseInput(x, y, buttons, dx = 0, dy = 0) {
+    if (!this.machine || this.machine.exited || this.inputStopped) return;
+    const m = this.machine.mouse;
+    m.x = x; m.y = y; m.dx += dx; m.dy += dy;
+    this.mouseButtons(buttons);
+  }
+
+  mouseButtons(buttons) {
+    const m = this.machine && this.machine.mouse;
+    if (!m) return;
+    buttons &= 7; // DOM buttons and INT33 both use left=1, right=2, middle=4.
+    const changed = m.buttons ^ buttons;
+    for (let b = 0; b < 3; b++) {
+      if (changed & (1 << b)) (buttons & (1 << b) ? m.pressed : m.released)[b]++;
+    }
+    m.buttons = buttons;
+  }
+
+  releaseMouse() { this.mouseButtons(0); }
+
   inputKey(ev, physical) {
     if (!this.machine || this.machine.exited || this.inputStopped) return;
     const id = ev.code || ev.key;
@@ -605,6 +628,7 @@ class LiveRun {
   stop() {
     this.inputStopped = true;
     this.releaseKeys();
+    this.releaseMouse();
     this.running = false;
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
@@ -666,15 +690,75 @@ class AudioRing {
   }
 }
 
-// Both browser launchers use this binding; the current run may change on retry.
-function bindKeyboard(canvas, getRun, win = globalThis, doc = win.document) {
+// One binding per canvas, disposed with its owner. Resolve the current run on
+// each event: a held gesture belongs to the run where it began, never a retry.
+function bindInput(canvas, getRun, win = globalThis, doc = win.document) {
   const listen = (target, type, fn) => { if (target) target.addEventListener(type, fn); return () => { if (target) target.removeEventListener(type, fn); }; };
-  const release = () => { const r = getRun(); if (r) r.releaseKeys(); };
-  const key = (method) => (e) => { const r = getRun(); if (!r) return; e.preventDefault(); e.stopPropagation(); r[method](e); };
+  let owner = null, held = 0, last = null, activePointer = null, disposed = false;
+  const releaseRun = (r) => { if (r) { r.releaseKeys(); if (r.releaseMouse) r.releaseMouse(); } };
+  const current = () => {
+    const r = disposed ? null : getRun();
+    if (owner !== r) { releaseRun(owner); owner = r; held = 0; last = null; activePointer = null; }
+    return r;
+  };
+  const release = () => { releaseRun(current()); held = 0; last = null; activePointer = null; };
+  const cancel = (e) => {
+    if (e.pointerType && e.pointerType !== 'mouse') return;
+    if (activePointer !== null && e.pointerId !== activePointer) return;
+    release();
+  };
+  const key = (method) => (e) => { const r = current(); if (!r) return; e.preventDefault(); e.stopPropagation(); r[method](e); };
+  const pointer = !!win.PointerEvent, prefix = pointer ? 'pointer' : 'mouse';
+  const mouse = (kind, outside = false) => (e) => {
+    if (pointer && e.pointerType !== 'mouse') return;
+    const r = current();
+    if (!r || !r.machine || r.machine.exited || r.inputStopped) return;
+    if (held && pointer && e.pointerId !== activePointer) return;
+    // Window listeners catch drags released outside the canvas. Canvas events
+    // bubble there too, and must not be counted twice.
+    if (outside && (e.target === canvas || !held)) return;
+    if (doc && (doc.hidden || doc.pointerLockElement)) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0) || !Number.isFinite(e.clientX) || !Number.isFinite(e.clientY)) return;
+    // INT33's conventional low-resolution grid has 640 horizontal units even
+    // for mode 13h's 320 pixels; text uses 640x200 regardless of glyph size.
+    // dos.js does not implement guest-programmed ranges (07h/08h).
+    const text = r.machine.vga.bpp === 0 && !(r.machine.vesa && r.machine.vesa.mode);
+    const width = text ? 640 : Math.max(640, canvas.width);
+    const height = text ? 200 : canvas.height;
+    if (!(height > 0)) return;
+    const x = Math.max(0, Math.min(width - 1, Math.floor((e.clientX - rect.left) * width / rect.width)));
+    const y = Math.max(0, Math.min(height - 1, Math.floor((e.clientY - rect.top) * height / rect.height)));
+    const sameGrid = last && last.width === width && last.height === height;
+    const dx = sameGrid ? x - last.x : 0, dy = sameGrid ? y - last.y : 0;
+    // Pointer Events report additional button edges as pointermove, even with
+    // unchanged coordinates. Accept that edge only inside this run's owned
+    // gesture and only for the changed button. Hover/late up after blur or a
+    // retry must not transfer still-held physical buttons into a new gesture.
+    const changedButton = e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
+    const chord = pointer && kind === 'move' && held ? changedButton & e.buttons : 0;
+    held = kind === 'down' ? (e.buttons & 7) : (held & e.buttons & 7) | chord;
+    activePointer = held && pointer ? e.pointerId : null;
+    if (kind === 'down') canvas.focus();
+    r.mouseInput(x, y, held, dx, dy);
+    last = { x, y, width, height };
+    e.preventDefault();
+  };
   const removers = [listen(canvas, 'keydown', key('keyDown')), listen(canvas, 'keyup', key('keyUp')),
-    listen(canvas, 'blur', release), listen(win, 'blur', release),
-    listen(doc, 'visibilitychange', () => { if (doc.hidden) release(); })];
-  return () => { release(); removers.forEach((remove) => remove()); };
+    listen(canvas, 'blur', release), listen(win, 'blur', release), listen(win, 'pagehide', release),
+    listen(doc, 'visibilitychange', () => { if (doc.hidden) release(); }),
+    listen(doc, 'pointerlockchange', () => { if (doc.pointerLockElement) release(); }),
+    listen(canvas, prefix + 'down', mouse('down')),
+    listen(canvas, prefix + 'move', mouse('move')),
+    listen(canvas, prefix + 'up', mouse('up')),
+    listen(win, prefix + 'move', mouse('move', true)),
+    listen(win, prefix + 'up', mouse('up', true)),
+    listen(canvas, 'contextmenu', (e) => { const r = current(); if (r && r.machine && !r.machine.exited && !r.inputStopped) e.preventDefault(); }),
+    listen(canvas, 'pointercancel', cancel), listen(win, 'pointercancel', cancel),
+    listen(canvas, 'lostpointercapture', cancel)];
+  return () => { if (disposed) return; release(); disposed = true; owner = null; removers.forEach((remove) => remove()); };
 }
 
-module.exports = { LiveRun, bindKeyboard, scancodeFor, STUB_SEG, isa, hasTailCalls, pickVariant };
+// Existing embedders retain the old export while actual launchers use bindInput.
+const bindKeyboard = bindInput;
+module.exports = { LiveRun, bindInput, bindKeyboard, scancodeFor, STUB_SEG, isa, hasTailCalls, pickVariant };

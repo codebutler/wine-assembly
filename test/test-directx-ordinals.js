@@ -14,6 +14,9 @@ const apiTable = [
   { id: 470, name: 'DirectSoundCreate' },
   { id: 1236, name: 'DirectSoundEnumerateA' },
   { id: 2600, name: 'KERNEL32_Ordinal99' },
+  { id: 4570, name: 'LoadLibrary16' },
+  { id: 4571, name: 'FreeLibrary16' },
+  { id: 4572, name: 'GetProcAddress16' },
 ];
 const { host } = createHostImports({
   getMemory: () => memory.buffer,
@@ -31,6 +34,8 @@ assert.strictEqual(host.resolve_ordinal(dllNameWA, 99), -1,
 
 bytes.fill(0, dllNameWA, dllNameWA + 32);
 bytes.set(Buffer.from('KERNEL32.dll\0', 'ascii'), dllNameWA);
+for (const [ordinal,id] of [[35,4570],[36,4571],[37,4572]])
+  assert.strictEqual(host.resolve_ordinal(dllNameWA,ordinal),id,'legacy NE ordinal import');
 assert.strictEqual(host.resolve_ordinal(dllNameWA, 99), 2600,
   'Win98 KERNEL32 ordinal 99 resolves to its one-argument timezone classifier');
 assert.strictEqual(host.resolve_ordinal(dllNameWA, 98), -1,

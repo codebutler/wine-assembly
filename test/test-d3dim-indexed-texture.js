@@ -221,6 +221,7 @@ const extraWat = String.raw`
       (i32.load offset=20 (local.get $entry))
       (call $dx_surf_fmt_get (local.get $entry))
       (call $dx_surf_pal_get (local.get $entry))
+      (call $dx_surf_pal_alpha (local.get $entry))
       (local.get $u) (local.get $v)
       (i32.const 1) (i32.const 1) (local.get $linear)))
 `;
@@ -997,6 +998,61 @@ function writeFloat(wat, addr, value) {
     'disabled texture color key still discarded the source texel');
   assert.notStrictEqual(mem.getUint16(zDib + 2 * 16 + 2 * 2, true), 0x2222,
     'opaque texture sample did not update attached depth');
+
+  // Original DX7 SDK: state144 TRUE replaces keyed RGBA with zero. With
+  // application tests/blending disabled this writes black AND depth.
+  const pixel = rtDib + 2*16 + 2*2, depthPixel = zDib + 2*16 + 2*2;
+  const resetKeyTarget = () => {
+    mem.setUint16(pixel,0x001f,true); mem.setUint16(depthPixel,0x2222,true);
+  };
+  wat.test_diptex_set_rs(device,41,1);
+  wat.test_diptex_set_rs(device,144,1);
+  wat.test_diptex_set_rs(device,15,0);
+  wat.test_diptex_set_rs(device,27,0);
+  wat.test_diptex_set_rs(device,26,0); // no dithering
+  for (const filter of [1,2]) {
+    wat.test_diptex_set_tss(device,16,filter);
+    wat.test_diptex_set_tss(device,17,filter);
+    resetKeyTarget(); wat.test_diptex_draw(device,vertices,indices);
+    assert.strictEqual(mem.getUint16(pixel,true),0,'explicit key blend writes black');
+    assert.notStrictEqual(mem.getUint16(depthPixel,true),0x2222,'no implicit key discard');
+    wat.test_diptex_set_rs(device,15,1);
+    wat.test_diptex_set_rs(device,24,0);
+    wat.test_diptex_set_rs(device,25,5); // GREATER
+    resetKeyTarget(); wat.test_diptex_draw(device,vertices,indices);
+    assert.strictEqual(mem.getUint16(pixel,true),0x001f,'app alpha test rejects key');
+    assert.strictEqual(mem.getUint16(depthPixel,true),0x2222,'rejection preserves depth');
+    wat.test_diptex_set_tss(device,4,3); // SELECTARG2 opaque diffuse alpha
+    resetKeyTarget(); wat.test_diptex_draw(device,vertices,indices);
+    assert.strictEqual(mem.getUint16(pixel,true),0,'stage-selected diffuse alpha keeps black fragment');
+    assert.notStrictEqual(mem.getUint16(depthPixel,true),0x2222,'post-stage alpha test passes and writes depth');
+    wat.test_diptex_set_tss(device,4,2); // SELECTARG1 texture alpha
+    wat.test_diptex_set_rs(device,15,0);
+    wat.test_diptex_set_rs(device,27,1);
+    wat.test_diptex_set_rs(device,19,5); wat.test_diptex_set_rs(device,20,6);
+    resetKeyTarget(); wat.test_diptex_draw(device,vertices,indices);
+    assert.strictEqual(mem.getUint16(pixel,true),0x001f,'app alpha blend preserves blue');
+    assert.notStrictEqual(mem.getUint16(depthPixel,true),0x2222,'blend does not reject depth');
+    wat.test_diptex_set_rs(device,27,0);
+  }
+  wat.test_diptex_set_rs(device,41,0);
+  resetKeyTarget(); wat.test_diptex_draw(device,vertices,indices);
+  assert.strictEqual(mem.getUint16(pixel,true),0xf81f,'state144 alone does not enable keying');
+  wat.test_diptex_set_rs(device,144,0); wat.test_diptex_set_rs(device,41,1);
+  resetKeyTarget(); wat.test_diptex_draw(device,vertices,indices);
+  assert.strictEqual(mem.getUint16(pixel,true),0x001f,'FALSE retains legacy behavior');
+  wat.test_diptex_set_rs(device,144,1);
+  for (let i=0;i<4;i++) mem.setUint16(texDib+i*2,i%2 ? 0x07e0 : 0xf81f,true);
+  for (let i=0;i<3;i++) {
+    writeFloat(wat,vertices+i*VERTEX_STRIDE+24,.5);
+    writeFloat(wat,vertices+i*VERTEX_STRIDE+28,.5);
+  }
+  for (const address of [1,3]) {
+    wat.test_diptex_set_tss(device,13,address); wat.test_diptex_set_tss(device,14,address);
+    resetKeyTarget(); wat.test_diptex_draw(device,vertices,indices);
+    assert.strictEqual(mem.getUint16(pixel,true),0x03e0,
+      '565 mixed filter removes magenta before filtering in wrap/fast16 and clamp/general cases');
+  }
 
   console.log(`PASS D3DIM legacy LVERTEX layout, homogeneous depth clipping, and Texture2 indexed triangles use dither/edge-AA, color keys, FVF UV sets, perspective/filter/address states, declared formats, blending, and attached reversed-Z (${textured.size} texture colours)`);
 })().catch(error => {

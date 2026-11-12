@@ -67,3 +67,17 @@ test('workers idle without owned tasks are reported to the dispatcher, not nudge
   w2.unassignedSince=1000;assert.equal(dispatch(snap,[o,w1,w2],c,d.record,700000).send,true,'a newly idle worker is a new dispatch');
   const m=dispatchMessage(['w1','w2']);assert.match(m,/w1, w2/);assert.match(m,/Do not deploy publicly/);assert.ok(m.length<420,m.length);
 });
+test('goal keeper resumes a stalled Codex goal after a stable stall, with cooldown and no give-up cap',()=>{
+  const {goalStallDecision}=require('./work-watchdog');
+  const codex={id:'orchestrator',provider:'codex',stalled:true,promptOpen:false};
+  let g=goalStallDecision(codex,config,{},0);assert.equal(g.send,false);assert.equal(g.record.reason,'observing stalled goal');
+  g=goalStallDecision(codex,config,g.record,300000);assert.equal(g.send,true);
+  g.record.lastResumeAt=300000;g.record.resumes=1;
+  assert.equal(goalStallDecision(codex,config,g.record,600000).record.reason,'goal resume cooldown');
+  const later={...g.record,resumes:50};assert.equal(goalStallDecision(codex,config,later,900001).send,true);
+  assert.equal(goalStallDecision({...codex,stalled:false},config,g.record,2000000).send,false);
+  assert.equal(goalStallDecision({...codex,stalled:false},config,g.record,2000000).record.stalledSince,null);
+  assert.equal(goalStallDecision({...codex,provider:'claude'},config,g.record,2000000).send,false);
+  assert.equal(goalStallDecision({...codex,promptOpen:true},config,g.record,2000000).send,false);
+  assert.equal(goalStallDecision(codex,{...config,paused:true},g.record,2000000).send,false);
+});

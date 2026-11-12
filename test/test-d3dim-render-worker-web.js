@@ -119,9 +119,9 @@ async function runBoids(browser, base, query) {
   const base = `http://127.0.0.1:${server.address().port}/index.html`;
   try {
     for (const [name, query, backend] of [
-      ['software', '', 'software'],
-      ['legacy opt-out ignored', '&no-d3d-worker', 'software'],
-      ['WebGL', '&d3dim-gpu', 'webgl'],
+      ['software', '&d3d-renderer=software', 'software'],
+      ['legacy opt-out ignored', '&d3d-renderer=software&no-d3d-worker', 'software'],
+      ['WebGL', '&d3d-renderer=webgl', 'webgl'],
     ]) {
       const { stats, problems } = await runBoids(browser, base, query);
       assert.deepStrictEqual(problems, [], name + ': no page errors');
@@ -130,7 +130,8 @@ async function runBoids(browser, base, query) {
       assert.strictEqual(stats.starts, 1, name + ': exactly one physical render Worker constructed');
       assert.strictEqual(stats.physicalWorkers, 1, name + ': exactly one live physical render Worker');
       assert.strictEqual(stats.manager, true, 'process manager owns rendering');
-      assert(stats.endpoints.some(p => p.api === 'legacy' && p.backend === backend));
+      assert(stats.endpoints.some(p => p.api === 'legacy' && p.backend === backend),
+        `${name}: expected ${backend} endpoint; actual ${JSON.stringify(stats)}`);
       assert(stats.d3d?.ready, JSON.stringify(stats));
       assert.strictEqual(stats.d3d.fallbacks, 0, 'no guest-local rendering fallback');
       assert(stats.d3d.fences > 0, 'presents fence the shared renderer');

@@ -14,6 +14,10 @@ function fixture({ bpp = 16, format = 1, clip = null, boundedReadback = true } =
       readPixels: (...args) => { reads.push(args.slice(0, 4)); args[6].fill(255); } } } } };
   const gpu = new D3DIMGpu({ getMemory: () => memory,
     getExports: () => ({ guest_to_wasm: a => a }), createCanvas: () => null, boundedReadback });
+  // This unit isolates point lowering from WebGL. The browser companion
+  // exercises native storage; retain its per-primitive boundary here.
+  const stores = [];
+  gpu._storeNative16 = () => stores.push(draws.at(-1));
   gpu._describe = () => desc; gpu._target = () => target; gpu.targets.set(desc.rt, target);
   gpu._texture = () => { throw new Error('points must not decode textures'); };
   const draw = points => {
@@ -25,11 +29,16 @@ function fixture({ bpp = 16, format = 1, clip = null, boundedReadback = true } =
     });
     return gpu.call(OPCODES.DRAW, 12288);
   };
-  return { gpu, draws, reads, draw, dv, target };
+  return { gpu, draws, reads, draw, dv, target, stores };
 }
 const f = fixture({ clip: { left: 1, top: 1, right: 7, bottom: 7 } });
 assert.equal(f.draw([[0.49, 0.5], [5.5, 6.49], [NaN, Infinity]]), 1);
-const d = f.draws[0], v = new DataView(d.vertices.buffer);
+assert.equal(f.draws.length, 4);
+assert.equal(f.stores.length, 4, 'each lowered native16 triangle reaches storage');
+assert(f.stores.every(d => d.primitiveCount === 1));
+const bytes = new Uint8Array(12 * 32);
+f.draws.forEach((d, i) => bytes.set(d.vertices, i * 3 * 32));
+const d = { ...f.draws[0], primitiveCount: 4 }, v = new DataView(bytes.buffer);
 assert.equal(d.primitive, 4); assert.equal(d.primitiveCount, 4);
 assert.deepEqual(d.colorBounds, [1, 1, 7, 7]);
 assert.deepEqual(Array.from({ length: 12 }, (_, i) => [v.getFloat32(i * 32, true), v.getFloat32(i * 32 + 4, true)]),
@@ -68,4 +77,11 @@ assert.equal(fixture({ format: 4 }).draw([[1, 1]]), 0, 'unsupported 4444 remains
 assert.equal(fixture().draw([[Infinity, -Infinity]]), 1, 'fully clipped operation is accepted without pixels');
 const nan = fixture(); nan.draw([[NaN, NaN]]);
 assert.deepEqual(nan.draws[0].colorBounds, [0, 0, 2, 2], 'WAT saturating NaN conversion is zero');
+// Synthetic lowering seam: native pixel storage is checked by the browser
+// companion and its ordinary public-COM owning-Worker route in both modules.
+const alpha = fixture({ format: 3 });
+assert.equal(alpha.draw([0,127,128,255].map((a,i)=>[i*2,2,(a*0x1000000+0x4a92d3)>>>0])),1);
+assert.deepEqual(alpha.draws.filter((_,i)=>i%2===0).map(d=>new DataView(d.vertices.buffer,d.vertices.byteOffset,d.vertices.byteLength).getUint32(16,true)),
+  [0x00d3924a,0x7fd3924a,0x80d3924a,0xffd3924a], 'A1 point lowering retains complete diffuse alpha');
+assert(alpha.draws.every(d=>!d.state.blend&&!d.state.zenable&&!d.state.zwrite&&!d.fixedFunction.alphaTest));
 console.log('PASS D3DIM point lowering, clipping, immutable batches, state independence and explicit fallbacks');

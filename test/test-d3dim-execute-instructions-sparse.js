@@ -3,6 +3,8 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 const apis = require('../src/api_table.json');
 const extraWat = String.raw`
+ (func (export "output") (param $buf i32) (result i32)
+   (call $d3dim_execbuf_output_guest (local.get $buf) (i32.const 0)))
  (func (export "device") (result i32)
    (local $p i32) (local $s i32)
    (local.set $p (call $dx_create_com_obj (i32.const 20) (global.get $DX_VTBL_D3DDEV1)))
@@ -10,7 +12,10 @@ const extraWat = String.raw`
    (call $d3ddev_init_state (local.get $s))
    (i32.store offset=16 (call $dx_from_this (local.get $p)) (local.get $s))
    (local.get $p))
+ (func (export "viewport") (result i32)
+   (call $dx_create_com_obj (i32.const 23) (global.get $DX_VTBL_D3DVP1)))
  (func (export "state") (param $p i32) (result i32) (call $d3ddev_state (local.get $p)))
+ (func (export "extent_rt") (result i32) (global.get $d3dim_exec_extent_rt))
  (func (export "extent_scope") (result i32) (global.get $d3dim_exec_extent_guest))
  (func (export "set_extent_scope") (param $rect i32) (param $dev i32)
    (global.set $d3dim_exec_extent_guest (local.get $rect))
@@ -41,8 +46,16 @@ const extraWat = String.raw`
 `;
 (async () => {
   const trace = [];
+  let queuedGpuDraws = null;
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none',
-    extraHostOverrides: { dx_trace: (...args) => { if (args[0] === 7) trace.push(args.slice(1)); } } });
+    extraHostOverrides: {
+      dx_trace: (...args) => { if (args[0] === 7) trace.push(args.slice(1)); },
+      gpu_gl_call: (opcode, descriptor) => {
+        if (!queuedGpuDraws) return 0;
+        if (opcode === 0x20000) queuedGpuDraws.push(descriptor);
+        return 1; // Acceptance only: replay has a different instance's globals.
+      },
+    } });
   e.init_dx_com_thunks();
   const dev = e.device(), state = e.state(dev), sp = e.guest_alloc(128);
   const desc = e.guest_alloc(20), out = e.guest_alloc(48), data = e.guest_alloc(48);
@@ -107,7 +120,10 @@ const extraWat = String.raw`
         assert.strictEqual(matrices[48 + i], i % 5 === 0 ? 4 : 0);
         assert.strictEqual(new Float32Array(memory.buffer, e.guest_to_wasm(state), 16)[i], matrices[48 + i]);
       }
-      for (let i = 0; i < 32; i++) assert.strictEqual(e.guest_read8(buf + 64 + i), i + 1, 'COPY record');
+      for (let i = 0; i < 32; i++) {
+        assert.strictEqual(e.guest_read8(e.output(buf) + 64 + i), i + 1, 'COPY driver output');
+        assert.strictEqual(e.guest_read8(buf + 64 + i), 0xcc, 'COPY preserves application source');
+      }
       call('IDirect3DExecuteBuffer_GetExecuteData', 12, eb, out);
       [1, 0xabcdef01, 0, 0, 0, 0].forEach((v, i) => assert.strictEqual(e.guest_read32(out + 24 + i * 4) >>> 0, v));
       assert.deepStrictEqual(trace, expectedTrace.map(([code, stride, n, rel]) => [code, stride, n, offset + rel]));
@@ -337,6 +353,25 @@ const extraWat = String.raw`
   }
   console.log(`PASS Execute clip status: ${clipCases} public stream/status/branch cases`);
   const outerRect = e.guest_alloc(16);
+  // GPU callback updates the current Execute owner only. Inactive, wrong-RT,
+  // and empty rectangles cannot mutate status or a later caller's rectangle.
+  [2048, 2048, 0, 0].forEach((v, i) => e.guest_write32(outerRect + i * 4, v));
+  const gpuRect = () => Array.from({length: 4}, (_, i) => e.guest_read32(outerRect + i * 4) | 0);
+  e.d3dim_gpu_extent(0, 1, 2, 8, 9);
+  assert.deepStrictEqual(gpuRect(), [2048, 2048, 0, 0]);
+  e.set_extent_scope(outerRect, dev);
+  const gpuRT = e.extent_rt();
+  assert(gpuRT, 'real render target owns GPU coverage');
+  e.d3dim_gpu_extent(gpuRT + 32, 1, 2, 8, 9);
+  e.d3dim_gpu_extent(gpuRT, 1, 2, 1, 9);
+  assert.deepStrictEqual(gpuRect(), [2048, 2048, 0, 0]);
+  e.d3dim_gpu_extent(gpuRT, 3, 4, 8, 9);
+  e.d3dim_gpu_extent(gpuRT, 2, 6, 10, 7);
+  assert.deepStrictEqual(gpuRect(), [2, 4, 10, 9]);
+  e.set_extent_scope(0, dev);
+  e.d3dim_gpu_extent(gpuRT, 0, 0, 32, 32);
+  assert.deepStrictEqual(gpuRect(), [2, 4, 10, 9]);
+  console.log('PASS GPU Execute extent scope: active owner, union, wrong target, empty and inactive guards');
   let extentCases = 0;
   for (const buf of [regular, base + 4090, base + 4030]) for (const mode of [0, 1, 2])
     for (const update of [0, 8]) for (const count of [0, 2]) {
@@ -435,6 +470,77 @@ const extraWat = String.raw`
   assertExtent(ownerB, [10, 11, 22, 23]);
   call('IDirect3DExecuteBuffer_Release', 8, ownerB.handle);
   console.log('PASS Execute extent owners: interleaved draw/Unlock, reset, XY clipping and release isolation');
+  // An asynchronous GPU transport accepts the batch without rasterizing on
+  // this instance. GetExecuteData must already contain coverage on return.
+  e.buffer(eb, regular);
+  e.d3dim_gpu_enable(1);
+  queuedGpuDraws = [];
+  e.guest_write32(state + 344, 1); // no culling
+  for (const fill of [2, 3]) for (const viewport of [false, true])
+    for (const [coords, bounds] of [
+    [[[4, 5], [13, 5], [4, 14]], [2, 3, 15, 16]],
+    [[[20, 21], [40, 21], [20, 40]], [18, 19, 32, 32]],
+    [[[-20, -20], [-10, -20], [-20, -10]], [2048, 2048, 0, 0]],
+  ]) {
+    e.guest_write32(state + 288, fill); // wireframe and solid
+    (viewport ? [8, 9, 10, 11] : [0, 0, 32, 32]).forEach((v, i) =>
+      e.guest_write32(state + 3088 + i * 4, v));
+    const expected = viewport && bounds[0] !== 2048
+      ? [Math.max(8, bounds[0]), Math.max(9, bounds[1]), Math.min(18, bounds[2]), Math.min(20, bounds[3])]
+      : bounds;
+    if (expected[2] <= expected[0] || expected[3] <= expected[1]) expected.splice(0, 4, 2048, 2048, 0, 0);
+    coords.forEach(([x, y], i) => [bits(x), bits(y), bits(0.5), bits(1), 0xffffffff, 0, 0, 0]
+      .forEach((v, j) => e.guest_write32(regular + i * 32 + j * 4, v)));
+    const program = [14 | (24 << 8) | (1 << 16), 2, 0, 2048, 2048, 0, 0,
+      3 | (8 << 8) | (1 << 16), 1 << 16, 2, 11, 0];
+    program.forEach((v, i) => e.guest_write32(regular + 512 + i * 4, v));
+    [48, 0, 3, 512, program.length * 4, 0, 3, 0, 2048, 2048, 0, 0]
+      .forEach((v, i) => e.guest_write32(data + i * 4, v));
+    call('IDirect3DExecuteBuffer_SetExecuteData', 12, eb, data);
+    call('IDirect3DExecuteBuffer_Unlock', 8, eb);
+    const before = queuedGpuDraws.length;
+    call('IDirect3DDevice_Execute', 20, dev, eb);
+    assert(queuedGpuDraws.length > before, 'real Execute submitted a GPU batch');
+    call('IDirect3DExecuteBuffer_GetExecuteData', 12, eb, out);
+    assert.deepStrictEqual(Array.from({ length: 4 }, (_, i) => e.guest_read32(out + 32 + i * 4)),
+      expected, 'queued GPU coverage belongs to the producer Execute');
+    assert.strictEqual(e.extent_scope(), 0, 'queued Execute retires its scope');
+  }
+  queuedGpuDraws = null;
+  e.d3dim_gpu_enable(0);
+  console.log('PASS queued GPU Execute extents: producer ownership, moving/reset bounds, lines/triangles, target/viewport clipping');
+  // DX1 Execute selects its viewport independently of Device2 current state.
+  // Globe's retained-mode DLL supplies equal X/Y scales in a nonsquare
+  // rectangle. Dropping the descriptor's clip transform makes spheres oval.
+  const vp = e.viewport(), vpDesc = e.guest_alloc(44);
+  call('IDirect3DDevice_AddViewport', 12, dev, vp);
+  const readFloat = address => new Float32Array(new Uint32Array([e.guest_read32(address)]).buffer)[0];
+  for (const [width, height, scaleX, scaleY] of [[292, 254, 146, 146], [676, 532, 338, 338], [120, 80, 30, 20], [292, 254, 146, 127]]) {
+    [44, 7, 11, width, height, bits(scaleX), bits(scaleY), bits(1), bits(1), bits(0), bits(1)]
+      .forEach((v, i) => e.guest_write32(vpDesc + i * 4, v));
+    call('IDirect3DViewport_SetViewport', 12, vp, vpDesc);
+    e.d3dim_gpu_enable(0);
+    e.buffer(eb, regular);
+    const program = [9 | (16 << 8) | (1 << 16), 1, 0, 2, 0, 11, 0];
+    program.forEach((v, i) => e.guest_write32(regular + 512 + i * 4, v));
+    [48, 0, 2, 512, program.length * 4, 0, 0, 0, 0, 0, 0, 0]
+      .forEach((v, i) => e.guest_write32(data + i * 4, v));
+    call('IDirect3DExecuteBuffer_SetExecuteData', 12, eb, data);
+    // Identity world/view/projection; two symmetric LVERTEX inputs.
+    for (let slot = 0; slot < 3; slot++) for (let i = 0; i < 16; i++)
+      e.guest_write32(state + slot * 64 + i * 4, bits(i % 5 === 0 ? 1 : 0));
+    for (const [i, x, y] of [[0, 0.25, 0], [1, 0, 0.25]])
+      [bits(x), bits(y), bits(0.5), 0, 0xffffffff, 0, 0, 0]
+        .forEach((v, j) => e.guest_write32(regular + i * 32 + j * 4, v));
+    call('IDirect3DExecuteBuffer_Unlock', 8, eb);
+    call('IDirect3DDevice_Execute', 20, dev, eb, vp);
+    const expected = [[7 + width / 2 + 0.25 * scaleX, 11 + height / 2],
+      [7 + width / 2, 11 + height / 2 - 0.25 * scaleY]];
+    for (let i = 0; i < 2; i++) for (let axis = 0; axis < 2; axis++)
+      assert(Math.abs(readFloat(e.output(regular) + i * 32 + axis * 4) - expected[i][axis]) < 0.0001,
+        `DX1 Execute must honor descriptor scale ${width}x${height} vertex=${i} axis=${axis}`);
+  }
+  console.log('PASS DX1 Execute viewport transform: equal scaling in nonsquare original Globe sizes, offset, explicit unequal scales and normalization reset');
   for (let page = 0; page < 7; page++) for (let i = 0; i < 4096; i++)
     assert.strictEqual(e.guest_read8(base + 0x10000 + page * 4096 + i), 0xa7, 'neighbor backing');
   e.buffer(eb, ownedBuffer); // Borrowed test mappings are not heap owners.

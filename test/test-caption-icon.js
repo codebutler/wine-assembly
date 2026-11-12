@@ -72,7 +72,7 @@ const extraWat = String.raw`
   (func (export "tci_nchittest") (param $h i32) (param $x i32) (param $y i32) (result i32)
     (call $defwndproc_do_nchittest (local.get $h) (local.get $x) (local.get $y)))
   (func (export "tci_frame") (param $h i32) (result i32) (call $defwndproc_frame_width (local.get $h)))
-  (func (export "tci_open_popup") (result i32) (global.get $menu_open_dynamic_hmenu))
+  (func (export "tci_open_popup") (result i32) (call $menu_open_dynamic_hmenu_get))
   (func (export "tci_set_focus") (param $h i32) (global.set $focus_hwnd (local.get $h)))
   (func (export "tci_age_system_menu") (param $ms i32)
     (global.set $system_menu_opened_at (i32.sub (global.get $system_menu_opened_at) (local.get $ms))))

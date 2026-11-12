@@ -1,5 +1,60 @@
 # Motocross Madness demo
 
+## Scene-list crash and Backspace, 2026-10-13
+
+The next Safari worker report on localhost:8081 failed in `ini_get_string`
+with saved EIP `0x407df6`. The original code at `0x407dd0` formats a scene
+path, then calls GetPrivateProfileString at `0x407e17` for
+`[SceneInfo] SceneName`. Both trial `.SCN` files are INI text. Mark these two
+manifest entries eager; `.SCN` in other games need not be the same format.
+Chromium worker mode then reaches Select Stunt Quarry with the T-rific preview.
+Race startup subsequently hit the same pending-read exception on
+`SBIKE\\BIKE.MCF` (2,400 bytes). BIKE, RIDER and WINNER `.MCF` files are INI
+animation descriptors and now load eagerly too.
+With both classes eager, a fresh Chromium worker profile reaches the rendered
+quarry race after a 60-second wait following Start: rider, terrain and HUD
+are visible. Evidence is in `scratch/runs/20261013-mcm-worker-startup-after/`.
+This is a race-entry smoke test, not a completed event or Safari validation.
+
+The custom Enter Name field also needs `WM_CHAR 8` for Backspace. The browser
+deliberately sends only its keydown/up because native EDIT already deletes
+on keydown. TranslateMessage now supplies that missing character for non-EDIT
+targets, preserving HWND and lParam; native EDIT retains one deletion per key.
+The worker browser check types `Testabc`, presses Backspace twice, and visibly
+shows `Testa`. TranslateMessage queue/metadata checks and the 12 Notepad editing
+checks pass. These browser observations are Chromium, not a Safari rerun.
+
+The video-memory prompt is controlled by the trial registry's
+`DriverInfo\\{00000000-0000-0000-0000-000000000000}` cache. The EXE at
+`0x465600` reads Driver, Version, Description and DeviceID and compares them
+against current enumeration. After testing it writes NumberOfModes, Modes
+(28 records of seven DWORDs in the observed run) and TextureSizes (16 DWORDs).
+The captured modes include a viewport-derived 936x704 mode, so copying that
+snapshot into universal defaults would freeze environment-specific results.
+These values already persist in browser localStorage. KVDD's `OmitDriverCheck`
+under the *non-Trial* key is a separate driver check; it is not evidence that
+setting that value suppresses this texture-memory dialog. No default was
+changed based only on the setting's name.
+
+## Controller-profile lazy mount crash, 2026-10-13
+
+The Safari report at 21:56Z on dashboard build `d19c10b7` fails in
+`GetPrivateProfileInt` at guest EIP `0x004704a2`: `UI\\CONTROL.CTL` was an
+async-only VFS entry. Both `CONTROL.CTL` and `PRESET.CTL` are 2,108-byte INI
+files, beginning with `[Setup]` and `CurrentInputDevice=4`. The shared
+app-file policy streamed this extension even though the profile APIs cannot
+park on an async read. Keep `.ctl` controller profiles eager, like `.ini`;
+other media remains streamed.
+
+Chromium 155 on macOS, cooperative route `?debug&mm-thread=0`, 1280x900:
+launch the registered `mcm`, press Enter on the video-memory prompt, wait
+30 seconds. The control reproduces the same fatal dialog and guest EIP.
+The candidate reaches the rendered Enter Name screen without that error.
+Evidence: `scratch/runs/20261013-mcm-controller-profile-{before,after}/`.
+This validates the reported startup failure only; it is not a fresh race,
+Safari, audio, or performance qualification. App-file policy and MCM manifest
+checks pass. No guest executable or configuration bytes were changed.
+
 ## Test route
 
 The browser build can reach a live race without Wine. With a persisted profile,
@@ -127,3 +182,212 @@ The focused coverage is in `test/test-d3dim-indexed-texture.js` and
 screenshots from the investigation were
 `/private/tmp/mcm-fixed-coop2-final-wait-45000.png` and
 `/private/tmp/mcm-fixed-worker-final-wait-60000.png`.
+
+### Original browser practice driving (2026-10-30)
+
+Run `scratch/runs/20261030T2356Z-mcm-browser-race/investigation.json`
+reached T-rific practice through the original profile and event menus with
+trusted browser input. Inspected captures show the rider and textured terrain,
+then motorcycle/camera movement under ArrowUp and a direction change after
+ArrowUp+ArrowRight. The player score remained zero; scored stunts and event
+completion were not tested. No guest code or original asset was patched.
+
+The loaded retained canonical module was SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`, not a build of current HEAD). The browser used D3DIM
+WebGL with guest threads disabled, Chrome 151 and ANGLE SwiftShader launch
+flags; the actual vendor string was not queried. GPU counters reported zero
+errors and fallbacks. All 311 registered inputs remained unchanged, and
+served-response hashes were verified in `verification.json`. A resource 404
+was logged without an identified request, but did not prevent this checkpoint.
+The browser and both local servers were verified closed and its private profile
+removed. This adds a current short-driving observation, not full gameplay or
+software/WebGL parity acceptance.
+
+### Native scored-stunt attempt: launch disk blocker (2026-11-01)
+
+Run `scratch/runs/20261101-motocross-scored-stunt/` stopped before launching
+an original. After Incoming's fresh final/result and 10:20:11 UTC explicit
+runtime/source/build release, the identity gate at 10:21:30 pinned main
+`16f6dd8868f12a5818aab1af649bee8cfddf03f9`. The native launch preflight at
+10:22:00 measured **2,139,860,992 available bytes on /home**, below the
+required 2,200,000,000-byte startup minimum by **60,139,008 bytes**. It refused
+launch before process creation. The worker's earlier 10:07 startup measurement
+was 2,201,370,624 bytes; that earlier pass does not establish sufficient disk
+at native launch. The continuous 2 GB floor was still met. No foreign cleanup,
+retry, source repair, configuration edit or asset modification was attempted.
+
+Before/after SHA-256 inventories match for all 311 original-tree files plus
+the registration manifest `lib/apps.js`; the eight original CTL/INI/SCN/MCF
+configuration files are also retained byte-for-byte. `MCM.EXE` is 1,029,632
+bytes, SHA-256
+`f0370d1d526be46eaf6ea5f941f185a393a8432baec695e1529f8672a314a71b`;
+the manifest SHA-256 is
+`cb645b1043738ac611d34d11679dce01afc54bf4e7bb86eeb2e9162ef4e0d857`.
+All 4,444 inventoried source/build files match before/after. The accepted
+build's 4,392 source pins and 141 prior actual-read hashes match current files,
+including canonical module SHA-256
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+This is a build-reuse identity check, **not a native game execution observation**.
+The October 30 browser evidence remains attributable only to its older
+`d83e413f` module.
+
+The retained observer passed actual synchronous/asynchronous scratch-Wasm
+execution, whole shared 512 MB memory immutability, host/native clock identity,
+and emitted late-event retention after 10,001 events. Its coverage excludes
+async file reads, streams, mmap and loader-internal reads; descriptor hashing
+requires complete reads of files at most 24 MiB. No actual native game module
+or runtime file reads exist for this attempt. No WM/keyboard/DirectInput input
+was consumed, and there are no new gameplay PNGs, scored stunts or event
+progress. Shipped `HELP/HELP.HTM` documents airborne Z+W as Heel Clicker and
+X+W as Bar Hop; these controls were read, not exercised. The scratch watcher
+was terminated and no game PID/group or new temporary directory was created;
+local box ID/state/expiry are N/A. Evidence is in `launch-preflight.json`,
+`gate.json`, `verification.json`, `observer-validation.log`, and `cleanup.json`.
+The next prerequisite is restoring the native startup disk margin before a
+fresh bounded ordinary-control attempt; this result adds no playability,
+audio, FPS, GPU, full-event or full-corpus claim.
+
+### Native Single Event results; scored stunt remains open (2026-11-01)
+
+Run `scratch/runs/20261101-motocross-scored-stunt-owner-floor/` launched two
+originals after Incoming helicopter worker `01a196a2` supplied fresh terminal
+files and its 10:26:31 UTC explicit runtime/source/build release. The actual
+gate at 10:27:27 UTC pinned main `5adc9e915` (after baseline `3cddaa00c`).
+The owner's >1.5 GB disk rule superseded the earlier 2.2 GB startup refusal;
+no foreign cleanup or RAM gate was used. Both runtime minima also exceeded
+2 GB: **2,097,991,680** and **2,069,643,264 bytes**. Logs were gzip bounded
+at 32 MiB. Both runs used the unchanged registered `mcm`, stock working
+directory and local CLI software renderer; no browser or GPU run occurred.
+
+The second original used the Enter Name/menu route, then clicked the Event
+Options right arrow at `(366,82)` to change **Practice → Single Event**.
+`scored-event-selected.png` records that selection. `before-event.png`
+records the quarry with opponent scores 5,500/2,000 and player A at zero;
+`event-results.png` at batch 37,900 records **Race Results: GLENN 5,500,
+ALBERTO 7,500, A 0**. Continue returned to the event menu. This is fresh
+native event progression beyond the October 30 practice checkpoint, **not a
+player-scored stunt**. The timer already displayed 00 in that first quarry
+capture: it does not establish a normally paced four-minute event.
+
+The first original was stopped cleanly after 128.552 seconds: the retained
+route's 10,000 startup batches were mistakenly issued at 100,000 blocks per
+batch, 100 times the documented default. The concrete second hypothesis
+restored 1,000 blocks per batch for that route; loading/gameplay subsequently
+used the existing `set-batch-size:100000` control. The second original ran
+417.045 seconds and exited 0. Within that same process, another Single Event
+was entered after changing the existing harness tick cadence from 200 to 2 ms,
+then 10 ms. `timed-live.png` retains the starting countdown with zero scores.
+Up, S (lean back), and shipped Z+W (Heel Clicker) were exercised through normal
+WM/keyboard/DI controls. The later ramp/air/stunt/release captures are retained,
+but `air-heel2.png` and `air-land.png` show a crash with rider and bike
+separated; `settled-score.png` still shows player A at zero. No clean stunt
+landing or points are inferred from those poses or filenames.
+
+Actual consumption is recorded in `runtime.log.gz` and
+`manual-controls.ndjson`. Before the first throttle, WM dequeue/route/dispatch
+counters were 24/24/17; after throttle they were 25/25/18, after Z+W
+27/27/20, and at final release 57/57/45 with empty input queues. Actual
+keyboard `GetDeviceState` calls used device `0x08221180`, length 256, return
+site `0x451132`; `GetDeviceData` returned success at `0x45119c`/`0x4511ec`.
+The active keyboard buffer's sequence/head advanced to 11/11 after the later
+Z+W and ended sequence 20, head 5, empty, without overflow. Up/S/W/Z physical
+and asynchronous key states were all false on final release. These observations
+establish consumption; they do not establish a successful stunt.
+
+The EXE and manifest hashes remain respectively
+`f0370d1d526be46eaf6ea5f941f185a393a8432baec695e1529f8672a314a71b` and
+`cb645b1043738ac611d34d11679dce01afc54bf4e7bb86eeb2e9162ef4e0d857`.
+All 311 original-tree files plus the manifest, and all 4,444 inventoried
+source/build files, match before/after. Full original/config trees are retained
+in SHA-verified `original-before.tar.gz` and `original-after.tar.gz`. Reuse of
+the accepted build matched its 4,392 source pins and 141 prior reads. Both
+actual runtime compile observations identify canonical module
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`;
+134/302 actual runtime file-read records also match. The observer covers
+synchronous reads and complete descriptor reads up to 24 MiB, excluding async
+reads, streams, mmap and loader-internal reads. Its scratch execution,
+whole-512-MB immutability, clock identity and late-event retention checks pass.
+
+`test-mcm-manifest-paths.js` passes. Two unchanged input fixtures fail because
+their extracted contexts lack `mainSchedulerObserver` and `hasFlag`; exact
+failures are retained in `test-results.json` and associated logs. No tracked
+source/helper/test/config/registration/backend change or rebuild was made.
+Both game PIDs, drivers and process groups are absent; no watcher was created
+and no new `wa-child-*` temporary directory remains. Local box ID/state/expiry
+are N/A. A scored stunt still requires a controlled takeoff and clean landing;
+this result adds no full-playthrough, audio, FPS or full-corpus claim.
+
+### Fixed-cadence Practice jump: landing fails (2026-11-01)
+
+Run `scratch/runs/20261101-motocross-clean-landing/` made **one bounded
+straight-route attempt**, then stopped at the first failed gameplay condition:
+the descent did not produce a stable, clean landing. No second original or
+Heel Clicker attempt was made. GL worker `01a196b3` supplied fresh launcher
+final/result files and its 10:49:46 UTC explicit runtime/source/build release.
+The 10:52:34 UTC gate pinned actual main `61cb10e17` (assignment baseline
+`3fc209ff3`). The original exited 0 after **110.443 seconds**, within the
+20-minute gate cap. Sampled minimum available disk was **2,623,963,136 bytes**;
+the continuous guard used the requested 2,000,000,000-byte floor.
+
+The unchanged native CLI software renderer entered **Practice → T-rific →
+default rider**, with two default opponents. Tick cadence stayed **10 ms per
+batch throughout**. Startup/menu batches used 1,000 blocks; the existing
+`set-batch-size:100000` control at batch 34,100 selected the fixed loading and
+gameplay budget. At batch 36,100, Up was pressed through ordinary WM and DI
+controls. No steering, lean or stunt key was pressed during driving. Every
+50 batches thereafter produced a PNG. The route follows the initial heading
+down the shallow trough beside the tall right-hand quarry wall, over its
+sloping shoulder toward the flat-topped ridge beyond; the left basin and
+right wall remain reference landmarks. `route-plan.json` and
+`manual-controls.ndjson` retain the route and exact commands.
+
+The paired captures are deliberately evidence of an **unsuccessful landing**:
+
+| Phase | Capture / absolute batch | Observation |
+|---|---|---|
+| Approach | `route-0400.png` / 36,500 | Mounted rider approaches the right wall's shoulder. |
+| Takeoff candidate | `route-0450.png` / 36,550 | Rider remains mounted; rear wheel and projected shadow separate near the slope. |
+| Air candidate | `route-0550.png` / 36,650 | Bike is above the descending terrain beyond the shoulder; this is visual evidence, without a guest airborne/contact flag. |
+| Released descent | `route-0700.png` / 36,800 | Up and both lean keys were explicitly released at 36,750, before the following apparent contact. |
+| Contact and rebound | `route-0750.png`, `route-0800.png` / 36,850–36,900 | Rear wheel appears to meet the slope, followed by another rise; stable touchdown is not established. |
+| Failed landing | `route-1050.png`, `route-1250.png` / 37,150–37,350 | Bike rolls sideways, then rider and bike separate. |
+| Settled crash | `route-1400.png` / 37,500 | Rider and bike lie separately; player **A: 0**. |
+
+Player A remains zero throughout; TFFST's 5,000 points belong to an opponent.
+Camera movement alone is not treated as airborne success, and apparent contact
+at 36,850 is not accepted as a clean landing. The exact obstacle is the
+uncontrolled rebound/roll after this shoulder descent despite released
+throttle and neutral lean. Its physics/input/rendering cause is unproven.
+The requested prerequisite therefore remains unmet; repeatability and shipped
+airborne Z+W scoring were not tested.
+
+Consumption is retained in `runtime.log.gz` (241,846 compressed bytes): WM
+dequeue/route/dispatch counts advance **21/21/15 → 22/22/16 → 25/25/19**.
+Up release is actually dequeued at batch **36,753**, before apparent contact.
+Keyboard device `0x08221180` receives successful 256-byte `GetDeviceState`
+calls at return site `0x451132`, and successful `GetDeviceData` at
+`0x45119c`/`0x4511ec`. The keyboard sequence/head advances **3/3 → 4/4**;
+the final buffer is active, empty and without overflow. Final physical and
+asynchronous Up/A/S/W/Z states are false, with empty scheduled/renderer queues.
+These establish ordinary input consumption, not a successful stunt.
+
+The EXE/manifest identities remain the hashes recorded above. All **311
+original files plus manifest** and **4,444 source/build files** match
+before/after; full original/config archives were verified against every pin.
+Accepted build reuse matches all **4,392 input pins and 141 prior reads**.
+The actual runtime compile identifies `dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`;
+all **285 actual file-read records** match retained files. Exact observer
+scripts and matching build inputs permit reuse of its whole-512-MB
+immutability, sync/async scratch-Wasm, native/host clock and late-10,001-event
+validation. Runtime read observation still excludes async filesystem reads,
+streams, mmap and loader-internal reads, and requires complete descriptor
+reads of at most 24 MiB. Compiler-input observation was reused, not repeated.
+
+The unchanged manifest fixture passes; input-state and input-clock fixtures
+still fail with missing `mainSchedulerObserver` and `hasFlag`, respectively.
+Failures remain in `test-results.json` and their logs. No tracked source,
+helper, test, config, registration or backend edit/rebuild occurred. Own
+runtime/driver/groups, publication watcher and new temporary directories were
+verified absent. Local box ID/state/expiry are N/A. This attempt adds no
+scored-stunt, clean-landing, GPU, FPS, audio or full-playthrough acceptance.

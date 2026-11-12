@@ -35,7 +35,7 @@ const TOYVM_FACTS = {
   'sync-reads': { text: 'ToyVM reads a file whole and synchronously when it is opened, so every file a live session might open must be downloaded before boot; there is no on-demand fetch.', cite: 'tools/toyvm/dos.js open (readFileSync of the whole file); tools/toyvm/bundle-browser.js mount' },
   'no-batch': { text: 'ToyVM has no COMMAND.COM: EXEC runs .EXE/.COM programs (and `COMMAND.COM /C prog`), never a batch file.', cite: 'tools/toyvm/dos.js INT 21h 4Bh' },
   'exec': { text: 'ToyVM implements DOS EXEC (INT 21h 4Bh, AL=00/01), so a launcher can start the next program.', cite: 'tools/toyvm/dos.js INT 21h 4Bh' },
-  'no-browser-mouse': { text: 'The browser live page wires keyboard only; INT 33h mouse exists in the CLI but no pointer events reach a live session.', cite: 'tools/toyvm/live.js and docs/dos-corpus/site.js (no mouse handlers)' },
+  'browser-mouse-limits': { text: 'Browser input supports absolute mouse position, three button bits, polling transition counts and deltas between absolute samples. No pointer lock/relative input, wheel, custom INT 33h ranges or callback interrupts; browser gameplay remains unqualified.', cite: 'tools/toyvm/live.js bindInput; test/test-toyvm-mouse-input.js (DOM/state fixtures only)' },
 };
 const LARGE_PRELOAD = 64 * 1024 * 1024;
 // What a GOG release adds AROUND the DOS game: its Windows DOSBox, installer
@@ -92,7 +92,7 @@ function assess(t, files, scans) {
   if (t.devices?.vbe2Lfb) add(blockers, 'vbe2', 'The program requires VESA VBE 2.0 (linear framebuffer); ToyVM refuses the LFB.', ['no-vbe2-lfb']);
   const bytes = files.reduce((n, f) => n + f.size, 0);
   if (bytes > LARGE_PRELOAD) add(cautions, 'preload-size', `All ${(bytes / 1048576).toFixed(0)} MB would have to download before boot and stay in memory: ToyVM cannot fetch a file on demand.`, ['sync-reads']);
-  add(cautions, 'keyboard-only', 'A browser session would get keyboard input only.', ['no-browser-mouse']);
+  add(cautions, 'browser-mouse-limits', 'Browser absolute mouse input has polling-only limits; gameplay is not qualified by input fixtures.', ['browser-mouse-limits']);
   const status = blockers.length ? 'blocked' : 'untested';
   const verdict = blockers.length
     ? `Not expected to run on ToyVM: ${blockers.map((b) => b.id).join(', ')}. Not attempted.`

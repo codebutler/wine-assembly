@@ -46,6 +46,8 @@
   ;; The i32 result keeps Worker RPC synchronous so the shared-memory write is
   ;; visible before the guest resumes.
   (import "host" "wall_clock" (func $host_wall_clock (param i32 i32) (result i32)))
+  (import "host" "cmos_io" (func $host_cmos_io (param i32 i32 i32) (result i32)))
+  (import "host" "pit_io" (func $host_pit_io (param i32 i32 i32 i32) (result i32)))
   (import "host" "yield" (func $host_yield (param i32)))
   ;; One bounded inline turn for the worker threads, for the case where the
   ;; main instance cannot yield: inside a synchronous wndproc the interpreter
@@ -203,6 +205,9 @@
   (import "host" "get_window_text_length" (func $host_get_window_text_length (param i32) (result i32)))
   ;; get_window_text_length(hwnd) → length in chars (no NUL).
   (import "host" "get_window_related" (func $host_get_window_related (param i32 i32) (result i32)))
+  (import "host" "find_window" (func $host_find_window (param i32 i32 i32 i32 i32) (result i32)))
+  ;; find_window(parent, after, classWA, titleWA, wide): shared desktop query;
+  ;; strings are in the caller's memory. -1 means no host desktop available.
   ;; get_window_related(hwnd, GW_*) → renderer-wide top-level relation.
   (import "host" "get_window_info" (func $host_get_window_info (param i32 i32) (result i32)))
   ;; get_window_info(hwnd, 0=style, 1=visible, 2=enabled, 3=pid, 4=exists) → renderer property.
@@ -333,6 +338,14 @@
   ;; reg_delete_value(hKey, valueNameWA, isWide) → error code
 
   ;; Audio host imports
+  ;; Audio output lifetimes share the invocation allocator's monotonic IDs.
+  (import "host" "beep_process_begin" (func $host_beep_process_begin (param i32 i32) (result i32)))
+  (import "host" "beep_thread_begin" (func $host_beep_thread_begin (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "beep_retire_thread" (func $host_beep_retire_thread (param i32 i32 i32) (result i32)))
+  (import "host" "beep_shutdown" (func $host_beep_shutdown (result i32)))
+  (import "host" "beep_start" (func $host_beep_start (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "beep_status" (func $host_beep_status (param i32 i32) (result i32)))
+  (import "host" "beep_cancel" (func $host_beep_cancel (param i32) (result i32)))
   (import "host" "message_beep" (func $host_message_beep (param i32)))
   ;; message_beep(uType) — play system sound (0=default, 0x10=error, 0x30=warning, 0x40=info)
   (import "host" "play_sound" (func $host_play_sound (param i32 i32 i32) (result i32)))
@@ -348,6 +361,13 @@
   (import "host" "mci_get_device_id" (func $host_mci_get_device_id (param i32) (result i32)))
   ;; mci_get_device_id(name_wa) → host device id for an mciSendStringA alias, or 0
   (import "host" "midi_num_devs" (func $host_midi_num_devs (result i32)))
+  (import "host" "midi_stream_open" (func $host_midi_stream_open (param i32 i32 i32 i32) (result i32)))
+  (import "host" "midi_stream_control" (func $host_midi_stream_control (param i32 i32 i32) (result i32)))
+  (import "host" "midi_stream_property" (func $host_midi_stream_property (param i32 i32 i32) (result i32)))
+  (import "host" "midi_stream_service" (func $host_midi_stream_service (param i32)))
+  ;; header(handle, headerWA, headerGA, dataWA, structSize, operation)
+  ;; operations: prepare=0, unprepare=1, streamOut=2, longMsg=3.
+  (import "host" "midi_header" (func $host_midi_header (param i32 i32 i32 i32 i32 i32) (result i32)))
   ;; midi_num_devs() → number of MIDI output devices
   (import "host" "midi_out_open" (func $host_midi_out_open (param i32 i32 i32 i32) (result i32)))
   ;; midi_out_open(device_id, callback, callback_instance, flags) → opaque MIDI handle or 0
@@ -369,6 +389,10 @@
   ;; audio_mixer_* controls and meters the shared master(0), wave(1), and MIDI(2) buses.
 
   ;; INI file host imports — backed by localStorage
+  (import "host" "ini_read_result" (func $host_ini_read_result (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+  ;; ini_read_result(kind, appWA, keyWA, default, bufGA, size, fileWA, wide, resultWA, tid) -> 997 = park
+  (import "host" "ini_prepare_read" (func $host_ini_prepare_read (param i32 i32 i32) (result i32)))
+  ;; ini_prepare_read(fileNameWA, isWide, threadId) -> 1 = IO_WAIT, 0 = ready
   (import "host" "ini_get_string" (func $host_ini_get_string (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
   ;; ini_get_string(appNameWA, keyNameWA, defaultWA, bufGA, bufSize, fileNameWA, isWide) → chars written
   (import "host" "ini_get_section" (func $host_ini_get_section (param i32 i32 i32 i32 i32) (result i32)))
@@ -423,7 +447,11 @@
   ;; Same write, returning ERROR_SUCCESS or the operation's Win32 error.
   (import "host" "fs_flush_file_buffers" (func $host_fs_flush_file_buffers (param i32) (result i32)))
   (import "host" "fs_close_handle" (func $host_fs_close_handle (param i32) (result i32)))
-  (import "host" "fs_duplicate_handle" (func $host_fs_duplicate_handle (param i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_duplicate_handle" (func $host_fs_duplicate_handle (param i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_lock_file" (func $host_fs_lock_file (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "host" "fs_crt_open" (func $host_fs_crt_open (param i32 i32) (result i32)))
+  (import "host" "fs_crt_descriptor_query" (func $host_fs_crt_descriptor_query (param i32) (result i32)))
+  (import "host" "fs_crt_descriptor_adopt" (func $host_fs_crt_descriptor_adopt (param i32 i32 i32 i32) (result i32)))
   (import "host" "fs_duplicate_mapping_result" (func $host_fs_duplicate_mapping_result (param i32 i32 i32 i32 i32) (result i32)))
   (import "host" "fs_set_file_pointer" (func $host_fs_set_file_pointer (param i32 i32 i32) (result i32)))
   (import "host" "fs_seek_result" (func $host_fs_seek_result (param i32 i32 i32 i32 i32) (result i32)))
@@ -542,12 +570,14 @@
   ;; pid, or 0 when this host cannot start one -- CreateProcessA then takes
   ;; its old shell_execute path, so a host that never implements this keeps
   ;; behaving exactly as before.
-  (import "host" "process_spawn" (func $host_process_spawn (param i32 i32 i32 i32 i32) (result i32)))
+  ;; Command, directory, child IP, pipe spec/count, explicit spawn, show command.
+  (import "host" "process_spawn" (func $host_process_spawn (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
   ;; A child that process_spawn started, by pid: op 0 = its exit code (259
   ;; STILL_ACTIVE while it runs), op 1 = terminate it with exit code arg (1 on
   ;; success). -1 = no such child.
   (import "host" "process_ctl" (func $host_process_ctl (param i32 i32 i32) (result i32)))
   (import "host" "get_thread_priority" (func $host_get_thread_priority (param i32 i32) (result i32)))
+  (import "host" "snapshot_threads" (func $host_snapshot_threads (param i32 i32 i32 i32) (result i32)))
   (import "host" "set_thread_priority" (func $host_set_thread_priority (param i32 i32 i32) (result i32)))
   (import "host" "get_thread_locale" (func $host_get_thread_locale (param i32) (result i32)))
   (import "host" "set_thread_locale" (func $host_set_thread_locale (param i32 i32) (result i32)))
@@ -568,6 +598,7 @@
 
   ;; ---- Memory: imported from host, 8192 pages = 512MB initial ----
   ;; Audio output — waveOut bridge to Web Audio API
+  (import "host" "wave_error_text" (func $host_wave_error_text (param i32 i32 i32 i32) (result i32)))
   (import "host" "wave_out_open" (func $host_wave_out_open (param i32 i32 i32 i32 i32 i32) (result i32)))
   ;; wave_out_open(sampleRate, channels, bitsPerSample, callbackType, callback, instance) → handle
   (import "host" "wave_out_write" (func $host_wave_out_write (param i32 i32 i32) (result i32)))
@@ -828,18 +859,20 @@
   ;; its diagnostic/API name separate from GetTimeZoneInformation: the native
   ;; ordinal takes a BOOL refresh flag, not an output-structure pointer.
   (data (region.addr $RESERVED_PAGE_STRINGS 0x30) "KERNEL32.dll\00KERNEL32_Ordinal99\00")
-  ;; Modules whose exports we dispatch statically: they have no mapped PE
-  ;; image and no DLL-table entry, so GetModuleHandle has to recognize them by
+  ;; Modules whose exports we dispatch statically: they have native PE identity
+  ;; headers and no DLL-table entry, so GetModuleHandle recognizes them by
   ;; name. Lower case and without the ".dll" suffix; the matcher accepts
   ;; either form. See $guest_name_is_static_system_dll in 09a-handlers.wat.
   ;; ORDER MATTERS: the DirectX range starts at $STATIC_SYS_DLL_FIRST_DX and
   ;; contains $STATIC_SYS_DLL_DX_COUNT entries. Append other module names so
-  ;; existing pseudo handles remain stable.
+  ;; shared image and reference slots remain stable.
   ;; GDI32 is here because Win9x maps it into every process: InstallShield 3's
   ;; engine registers GDI32, KERNEL32 and USER32 by GetModuleHandle at startup,
   ;; stops at the first NULL, and then silently drops every script call into
   ;; USER32 — War Wind II's SdAskOptions never shows its dialog and spins.
-  (data (region.addr $RESERVED_PAGE_STRINGS 0x280) "ole32\00user32\00comctl32\00gdi32\00dplayx\00ddraw\00dsound\00d3drm\00glide2x\00glide3x\00wsock32\00ws2_32\00\00")
+  ;; OLEAUT32 needs its own identity for dynamic ordinal lookups as well:
+  ;; the image-base fallback cannot distinguish its ordinals from the EXE's.
+  (data (region.addr $RESERVED_PAGE_STRINGS 0x280) "ole32\00user32\00comctl32\00gdi32\00dplayx\00ddraw\00dsound\00d3drm\00glide2x\00glide3x\00oleaut32\00\00")
   ;; Where those modules claim to live, and the suffix appended to the stem.
   (data (region.addr $RESERVED_PAGE_STRINGS 0x25C) "C:\\WINDOWS\\SYSTEM\\\00")
   (data (region.addr $RESERVED_PAGE_STRINGS 0x274) ".dll\00")
@@ -1039,26 +1072,9 @@
   (data (region.addr $BROWSE_DIALOG_STRINGS 0x3B) "My Documents\00")
   (data (region.addr $BROWSE_DIALOG_STRINGS 0x48) "C:\\My Documents\00")
 
-  ;; A complete VS_VERSIONINFO block (header + VS_FIXEDFILEINFO, no string
-  ;; tables) reporting DirectX 6.1a — dplayx.dll 4.06.03.0518, the version
-  ;; Windows 98 SE shipped. The file-version APIs hand this back for the
-  ;; DirectX modules we dispatch statically, which have no file on disk to
-  ;; read a real resource out of. Age of Empires II refuses to start below
-  ;; 4.6.3.516, and it asks dplayx, not the display driver.
-  ;;   +0x00 wLength=92  wValueLength=52  wType=0
-  ;;   +0x06 "VS_VERSION_INFO" UTF-16 + NUL, then 2 bytes of padding
-  ;;   +0x28 VS_FIXEDFILEINFO: signature, struct version, file/product
-  ;;         version, flags mask, flags, VOS__WINDOWS32, VFT_DLL, dates
-  (data (region.addr $DX_VERSION_INFO 0)
-    "\5c\00\34\00\00\00"
-    "V\00S\00_\00V\00E\00R\00S\00I\00O\00N\00_\00I\00N\00F\00O\00\00\00"
-    "\00\00"
-    "\bd\04\ef\fe\00\00\01\00"
-    "\06\00\04\00\06\02\03\00"
-    "\06\00\04\00\06\02\03\00"
-    "\3f\00\00\00\00\00\00\00"
-    "\04\00\00\00\02\00\00\00"
-    "\00\00\00\00\00\00\00\00\00\00\00\00")
+  ;; DX_VERSION_INFO's region remains reserved to avoid moving unrelated
+  ;; allocations. File version APIs now read actual named-file resources;
+  ;; no fabricated DirectX version block is initialized here.
 
   ;; Dialog-template string class names. Win32 templates may use either
   ;; builtin ordinal classes (0x80..0x85) or string names.
@@ -1412,7 +1428,7 @@
   ;; offset never needs bit 14 and the marker is free.
   ;;
   ;; 9KB each. The main thread keeps 512 slots (4.5MB; 128 until 2026-09-28); each of the fifteen
-  ;; workers gets 16 (128KB), because a worker compiles the one routine it was
+  ;; workers gets 16 (144KiB), because a worker compiles the one routine it was
   ;; spawned for. $PAGE_INDEX_SLOTS is therefore per-instance, set alongside
   ;; $PAGE_INDEX in $init_thread, and the defaults here are the main thread's.
   (global $PAGE_INDEX_ARENA i32 (region.addr $PAGE_INDEX_ARENA 0))
@@ -1426,6 +1442,12 @@
   (global $PAGE_INDEX_MAIN_BYTES (mut i32) (i32.const 0x00480000))
   (global $PAGE_INDEX_STRIDE (mut i32) (i32.const 0x00024000))
   (global $PAGE_INDEX_BYTES  i32 (i32.const 0x2400))
+  ;; Experimental layout 2 keeps the default arena split and adds sixteen
+  ;; worker indexes at the tail of that worker's code partition. This base is
+  ;; stable across temporary spill arenas; zero means all indexes are in the
+  ;; ordinary arena (including main in every layout).
+  (global $PAGE_INDEX_EXTRA (mut i32) (i32.const 0))
+  (global $PAGE_INDEX_WORKER_EXTRA_BYTES (mut i32) (i32.const 0))
   ;; Block-executor round 13 (docs/block-executor-design.md section 22). The
   ;; threaded stream is not self-describing: an op is (handler, operand) plus
   ;; however many inline words that handler takes, so nothing downstream of the
@@ -1644,6 +1666,10 @@
   (global $fault_raising (mut i32) (i32.const 0))
   (global $API_HASH_TABLE i32 (region.addr $API_HASH_TABLE 0))
   (global $API_HASH_TABLE_SIZE i32 (region.size $API_HASH_TABLE))
+  (global $BIG5_DECODE_TABLE i32 (region.addr $BIG5_DECODE_TABLE 0))
+  (global $BIG5_DECODE_TABLE_SIZE i32 (region.size $BIG5_DECODE_TABLE))
+  (global $BIG5_ENCODE_TABLE i32 (region.addr $BIG5_ENCODE_TABLE 0))
+  (global $BIG5_ENCODE_TABLE_SIZE i32 (region.size $BIG5_ENCODE_TABLE))
   ;; Window/class/parent tables (below GUEST_BASE, above the API hash table).
   ;; All four tables live in the 0x7000..0xC000 region; the old 0x2000..0x4000
   ;; layout is now unused and free for future scratch use.
@@ -1870,6 +1896,12 @@
   ;; game and a class with cbClsExtra were writing the same 256 bytes. Moved
   ;; beside the other per-class tables instead.
   (global $CLASS_EXTRA_TABLE i32 (region.addr $CLASS_EXTRA_TABLE 0))
+  (global $CLASS_NAME_WIDE i32 (region.addr $CLASS_NAME_WIDE 0))
+  (global $CLASS_NAME_WIDE_SIZE i32 (region.size $CLASS_NAME_WIDE))
+  (global $WND_LOOKUP_RETIRED i32 (region.addr $WND_LOOKUP_RETIRED 0))
+  (global $WND_LOOKUP_RETIRED_SIZE i32 (region.size $WND_LOOKUP_RETIRED))
+  (global $WND_LOOKUP_GENERATIONS i32 (region.addr $WND_LOOKUP_GENERATIONS 0))
+  (global $WND_LOOKUP_GENERATIONS_SIZE i32 (region.size $WND_LOOKUP_GENERATIONS))
   (global $CLASS_EXTRA_TABLE_SIZE i32 (region.size $CLASS_EXTRA_TABLE))
   (global $CLASS_EXTRA_STRIDE i32 (i32.const 4))
   ;; EDIT visual-line scratch table. Each entry is { char_start, char_len }.
@@ -1908,19 +1940,19 @@
   (global $GDI_DC_SAVE_TABLE i32 (region.addr $GDI_DC_SAVE_TABLE 0))
   (global $GDI_DC_SAVE_TABLE_SIZE i32 (region.size $GDI_DC_SAVE_TABLE))
   (global $GDI_DC_SAVE_COUNT i32 (i32.const 256))
-  (global $GDI_LINE_DESC i32 (region.addr $GDI_LINE_DESC 0))
+  (global $GDI_LINE_DESC (mut i32) (region.addr $GDI_LINE_DESC 0))
   (global $GDI_LINE_DESC_SIZE i32 (region.size $GDI_LINE_DESC))
   ;; Two 80-byte surface descriptors for raster/blit destination and source.
   ;; The surface registry owns resolution; pixel kernels consume this scratch.
   (global $GDI_BLIT_DESC i32 (region.addr $GDI_BLIT_DESC 0))
-  (global $GDI_BLIT_DST_DESC i32 (region.addr $GDI_BLIT_DESC 0x00000000))
-  (global $GDI_BLIT_SRC_DESC i32 (region.addr $GDI_BLIT_DESC 0x00000050))
+  (global $GDI_BLIT_DST_DESC (mut i32) (region.addr $GDI_BLIT_DESC 0x00000000))
+  (global $GDI_BLIT_SRC_DESC (mut i32) (region.addr $GDI_BLIT_DESC 0x00000050))
   (global $GDI_BLIT_DESC_SIZE i32 (region.size $GDI_BLIT_DESC))
   ;; Bitmap creation handlers are synchronous. They share a parsed metadata
   ;; plan and an ANSI conversion buffer for LoadBitmapW resource names.
-  (global $GDI_BITMAP_PLAN i32 (region.addr $GDI_BITMAP_PLAN 0))
+  (global $GDI_BITMAP_PLAN (mut i32) (region.addr $GDI_BITMAP_PLAN 0))
   (global $GDI_BITMAP_PLAN_SIZE i32 (region.size $GDI_BITMAP_PLAN))
-  (global $GDI_BITMAP_INFO_SCRATCH i32 (region.addr $GDI_BITMAP_INFO_SCRATCH 0))
+  (global $GDI_BITMAP_INFO_SCRATCH (mut i32) (region.addr $GDI_BITMAP_INFO_SCRATCH 0))
   (global $GDI_BITMAP_INFO_SCRATCH_SIZE i32 (region.size $GDI_BITMAP_INFO_SCRATCH))
   (global $GUEST_SPAN_SCRATCH i32 (region.addr $GUEST_SPAN_SCRATCH 0))
   (global $GUEST_SPAN_SCRATCH_SIZE i32 (region.size $GUEST_SPAN_SCRATCH))
@@ -1930,18 +1962,18 @@
   (global $guest_span_cursor (mut i32) (i32.const 0))
   (global $guest_span_overflow (mut i32) (i32.const 0))
   (global $GDI_RGB555_MASKS i32 (region.addr $DIB_DEFAULT_RGB555_MASKS 0x00000000))
-  (global $GDI_BITMAP_NAME i32 (region.addr $GDI_BITMAP_NAME 0))
+  (global $GDI_BITMAP_NAME (mut i32) (region.addr $GDI_BITMAP_NAME 0))
   (global $GDI_BITMAP_NAME_SIZE i32 (region.size $GDI_BITMAP_NAME))
   ;; Window-coordinate resolution can run while a painter owns PAINT_SCRATCH.
   ;; Keep host GetWindowRect results in private high memory so surface/text
   ;; binding cannot overwrite the caller's RECT.
-  (global $WINDOW_RECT_SCRATCH i32 (region.addr $WINDOW_RECT_SCRATCH 0))
+  (global $WINDOW_RECT_SCRATCH (mut i32) (region.addr $WINDOW_RECT_SCRATCH 0))
   (global $WINDOW_RECT_SCRATCH_SIZE i32 (region.size $WINDOW_RECT_SCRATCH))
   ;; Pattern-brush sampling is synchronous and uses a private bitmap
   ;; descriptor so it cannot clobber active line/blit descriptors.
-  (global $GDI_BRUSH_DESC i32 (region.addr $GDI_BRUSH_DESC 0))
+  (global $GDI_BRUSH_DESC (mut i32) (region.addr $GDI_BRUSH_DESC 0))
   (global $GDI_BRUSH_DESC_SIZE i32 (region.size $GDI_BRUSH_DESC))
-  (global $GDI_BRUSH_ROW i32 (region.addr $GDI_BRUSH_ROW 0))
+  (global $GDI_BRUSH_ROW (mut i32) (region.addr $GDI_BRUSH_ROW 0))
   (global $GDI_BRUSH_ROW_SIZE i32 (region.size $GDI_BRUSH_ROW))
   (global $GDI_BITBLT_DECLINE i32 (region.addr $GDI_BITBLT_DECLINE 0))
   (global $GDI_BITBLT_DECLINE_SIZE i32 (region.size $GDI_BITBLT_DECLINE))
@@ -2236,6 +2268,8 @@
   ;; global because each emulated Win32 thread is a separate WASM instance.
   (global $SHARED_PROCESS_ID i32 (region.addr $SHARED_PROCESS_ID 0))
   (global $SHARED_PROCESS_ID_SIZE i32 (region.size $SHARED_PROCESS_ID))
+  (global $STARTUP_SHOW_STATE i32 (region.addr $STARTUP_SHOW_STATE 0))
+  (global $STARTUP_SHOW_STATE_SIZE i32 (region.size $STARTUP_SHOW_STATE))
   ;; Per-window cbWndExtra-compatible storage. USER classes in WinHelp use
   ;; independent LONG slots at offsets 0, 4, 8, and 12; aliasing these to
   ;; GWL_USERDATA corrupts toolbar layout state.
@@ -2456,13 +2490,10 @@
   (global $VIRTUAL_ALLOC_MIN i32 (i32.const 0x10000000))
   ;; The band the sparse arena steps over. It is deliberately coarser than what
   ;; is in it -- the DIB guest arena at 0x50000000..0x53F00000 and the static
-  ;; system-DLL pseudo handles at 0x5D110000 -- because one span costs one test
-  ;; on the reserve path and a set of exact holes would cost a walk, and because
-  ;; a handle is compared against a base address rather than translated: a real
-  ;; mapping landing on $STATIC_SYS_DLL_HANDLE_BASE would make a guest that
-  ;; reads through a GetModuleHandle result find plausible bytes instead of
-  ;; nothing. 256MB of slack in a 2GB address space is the cheap side of that
-  ;; trade.
+  ;; legacy system-DLL handle band at 0x5D110000. Native module identities now
+  ;; have allocated readable images, but changing this allocator boundary is
+  ;; independent of their representation. One excluded span costs one test
+  ;; on the reserve path instead of a walk over exact holes.
   (global $VIRTUAL_ALLOC_BAND_BASE i32 (i32.const 0x50000000))
   (global $VIRTUAL_ALLOC_BAND_END i32 (i32.const 0x60000000))
   ;; Process-wide heap state, in memory rather than in globals so every instance
@@ -2498,6 +2529,12 @@
   ;; (08b-dll-loader.wat, "The loader lock"). Same layout as a LOCK_TABLE line.
   (global $DLL_LOAD_LOCK i32 (region.addr $DLL_LOAD_LOCK 0))
   (global $DLL_LOAD_LOCK_SIZE i32 (region.size $DLL_LOAD_LOCK))
+  ;; Shared GDI slot/handle and DIB page reservation. Never held across host
+  ;; rendering imports, guest callbacks, or acquisition of another lock.
+  (global $GDI_ALLOC_LOCK i32 (region.addr $GDI_ALLOC_LOCK 0))
+  (global $GDI_ALLOC_LOCK_SIZE i32 (region.size $GDI_ALLOC_LOCK))
+  (global $GDI_THREAD_SCRATCH i32 (region.addr $GDI_THREAD_SCRATCH 0))
+  (global $GDI_THREAD_SCRATCH_SIZE i32 (region.size $GDI_THREAD_SCRATCH))
   ;; Every CRITICAL_SECTION the guest has initialised, so that one owned by a
   ;; thread that has ended can be found and released. WASM addresses, not guest
   ;; ones: the release runs from whichever instance notices the exit, and in
@@ -2718,6 +2755,74 @@
   (global $cs_depth (mut i32) (i32.const 0))
   (global $cs_enabled (mut i32) (i32.const 0))
 
+  ;; One-shot pending-call coverage. Independent of the debug return ring.
+  ;; The shared allocator leases a distinct 2KB slot per owning instance;
+  ;; sixteen leases per memory, never reused. Exhaustion fails closed.
+  (global $PENDING_CONTEXT i32 (region.addr $PENDING_CONTEXT 0))
+  (global $PENDING_CONTEXT_SIZE i32 (region.size $PENDING_CONTEXT))
+  (global $pending_seen (mut i32) (i32.const 0))
+  (global $pending_armed (mut i32) (i32.const 0))
+  ;; Profile 1 retains the original MDK2 target set and arm ABI. Profile 2
+  ;; is explicitly Stronghold-bound; a depth from one is never the other's
+  ;; absence proof. The expected image base is checked at native execution.
+  (global $pending_profile (mut i32) (i32.const 1))
+  (global $pending_image_base (mut i32) (i32.const 0))
+  (global $pending_reason (mut i32) (i32.const 0))
+  ;; Immutable first native coverage failure; diagnostic only, never an absence proof.
+  (global $pending_first_reason (mut i32) (i32.const 0))
+  (global $pending_first_site (mut i32) (i32.const 0))
+  (global $pending_first_eip (mut i32) (i32.const 0))
+  (global $pending_first_esp (mut i32) (i32.const 0))
+  (global $pending_first_thread (mut i32) (i32.const 0))
+  (global $pending_first_owner_thread (mut i32) (i32.const 0))
+  (global $pending_first_depth (mut i32) (i32.const 0))
+  (global $pending_first_epoch (mut i32) (i32.const 0))
+  (global $pending_first_profile (mut i32) (i32.const 0))
+  (global $pending_first_image (mut i32) (i32.const 0))
+  (global $pending_first_active (mut i32) (i32.const 0))
+  (global $pending_first_entries (mut i32) (i32.const 0))
+  (global $pending_first_returns (mut i32) (i32.const 0))
+  (global $pending_first_compiled_pc (mut i32) (i32.const 0))
+  (global $pending_first_compiled_eip (mut i32) (i32.const 0))
+  (global $pending_first_yield (mut i32) (i32.const 0))
+  (global $pending_first_a (mut i32) (i32.const 0))
+  (global $pending_first_b (mut i32) (i32.const 0))
+  (global $pending_first_c (mut i32) (i32.const 0))
+  (global $pending_first_prior_reason (mut i32) (i32.const 0))
+  (global $pending_first_frame0 (mut i32) (i32.const 0))
+  (global $pending_first_frame1 (mut i32) (i32.const 0))
+  (global $pending_first_frame2 (mut i32) (i32.const 0))
+  (global $pending_first_frame3 (mut i32) (i32.const 0))
+  (global $pending_first_frame4 (mut i32) (i32.const 0))
+  (global $pending_first_frame5 (mut i32) (i32.const 0))
+  (global $pending_first_frame6 (mut i32) (i32.const 0))
+  (global $pending_first_frame7 (mut i32) (i32.const 0))
+  (global $pending_first_process_epoch_lo (mut i32) (i32.const 0))
+  (global $pending_first_process_epoch_hi (mut i32) (i32.const 0))
+  (global $pending_first_root_lo (mut i32) (i32.const 0))
+  (global $pending_first_root_hi (mut i32) (i32.const 0))
+  (global $pending_first_dispatch_ret (mut i32) (i32.const 0))
+  (global $pending_first_dispatch_thunk_index (mut i32) (i32.const 0))
+  (global $pending_first_dispatch_metadata (mut i32) (i32.const 0))
+  (global $pending_first_current_thunk_eip (mut i32) (i32.const 0))
+  (global $pending_thread (mut i32) (i32.const 0))
+  (global $pending_epoch (mut i32) (i32.const 0))
+  (global $pending_slot (mut i32) (i32.const 0))
+  (global $pending_depth (mut i32) (i32.const 0))
+  ;; Each 32-byte shadow frame keeps its original target/return/ESP triple,
+  ;; then kind (0 CALL, 1 native dispatch, 2 loader, 3 returned loader,
+  ;; 4 returned dispatch; loader high bits retain the exact DLL row index),
+  ;; saved parent EIP/ESP and a once-only native loader token.
+  (global $pending_callback_entries (mut i32) (i32.const 0))
+  (global $pending_callback_returns (mut i32) (i32.const 0))
+  (global $pending_loader_serial (mut i32) (i32.const 0))
+  (global $pending_active (mut i32) (i32.const 0))
+  (global $pending_process_epoch (mut i64) (i64.const 0))
+  (global $pending_root (mut i64) (i64.const 0))
+  (global $pending_compiled_pc (mut i32) (i32.const 0))
+  (global $pending_compiled_eip (mut i32) (i32.const 0))
+  (global $pending_compiled_gen (mut i32) (i32.const 0))
+
   ;; Direction flag for string ops (0=up, 1=down)
   (global $df (mut i32) (i32.const 0))
 
@@ -2877,6 +2982,7 @@
   (global $createwnd_setfocus_thunk (mut i32) (i32.const 0))   ;; CACA0023: WM_SETFOCUS
   (global $createwnd_move_thunk     (mut i32) (i32.const 0))   ;; CACA0024: WM_MOVE
   (global $createwnd_size_thunk     (mut i32) (i32.const 0))   ;; CACA0031: WM_SIZE
+  (global $createwnd_size_ret_thunk (mut i32) (i32.const 0))   ;; CACA003D: WM_SIZE completion
   (global $createwnd_saved_hwnd (mut i32) (i32.const 0))
   (global $createwnd_saved_ret  (mut i32) (i32.const 0))
   (global $show_window_activated (mut i32) (i32.const 0))      ;; first-ShowWindow gate
@@ -2934,9 +3040,6 @@
   (global $MMIO_BUF_SIZE i32 (i32.const 8192))
   (global $rgn_counter (mut i32) (i32.const 0))
   ;; _initterm trampoline state
-  (global $initterm_ptr (mut i32) (i32.const 0))  ;; current position in fn ptr table
-  (global $initterm_end (mut i32) (i32.const 0))  ;; end of fn ptr table
-  (global $initterm_ret (mut i32) (i32.const 0))  ;; original caller return address
   (global $initterm_thunk (mut i32) (i32.const 0)) ;; guest addr of initterm-return thunk
   ;; CRT atexit registry. The callback array contains guest function pointers
   ;; and grows on demand; normal exit() drains it in reverse registration
@@ -2944,27 +3047,11 @@
   (global $atexit_table (mut i32) (i32.const 0))
   (global $atexit_count (mut i32) (i32.const 0))
   (global $atexit_capacity (mut i32) (i32.const 0))
-  (global $atexit_exit_code (mut i32) (i32.const 0))
   (global $atexit_ret_thunk (mut i32) (i32.const 0))
   ;; bsearch trampoline state (CACA000C continuation drives the search)
-  (global $bsearch_key     (mut i32) (i32.const 0))  ;; guest ptr to key
-  (global $bsearch_base    (mut i32) (i32.const 0))  ;; guest ptr to array base
-  (global $bsearch_size    (mut i32) (i32.const 0))  ;; element size in bytes
-  (global $bsearch_compar  (mut i32) (i32.const 0))  ;; guest fn ptr (cdecl comparator)
-  (global $bsearch_low     (mut i32) (i32.const 0))  ;; inclusive lower bound
-  (global $bsearch_high    (mut i32) (i32.const 0))  ;; exclusive upper bound
-  (global $bsearch_mid     (mut i32) (i32.const 0))  ;; current probe index
-  (global $bsearch_ret     (mut i32) (i32.const 0))  ;; caller return address
   (global $bsearch_thunk   (mut i32) (i32.const 0))  ;; guest addr of CACA000C thunk
   ;; qsort trampoline state. Adjacent comparisons make the continuation small
   ;; and let swaps use sparse-safe guest byte accesses (CACA002D).
-  (global $qsort_base      (mut i32) (i32.const 0))
-  (global $qsort_count     (mut i32) (i32.const 0))
-  (global $qsort_size      (mut i32) (i32.const 0))
-  (global $qsort_compar    (mut i32) (i32.const 0))
-  (global $qsort_pass      (mut i32) (i32.const 0))
-  (global $qsort_index     (mut i32) (i32.const 0))
-  (global $qsort_ret       (mut i32) (i32.const 0))
   (global $qsort_thunk     (mut i32) (i32.const 0))
   ;; DLL loader state
   ;; DLL row count is process-owned in DLL_SHARED, never an instance global.
@@ -2986,6 +3073,10 @@
   (global $DLL_STATIC_TLS_TABLE i32 (region.addr $DLL_STATIC_TLS_TABLE 0))
   (global $DLL_STATIC_TLS_TABLE_SIZE i32 (region.size $DLL_STATIC_TLS_TABLE))
   (global $DLL_SYNTHETIC_REFS i32 (region.addr $DLL_SYNTHETIC_REFS 0))
+  (global $KERNEL32_MODULE i32 (region.addr $KERNEL32_MODULE 0))
+  (global $KERNEL32_MODULE_SIZE i32 (region.size $KERNEL32_MODULE))
+  (global $STATIC_SYS_DLL_IMAGES i32 (region.addr $STATIC_SYS_DLL_IMAGES 0))
+  (global $STATIC_SYS_DLL_IMAGES_SIZE i32 (region.size $STATIC_SYS_DLL_IMAGES))
   (global $DLL_SYNTHETIC_REFS_SIZE i32 (region.size $DLL_SYNTHETIC_REFS))
   (global $DLL_LIFECYCLE_TABLE i32 (region.addr $DLL_LIFECYCLE_TABLE 0))
   (global $DLL_LIFECYCLE_TABLE_SIZE i32 (region.size $DLL_LIFECYCLE_TABLE))
@@ -3069,8 +3160,8 @@
   (global $hook_dispatch_depth (mut i32) (i32.const 0))
   (global $hook_retired_head (mut i32) (i32.const 0))
   (global $capture_hwnd (mut i32) (i32.const 0))      ;; hwnd that has mouse capture (SetCapture/ReleaseCapture)
-  (global $cursor_count (mut i32) (i32.const 0))      ;; ShowCursor display count (>=0 = visible)
-  (global $current_cursor (mut i32) (i32.const 0x67F00)) ;; HCURSOR last set by SetCursor (default IDC_ARROW)
+  (global $CURSOR_THREAD_STATE i32 (region.addr $CURSOR_THREAD_STATE 0))
+  (global $CURSOR_THREAD_STATE_SIZE i32 (i32.const 0x110))
   (global $caret_hwnd (mut i32) (i32.const 0))        ;; USER caret owner hwnd
   (global $caret_x (mut i32) (i32.const 0))           ;; USER caret client x
   (global $caret_y (mut i32) (i32.const 0))           ;; USER caret client y
@@ -3449,6 +3540,9 @@
   ;; budget the running call started with. $blocks_now reads both.
   (global $blocks_retired_base (mut i32) (i32.const 0))
   (global $run_budget_start (mut i32) (i32.const 0))
+  ;; In-flight work of enclosing run() calls. Banked work excludes these
+  ;; active calls; nested entry must keep their progress visible to clocks.
+  (global $blocks_running_outer (mut i32) (i32.const 0))
   ;; The value a park was already taken for. One park per distinct millisecond,
   ;; ever: if the host hands the guest back with the clock still reading the
   ;; same thing, spinning is the honest answer until it moves. Without this the
@@ -3804,6 +3898,15 @@
   ;; TextOutW, etc.). WAT-private so guest writes cannot corrupt it.
   (global $TEXT_SCRATCH i32 (region.addr $TEXT_SCRATCH 0))
   (global $TEXT_SCRATCH_SIZE i32 (region.size $TEXT_SCRATCH))
+  ;; Decoded-WCHAR scratch for the GDI text funnels (DBCS stage 2): an ANSI
+  ;; string in a table-backed DBCS page is decoded here once and handed to
+  ;; the wide pipeline, so the pipeline itself stays byte-source-agnostic.
+  (global $TEXT_DECODE_SCRATCH i32 (region.addr $TEXT_DECODE_SCRATCH 0))
+  (global $TEXT_DECODE_SCRATCH_SIZE i32 (region.size $TEXT_DECODE_SCRATCH))
+  ;; Re-expressed per-character lpDx for a decoded ExtTextOutA (see
+  ;; 00-regions.wat); WAT-private like $TEXT_DECODE_SCRATCH.
+  (global $TEXT_DX_SCRATCH i32 (region.addr $TEXT_DX_SCRATCH 0))
+  (global $TEXT_DX_SCRATCH_SIZE i32 (region.size $TEXT_DX_SCRATCH))
   ;; Console screen buffer. This used to sit at 0x7000/0x7FA0, which is
   ;; WND_RECORDS — every WriteConsole overwrote the window table, so a console
   ;; app corrupted windows it never touched. Cells are capped by
@@ -3916,7 +4019,7 @@
   ;; from zeroed memory -- sub_next starts at WIN16_SUB_FIRST, so it is stored
   ;; biased by it -- and $win16_handle_reset does not reach this far.
   (func $win16_task_shared (param $off i32) (result i32)
-    (i32.add (call $g2w (i32.add (global.get $WIN16_ARENA)
+    (i32.add (call $g2w (i32.add (call $win16_arena_base)
                                  (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))
              (i32.add (i32.const 0xF000) (local.get $off))))
   (func $win16_next_seg_get (result i32) (i32.load (call $win16_task_shared (i32.const 0))))
@@ -3977,6 +4080,8 @@
   ;; alone is 107 segments, and Rattler Race, Rodent's Revenge, JigSawed,
   ;; GoFigure and TicTacDrop all stopped while the loader was still placing it.
   (global $WIN16_ARENA     i32 (i32.const 0x00100000))
+  (global $WIN16_PROCESS_ARENA i32 (region.addr $WIN16_PROCESS_ARENA 0))
+  (global $WIN16_PROCESS_ARENA_SIZE i32 (region.size $WIN16_PROCESS_ARENA))
   (global $WIN16_THUNK_SEL (mut i32) (i32.const 0))
   (global $win16_thunk_index (mut i32) (i32.const 0))
   (global $win16_seg_count (mut i32) (i32.const 0))
@@ -4185,10 +4290,8 @@
   (global $STATIC_SYS_DLL_NAMES i32 (region.addr $RESERVED_PAGE_STRINGS 0x00000280))
   (global $STATIC_SYS_DIR i32 (region.addr $RESERVED_PAGE_STRINGS 0x0000025C))
   (global $STATIC_SYS_DLL_EXT i32 (region.addr $RESERVED_PAGE_STRINGS 0x00000274))
-  ;; Pseudo module handles for those names. They are deliberately outside
-  ;; every mapped image so nothing mistakes one for a real base address; the
-  ;; only operations defined on them are GetProcAddress (which resolves
-  ;; through the API table and ignores the handle) and GetModuleFileName.
+  ;; Legacy pseudo-handle band remains reserved from VirtualAlloc. Native
+  ;; module handles now identify shared readable PE headers instead.
   (global $STATIC_SYS_DLL_HANDLE_BASE i32 (i32.const 0x5D110000))
   ;; First index in the name list that belongs to DirectX.
   (global $STATIC_SYS_DLL_FIRST_DX i32 (i32.const 4))
@@ -4340,22 +4443,7 @@
   ;; labels, and that is the only difference between the two. Set by $menu_load.
   (global $ml_char_stride  (mut i32) (i32.const 2))
 
-  ;; Menu tracking state — set by $menu_open / cleared by $menu_close.
-  ;; Read by $menu_paint_bar (open_idx) and $menu_paint_dropdown (hover)
-  ;; via the JS-side compositor as part of every repaint. Only one menu
-  ;; can be open at a time across all windows.
-  (global $menu_open_hwnd  (mut i32) (i32.const 0))
-  (global $menu_open_top   (mut i32) (i32.const -1))
-  ;; The bar POSITION the open dropdown hangs from (highlighted on the bar and
-  ;; anchoring the dropdown), or -1 for a TrackPopupMenu popup. $menu_open_top
-  ;; names the dropdown's CONTENT: a blob top, or 0 of the popup blob built
-  ;; from an HMENU. They differ once a bar has an arrangement.
-  (global $menu_open_bar_pos (mut i32) (i32.const -1))
-  (global $menu_open_hover (mut i32) (i32.const -1))
-  (global $menu_open_sub_hover (mut i32) (i32.const -1))
-  (global $menu_open_x     (mut i32) (i32.const -1))
-  (global $menu_open_y     (mut i32) (i32.const -1))
-  (global $menu_open_popup_blob (mut i32) (i32.const 0)) ;; guest ptr to transient TrackPopupMenu blob for dynamic HMENU
+  ;; Process-shared menu tracking lives in 09c5-menu.wat:$MENU_TRACKING.
 
   ;; Currently-dropped combobox hwnd (the COMBO, not the popup). 0 = none open.
   ;; Set by $combobox_open_dropdown / cleared by $combobox_close_dropdown.

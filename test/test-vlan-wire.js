@@ -58,6 +58,47 @@ function settle(...nodes) {
 }
 
 async function main() {
+  check('loopback close releases queues and hooks and rejects late traffic', () => {
+    const segment = new LoopbackSegment();
+    const sender = segment.attach(), retired = segment.attach(), peer = segment.attach();
+    const bytes = new Uint8Array(28);
+    sender.send(bytes);
+    retired.onDeliver = () => assert.fail('retired delivery hook');
+    retired.onFrame = () => assert.fail('retired frame hook');
+    const received = retired.recvFrames;
+    retired.close(); retired.close();
+    assert.strictEqual(retired.pending, 0);
+    assert.strictEqual(retired.segment, null);
+    assert.strictEqual(retired.onDeliver, null);
+    assert.strictEqual(retired.onFrame, null);
+    assert.strictEqual(retired.send(bytes), false);
+    retired.deliver(bytes); retired.peerGone(1); sender.send(bytes);
+    assert.strictEqual(retired.pending, 0);
+    assert.strictEqual(retired.recvFrames, received);
+    assert.strictEqual(retired.sentFrames, 0);
+    assert.deepStrictEqual(segment.endpoints, [sender, peer]);
+    assert.strictEqual(peer.pending, 2, 'close emits no extra GONE frame');
+  });
+
+  check('broadcast snapshots recipients while delivery hooks change membership', () => {
+    const segment = new LoopbackSegment();
+    const sender = segment.attach(), first = segment.attach();
+    const retired = segment.attach(), last = segment.attach();
+    let added;
+    first.onDeliver = () => {
+      first.close(); retired.close(); added = segment.attach();
+    };
+    const bytes = new Uint8Array(28);
+    assert.strictEqual(sender.send(bytes), true);
+    assert.strictEqual(first.pending, 0, 'self-close clears the delivered frame');
+    assert.strictEqual(retired.pending, 0, 'closed recipient in snapshot rejects delivery');
+    assert.strictEqual(last.pending, 1, 'removal cannot skip a later live recipient');
+    assert.strictEqual(added.pending, 0, 'new recipient starts with the next broadcast');
+    sender.send(bytes);
+    assert.strictEqual(last.pending, 2);
+    assert.strictEqual(added.pending, 1);
+  });
+
   // The [net] trace names what it carries. DDEML frames share the wire under
   // 'DDE1' and must be read with their own layout: decoded as vln/1, a Hearts
   // poke (DDE type 6) printed as "DGRAM", and test-win16-hearts-vlan.js, which

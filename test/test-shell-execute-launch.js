@@ -17,6 +17,7 @@ const apps = {
   wordpad:   { exe: 'binaries/win98-apps/wordpad.exe' },
   mspaint98: { exe: 'binaries/win98-apps/mspaint.exe' },
   write:     { exe: 'binaries/win98-apps/write.exe' },
+  scr_architec: { exe: 'binaries/screensavers/ARCHITEC.SCR', args: '/s' },
 };
 
 function makeShell(opts = {}) {
@@ -67,6 +68,10 @@ function makeShell(opts = {}) {
     'falls back to the registered exe basename when the key differs');
   assert.strictEqual(shell.appKeyForExe('nosuchprogram.exe'), null,
     'an unregistered exe resolves to nothing');
+  assert.strictEqual(shell.appKeyForExe('ARCHITEC.SCR'), 'scr_architec',
+    'native applet Preview resolves a registered saver basename');
+  assert.strictEqual(shell.appKeyForExe('architec.scr'), 'scr_architec');
+  assert.strictEqual(shell.appKeyForExe('ARCHITEC.SCR.txt'), null);
   assert.strictEqual(shell.appKeyForExe(''), null);
   console.log('ok: exe name resolution');
 }
@@ -180,13 +185,14 @@ function makeShell(opts = {}) {
     /resolved = ctx\.vfs\._resolvePath\(fullName\)[\s\S]*?return ctx\.vfs\.materialize\(resolved\)/,
     'runtime DLL loading prefers the exact current-directory VFS entry over duplicate basenames');
   assert.match(hostSource,
-    /if \(absolute && shell\.launchVfsExe && shell\.launchVfsExe\(launchFile, self, launchDir, params\)\)/,
+    /if \(absolute && shell\.launchVfsExe && shell\.launchVfsExe\(launchFile, self, launchDir, params, launchOpts\)\)/,
     'browser host offers relative and absolute executable names to the caller VFS');
-  assert(hostSource.indexOf('if (!absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params))') <
-      hostSource.indexOf("if (/\\.exe$/i.test(file) && shell.launchExe(file))"),
+  const relativeLaunch = hostSource.indexOf('if (!absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params, launchOpts))');
+  assert(relativeLaunch >= 0 && relativeLaunch <
+      hostSource.indexOf("if (!parsedCommand.isWinExec && /\\.(exe|scr)$/i.test(file) && shell.launchExe(file, launchOpts))"),
     'a bare name in the caller current directory (NFS II autorun "setup.exe") beats the registry basename match');
   assert.strictEqual(
-    (shellSource.match(/queuePendingLaunch\(key, SINGLE_APP\(\)\);/g) || []).length,
+    (shellSource.match(/queuePendingLaunch\(key, SINGLE_APP\(\), launchOpts\);/g) || []).length,
     2,
     'registered and inherited-VFS handoffs use the dormant process queue');
   assert.strictEqual(
@@ -208,6 +214,168 @@ function makeShell(opts = {}) {
   assert(logs.some(line => /skipped obsolete DirectX setup/i.test(line)),
     'the DirectX no-op is visible in the debug log');
   console.log('ok: obsolete DirectX setup is already satisfied');
+}
+
+// WinExec uses CreateProcess's ordered unquoted candidates at the browser
+// callback too. Fixtures never load a PE; only the final boot is substituted.
+{
+  const vm = require('vm');
+  const { VirtualFS } = require('../lib/filesystem');
+  const { parseShellLaunchCommand, resolveShellLaunchPath, createWinExecReadiness } = require('../host');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'host.js'), 'utf8');
+  const start = source.indexOf('    h.shell_execute =');
+  const end = source.indexOf('    // The guest asked for the machine to go down', start);
+  assert(start >= 0 && end > start);
+  const image = 'C:\\Program Files\\Sub Dir\\program.exe';
+  function launch(command, files, operation = 'WinExec', applicationPath = '', searchPath = '') {
+    const vfs = new VirtualFS();
+    for (const file of files) vfs.files.set(vfs._resolvePath(file), { data: new Uint8Array(1) });
+    const calls = [];
+    const strings = [null, operation, command, applicationPath, searchPath];
+    const parent = { _helpCtx: { vfs }, readString: p => strings[p], logToUI() {} };
+    const h = {}, winexecReadiness = createWinExecReadiness();
+    vm.runInNewContext(source.slice(start, end), {
+      h, self: parent, WineAssembly: {}, parseShellLaunchCommand, resolveShellLaunchPath, winexecReadiness,
+      console: { log() {} }, window: { wineShell: {
+        launchVfsExe(file, caller, dir, params, opts) {
+          calls.push({ file, params });
+          const exists = vfs.files.has(vfs._resolvePath(file));
+          if (exists && opts.beforeRun) {
+            const child = {}; opts.beforeRun(child);
+            child._winexecStartup.ready = true;
+          }
+          return exists;
+        }, launchExe() { return false; },
+      } },
+    });
+    let status = h.shell_execute(0, 1, 2, searchPath ? 4 : 0, applicationPath ? 3 : 0, 5);
+    if ((status >>> 16) === 0x5745) status = winexecReadiness.control(10, 123, status);
+    return { status, calls };
+  }
+  const full = launch(image + ' /flag', [image]);
+  assert.strictEqual(full.status, 33);
+  assert.deepStrictEqual(full.calls, [{ file: image, params: '/flag' }]);
+  const prefix = launch(image + ' /flag', [image, 'C:\\Program.exe']);
+  assert.strictEqual(prefix.status, 33);
+  assert.deepStrictEqual(prefix.calls, [{ file: 'C:\\Program.exe', params: 'Files\\Sub Dir\\program.exe /flag' }]);
+  assert.strictEqual(launch('"C:\\Program" Files\\Sub Dir\\program.exe', [image]).status, 2);
+  assert.strictEqual(launch(image, []).status, 2);
+  assert.deepStrictEqual(launch(image, [image], 'open').calls, [{ file: image, params: '' }]);
+  const app = 'C:\\Tools\\Parent.exe', sibling = 'C:\\Tools\\Helper.exe';
+  const order = [sibling, 'C:\\Helper.exe', 'C:\\WINDOWS\\SYSTEM\\Helper.exe',
+    'C:\\WINDOWS\\Helper.exe', 'D:\\Bin\\Helper.exe', 'E:\\Bin\\Helper.exe'];
+  for (let i = 0; i < order.length; i++) {
+    const result = launch('helper /flag "two words"', order.slice(i), 'WinExec', app, 'D:\\Bin;E:\\Bin');
+    assert.strictEqual(result.status, 33, 'each search fallback launches');
+    assert.deepStrictEqual(result.calls, [{ file: order[i].toLowerCase(), params: '/flag "two words"' }]);
+  }
+  assert.strictEqual(launch('absent /flag', order, 'WinExec', app).status, 2);
+  assert.strictEqual(launch('.\\helper /flag', [sibling], 'WinExec', app).status, 2,
+    'explicit relative directory does not search the application directory');
+  assert.strictEqual(launch('"helper" /flag', [sibling], 'WinExec', app).status, 33);
+  console.log('ok: browser WinExec candidate order, quoted and absent controls, separate ShellExecute lpFile');
+}
+
+// Exercise the production browser process_spawn callback with the real shell
+// skip policy and loopback transport. Only guest attachment/boot is substituted.
+{
+  const vm = require('vm');
+  const VlanWire = require('../lib/vlan-wire');
+  const { parseShellLaunchCommand, resolveShellLaunchPath, createWinExecReadiness } = require('../host');
+  const hostSource = fs.readFileSync(path.join(__dirname, '..', 'host.js'), 'utf8');
+  const start = hostSource.indexOf('    h.process_spawn =');
+  const end = hostSource.indexOf('    // E4:', start);
+  assert(start >= 0 && end > start, 'extract the production process_spawn callback');
+  function fixture(mode = 'skip', pipes = 1) {
+    const { shell, launched } = makeShell();
+    let options;
+    const parent = {
+      memory: new WebAssembly.Memory({ initial: 1 }),
+      readString: () => mode === 'skip' ? 'C:\\DXSETUP.EXE' : 'C:\\child.exe',
+      threadManager: {},
+    };
+    const h = {};
+    vm.runInNewContext(hostSource.slice(start, end), {
+      h, self: parent, WineAssembly: {}, DataView, Map,
+      parseShellLaunchCommand, resolveShellLaunchPath,
+      console: { log() {} },
+      window: { VlanWire, wineShell: { launchVfsExe(...args) {
+        options = args[4];
+        if (mode === 'decline') return false;
+        if (mode === 'throw') throw new Error('launch failed');
+        if (mode === 'skip') return shell.launchVfsExe(...args);
+        return true;
+      } } },
+    });
+    return { parent, launched, spawn: () => h.process_spawn(1, 0, 0x0a000002, 0, pipes, 1, 0),
+      options: () => options };
+  }
+  function assertRetired(f) {
+    const wire = f.options().lanLink.wire;
+    assert.deepStrictEqual(f.parent._childSegment.endpoints, [f.parent.vlanWire],
+      'only the caller remains attached');
+    assert.strictEqual(wire.pending, 0);
+    assert.strictEqual(wire.send(new Uint8Array(28)), false);
+    wire.deliver(new Uint8Array(28)); wire.peerGone(9); wire.close();
+    assert.strictEqual(wire.pending, 0, 'retired child rejects late traffic');
+    assert.strictEqual(f.parent.vlanWire.pending, 1, 'completion emits exactly one EOF');
+  }
+  const skipped = fixture();
+  const pid = skipped.spawn();
+  const rec = skipped.parent._children.get(pid);
+  assert.strictEqual(rec.object.exited, true);
+  assert.strictEqual(rec.object.pending, false);
+  assert.strictEqual(rec.object.wine, null);
+  assert.strictEqual(rec.exitCode, 0, 'tracked skipped installer completes successfully');
+  assert.strictEqual(skipped.launched.length, 0);
+  skipped.options().onExit(null, 'already-satisfied');
+  assertRetired(skipped);
+
+  const noPipes = fixture('skip', 0);
+  const noPipePid = noPipes.spawn();
+  assert.strictEqual(noPipes.parent._children.get(noPipePid).exitCode, 0,
+    'skipped tracked launch without redirected handles also completes successfully');
+  assert.strictEqual(noPipes.parent._childSegment, undefined);
+
+  const live = fixture('live');
+  const livePid = live.spawn();
+  const wire = live.options().lanLink.wire;
+  const sibling = live.parent._childSegment.attach();
+  live.parent.vlanWire.send(new Uint8Array(28));
+  assert.strictEqual(wire.pending, 1, 'endpoint remains live until consumer completes');
+  live.options().onExit({ _exitCode: 17 });
+  live.options().onExit(null);
+  assert.strictEqual(live.parent._children.get(livePid).exitCode, 17);
+  assert.strictEqual(sibling.pending, 1, 'sibling keeps its frame and endpoint');
+  sibling.close();
+  assertRetired(live);
+
+  const cancelled = fixture('live');
+  const cancelledPid = cancelled.spawn();
+  const cancelledObject = cancelled.parent._children.get(cancelledPid).object;
+  cancelledObject.exited = true;
+  cancelledObject.exitCode = 0xdeadbeef;
+  cancelledObject.complete(null, 'already-satisfied');
+  assert.strictEqual(cancelled.parent._children.get(cancelledPid).exitCode, 0xdeadbeef,
+    'completion preserves a prior authoritative termination status');
+  assertRetired(cancelled);
+
+  const bootFailed = fixture('live');
+  const failedPid = bootFailed.spawn();
+  bootFailed.options().onExit(null);
+  assert.strictEqual(bootFailed.parent._children.get(failedPid).exitCode, 1,
+    'null child without the skip outcome remains a boot failure');
+  assertRetired(bootFailed);
+
+  for (const mode of ['decline', 'throw']) {
+    const failed = fixture(mode);
+    if (mode === 'throw') assert.throws(failed.spawn, /launch failed/);
+    else assert.strictEqual(failed.spawn(), 0);
+    assert.strictEqual(failed.parent._children.size, 0, 'failed launch is unpublished');
+    failed.options().onExit(null);
+    assertRetired(failed);
+  }
+  console.log('ok: tracked skipped/normal/failed launches retire only their child endpoint once');
 }
 
 // War Wind asks to run that obsolete redistributable from its final setup

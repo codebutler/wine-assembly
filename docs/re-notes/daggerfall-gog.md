@@ -15,6 +15,28 @@ DOS software: `FALL.EXE` contains the CauseWay 3.32 DOS extender. GOG bundles a
 Windows build of DOSBox 0.74-2.1 at `installed/DOSBOX/DOSBox.exe`, which is the
 executable Wine-Assembly hosts for this acceptance path.
 
+## Reproducible installed payload (2026-10-14)
+
+`node tools/fetch-candidate-corpus.js --id=gog-free-elder-scrolls-daggerfall --force`
+now recovers the pinned package and extracts1623 original files into `installed/`
+using innoextract1.9, language `en-US`, excluding installer temporary files.
+`test/candidate-corpus/gog-free-elder-scrolls-daggerfall-files.json` records every output hash;
+`node test/test-daggerfall-recovery.js` verifies pristine output. Fresh recipe
+output matches an independent extraction and all corresponding restored files
+byte-for-byte. Existing critical hashes in `lib/daggerfall-gog-source.json`
+also match. The original saves remain original bytes, not generated state.
+
+This is payload recovery, not a fresh browser launch qualification. The generic
+candidate manifest and the dedicated `tools/gen-daggerfall-manifest.js` output
+serve different routes; the dedicated generator rejects conflicting existing
+metadata rather than silently replacing it. Keep the required-save policy and
+existing mount configuration when preparing that route. No runtime or live
+dashboard files were changed here.
+
+Evidence and original installer copy:
+`scratch/runs/20261014-daggerfall-recovery/`. Preserve local saves separately
+before forced recovery, which replaces the complete fixture tree.
+
 ## Confirmed launch path
 
 Apply the GOG base configuration followed by the two repository overrides:

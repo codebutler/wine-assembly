@@ -425,6 +425,35 @@ async function main() {
     assert.strictEqual(chooseOwner([peers[2]]), null);
   });
 
+  await check('local probe waits for a valid reply and recognizes only configured discovery', () => {
+    const spec = { port: 27960, query: '\xff\xff\xff\xffgetinfo test',
+      response: '^\\xff\\xff\\xff\\xffinfoResponse\\n',
+      discoveryQuery: '^\\xff\\xff\\xff\\xffgetinfo\\b' };
+    let discoveries = 0;
+    const wire = new star.LocalProbeWire(spec, () => discoveries++);
+    const probe = new star.HostProbe(wire, spec);
+    const frame = (dst, port, body) => star.datagram(star.seatIp(1), 27960,
+      dst, port, star.latin1(body));
+    probe.ask();
+    assert.strictEqual(wire.pending, 1, 'probe delivered only to local guest');
+    wire.commit();
+    assert.strictEqual(probe.hosting, null, 'a socket without replies is not hosting');
+    wire.send(frame(star.seatIp(star.PROBE_SEAT), star.PROBE_PORT, 'unrelated response'));
+    assert.strictEqual(probe.hosting, null);
+    wire.send(frame(star.seatIp(star.PROBE_SEAT), star.PROBE_PORT, '\xff\xff\xff\xffinfoResponse\n\\hostname\\test'));
+    assert(probe.hosting, 'valid server response establishes hosting');
+    assert.strictEqual(wire.links.size, 0, 'no public network peer created');
+    wire.send(frame(0xffffffff, 27961, spec.query));
+    wire.send(frame(star.seatIp(2), 27960, spec.query));
+    wire.send(frame(0xffffffff, 27960, 'other packet'));
+    assert.strictEqual(discoveries, 0);
+    wire.send(frame(0xffffffff, 27960, spec.query));
+    assert.strictEqual(discoveries, 1);
+    probe.stop(); wire.close();
+    assert.strictEqual(wire.send(frame(0xffffffff, 27960, spec.query)), false);
+    assert.strictEqual(discoveries, 1, 'closed probe cannot trigger UI');
+  });
+
   await check('a serving probe follows the game, not the wire', () => {
     // Hearts, TetriNET and Liquid War say nothing on the wire while they wait
     // for players, so the probe asks the emulator (the page's gameServing).

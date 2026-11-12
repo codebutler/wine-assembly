@@ -1,3 +1,62 @@
+  ;; Guest execution and the compositor use different WASM instances.
+  ;; Popup identity, selection and return-command state belong to the process.
+  ;; Store index/coordinate sentinels biased by one so zeroed process memory
+  ;; means -1, without an instance initializer resetting another thread's menu.
+  (global $MENU_TRACKING i32 (region.addr $MENU_TRACKING 0))
+  (global $MENU_TRACKING_SIZE i32 (region.size $MENU_TRACKING))
+  (func $menu_open_hwnd_get (result i32)
+    (i32.atomic.load offset=0 (global.get $MENU_TRACKING)))
+  (func $menu_open_hwnd_set (param $value i32)
+    (i32.atomic.store offset=0 (global.get $MENU_TRACKING) (local.get $value)))
+  (func $menu_open_top_get (result i32)
+    (i32.sub (i32.atomic.load offset=4 (global.get $MENU_TRACKING)) (i32.const 1)))
+  (func $menu_open_top_set (param $value i32)
+    (i32.atomic.store offset=4 (global.get $MENU_TRACKING) (i32.add (local.get $value) (i32.const 1))))
+  (func $menu_open_hover_get (result i32)
+    (i32.sub (i32.atomic.load offset=8 (global.get $MENU_TRACKING)) (i32.const 1)))
+  (func $menu_open_hover_set (param $value i32)
+    (i32.atomic.store offset=8 (global.get $MENU_TRACKING) (i32.add (local.get $value) (i32.const 1))))
+  (func $menu_open_sub_hover_get (result i32)
+    (i32.sub (i32.atomic.load offset=12 (global.get $MENU_TRACKING)) (i32.const 1)))
+  (func $menu_open_sub_hover_set (param $value i32)
+    (i32.atomic.store offset=12 (global.get $MENU_TRACKING) (i32.add (local.get $value) (i32.const 1))))
+  (func $menu_open_x_get (result i32)
+    (i32.sub (i32.atomic.load offset=16 (global.get $MENU_TRACKING)) (i32.const 1)))
+  (func $menu_open_x_set (param $value i32)
+    (i32.atomic.store offset=16 (global.get $MENU_TRACKING) (i32.add (local.get $value) (i32.const 1))))
+  (func $menu_open_y_get (result i32)
+    (i32.sub (i32.atomic.load offset=20 (global.get $MENU_TRACKING)) (i32.const 1)))
+  (func $menu_open_y_set (param $value i32)
+    (i32.atomic.store offset=20 (global.get $MENU_TRACKING) (i32.add (local.get $value) (i32.const 1))))
+  (func $menu_open_popup_blob_get (result i32)
+    (i32.atomic.load offset=24 (global.get $MENU_TRACKING)))
+  (func $menu_open_popup_blob_set (param $value i32)
+    (i32.atomic.store offset=24 (global.get $MENU_TRACKING) (local.get $value)))
+  (func $menu_open_dynamic_hmenu_get (result i32)
+    (i32.atomic.load offset=28 (global.get $MENU_TRACKING)))
+  (func $menu_open_dynamic_hmenu_set (param $value i32)
+    (i32.atomic.store offset=28 (global.get $MENU_TRACKING) (local.get $value)))
+  (func $menu_track_state_get (result i32)
+    (i32.atomic.load offset=32 (global.get $MENU_TRACKING)))
+  (func $menu_track_state_set (param $value i32)
+    (i32.atomic.store offset=32 (global.get $MENU_TRACKING) (local.get $value)))
+  (func $menu_track_result_get (result i32)
+    (i32.atomic.load offset=36 (global.get $MENU_TRACKING)))
+  (func $menu_track_result_set (param $value i32)
+    (i32.atomic.store offset=36 (global.get $MENU_TRACKING) (local.get $value)))
+  ;; The bar POSITION the open dropdown hangs from (highlighted on the bar and
+  ;; anchoring the dropdown), or -1 for a TrackPopupMenu popup. menu_open_top
+  ;; names the dropdown's CONTENT: a blob top, or 0 of the popup blob built
+  ;; from an HMENU. They differ once a bar has an arrangement.
+  (func $menu_open_bar_pos_get (result i32)
+    (i32.sub (i32.atomic.load offset=44 (global.get $MENU_TRACKING)) (i32.const 1)))
+  (func $menu_open_bar_pos_set (param $value i32)
+    (i32.atomic.store offset=44 (global.get $MENU_TRACKING) (i32.add (local.get $value) (i32.const 1))))
+  (func $resource_submenu_bindings_get (result i32)
+    (i32.atomic.load offset=40 (global.get $MENU_TRACKING)))
+  (func $resource_submenu_bindings_set (param $value i32)
+    (i32.atomic.store offset=40 (global.get $MENU_TRACKING) (local.get $value)))
+
   ;; ============================================================
   ;; Menu painting + hit-testing (WAT-side, was JS drawMenuBar /
   ;; _drawDropdown / _drawAccelText / renderer-input menu hit code)
@@ -51,14 +110,11 @@
   ;; MNUD record has been serialized. Retain the originating HMENU separately
   ;; so handle-based geometry queries cannot mistake any other live popup for
   ;; the one currently displayed.
-  (global $menu_open_dynamic_hmenu (mut i32) (i32.const 0))
 
   ;; TPM_RETURNCMD: USER runs the menu loop inside TrackPopupMenu and returns
   ;; the picked id instead of posting WM_COMMAND. The call parks on its thunk
   ;; while the popup is open. State 0 = no such call, 1 = popup open, 2 = the
   ;; popup closed and $menu_track_result holds the id (0 = dismissed).
-  (global $menu_track_state (mut i32) (i32.const 0))
-  (global $menu_track_result (mut i32) (i32.const 0))
 
   ;; Resource menus are stored as immutable-layout paint blobs, but Win32
   ;; still lets applications mutate an HMENU returned for a cascading popup.
@@ -67,7 +123,6 @@
   ;; Binding: next, parent blob, top index, child index, HMENU, paint blob,
   ;;           owned copies of seed labels, cached owner-draw measurements,
   ;;           owner HWND.
-  (global $resource_submenu_bindings (mut i32) (i32.const 0))
 
   ;; --------- MENU_DATA_TABLE accessors ---------
 
@@ -110,9 +165,9 @@
   ;; here for painting, hit-testing, and activation until $menu_close.
   (func $menu_dropdown_blob_w (param $hwnd i32) (result i32)
     (if (i32.and
-          (i32.ne (global.get $menu_open_popup_blob) (i32.const 0))
-          (i32.eq (local.get $hwnd) (global.get $menu_open_hwnd)))
-      (then (return (call $g2w (global.get $menu_open_popup_blob)))))
+          (i32.ne (call $menu_open_popup_blob_get) (i32.const 0))
+          (i32.eq (local.get $hwnd) (call $menu_open_hwnd_get)))
+      (then (return (call $g2w (call $menu_open_popup_blob_get)))))
     (call $menu_blob_w (local.get $hwnd)))
 
   ;; Dynamic popup HMENU state. Handles are guest heap pointers to:
@@ -1080,7 +1135,7 @@
   (func $resource_submenu_binding_find_key
         (param $parent_blob i32) (param $top i32) (param $child i32) (result i32)
     (local $binding i32) (local $bw i32)
-    (local.set $binding (global.get $resource_submenu_bindings))
+    (local.set $binding (call $resource_submenu_bindings_get))
     (block $done (loop $scan
       (br_if $done (i32.eqz (local.get $binding)))
       (local.set $bw (call $g2w (local.get $binding)))
@@ -1096,7 +1151,7 @@
 
   (func $resource_submenu_binding_find_handle (param $hmenu i32) (result i32)
     (local $binding i32) (local $bw i32)
-    (local.set $binding (global.get $resource_submenu_bindings))
+    (local.set $binding (call $resource_submenu_bindings_get))
     (block $done (loop $scan
       (br_if $done (i32.eqz (local.get $binding)))
       (local.set $bw (call $g2w (local.get $binding)))
@@ -1190,7 +1245,7 @@
   (func $resource_submenu_binding_forget_handle (param $hmenu i32) (result i32)
     (local $binding i32) (local $prev_w i32) (local $bw i32) (local $next i32)
     (local $parent_w i32) (local $item i32)
-    (local.set $binding (global.get $resource_submenu_bindings))
+    (local.set $binding (call $resource_submenu_bindings_get))
     (block $done (loop $scan
       (br_if $done (i32.eqz (local.get $binding)))
       (local.set $bw (call $g2w (local.get $binding)))
@@ -1215,7 +1270,7 @@
             (then (call $heap_free (i32.load offset=28 (local.get $bw)))))
           (if (local.get $prev_w)
             (then (i32.store (local.get $prev_w) (local.get $next)))
-            (else (global.set $resource_submenu_bindings (local.get $next))))
+            (else (call $resource_submenu_bindings_set (local.get $next))))
           (call $heap_free (local.get $binding))
           (return (i32.const 1))))
       (local.set $prev_w (local.get $bw))
@@ -1226,7 +1281,7 @@
   (func $resource_submenu_bindings_drop_parent (param $parent_blob i32)
     (local $binding i32) (local $prev_w i32) (local $bw i32) (local $next i32)
     (local $hmenu i32) (local $sw i32)
-    (local.set $binding (global.get $resource_submenu_bindings))
+    (local.set $binding (call $resource_submenu_bindings_get))
     (block $done (loop $scan
       (br_if $done (i32.eqz (local.get $binding)))
       (local.set $bw (call $g2w (local.get $binding)))
@@ -1248,7 +1303,7 @@
               (call $heap_free (local.get $hmenu))))
           (if (local.get $prev_w)
             (then (i32.store (local.get $prev_w) (local.get $next)))
-            (else (global.set $resource_submenu_bindings (local.get $next))))
+            (else (call $resource_submenu_bindings_set (local.get $next))))
           (call $heap_free (local.get $binding)))
         (else (local.set $prev_w (local.get $bw))))
       (local.set $binding (local.get $next))
@@ -1323,7 +1378,7 @@
         (drop (call $dynamic_menu_destroy (local.get $hmenu)))
         (return (i32.const 0))))
     (local.set $bw (call $g2w (local.get $binding)))
-    (i32.store (local.get $bw) (global.get $resource_submenu_bindings))
+    (i32.store (local.get $bw) (call $resource_submenu_bindings_get))
     (i32.store offset=4 (local.get $bw) (call $w2g (local.get $parent_w)))
     (i32.store offset=8 (local.get $bw) (local.get $top))
     (i32.store offset=12 (local.get $bw) (local.get $child))
@@ -1332,7 +1387,7 @@
     (i32.store offset=24 (local.get $bw) (local.get $labels))
     (i32.store offset=28 (local.get $bw) (i32.const 0))
     (i32.store offset=32 (local.get $bw) (local.get $hwnd))
-    (global.set $resource_submenu_bindings (local.get $binding))
+    (call $resource_submenu_bindings_set (local.get $binding))
     (call $resource_submenu_binding_refresh (local.get $hmenu))
     (local.get $hmenu))
 
@@ -1642,6 +1697,18 @@
     (local.set $list (i32.load (call $menu_bar_list_cell (local.get $slot))))
     (if (i32.eqz (local.get $list)) (then (return (i32.const 0))))
     (call $g2w (local.get $list)))
+
+  ;; The observed compositor can certify the no-menu branch without invoking
+  ;; g2w (which may materialize lazy storage). This only reads window metadata:
+  ;; the bar's blob guest pointer, or its arrangement's when the bar has one
+  ;; and no blob, so 0 means the window has no menu bar at all.
+  (func (export "get_menu_bar_blob_guest") (param $hwnd i32) (result i32)
+    (local $slot i32) (local $blob i32)
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.eq (local.get $slot) (i32.const -1)) (then (return (i32.const 0))))
+    (local.set $blob (i32.load (call $menu_data_table_addr (local.get $slot))))
+    (if (local.get $blob) (then (return (local.get $blob))))
+    (i32.load (call $menu_bar_list_cell (local.get $slot))))
 
   ;; The number of tops in the blob, whatever the arrangement.
   (func $menu_blob_top_count (param $hwnd i32) (result i32)
@@ -2061,8 +2128,8 @@
   ;; Repainting is the program's (DrawMenuBar), as on Win32.
   (func $menu_bar_edited (param $hwnd i32)
     (if (i32.and
-          (i32.eq (global.get $menu_open_hwnd) (local.get $hwnd))
-          (i32.ge_s (global.get $menu_open_bar_pos) (i32.const 0)))
+          (i32.eq (call $menu_open_hwnd_get) (local.get $hwnd))
+          (i32.ge_s (call $menu_open_bar_pos_get) (i32.const 0)))
       (then (call $menu_close))))
 
   ;; ModifyMenu on the bar: the item at the position is replaced. The old
@@ -2259,9 +2326,9 @@
     ;; A TrackPopupMenu popup is not a bar session: nothing on the bar is
     ;; open while one is up, unless the popup IS a bar position's own menu.
     (if (i32.and
-          (i32.ne (global.get $menu_open_popup_blob) (i32.const 0))
-          (i32.and (i32.eq (local.get $hwnd) (global.get $menu_open_hwnd))
-                   (i32.lt_s (global.get $menu_open_bar_pos) (i32.const 0))))
+          (i32.ne (call $menu_open_popup_blob_get) (i32.const 0))
+          (i32.and (i32.eq (local.get $hwnd) (call $menu_open_hwnd_get))
+                   (i32.lt_s (call $menu_open_bar_pos_get) (i32.const 0))))
       (then (local.set $open_idx (i32.const -1))))
 
     (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 2)))
@@ -3500,7 +3567,7 @@
           (i32.add (local.get $dx) (local.get $dw))
           (i32.add (i32.add (local.get $dy) (i32.const 2))
                    (i32.mul (local.get $hover_cidx) (i32.const 20)))
-          (global.get $menu_open_sub_hover)))))
+          (call $menu_open_sub_hover_get)))))
 
   ;; Let the compositor obtain/clear the presentation canvas before invoking
   ;; menu_paint_dropdown. The returned surface remains an ordinary WAT bitmap.
@@ -3631,29 +3698,85 @@
   ;;   pass 2 — write into a freshly allocated heap blob, sized exactly
   ;; ============================================================
 
+  ;; UTF-16 labels under an ANSI page with conversion tables (CP950). The
+  ;; menu blob keeps canonical ANSI text, and Windows produces that text
+  ;; with the ANSI code page, so a Big5 build's 檔案(&F) must become the
+  ;; Big5 bytes, not the low byte of each code unit. Each label is encoded
+  ;; once into this grow-only scratch (WASM address; guest heap backed) and
+  ;; read back one byte per character, so every walker below sees an ANSI
+  ;; label exactly like an NE template's. $ml_xcode_cp is 0 — and nothing
+  ;; changes — for NE templates and for every page without tables.
+  (global $ml_xcode_cp  (mut i32) (i32.const 0))
+  (global $ml_xcode_buf (mut i32) (i32.const 0))  ;; guest ptr
+  (global $ml_xcode_cap (mut i32) (i32.const 0))
+  (global $ml_xcode_cur (mut i32) (i32.const 0))
+
+  ;; Arm (or disarm) label transcoding for the template of $size bytes
+  ;; whose bounds $ml_end and $ml_char_stride were just set. A template is
+  ;; walked at most twice (count, then write) and each pass's labels fit in
+  ;; the template's own bytes, so twice its size bounds the scratch.
+  (func $ml_xcode_begin (param $size i32)
+    (local $need i32)
+    (global.set $ml_xcode_cur (i32.const 0))
+    (global.set $ml_xcode_cp (i32.const 0))
+    (if (i32.ne (global.get $ml_char_stride) (i32.const 2)) (then (return)))
+    (if (i32.eqz (call $text_decode_code_page)) (then (return)))
+    (local.set $need (i32.add (i32.shl (local.get $size) (i32.const 1)) (i32.const 16)))
+    (if (i32.lt_u (global.get $ml_xcode_cap) (local.get $need))
+      (then
+        (if (global.get $ml_xcode_buf)
+          (then (call $heap_free (global.get $ml_xcode_buf))))
+        (global.set $ml_xcode_buf (call $heap_alloc (local.get $need)))
+        (global.set $ml_xcode_cap
+          (select (local.get $need) (i32.const 0) (i32.ne (global.get $ml_xcode_buf) (i32.const 0))))))
+    ;; No scratch: keep the historical copy rather than fail the menu.
+    (if (i32.eqz (global.get $ml_xcode_buf)) (then (return)))
+    (global.set $ml_xcode_cp (call $text_decode_code_page)))
+
   ;; Read the label starting at $ml_pos, one $ml_char_stride-wide character at
   ;; a time. Advances $ml_pos past the trailing NUL, writes the char count to
-  ;; $ml_label_chars, and returns the WASM addr of the first character.
+  ;; $ml_label_chars, and returns the WASM addr of the first character. With
+  ;; transcoding armed the returned label is the encoded ANSI copy and the
+  ;; count is in bytes.
   (func $ml_load_label (result i32)
-    (local $start i32) (local $chars i32) (local $ch i32)
+    (local $start i32) (local $chars i32) (local $ch i32) (local $dst i32)
     (local.set $start (global.get $ml_pos))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (global.get $ml_pos) (global.get $ml_end)))
-      (local.set $ch (call $ml_char_at (global.get $ml_pos) (i32.const 0)))
+      (local.set $ch
+        (if (result i32) (i32.eq (global.get $ml_char_stride) (i32.const 1))
+          (then (i32.load8_u (global.get $ml_pos)))
+          (else (i32.load16_u (global.get $ml_pos)))))
       (global.set $ml_pos (i32.add (global.get $ml_pos) (global.get $ml_char_stride)))
       (br_if $done (i32.eqz (local.get $ch)))
       (local.set $chars (i32.add (local.get $chars) (i32.const 1)))
       (br $scan)))
+    (if (global.get $ml_xcode_cp)
+      (then
+        (local.set $dst (i32.add (call $g2w (global.get $ml_xcode_buf))
+          (global.get $ml_xcode_cur)))
+        (local.set $chars (call $wide_wa_to_ansi_wa (local.get $start) (local.get $chars)
+          (local.get $dst)
+          (i32.sub (global.get $ml_xcode_cap) (global.get $ml_xcode_cur))))
+        (global.set $ml_xcode_cur (i32.add (global.get $ml_xcode_cur) (local.get $chars)))
+        (local.set $start (local.get $dst))))
     (global.set $ml_label_chars (local.get $chars))
     (local.get $start))
 
-  ;; Character $i of the label at $wa, in whichever width this template uses.
+  ;; Character $i of the label at $wa, in whichever width this template uses
+  ;; (one byte for a transcoded label).
   (func $ml_char_at (param $wa i32) (param $i i32) (result i32)
-    (local.set $wa (i32.add (local.get $wa)
-      (i32.mul (local.get $i) (global.get $ml_char_stride))))
-    (if (result i32) (i32.eq (global.get $ml_char_stride) (i32.const 1))
-      (then (i32.load8_u (local.get $wa)))
-      (else (i32.load16_u (local.get $wa)))))
+    (if (result i32) (i32.or (i32.eq (global.get $ml_char_stride) (i32.const 1))
+                             (i32.ne (global.get $ml_xcode_cp) (i32.const 0)))
+      (then (i32.load8_u (i32.add (local.get $wa) (local.get $i))))
+      (else (i32.load16_u (i32.add (local.get $wa) (i32.shl (local.get $i) (i32.const 1)))))))
+
+  ;; Address of character $i, under the same stride rule as $ml_char_at.
+  (func $ml_char_addr (param $wa i32) (param $i i32) (result i32)
+    (if (result i32) (i32.or (i32.eq (global.get $ml_char_stride) (i32.const 1))
+                             (i32.ne (global.get $ml_xcode_cp) (i32.const 0)))
+      (then (i32.add (local.get $wa) (local.get $i)))
+      (else (i32.add (local.get $wa) (i32.shl (local.get $i) (i32.const 1))))))
 
   ;; Recursively consume one level of items WITHOUT counting them.
   ;; Used to skip cascading sub-popups in pass 1 / pass 2.
@@ -3826,9 +3949,12 @@
     (if (local.get $sc_chars)
       (then
         (local.set $sc_off (global.get $ml_string_cur))
+        ;; The shortcut starts one character past the tab, in whatever stride
+        ;; the label is held in: a Win16 menu's ANSI bytes and a CP950
+        ;; transcoded label are one byte per unit, and a fixed UTF-16 stride
+        ;; drew FreeCell's F2/F3/F4 as fragments of the item text ("le", "Ga").
         (call $ml_copy_ascii
-          (i32.add (local.get $str_w) (i32.shl (i32.add (local.get $tab) (i32.const 1))
-                                                (i32.const 1)))
+          (call $ml_char_addr (local.get $str_w) (i32.add (local.get $tab) (i32.const 1)))
           (i32.add (global.get $ml_blob_w) (global.get $ml_string_cur))
           (local.get $sc_chars))
         (global.set $ml_string_cur (i32.add (global.get $ml_string_cur) (local.get $sc_chars)))))
@@ -4206,6 +4332,7 @@
     ;; --- Pass 1: count ---
     (global.set $ml_pos (local.get $items_w))
     (global.set $ml_end (i32.add (local.get $bytes_w) (local.get $size)))
+    (call $ml_xcode_begin (local.get $size))
     (global.set $ml_bar_count   (i32.const 0))
     (global.set $ml_struct_size (i32.const 4)) ;; bar_count header
     (global.set $ml_string_size (i32.const 0))
@@ -4251,42 +4378,42 @@
   ;; a valid handoff. The guest pump dequeues the shared message next slice.
   ;; ============================================================
 
-  (func (export "menu_open_hwnd")  (result i32) (global.get $menu_open_hwnd))
-  (func (export "menu_open_top")   (result i32) (global.get $menu_open_top))
-  (func (export "menu_open_bar_pos") (result i32) (global.get $menu_open_bar_pos))
-  (func (export "menu_open_hover") (result i32) (global.get $menu_open_hover))
-  (func (export "menu_open_sub_hover") (result i32) (global.get $menu_open_sub_hover))
-  (func (export "menu_open_x")     (result i32) (global.get $menu_open_x))
-  (func (export "menu_open_y")     (result i32) (global.get $menu_open_y))
+  (func (export "menu_open_hwnd")  (result i32) (call $menu_open_hwnd_get))
+  (func (export "menu_open_top")   (result i32) (call $menu_open_top_get))
+  (func (export "menu_open_bar_pos") (result i32) (call $menu_open_bar_pos_get))
+  (func (export "menu_open_hover") (result i32) (call $menu_open_hover_get))
+  (func (export "menu_open_sub_hover") (result i32) (call $menu_open_sub_hover_get))
+  (func (export "menu_open_x")     (result i32) (call $menu_open_x_get))
+  (func (export "menu_open_y")     (result i32) (call $menu_open_y_get))
 
   ;; Exported so a trace can say where the dropdown and its cascade are:
   ;; "the submenu was never highlighted" and "the pointer was aimed left of
   ;; the submenu" are the same subhover=-1 without them.
   (func $menu_dropdown_x (export "menu_dropdown_x") (param $hwnd i32) (param $top i32) (result i32)
-    (if (i32.ge_s (global.get $menu_open_x) (i32.const 0))
-      (then (return (global.get $menu_open_x))))
+    (if (i32.ge_s (call $menu_open_x_get) (i32.const 0))
+      (then (return (call $menu_open_x_get))))
     ;; A bar dropdown hangs from its bar POSITION; $top names its content.
-    (if (i32.and (i32.eq (local.get $hwnd) (global.get $menu_open_hwnd))
-                 (i32.ge_s (global.get $menu_open_bar_pos) (i32.const 0)))
-      (then (local.set $top (global.get $menu_open_bar_pos))))
+    (if (i32.and (i32.eq (local.get $hwnd) (call $menu_open_hwnd_get))
+                 (i32.ge_s (call $menu_open_bar_pos_get) (i32.const 0)))
+      (then (local.set $top (call $menu_open_bar_pos_get))))
     (i32.add (call $menu_bar_screen_x (local.get $hwnd))
              (call $menu_bar_item_x (local.get $hwnd) (local.get $top))))
 
   (func $menu_dropdown_y (export "menu_dropdown_y") (param $hwnd i32) (result i32)
-    (if (i32.ge_s (global.get $menu_open_y) (i32.const 0))
-      (then (return (global.get $menu_open_y))))
+    (if (i32.ge_s (call $menu_open_y_get) (i32.const 0))
+      (then (return (call $menu_open_y_get))))
     (i32.add (call $menu_bar_screen_y (local.get $hwnd)) (call $menu_bar_screen_h)))
 
   ;; Number of items currently being tracked (0 if no menu open).
   (func $menu_track_child_count (result i32)
-    (if (i32.eqz (global.get $menu_open_hwnd)) (then (return (i32.const 0))))
-    (call $menu_child_count (global.get $menu_open_hwnd) (global.get $menu_open_top)))
+    (if (i32.eqz (call $menu_open_hwnd_get)) (then (return (i32.const 0))))
+    (call $menu_child_count (call $menu_open_hwnd_get) (call $menu_open_top_get)))
 
   (func $menu_sub_track_child_count (result i32)
-    (if (i32.eqz (global.get $menu_open_hwnd)) (then (return (i32.const 0))))
-    (if (i32.lt_s (global.get $menu_open_hover) (i32.const 0)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $menu_open_hwnd_get)) (then (return (i32.const 0))))
+    (if (i32.lt_s (call $menu_open_hover_get) (i32.const 0)) (then (return (i32.const 0))))
     (call $menu_child_sub_count
-      (global.get $menu_open_hwnd) (global.get $menu_open_top) (global.get $menu_open_hover)))
+      (call $menu_open_hwnd_get) (call $menu_open_top_get) (call $menu_open_hover_get)))
 
   (func $menu_sub_first_selectable (result i32)
     (local $n i32) (local $i i32) (local $f i32)
@@ -4294,9 +4421,9 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
       (local.set $f (call $menu_subchild_flags
-        (global.get $menu_open_hwnd)
-        (global.get $menu_open_top)
-        (global.get $menu_open_hover)
+        (call $menu_open_hwnd_get)
+        (call $menu_open_top_get)
+        (call $menu_open_hover_get)
         (local.get $i)))
       (if (i32.eqz (i32.and (local.get $f) (i32.const 0x03)))
         (then (return (local.get $i))))
@@ -4373,6 +4500,7 @@
     (if (i32.ne (i32.load16_u (local.get $bytes_w)) (i32.const 0))
       (then (return (i32.const 0))))
     (global.set $ml_end (i32.add (local.get $bytes_w) (local.get $size)))
+    (call $ml_xcode_begin (local.get $size))
     (i32.add (local.get $bytes_w)
       (i32.add (i32.const 4)
         (i32.load16_u (i32.add (local.get $bytes_w) (i32.const 2))))))
@@ -5016,11 +5144,11 @@
   (func $menu_open (export "menu_open") (param $hwnd i32) (param $pos i32)
     (local $top i32) (local $e i32) (local $hmenu i32)
     (call $menu_track_finish)
-    (if (global.get $menu_open_popup_blob)
+    (if (call $menu_open_popup_blob_get)
       (then
-        (call $heap_free (global.get $menu_open_popup_blob))
-        (global.set $menu_open_popup_blob (i32.const 0))))
-    (global.set $menu_open_dynamic_hmenu (i32.const 0))
+        (call $heap_free (call $menu_open_popup_blob_get))
+        (call $menu_open_popup_blob_set (i32.const 0))))
+    (call $menu_open_dynamic_hmenu_set (i32.const 0))
     (local.set $top (call $menu_bar_top (local.get $hwnd) (local.get $pos)))
     (if (i32.lt_s (local.get $top) (i32.const 0))
       (then
@@ -5029,17 +5157,17 @@
                      (i32.ne (i32.and (i32.load offset=8 (local.get $e)) (i32.const 0x10)) (i32.const 0)))
           (then
             (local.set $hmenu (i32.load offset=4 (local.get $e)))
-            (global.set $menu_open_popup_blob (call $dynamic_menu_make_popup_blob (local.get $hmenu)))
-            (if (global.get $menu_open_popup_blob)
-              (then (global.set $menu_open_dynamic_hmenu (local.get $hmenu))))))
+            (call $menu_open_popup_blob_set (call $dynamic_menu_make_popup_blob (local.get $hmenu)))
+            (if (call $menu_open_popup_blob_get)
+              (then (call $menu_open_dynamic_hmenu_set (local.get $hmenu))))))
         (local.set $top (i32.const 0))))
-    (global.set $menu_open_hwnd  (local.get $hwnd))
-    (global.set $menu_open_top   (local.get $top))
-    (global.set $menu_open_bar_pos (local.get $pos))
-    (global.set $menu_open_hover (i32.const -1))
-    (global.set $menu_open_sub_hover (i32.const -1))
-    (global.set $menu_open_x     (i32.const -1))
-    (global.set $menu_open_y     (i32.const -1))
+    (call $menu_open_hwnd_set  (local.get $hwnd))
+    (call $menu_open_top_set   (local.get $top))
+    (call $menu_open_bar_pos_set (local.get $pos))
+    (call $menu_open_hover_set (i32.const -1))
+    (call $menu_open_sub_hover_set (i32.const -1))
+    (call $menu_open_x_set     (i32.const -1))
+    (call $menu_open_y_set     (i32.const -1))
     (call $menu_init_popup (local.get $hwnd) (local.get $pos)))
 
   ;; Where TrackPopupMenu puts a w-by-h popup for the point (x, y). The
@@ -5071,8 +5199,8 @@
       (then (local.set $y (i32.sub (local.get $sh) (local.get $h)))))
     (if (i32.lt_s (local.get $x) (i32.const 0)) (then (local.set $x (i32.const 0))))
     (if (i32.lt_s (local.get $y) (i32.const 0)) (then (local.set $y (i32.const 0))))
-    (global.set $menu_open_x (local.get $x))
-    (global.set $menu_open_y (local.get $y)))
+    (call $menu_open_x_set (local.get $x))
+    (call $menu_open_y_set (local.get $y)))
 
   (func $menu_track_popup_open (export "menu_track_popup_open")
         (param $hmenu i32) (param $flags i32) (param $x i32) (param $y i32) (param $hwnd i32)
@@ -5085,29 +5213,29 @@
     (call $menu_track_finish)
     (if (call $dynamic_menu_state_w (local.get $hmenu))
       (then
-        (if (global.get $menu_open_popup_blob)
+        (if (call $menu_open_popup_blob_get)
           (then
-            (call $heap_free (global.get $menu_open_popup_blob))
-            (global.set $menu_open_popup_blob (i32.const 0))))
-        (global.set $menu_open_popup_blob
+            (call $heap_free (call $menu_open_popup_blob_get))
+            (call $menu_open_popup_blob_set (i32.const 0))))
+        (call $menu_open_popup_blob_set
           (call $dynamic_menu_make_popup_blob (local.get $hmenu)))
-        (if (i32.eqz (global.get $menu_open_popup_blob))
+        (if (i32.eqz (call $menu_open_popup_blob_get))
           (then (return (i32.const 0))))
-        (global.set $menu_open_dynamic_hmenu (local.get $hmenu))
-        (global.set $menu_open_hwnd  (local.get $hwnd))
-        (global.set $menu_open_top   (i32.const 0))
-        (global.set $menu_open_bar_pos (i32.const -1))
-        (global.set $menu_open_hover (i32.const -1))
-        (global.set $menu_open_sub_hover (i32.const -1))
+        (call $menu_open_dynamic_hmenu_set (local.get $hmenu))
+        (call $menu_open_hwnd_set  (local.get $hwnd))
+        (call $menu_open_top_set   (i32.const 0))
+        (call $menu_open_bar_pos_set (i32.const -1))
+        (call $menu_open_hover_set (i32.const -1))
+        (call $menu_open_sub_hover_set (i32.const -1))
         (call $menu_track_popup_place (local.get $flags) (local.get $x) (local.get $y)
           (call $menu_dropdown_width (local.get $hwnd) (i32.const 0))
           (call $menu_dropdown_height (local.get $hwnd) (i32.const 0)))
         (return (i32.const 1))))
-    (if (global.get $menu_open_popup_blob)
+    (if (call $menu_open_popup_blob_get)
       (then
-        (call $heap_free (global.get $menu_open_popup_blob))
-        (global.set $menu_open_popup_blob (i32.const 0))))
-    (global.set $menu_open_dynamic_hmenu (i32.const 0))
+        (call $heap_free (call $menu_open_popup_blob_get))
+        (call $menu_open_popup_blob_set (i32.const 0))))
+    (call $menu_open_dynamic_hmenu_set (i32.const 0))
     (local.set $menu_id (i32.and (local.get $hmenu) (i32.const 0xFFFF)))
     (local.set $top_idx (i32.sub (i32.and (i32.shr_u (local.get $hmenu) (i32.const 16)) (i32.const 0xFFFF)) (i32.const 1)))
     (if (i32.or (i32.eqz (local.get $menu_id)) (i32.lt_s (local.get $top_idx) (i32.const 0)))
@@ -5121,11 +5249,11 @@
         (call $menu_load (local.get $hwnd) (local.get $menu_id))))
     (if (i32.eqz (call $menu_child_count (local.get $hwnd) (local.get $top_idx)))
       (then (return (i32.const 0))))
-    (global.set $menu_open_hwnd  (local.get $hwnd))
-    (global.set $menu_open_top   (local.get $top_idx))
-    (global.set $menu_open_bar_pos (i32.const -1))
-    (global.set $menu_open_hover (i32.const -1))
-    (global.set $menu_open_sub_hover (i32.const -1))
+    (call $menu_open_hwnd_set  (local.get $hwnd))
+    (call $menu_open_top_set   (local.get $top_idx))
+    (call $menu_open_bar_pos_set (i32.const -1))
+    (call $menu_open_hover_set (i32.const -1))
+    (call $menu_open_sub_hover_set (i32.const -1))
     (call $menu_track_popup_place (local.get $flags) (local.get $x) (local.get $y)
       (call $menu_dropdown_width (local.get $hwnd) (local.get $top_idx))
       (call $menu_dropdown_height (local.get $hwnd) (local.get $top_idx)))
@@ -5133,34 +5261,34 @@
 
   ;; An open TPM_RETURNCMD popup is closing, with or without a pick.
   (func $menu_track_finish
-    (if (i32.eq (global.get $menu_track_state) (i32.const 1))
-      (then (global.set $menu_track_state (i32.const 2)))))
+    (if (i32.eq (call $menu_track_state_get) (i32.const 1))
+      (then (call $menu_track_state_set (i32.const 2)))))
 
   ;; Is the guest parked in a TPM_RETURNCMD TrackPopupMenu? Hosts exempt that
   ;; wait from their stalled-wire cap: it lasts as long as the user looks.
   (func (export "menu_track_parked") (result i32)
-    (i32.eq (global.get $menu_track_state) (i32.const 1)))
+    (i32.eq (call $menu_track_state_get) (i32.const 1)))
 
   (func $menu_close (export "menu_close")
     (call $utrace (i32.const 2) "menu close (hwnd, bar position, popup menu)"
-      (global.get $menu_open_hwnd) (global.get $menu_open_bar_pos) (global.get $menu_open_dynamic_hmenu))
+      (call $menu_open_hwnd_get) (call $menu_open_bar_pos_get) (call $menu_open_dynamic_hmenu_get))
     (call $menu_track_finish)
-    (if (global.get $menu_open_popup_blob)
+    (if (call $menu_open_popup_blob_get)
       (then
-        (call $heap_free (global.get $menu_open_popup_blob))
-        (global.set $menu_open_popup_blob (i32.const 0))))
-    (global.set $menu_open_dynamic_hmenu (i32.const 0))
-    (global.set $menu_open_hwnd  (i32.const 0))
-    (global.set $menu_open_top   (i32.const -1))
-    (global.set $menu_open_bar_pos (i32.const -1))
-    (global.set $menu_open_hover (i32.const -1))
-    (global.set $menu_open_sub_hover (i32.const -1))
-    (global.set $menu_open_x     (i32.const -1))
-    (global.set $menu_open_y     (i32.const -1)))
+        (call $heap_free (call $menu_open_popup_blob_get))
+        (call $menu_open_popup_blob_set (i32.const 0))))
+    (call $menu_open_dynamic_hmenu_set (i32.const 0))
+    (call $menu_open_hwnd_set  (i32.const 0))
+    (call $menu_open_top_set   (i32.const -1))
+    (call $menu_open_bar_pos_set (i32.const -1))
+    (call $menu_open_hover_set (i32.const -1))
+    (call $menu_open_sub_hover_set (i32.const -1))
+    (call $menu_open_x_set     (i32.const -1))
+    (call $menu_open_y_set     (i32.const -1)))
 
   (func (export "menu_set_hover") (param $cidx i32)
-    (global.set $menu_open_hover (local.get $cidx))
-    (global.set $menu_open_sub_hover (i32.const -1)))
+    (call $menu_open_hover_set (local.get $cidx))
+    (call $menu_open_sub_hover_set (i32.const -1)))
 
   ;; Activate a top-level command item, if the bar slot is a command
   ;; instead of a popup. Returns 1 when a command was posted.
@@ -5188,9 +5316,9 @@
     (local $bar_x i32) (local $bar_y i32) (local $bar_h i32)
     (local $dx i32) (local $dy i32) (local $idx i32)
     (local $sdx i32) (local $sdy i32) (local $dw i32)
-    (local.set $hwnd (global.get $menu_open_hwnd))
+    (local.set $hwnd (call $menu_open_hwnd_get))
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const 0))))
-    (local.set $top (global.get $menu_open_top))
+    (local.set $top (call $menu_open_top_get))
     (local.set $bar_x (call $menu_bar_screen_x (local.get $hwnd)))
     (local.set $bar_y (call $menu_bar_screen_y (local.get $hwnd)))
     (local.set $bar_h (call $menu_bar_screen_h))
@@ -5204,31 +5332,31 @@
       (local.get $sx) (local.get $sy)))
     (if (i32.ge_s (local.get $idx) (i32.const 0))
       (then
-        (global.set $menu_open_hover (local.get $idx))
-        (global.set $menu_open_sub_hover (i32.const -1))
+        (call $menu_open_hover_set (local.get $idx))
+        (call $menu_open_sub_hover_set (i32.const -1))
         (drop (call $menu_activate))
         (return (i32.const 1))))
 
-    (if (i32.ge_s (global.get $menu_open_hover) (i32.const 0))
+    (if (i32.ge_s (call $menu_open_hover_get) (i32.const 0))
       (then
         (local.set $sdx (i32.add (local.get $dx) (local.get $dw)))
         (local.set $sdy
           (i32.add (i32.add (local.get $dy) (i32.const 2))
-                   (i32.mul (global.get $menu_open_hover) (i32.const 20))))
+                   (i32.mul (call $menu_open_hover_get) (i32.const 20))))
         (local.set $idx (call $menu_hittest_submenu
-          (local.get $hwnd) (local.get $top) (global.get $menu_open_hover)
+          (local.get $hwnd) (local.get $top) (call $menu_open_hover_get)
           (local.get $sdx) (local.get $sdy)
           (local.get $sx) (local.get $sy)))
         (if (i32.ge_s (local.get $idx) (i32.const 0))
           (then
-            (global.set $menu_open_sub_hover (local.get $idx))
+            (call $menu_open_sub_hover_set (local.get $idx))
             (drop (call $menu_activate))
             (return (i32.const 1))))))
 
     ;; TrackPopupMenu popups have an explicit screen anchor. They are not a
     ;; menubar tracking session, so an outside click must dismiss them instead
     ;; of switching to another top-level menu item in the same resource.
-    (if (i32.lt_s (global.get $menu_open_x) (i32.const 0))
+    (if (i32.lt_s (call $menu_open_x_get) (i32.const 0))
       (then
         (local.set $idx (call $menu_hittest_bar
           (local.get $hwnd) (local.get $bar_x) (local.get $bar_y)
@@ -5246,8 +5374,8 @@
     ;; USER's menu loop lets that through as WM_NCLBUTTONDBLCLK(HTSYSMENU),
     ;; which DefWindowProc turns into SC_CLOSE.
     (if (i32.and
-          (i32.ne (global.get $menu_open_dynamic_hmenu) (i32.const 0))
-          (i32.eq (call $system_menu_owner (global.get $menu_open_dynamic_hmenu))
+          (i32.ne (call $menu_open_dynamic_hmenu_get) (i32.const 0))
+          (i32.eq (call $system_menu_owner (call $menu_open_dynamic_hmenu_get))
                   (local.get $hwnd)))
       (then
         (if (i32.eq (call $defwndproc_do_nchittest (local.get $hwnd)
@@ -5294,9 +5422,9 @@
     (local $dx i32) (local $dy i32) (local $idx i32)
     (local $sdx i32) (local $sdy i32) (local $subn i32)
     (local $dw i32) (local $sw i32)
-    (local.set $hwnd (global.get $menu_open_hwnd))
+    (local.set $hwnd (call $menu_open_hwnd_get))
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
-    (local.set $top (global.get $menu_open_top))
+    (local.set $top (call $menu_open_top_get))
     (local.set $bar_x (call $menu_bar_screen_x (local.get $hwnd)))
     (local.set $bar_y (call $menu_bar_screen_y (local.get $hwnd)))
     (local.set $bar_h (call $menu_bar_screen_h))
@@ -5308,14 +5436,14 @@
     ;; A bar command item is only highlighted by USER, never run on hover, so
     ;; those are left alone; TrackPopupMenu popups (explicit anchor) are not a
     ;; bar-tracking session at all.
-    (if (i32.lt_s (global.get $menu_open_x) (i32.const 0))
+    (if (i32.lt_s (call $menu_open_x_get) (i32.const 0))
       (then
         (local.set $idx (call $menu_hittest_bar
           (local.get $hwnd) (local.get $bar_x) (local.get $bar_y)
           (local.get $sx) (local.get $sy)))
         (if (i32.and
               (i32.and (i32.ge_s (local.get $idx) (i32.const 0))
-                       (i32.ne (local.get $idx) (global.get $menu_open_bar_pos)))
+                       (i32.ne (local.get $idx) (call $menu_open_bar_pos_get)))
               (i32.ne (call $menu_bar_popup_count (local.get $hwnd) (local.get $idx))
                       (i32.const 0)))
           (then
@@ -5325,18 +5453,18 @@
     ;; over lower parent rows on the right side of the dropdown. Otherwise a
     ;; diagonal move toward "2 Players" can briefly hit "&Sounds" and close
     ;; the cascade before the cursor reaches the child menu.
-    (if (i32.ge_s (global.get $menu_open_hover) (i32.const 0))
+    (if (i32.ge_s (call $menu_open_hover_get) (i32.const 0))
       (then
         (local.set $subn (call $menu_child_sub_count
-          (local.get $hwnd) (local.get $top) (global.get $menu_open_hover)))
+          (local.get $hwnd) (local.get $top) (call $menu_open_hover_get)))
         (if (i32.gt_s (local.get $subn) (i32.const 0))
           (then
             (local.set $sdx (i32.add (local.get $dx) (local.get $dw)))
             (local.set $sw (call $menu_submenu_width
-              (local.get $hwnd) (local.get $top) (global.get $menu_open_hover)))
+              (local.get $hwnd) (local.get $top) (call $menu_open_hover_get)))
             (local.set $sdy
               (i32.add (i32.add (local.get $dy) (i32.const 2))
-                       (i32.mul (global.get $menu_open_hover) (i32.const 20))))
+                       (i32.mul (call $menu_open_hover_get) (i32.const 20))))
             (local.set $idx
               (i32.and
                 (i32.and
@@ -5353,41 +5481,41 @@
             (if (local.get $idx)
               (then
                 (local.set $idx (call $menu_hittest_submenu
-                  (local.get $hwnd) (local.get $top) (global.get $menu_open_hover)
+                  (local.get $hwnd) (local.get $top) (call $menu_open_hover_get)
                   (local.get $sdx) (local.get $sdy)
                   (local.get $sx) (local.get $sy)))
                 (if (i32.ge_s (local.get $idx) (i32.const 0))
-                  (then (global.set $menu_open_sub_hover (local.get $idx))))
-                (return (global.get $menu_open_hover))))))))
+                  (then (call $menu_open_sub_hover_set (local.get $idx))))
+                (return (call $menu_open_hover_get))))))))
     (local.set $idx (call $menu_hittest_dropdown
       (local.get $hwnd) (local.get $top)
       (local.get $dx) (local.get $dy)
       (local.get $sx) (local.get $sy)))
     (if (i32.ge_s (local.get $idx) (i32.const 0))
       (then
-        (global.set $menu_open_hover (local.get $idx))
-        (global.set $menu_open_sub_hover (i32.const -1))
+        (call $menu_open_hover_set (local.get $idx))
+        (call $menu_open_sub_hover_set (i32.const -1))
         (return (local.get $idx))))
-    (if (i32.ge_s (global.get $menu_open_hover) (i32.const 0))
+    (if (i32.ge_s (call $menu_open_hover_get) (i32.const 0))
       (then
         (local.set $sdx (i32.add (local.get $dx) (local.get $dw)))
         (local.set $sw (call $menu_submenu_width
-          (local.get $hwnd) (local.get $top) (global.get $menu_open_hover)))
+          (local.get $hwnd) (local.get $top) (call $menu_open_hover_get)))
         (local.set $sdy
           (i32.add (i32.add (local.get $dy) (i32.const 2))
-                   (i32.mul (global.get $menu_open_hover) (i32.const 20))))
+                   (i32.mul (call $menu_open_hover_get) (i32.const 20))))
         (local.set $idx (call $menu_hittest_submenu
-          (local.get $hwnd) (local.get $top) (global.get $menu_open_hover)
+          (local.get $hwnd) (local.get $top) (call $menu_open_hover_get)
           (local.get $sdx) (local.get $sdy)
           (local.get $sx) (local.get $sy)))
         (if (i32.ge_s (local.get $idx) (i32.const 0))
           (then
-            (global.set $menu_open_sub_hover (local.get $idx))
-            (return (global.get $menu_open_hover))))
+            (call $menu_open_sub_hover_set (local.get $idx))
+            (return (call $menu_open_hover_get))))
         ;; Keep the parent submenu open while the pointer crosses the small
         ;; non-client gap between the parent item and its cascading submenu.
         (local.set $subn (call $menu_child_sub_count
-          (local.get $hwnd) (local.get $top) (global.get $menu_open_hover)))
+          (local.get $hwnd) (local.get $top) (call $menu_open_hover_get)))
         (local.set $idx
           (i32.and
             (i32.gt_s (local.get $subn) (i32.const 0))
@@ -5404,9 +5532,9 @@
                     (i32.add (i32.mul (local.get $subn) (i32.const 20))
                              (i32.const 4))))))))
         (if (local.get $idx)
-          (then (return (global.get $menu_open_hover))))))
-    (global.set $menu_open_hover (i32.const -1))
-    (global.set $menu_open_sub_hover (i32.const -1))
+          (then (return (call $menu_open_hover_get))))))
+    (call $menu_open_hover_set (i32.const -1))
+    (call $menu_open_sub_hover_set (i32.const -1))
     (i32.const -1))
 
   ;; Open a top-level menu item for a particular hwnd and point. Used by the
@@ -5431,7 +5559,7 @@
     (local $n i32) (local $i i32) (local $k i32) (local $f i32)
     (local.set $n (call $menu_track_child_count))
     (if (i32.eqz (local.get $n)) (then (return)))
-    (local.set $i (global.get $menu_open_hover))
+    (local.set $i (call $menu_open_hover_get))
     (if (i32.lt_s (local.get $i) (i32.const 0))
       (then (local.set $i (select (i32.const -1) (local.get $n)
                                   (i32.gt_s (local.get $dir) (i32.const 0))))))
@@ -5443,13 +5571,13 @@
       (if (i32.ge_s (local.get $i) (local.get $n))
         (then (local.set $i (i32.const 0))))
       (local.set $f (call $menu_child_flags
-                     (global.get $menu_open_hwnd)
-                     (global.get $menu_open_top)
+                     (call $menu_open_hwnd_get)
+                     (call $menu_open_top_get)
                      (local.get $i)))
       (if (i32.eqz (i32.and (local.get $f) (i32.const 0x03)))
         (then
-          (global.set $menu_open_hover (local.get $i))
-          (global.set $menu_open_sub_hover (i32.const -1))
+          (call $menu_open_hover_set (local.get $i))
+          (call $menu_open_sub_hover_set (i32.const -1))
           (return)))
       (local.set $k (i32.add (local.get $k) (i32.const 1)))
       (br $scan))))
@@ -5458,7 +5586,7 @@
     (local $n i32) (local $i i32) (local $k i32) (local $f i32)
     (local.set $n (call $menu_sub_track_child_count))
     (if (i32.eqz (local.get $n)) (then (return)))
-    (local.set $i (global.get $menu_open_sub_hover))
+    (local.set $i (call $menu_open_sub_hover_get))
     (if (i32.lt_s (local.get $i) (i32.const 0))
       (then (local.set $i (select (i32.const -1) (local.get $n)
                                   (i32.gt_s (local.get $dir) (i32.const 0))))))
@@ -5470,13 +5598,13 @@
       (if (i32.ge_s (local.get $i) (local.get $n))
         (then (local.set $i (i32.const 0))))
       (local.set $f (call $menu_subchild_flags
-        (global.get $menu_open_hwnd)
-        (global.get $menu_open_top)
-        (global.get $menu_open_hover)
+        (call $menu_open_hwnd_get)
+        (call $menu_open_top_get)
+        (call $menu_open_hover_get)
         (local.get $i)))
       (if (i32.eqz (i32.and (local.get $f) (i32.const 0x03)))
         (then
-          (global.set $menu_open_sub_hover (local.get $i))
+          (call $menu_open_sub_hover_set (local.get $i))
           (return)))
       (local.set $k (i32.add (local.get $k) (i32.const 1)))
       (br $scan))))
@@ -5484,32 +5612,32 @@
   ;; Left/Right arrow nav: switch to neighbor bar item, wrapping.
   (func $menu_switch_top (export "menu_switch_top") (param $dir i32)
     (local $n i32) (local $i i32)
-    (if (i32.eqz (global.get $menu_open_hwnd)) (then (return)))
-    (local.set $n (call $menu_bar_count (global.get $menu_open_hwnd)))
+    (if (i32.eqz (call $menu_open_hwnd_get)) (then (return)))
+    (local.set $n (call $menu_bar_count (call $menu_open_hwnd_get)))
     (if (i32.eqz (local.get $n)) (then (return)))
-    (local.set $i (i32.add (global.get $menu_open_bar_pos) (local.get $dir)))
+    (local.set $i (i32.add (call $menu_open_bar_pos_get) (local.get $dir)))
     (if (i32.lt_s (local.get $i) (i32.const 0))
       (then (local.set $i (i32.sub (local.get $n) (i32.const 1)))))
     (if (i32.ge_s (local.get $i) (local.get $n))
       (then (local.set $i (i32.const 0))))
-    (call $menu_open (global.get $menu_open_hwnd) (local.get $i)))
+    (call $menu_open (call $menu_open_hwnd_get) (local.get $i)))
 
   ;; Keyboard routing for an already-open dropdown. Returns 1 when the key was
   ;; consumed by USER menu tracking.
   (func $menu_handle_key_open (export "menu_handle_key_open")
         (param $vk i32) (result i32)
-    (if (i32.eqz (global.get $menu_open_hwnd)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $menu_open_hwnd_get)) (then (return (i32.const 0))))
     (if (i32.eq (local.get $vk) (i32.const 27))
       (then (call $menu_close) (return (i32.const 1))))     ;; Escape
     (if (i32.eq (local.get $vk) (i32.const 40))
       (then
-        (if (i32.ge_s (global.get $menu_open_sub_hover) (i32.const 0))
+        (if (i32.ge_s (call $menu_open_sub_hover_get) (i32.const 0))
           (then (call $menu_sub_advance (i32.const 1)))
           (else (call $menu_advance (i32.const 1))))
         (return (i32.const 1))))  ;; Down
     (if (i32.eq (local.get $vk) (i32.const 38))
       (then
-        (if (i32.ge_s (global.get $menu_open_sub_hover) (i32.const 0))
+        (if (i32.ge_s (call $menu_open_sub_hover_get) (i32.const 0))
           (then (call $menu_sub_advance (i32.const -1)))
           (else (call $menu_advance (i32.const -1))))
         (return (i32.const 1)))) ;; Up
@@ -5517,17 +5645,17 @@
       (then
         (if (call $menu_sub_track_child_count)
           (then
-            (global.set $menu_open_sub_hover (call $menu_sub_first_selectable)))
+            (call $menu_open_sub_hover_set (call $menu_sub_first_selectable)))
           (else
-            (if (i32.lt_s (global.get $menu_open_x) (i32.const 0))
+            (if (i32.lt_s (call $menu_open_x_get) (i32.const 0))
               (then (call $menu_switch_top (i32.const 1))))))
         (return (i32.const 1))))  ;; Right
     (if (i32.eq (local.get $vk) (i32.const 37))
       (then
-        (if (i32.ge_s (global.get $menu_open_sub_hover) (i32.const 0))
-          (then (global.set $menu_open_sub_hover (i32.const -1)))
+        (if (i32.ge_s (call $menu_open_sub_hover_get) (i32.const 0))
+          (then (call $menu_open_sub_hover_set (i32.const -1)))
           (else
-            (if (i32.lt_s (global.get $menu_open_x) (i32.const 0))
+            (if (i32.lt_s (call $menu_open_x_get) (i32.const 0))
               (then (call $menu_switch_top (i32.const -1))))))
         (return (i32.const 1)))) ;; Left
     (if (i32.eq (local.get $vk) (i32.const 13))
@@ -5563,17 +5691,17 @@
   (func $menu_activate (export "menu_activate") (result i32)
     (local $hwnd i32) (local $top i32) (local $hover i32)
     (local $sub i32) (local $f i32) (local $id i32)
-    (local.set $hwnd (global.get $menu_open_hwnd))
+    (local.set $hwnd (call $menu_open_hwnd_get))
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const 0))))
-    (local.set $top  (global.get $menu_open_top))
-    (local.set $hover (global.get $menu_open_hover))
+    (local.set $top  (call $menu_open_top_get))
+    (local.set $hover (call $menu_open_hover_get))
     (if (i32.lt_s (local.get $hover) (i32.const 0)) (then (return (i32.const 0))))
     (local.set $f (call $menu_child_flags (local.get $hwnd) (local.get $top) (local.get $hover)))
     (if (i32.and (local.get $f) (i32.const 0x03))
       (then (return (i32.const 0))))   ;; separator or grayed
     (if (call $menu_child_sub_count (local.get $hwnd) (local.get $top) (local.get $hover))
       (then
-        (local.set $sub (global.get $menu_open_sub_hover))
+        (local.set $sub (call $menu_open_sub_hover_get))
         (if (i32.lt_s (local.get $sub) (i32.const 0)) (then (return (i32.const 0))))
         (local.set $f (call $menu_subchild_flags
                         (local.get $hwnd) (local.get $top) (local.get $hover) (local.get $sub)))
@@ -5594,8 +5722,8 @@
   ;; A picked command goes back to a TPM_RETURNCMD caller as its return value
   ;; and is not posted; otherwise it is an edit command or a WM_COMMAND.
   (func $menu_deliver_command (param $hwnd i32) (param $id i32)
-    (if (i32.eq (global.get $menu_track_state) (i32.const 1))
-      (then (global.set $menu_track_result (local.get $id)) (return)))
+    (if (i32.eq (call $menu_track_state_get) (i32.const 1))
+      (then (call $menu_track_result_set (local.get $id)) (return)))
     ;; A pick from a system menu is a WM_SYSCOMMAND, never a menu command.
     (if (i32.and (i32.eq (call $menu_pick_message) (i32.const 0x0111))
                  (call $menu_try_edit_command (local.get $id)))
@@ -5663,23 +5791,23 @@
   ;; Returns 1 if a matching item was found and activated, else 0.
   (func $menu_handle_letter (export "menu_handle_letter") (param $ch i32) (result i32)
     (local $n i32) (local $i i32) (local $f i32)
-    (if (i32.eqz (global.get $menu_open_hwnd)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $menu_open_hwnd_get)) (then (return (i32.const 0))))
     (local.set $n (call $menu_track_child_count))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
       (local.set $f (call $menu_child_flags
-                     (global.get $menu_open_hwnd)
-                     (global.get $menu_open_top)
+                     (call $menu_open_hwnd_get)
+                     (call $menu_open_top_get)
                      (local.get $i)))
       (if (i32.eqz (i32.and (local.get $f) (i32.const 0x03)))
         (then
           (if (i32.eq (call $menu_child_accel
-                       (global.get $menu_open_hwnd)
-                       (global.get $menu_open_top)
+                       (call $menu_open_hwnd_get)
+                       (call $menu_open_top_get)
                        (local.get $i))
                       (local.get $ch))
             (then
-              (global.set $menu_open_hover (local.get $i))
+              (call $menu_open_hover_set (local.get $i))
               (drop (call $menu_activate))
               (return (i32.const 1))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -5856,9 +5984,9 @@
   ;; receives as WM_COMMAND and DefFrameProc hands on.
   (func $menu_pick_message (result i32)
     (if (i32.and
-          (i32.ne (global.get $menu_open_dynamic_hmenu) (i32.const 0))
-          (i32.eq (call $system_menu_owner (global.get $menu_open_dynamic_hmenu))
-                  (global.get $menu_open_hwnd)))
+          (i32.ne (call $menu_open_dynamic_hmenu_get) (i32.const 0))
+          (i32.eq (call $system_menu_owner (call $menu_open_dynamic_hmenu_get))
+                  (call $menu_open_hwnd_get)))
       (then (return (i32.const 0x0112))))
     (i32.const 0x0111))
 
@@ -6076,19 +6204,19 @@
         (param $hwnd i32) (result i32)
     (local $ret i32)
     (block $done
-      (if (i32.eq (global.get $menu_track_state) (i32.const 2))
+      (if (i32.eq (call $menu_track_state_get) (i32.const 2))
         (then
-          (local.set $ret (global.get $menu_track_result))
-          (global.set $menu_track_state (i32.const 0))
+          (local.set $ret (call $menu_track_result_get))
+          (call $menu_track_state_set (i32.const 0))
           (br $done)))
-      (if (i32.eq (global.get $menu_track_state) (i32.const 1))
+      (if (i32.eq (call $menu_track_state_get) (i32.const 1))
         (then (call $menu_track_park) (return (i32.const 0))))
       (local.set $ret (call $menu_track_popup_open
         (local.get $hmenu) (local.get $flags) (local.get $x) (local.get $y) (local.get $hwnd)))
       (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x0100))) (then (br $done)))
       (if (i32.eqz (local.get $ret)) (then (br $done)))
-      (global.set $menu_track_result (i32.const 0))
-      (global.set $menu_track_state (i32.const 1))
+      (call $menu_track_result_set (i32.const 0))
+      (call $menu_track_state_set (i32.const 1))
       (call $menu_track_park)
       (return (i32.const 0)))
     (i32.store offset=0 (global.get $reg_base) (local.get $ret))
@@ -6458,27 +6586,27 @@
     (if (call $dynamic_menu_state_w (local.get $hmenu))
       (then
         (if (i32.or
-              (i32.eqz (global.get $menu_open_popup_blob))
-              (i32.ne (local.get $hmenu) (global.get $menu_open_dynamic_hmenu)))
+              (i32.eqz (call $menu_open_popup_blob_get))
+              (i32.ne (local.get $hmenu) (call $menu_open_dynamic_hmenu_get)))
           (then (return (i32.const 0))))
         (if (i32.and
               (i32.ne (local.get $hwnd_arg) (i32.const 0))
-              (i32.ne (local.get $hwnd_arg) (global.get $menu_open_hwnd)))
+              (i32.ne (local.get $hwnd_arg) (call $menu_open_hwnd_get)))
           (then (return (i32.const 0))))
         (local.set $count
-          (call $menu_child_count (global.get $menu_open_hwnd) (i32.const 0)))
+          (call $menu_child_count (call $menu_open_hwnd_get) (i32.const 0)))
         (if (i32.ge_u (local.get $item) (local.get $count))
           (then (return (i32.const 0))))
         (local.set $width
-          (call $menu_dropdown_width (global.get $menu_open_hwnd) (i32.const 0)))
+          (call $menu_dropdown_width (call $menu_open_hwnd_get) (i32.const 0)))
         (if (i32.eqz (local.get $width)) (then (return (i32.const 0))))
-        (local.set $left (i32.add (global.get $menu_open_x) (i32.const 2)))
+        (local.set $left (i32.add (call $menu_open_x_get) (i32.const 2)))
         (local.set $top
           (i32.add
-            (i32.add (global.get $menu_open_y) (i32.const 2))
+            (i32.add (call $menu_open_y_get) (i32.const 2))
             (i32.mul (local.get $item) (i32.const 20))))
         (local.set $right
-          (i32.sub (i32.add (global.get $menu_open_x) (local.get $width))
+          (i32.sub (i32.add (call $menu_open_x_get) (local.get $width))
                    (i32.const 2)))
         (local.set $bottom (i32.add (local.get $top) (i32.const 20))))
       (else
@@ -6520,10 +6648,10 @@
                   (i32.ge_u (local.get $top_index)
                     (call $menu_blob_top_count (local.get $owner)))
                   (i32.or
-                    (i32.ne (global.get $menu_open_dynamic_hmenu) (i32.const 0))
+                    (i32.ne (call $menu_open_dynamic_hmenu_get) (i32.const 0))
                     (i32.or
-                      (i32.ne (global.get $menu_open_hwnd) (local.get $owner))
-                      (i32.ne (global.get $menu_open_top) (local.get $top_index)))))
+                      (i32.ne (call $menu_open_hwnd_get) (local.get $owner))
+                      (i32.ne (call $menu_open_top_get) (local.get $top_index)))))
               (then (return (i32.const 0))))
             (if (i32.and
                   (i32.ne (local.get $hwnd_arg) (i32.const 0))

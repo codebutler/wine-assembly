@@ -253,4 +253,30 @@ try {
     'the lead should be the ~15ms a Win98 driver keeps committed');
 }
 
-console.log('PASS  DirectSound cursors: play trails the device, write leads play');
+// A clock between two PCM frames must never expose bytes from the next
+// frame. At ring wrap a one-byte tail otherwise becomes a zero-frame refill
+// in SimGolf's original sound.dll converter (which uses a do/while loop).
+for (const browserClock of [false, true]) {
+  globalThis.AudioContext = browserClock ? audioContextClass(0, 0) : undefined;
+  try {
+    for (const [channels, bits] of [[2, 16], [1, 16], [2, 8], [1, 8]]) {
+      let clockMs = 0;
+      const ctx = {getMemory: () => new ArrayBuffer(128 * 1024),
+        ...(browserClock ? {} : {audioClockMs: () => clockMs})};
+      const {host} = createHostImports(ctx);
+      const id = host.voice_open(1000, channels, bits);
+      const frame = channels * bits / 8;
+      const size = 100 * frame;
+      host.voice_play_ring(id, 0x1000, size, 0, 1);
+      const start = ctx._voices._ac?.currentTime;
+      for (const frames of [0.75, 1.75, 99.75, 100.75]) {
+        if (browserClock) ctx._voices._ac.currentTime = start + frames / 1000;
+        else clockMs = frames;
+        assert.strictEqual(host.voice_get_pos(id), Math.floor(frames) * frame % size,
+          `${browserClock ? 'browser' : 'guest'} clock: ${channels}ch/${bits}bit complete frames at ${frames}`);
+      }
+    }
+  } finally { globalThis.AudioContext = oldAudioContext; }
+}
+
+console.log('PASS  DirectSound cursors: complete frames, play trails the device, write leads play');

@@ -12,6 +12,8 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
   (func (export "test_init")
+    ;; This fixture is a standalone NE task, not a Win32-owned bridge load.
+    (global.set $is_win16 (i32.const 1))
     (global.set $WIN16_THUNK_SEL (call $win16_index_to_sel (i32.const 3)))
     (call $win16_seg_set (i32.const 1) (i32.const 0x100000) (i32.const 65536) (i32.const 0) (i32.const 1))
     (call $win16_seg_set (i32.const 2) (i32.const 0x110000) (i32.const 65536) (i32.const 1) (i32.const 2))

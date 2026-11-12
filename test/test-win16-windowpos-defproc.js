@@ -1285,6 +1285,7 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
   for (const [index, mode] of ['normal', 'pre-disabled', 'nested', 'destroy-owner', 'modeless', 'failed', 'cancel', 'ownerless'].entries()) {
     const proc = 0xf000 + index * 0x100;
     const owner = mode === 'ownerless' ? 0 : e.test_window(0x5000);
+    if (mode === 'normal') rectangles.set(owner, [300, 100, 804, 468]);
     if (mode === 'pre-disabled') e.test_disable(owner);
     const nested = mode === 'nested' ? [
       0x6a, 0, 0x68, ...word(template), 0x68, ...word(e.test_narrow(owner)),
@@ -1299,7 +1300,15 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
       0x75, finish.length, ...finish]));
     e.guest_write32(0x110900, 0);
     e.guest_write32(0x110f48, 0xffff);
+    const beforeDialogMoves = moves.length;
     e.test_open_modal(mode === 'failed' ? 0 : template, owner, proc, mode === 'modeless' ? 1 : 0);
+    if (mode === 'normal') {
+      const placed = moves.slice(beforeDialogMoves).find(m => m.hwnd !== owner);
+      assert(placed, 'Win16 dialog placement runs before WM_INITDIALOG');
+      assert.deepStrictEqual([placed.x, placed.y],
+        [280 + e.get_client_rect_l(owner), 70 + e.get_client_rect_t(owner)],
+        'Win16 template origin is offset by owner screen position and client inset');
+    }
     assert.strictEqual(e.test_enabled(owner), ['modeless', 'failed', 'ownerless'].includes(mode) ? 1 : 0,
       `${mode}: owner disabled before WM_INITDIALOG can reenter USER`);
     if (mode === 'cancel') {
@@ -1358,7 +1367,13 @@ const pack = (x, y) => ((x & 0xffff) | (y << 16)) >>> 0;
       assert.strictEqual(e.guest_read32(0x110f40) >>> 16, e.test_narrow(owner),
         'owner has focus before its real far WM_SETFOCUS callback');
       assert(pumpMessages().some(m => m.msg === 7));
-    } else assert.deepStrictEqual(pumpMessages(), [], 'surviving guest focus is not replaced');
+    } else {
+      const notifications = pumpMessages();
+      assert.deepStrictEqual(notifications.filter(m => m.msg === 7 || m.msg === 8), [],
+        'surviving guest focus is not replaced');
+      assert.deepStrictEqual(notifications.map(m => m.msg), [2, 0x82, 2, 0x82],
+        'modal child and root complete their far destruction callbacks');
+    }
     if (mode === 'nested-dialog') {
       assert.strictEqual(e.guest_read32(0x110f44) & 0xffff, 99,
         'actual nested DialogBoxIndirect/EndDialog returns its own result');

@@ -1,0 +1,9 @@
+# Shadow Man candidate canonical qualification, 2026-10-28
+
+Historical source last updated, 2026-10-28. Runtime and implementation claims below describe that dated source; see current app notes and source for subsequent changes.
+
+**BLOCKED: mandatory callback-ownership census.** Candidate `2e6f5984d3f64d7781fb02da09bbb8d564302123` received exactly one canonical `bash tools/build.sh` attempt on fresh task Boat `bx_k4htahnf`. It exited 1 after 2.471 seconds; the compiler was never reached. No module, compiled ABI qualification, native fixture or attribution outcome exists for this candidate.
+
+The preceding CLAUDE size, complete 127-fragment manifest and individual fragment-balance gates passed. `tools/callback-ownership-census.js` then rejected changed sha256/targets for `$th_pop_run_ret`, `$th_ret`, `$th_ret_imm`; changed hashes for `$win32_dispatch`, `$win32_dispatch_inner`, `$run`; and unknown `$null_transfer_check` and `$null_transfer_record`. See exact stderr (historical artifact: `shadow-man-admitted-remote-native-20261028/remote/canonical-build.stderr`), stdout (historical artifact: `shadow-man-admitted-remote-native-20261028/remote/canonical-build.stdout`), and process receipt (historical artifact: `shadow-man-admitted-remote-native-20261028/remote/canonical-build.json`). This is a producer review prerequisite, not proof that an individual diagnostic writer is correct or incorrect. No census refresh, source repair, retry, partial build, historical-module substitution or integration occurred.
+
+The source-only acceptance does not overcome this mandatory rejection. The first missing evidence is a passing reviewed producer census for the exact candidate under a separately authorized change; complete compilation and every requested native attribution/control case remain unexecuted. Original source `61e1ea2d` remains REJECTED and historical writer attribution UNPROVEN. Historical module `8fac3993` is not candidate evidence.

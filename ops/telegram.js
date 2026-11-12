@@ -52,7 +52,7 @@ async function main(){
   async function inboxStatus(){
     let consumers=[];try{consumers=JSON.parse(await fs.readFile(path.join(root,'ops/work-watchdog.json'),'utf8')).telegramInbox?.consumers||[];}catch{}
     const entries=await inboxLib.readInbox(inboxFile);
-    return {last:entries.at(-1)?.id||0,consumers:consumers.map(c=>({agent:c.agent,cursor:inboxLib.readCursorSync(inboxLib.cursorPath(dir,c.agent))}))};
+    return {last:entries.at(-1)?.id||0,consumers:consumers.map(c=>({agent:c.agent,cursor:inboxLib.readCursorSync(inboxLib.cursorPath(dir,c.agent)),...(Number.isSafeInteger(c.deliveryRequiredAfter)?{pending:inboxLib.readPendingSync(inboxFile,c).length}:{})}))};
   }
   const save=()=>atomic(file,state),bot=createBot({state,save,telegram,local,download,inbox,inboxStatus});
   // Messages left in the old pane-typing queue move to the inbox instead of being dropped.

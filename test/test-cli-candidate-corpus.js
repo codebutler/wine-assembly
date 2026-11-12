@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { compileSrcWasm } = require('./compile-src');
+const { fixtureId, buildLaunchArgs } = require('../lib/candidate-cli');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -25,10 +26,6 @@ function usage(message) {
   if (message) console.error(message);
   console.error('usage: node test/test-cli-candidate-corpus.js [--id=a,b] [--list] [--dry-run] [--strict]');
   process.exit(2);
-}
-
-function fixtureId(candidate) {
-  return candidate.fixture || candidate.id;
 }
 
 function walkFiles(directory, output = []) {
@@ -86,7 +83,8 @@ function classify(output, status, signal, error) {
   if (error && error.code === 'ETIMEDOUT') return { status: 'BLOCKED', reason: 'timeout' };
   const missingDll = output.match(/(?:cannot|failed to) (?:load|resolve)[^\r\n]*\.dll[^\r\n]*/i);
   if (missingDll) return { status: 'BLOCKED', reason: missingDll[0].trim() };
-  const marker = output.match(/(?:RuntimeError|LinkError|CRASH|STUCK)[^\r\n]*/i);
+  // Match diagnostic tokens, not prose such as the DLL warning's "crashes as".
+  const marker = output.match(/\b(?:RuntimeError|LinkError|CRASH|STUCK)\b[^\r\n]*/i);
   if (marker) return { status: 'BLOCKED', reason: marker[0].trim().slice(0, 180) };
   if (signal) return { status: 'BLOCKED', reason: `terminated by ${signal}` };
   if (status !== 0) return { status: 'BLOCKED', reason: `runner exit ${status}` };
@@ -95,46 +93,22 @@ function classify(output, status, signal, error) {
 
 function runCandidate(candidate, executable, wasmPath) {
   const cli = candidate.cli || {};
-  const args = [
-    RUN,
-    `--exe=${executable}`,
-    `--wasm=${wasmPath}`,
-    '--no-build',
-    '--no-close',
-    '--quiet-api',
-    '--quiet-blocks',
-    '--stuck-after=50',
-    `--max-batches=${cli.maxBatches || 80}`,
-    `--batch-size=${cli.batchSize || 10000}`,
-  ];
-  if (cli.args) args.push(`--args=${cli.args}`);
-  if (cli.cue) {
-    const cue = path.join(ASSET_ROOT, fixtureId(candidate), cli.cue);
-    if (!fs.existsSync(cue)) throw new Error(`${candidate.id}.cli.cue is missing: ${cue}`);
-    args.push(`--cue=${cue}`);
-  }
-  if (cli.dlls !== undefined) {
-    if (!Array.isArray(cli.dlls) || !cli.dlls.length ||
-        cli.dlls.some(filename => typeof filename !== 'string' || !filename.trim())) {
-      throw new Error(`${candidate.id}.cli.dlls must be a non-empty string array`);
-    }
-    for (const filename of cli.dlls) {
-      const dll = path.join(ASSET_ROOT, fixtureId(candidate), filename);
-      if (!fs.existsSync(dll)) throw new Error(`${candidate.id}.cli.dlls is missing: ${dll}`);
-      args.push(`--dll-seed=${dll}`);
-    }
-  }
-  if (cli.vfsInclude !== undefined) {
-    if (!Array.isArray(cli.vfsInclude) || !cli.vfsInclude.length ||
-        cli.vfsInclude.some(pattern => typeof pattern !== 'string' || !pattern.trim())) {
-      throw new Error(`${candidate.id}.cli.vfsInclude must be a non-empty string array`);
-    }
-    for (const pattern of cli.vfsInclude) args.push(`--vfs-include=${pattern}`);
+  let args;
+  try {
+    args = buildLaunchArgs(candidate, {
+      runPath: RUN, executable, wasmPath,
+      fixtureRoot: path.join(ASSET_ROOT, fixtureId(candidate)),
+    });
+  } catch (error) {
+    return { status: error.media ? 'BLOCKED' : 'HARNESS', reason: error.message };
   }
   const result = spawnSync('node', args, {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: cli.timeoutMs || 120000,
+    // run.js handles SIGTERM in JS; a CPU-bound guest can keep that callback
+    // queued indefinitely. This smoke deadline must also bound termination.
+    killSignal: 'SIGKILL',
     maxBuffer: 32 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -152,8 +126,10 @@ async function main() {
       'e7caae4255e8ed570cef3a29642432c8d28ecdb9',
     ]],
     ['baldurs-gate-interactive-demo', [
-      'https://archive.org/download/bg-demo/BG%20Demo.iso',
-      '3796defce51a3e867aa216bc27f0be0689fdadf0',
+      // d9708d802: original Silver Edition demo CD replaces the unavailable
+      // bg-demo ISO. Its raw CD layout must stay paired with this exact pin.
+      'https://archive.org/download/20230723_20230723_0858/Forgotten%20Realms%20Archives%20-%20Silver%20Edition%20%28USA%29%20%28Baldur%27s%20Gate%20Demo%29.zip',
+      'df6c2f77e4879bd25955a63d40e9b3a5bbc4c1b7',
     ]],
     ['baldurs-gate-chapters-1-2-demo', [
       'https://archive.org/download/20230723_20230723_0858/Baldur%27s%20Gate%20-%20Chapters%20I%20%26%20II%20%28USA%29%20%28Demo%29.zip',
@@ -168,6 +144,51 @@ async function main() {
     assert.deepStrictEqual(candidate.cli.vfsInclude, ['**/*'],
       `${id} mounts the complete extracted companion-file tree`);
   }
+  const interactive = manifest.candidates.find(candidate =>
+    candidate.id === 'baldurs-gate-interactive-demo');
+  assert.strictEqual(fixtureId(interactive), 'baldurs-gate-interactive-demo',
+    'Baldur\'s Gate interactive demo keeps its isolated local fixture identity');
+  assert.strictEqual(interactive.packages[0].type, 'archive',
+    'Baldur\'s Gate interactive demo extracts its pinned Silver Edition ZIP');
+  assert.deepStrictEqual(interactive.executables, ['installed-extracted/MinimumData/BGDemo.exe'],
+    'Baldur\'s Gate interactive demo launches the preserved CD executable in the MinimumData tree');
+  // Bind every ordered step: a valid prefix cannot authorize later writes over
+  // the preserved executable or changes to its companion files/configuration.
+  assert.deepStrictEqual(interactive.postExtract, [
+    {
+      type: 'extractRawMode1Cd',
+      image: 'Forgotten Realms Archives - Silver Edition (USA) (Baldur\'s Gate Demo).bin',
+      into: 'cd',
+    },
+    { type: 'unshield', cab: 'cd/DATA1.CAB', into: 'installed-extracted', group: 'MinimumData' },
+    { type: 'copyFile', from: 'cd/BGDEMO.EXE', into: 'installed-extracted/MinimumData/BGDemo.exe' },
+    { type: 'copyFile', from: 'cd/CD1/MOVIES/MOVIECD1.BIF', into: 'installed-extracted/MinimumData/CD1/Movies/MovieCD1.bif' },
+    { type: 'copyFile', from: 'cd/CD1/MOVIES/MOVIES.BIF', into: 'installed-extracted/MinimumData/CD1/Movies/Movies.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/AREA2600.BIF', into: 'installed-extracted/MinimumData/CD1/data/AREA2600.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/AREA260A.BIF', into: 'installed-extracted/MinimumData/CD1/data/AREA260a.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/AREA2700.BIF', into: 'installed-extracted/MinimumData/CD1/data/AREA2700.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/AREA2800.BIF', into: 'installed-extracted/MinimumData/CD1/data/AREA2800.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/CHASOUND.BIF', into: 'installed-extracted/MinimumData/CD1/data/CHASound.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/CREANIM.BIF', into: 'installed-extracted/MinimumData/CD1/data/CREAnim.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/CRESOUND.BIF', into: 'installed-extracted/MinimumData/CD1/data/CRESound.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/NPCSOUND.BIF', into: 'installed-extracted/MinimumData/CD1/data/NPCSound.bif' },
+    { type: 'copyFile', from: 'cd/CD1/DATA/RNDENCNT.BIF', into: 'installed-extracted/MinimumData/CD1/data/RndEncnt.bif' },
+    { type: 'copyFile', from: 'cd/OVERRIDE/SPLASH1.BMP', into: 'installed-extracted/MinimumData/override/Splash1.bmp' },
+    { type: 'copyFile', from: 'cd/OVERRIDE/SPLASH2.BMP', into: 'installed-extracted/MinimumData/override/Splash2.bmp' },
+    { type: 'copyFile', from: 'cd/OVERRIDE/SPLASH3.BMP', into: 'installed-extracted/MinimumData/override/Splash3.bmp' },
+    { type: 'copyFile', from: 'cd/OVERRIDE/SPLASH4.BMP', into: 'installed-extracted/MinimumData/override/Splash4.bmp' },
+    {
+      type: 'replaceText', file: 'installed-extracted/MinimumData/Baldur.ini',
+      replacements: [
+        { from: 'HD0:=.\\', to: 'HD0:=C:\\' },
+        { from: 'CD1:=.\\', to: 'CD1:=C:\\CD1\\' },
+        { from: 'CD2:=.\\', to: 'CD2:=C:\\CD1\\' },
+        { from: 'CD3:=.\\', to: 'CD3:=C:\\CD1\\' },
+        { from: 'CD4:=.\\', to: 'CD4:=C:\\CD1\\' },
+        { from: 'CD5:=.\\', to: 'CD5:=C:\\CD1\\' },
+      ],
+    },
+  ], 'Baldur\'s Gate interactive demo keeps its Silver Edition data-track, cabinet and executable identity');
   const chapters = manifest.candidates.find(candidate =>
     candidate.id === 'baldurs-gate-chapters-1-2-demo');
   assert(chapters.postExtract.some(step => step.type === 'extractRawMode1Cd'),
@@ -252,7 +273,9 @@ async function main() {
   return harness || (strict && blocked) ? 1 : 0;
 }
 
-main().then(code => process.exit(code)).catch(error => {
+if (require.main === module) main().then(code => process.exit(code)).catch(error => {
   console.error(error.stack || error.message);
   process.exit(1);
 });
+
+module.exports = { runCandidate };

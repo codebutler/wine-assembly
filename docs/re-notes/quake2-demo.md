@@ -1,5 +1,13 @@
 # Quake II 3.14 demo
 
+## Brighter first-launch defaults (2026-10-15)
+
+The bundled config now seeds `vid_gamma 0.7`; Q2's gamma exponent becomes
+brighter as it decreases. Saved player configs still replace the seed.
+Before/after Chrome captures of demo1 are under
+`scratch/runs/20261015-quake-brightness/quake2_demo-{before,after}-verified`.
+The comparison uses the stable deployed WASM with intercepted seed configs.
+
 ## Package and layout
 
 - Local-only installer: `test/binaries/candidates/quake-2-demo-installer/q2-314-demo-x86.exe`
@@ -687,3 +695,1218 @@ unqualified. One room and one traversal cycle were tested; combat, level
 completion, FPS, and audio were not qualified. See
 [the software handoff](../../ops/handoffs/quake2-software-ordinary-20261008.md)
 for exact identity, timings, backend proof, resource grant, and cleanup.
+
+## 2026-10-30: native browser movement, firing, death and autosave reload
+
+Run `scratch/runs/20261030T2210Z-quake2-browser/result.json` records a fresh
+local Chrome 151 profile using the registered `quake2_demo` selector and
+Launch button, unchanged `+set vid_ref gl +menu_main`, and ordinary trusted
+browser input. Game → Easy enters Outer Base (`demo1`). W approaches the
+diagonal support until it occludes the room; S restores the wall emblem and
+wider view. Mouse-one under pointer lock produces visible blaster bolts,
+impact sparks and dynamic lighting. Held guest `in_attack` has key 200 and
+state 5; after release key is 0, state 4 (held bit clear), and the host mouse
+mask is 0.
+
+Native W/arrow-key navigation reaches the lower room. An enemy attacks:
+inspected captures show health 100 → 73 → 61 → 0 and the rolled death camera.
+Enter opens the ordinary Load Game menu with `ENTERING Outer Base` selected;
+a second Enter loads that autosave. The starting view and health 100 return.
+Further W/S movement and a new mouse-one burst work after reload, including
+visible projectile/impact captures and cleared attack state after release.
+No console command, guest-memory write, asset modification, or forced input
+handler was used. No runtime blocker reproduced and no repair was made.
+
+This run uses game **`ref_gl`**, emulator **WebGL 1**, and Chrome ANGLE
+**SwiftShader**. SwiftShader is the browser's software GPU implementation;
+this is neither game `ref_soft` nor the emulator's WAT software GL backend.
+The live layer owns a `WebGLRenderingContext`; guest threads and render
+workers were disabled. The retained, actually downloaded module is
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`.
+Launch HEAD was `24af711e78857d8d22adfba794d235447017de90`; the shared tree
+had another worker's uncommitted GL changes, so the compiled source commit
+is **unknown**, not certified as a pristine build of that HEAD. Served file
+hashes and the launch diff are retained. The 67 registered file hashes
+include 65 original extracted assets and the two host control/source files;
+all remained unchanged. The original installer was absent, so no new full
+installer/extraction comparison is claimed. `pak0.pak` matches the documented
+SHA-256 above.
+
+The screenshots and input timestamps were reviewed directly. Coverage is
+one death/autosave cycle, movement and blaster firing before and after it;
+enemy defeat, level completion, hardware GPU behavior, audio quality, FPS,
+networking and WAT software rendering remain untested here. Own browser and
+both local server/controller ports were closed and checked; no Boat was used.
+The static harness also logged HTTP 404 responses; their URLs were not captured,
+and they are not evidence of successful network or service integration. No
+page exception, guest trap or `FreeLibrary failed` message was recorded.
+
+## 2026-10-30: retained-module native gameplay on emulator software OpenGL
+
+Run `scratch/runs/20261030T2220Z-quake2-software/result.json` passes the
+registered selector/Launch → Game → Easy → Outer Base route with unchanged
+`+set vid_ref gl +menu_main`. The browser URL selects
+`gl-renderer=software`; the game still uses original **`ref_gl`**, never
+`ref_soft`. The static server routes the module request to the prior browser
+run's exact retained module, SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`.
+Its compiled source commit remains unknown; this does not certify current main.
+
+Actual loaded-module counters prove the emulator WAT raster path is active:
+`gl_sw_enabled()` is 1, triangles advance from 1,050,157 to 1,466,293,
+and software presents from 451 to 604. Both samples report 1,422 texture
+uploads and zero unsupported uploads. The window has no WebGL frame layer.
+Guest threads and the render Worker are disabled. The generic GPU dropdown
+still reads WebGL, the synthetic guest GL renderer string still says WebGL
+fixed function, and Chrome was launched with SwiftShader flags; none of those
+labels overrides the directly observed WAT software-raster counters.
+
+Personally inspected captures show native W moving toward the diagonal support
+until it occludes the room, and S restoring the wider view and wall emblem.
+Mouse-one under pointer lock produces blaster bolts/impact particles and
+dynamic yellow illumination. Five held-fire samples read guest attack key 200,
+state 5, host mouse mask 1; release reads key 0, state 4, mask 0. The saved
+timeline contains trusted browser events only. No console command, guest-memory
+write, forced handler, asset modification, or runtime repair was used.
+
+All 67 registered file hashes, including 65 original extracted assets, match
+the preceding run; the documented pak hash also matches. The installer remains
+absent, so this is not a fresh installer/extraction comparison. Served runtime
+hashes and the exact downloaded module are retained. Coverage is the starting
+room, movement and blaster firing/release; combat progression, death/reload,
+level completion, audio, FPS, networking and Worker rendering are untested in
+this software run. Static-harness HTTP 404 messages remain; no page exception,
+guest trap or `FreeLibrary failed` message was observed. Own browser and server
+ports were closed and checked, profile removed, no Boat used, and /home free
+space remained above 2 GB. No blocker reproduced and no code repair was needed.
+
+## 2026-10-30: native combat, death and autosave on WAT software OpenGL
+
+Run `scratch/runs/20261030T2225Z-quake2-software-combat/result.json` advances
+native W/arrow-key movement into the lower area with debris, medkits and a
+live armored enemy. Trusted mouse-one bursts produce blaster impact particles
+and light. Enemy attacks reduce player health 100 → 73 → 43 → 0; the rolled
+death view appears behind the ordinary Load Game menu with `ENTERING Outer
+Base` selected. Enter restores the autosave's starting room and health 100.
+Postreload W movement approaches the diagonal support, and a fresh blaster
+burst produces visible particles and yellow illumination. Five held-fire
+samples have key 200/state 5/mouse mask 1; release clears these to key 0/state
+4/mask 0. A further close enemy encounter reaches health 32 and a second
+health-zero death. Further ordinary mouse attack starts another autosave load;
+that second reload's completed movement was not inspected.
+
+The close enemy, red particles and native firing attempts were inspected, but
+**enemy damage and defeat remain unverified**. The corpse already present by
+the debris is not credited as a kill. This run verifies player damage/death,
+one completed ordinary autosave reload and resumed movement/fire, not enemy
+health accounting or level completion. No console command, guest-memory write,
+synthetic game state, forced input handler or asset edit was used. No runtime
+blocker reproduced and no repair was needed.
+
+This is original **`ref_gl` on emulator WAT software OpenGL**, not `ref_soft`.
+Actual loaded-module `gl_sw_enabled()` remains 1; triangles advance
+313,125 → 4,327,627 and presents 183 → 1,720, with zero unsupported texture
+uploads. The window has no WebGL frame layer; guest threads and render Worker
+are disabled. Generic WebGL UI/string labels and Chrome SwiftShader launch
+flags do not supersede these actual backend counters.
+
+The exact retained and downloaded module remains
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`;
+its compiled source commit is explicitly **unknown**. This is not certification
+of a fresh current-main build. All 67 registered file hashes, including 65
+original extracted assets, match the preceding software run; the known pak
+hash matches. The installer remains absent. Served host/module hashes, native
+input timestamps, reviewed captures and scoped checks are retained in the run.
+Focused module/assets/backend/native-input/release/cleanup checks pass. No
+page exception, guest trap or `FreeLibrary failed` was recorded; static-harness
+HTTP 404 messages remain. Audio, FPS, networking and Worker rendering are not
+qualified. Own Chrome and both servers closed, ports checked, profile removed,
+no Boat/test boxes used, and /home free space stayed above 2 GB.
+
+## 2026-10-30: bounded WebGL combat attempt; defeat still unverified
+
+Run `scratch/runs/20261030T2334Z-quake2-combat/result.json` reuses the
+retained module and original extraction through registered Launch → Game →
+Easy. Inspected captures show the lower debris doorway, a live armored enemy
+in its corridor, native blaster bursts, player health 53 → 17 → 0, and ordinary
+Enter autosave reload to health 100. A second approach collects normal health
+pickups (102 and 114 visible), encounters the enemy again, then loses health
+90 → 20 → 0. A second ordinary autosave completes. The final approach remains
+in the starting room. **Enemy defeat and subsequent room progression are not
+verified.** Close enemy poses and red particles do not establish a kill; the
+corpse by the debris predates combat. The filenames `enemy-down.png` and
+`next-room.png` actually show the player's death/Load Game menu, as explicitly
+recorded in `inspected.json`.
+
+The concrete execution limit was two player deaths during close corridor
+aiming; no emulator blocker or causal runtime repair was proven. Short native
+arrow holds produced uneven observed turn distances, but this run does not
+establish an input implementation defect. A direct CDP relative-motion
+experiment was visually inconclusive and temporarily resized the viewport to
+800×600; subsequent native commands restored 1024×768. All recorded DOM inputs
+are trusted browser events. No console command, guest-memory write, health or
+ammo edit, enemy edit, cheat, or asset modification was used.
+
+Actual backend probes identify original **`ref_gl` / emulator WebGL 1**, with
+`gl_sw_enabled() = 0`, threads and render Worker disabled. Despite the retained
+harness requesting SwiftShader flags, the live context reports **ANGLE Intel
+Mesa UHD Graphics 620 (KBL GT2), OpenGL 4.6 Core / Mesa 23.2.1**. This is the
+observed backend, not a SwiftShader claim. The exact downloaded module remains
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`;
+its compiled source commit remains unknown, so current-main certification is
+not claimed. Served host hashes are retained; `lib/host-audio.js` changed in
+the shared tree after being served, and its recorded served hash must not be
+replaced by the later file's hash. All 67 registered files, including 65
+original assets and the documented pak hash, match the preceding run. The
+installer remains unavailable for a fresh extraction comparison.
+
+The bounded attempt closed its browser and both servers, checked all three
+ports and browser PID absent, removed its profile, and retained useful images
+before teardown; no Boat was used and /home remained above 2 GB free. There
+was no observed page exception, guest trap or `FreeLibrary failed`; static
+harness HTTP 404s remain. The task's defeat/progression acceptance is **not
+met**, rather than recast as a successful gameplay or emulator repair result.
+
+## 2026-10-31: first guard defeated and next room entered
+
+Run `scratch/runs/20261030T2355Z-quake2-ranged/result.json` verifies the
+requested combat milestone. Personally inspected captures show the live guard
+in the narrow corridor, sustained native mouse-one fire with S retreat and
+S+D/A strafe, hit reactions, and a new fallen body beside the player. This is
+distinguished from the corpse already lying farther down the corridor.
+The game's ordinary **F1 help/status screen reads kills 1/18** after loading
+the unchanged native post-combat quicksave. Native W then crosses the corridor
+into the larger room beyond it: `next-room-entry.png` shows the new room's
+metal walls and pickup crate, with the player alive at health 42.
+
+The broader room view reveals a second attacking guard. Health falls to 20,
+then 12 during another native quicksave, and finally 0 before the final menu
+capture. The safer **post-combat save at health 42** is retained separately
+from the dangerous later room save, along with a pre-guard save. Save bytes
+were read from the browser VFS without modification, exported with hashes,
+mounted as ordinary files on recovery, and loaded using native F9. The run
+directory contains save manifests and recovery instructions. No console
+commands, guest-memory writes, cheats, asset patches or forced game handlers
+were used.
+
+The attempt and recoveries occupied approximately 12 minutes of controller
+gameplay, below the 20-minute limit. The first Chrome disappeared during
+navigation; the second Chrome's process exit explicitly reports **SIGKILL**
+at 00:00:06Z, before room-entry capture. Its sender and cause are unknown.
+A third browser recovered the exported native save, confirmed kills 1/18,
+and completed room entry. No emulator defect or runtime repair is established.
+
+Actual backend probes identify original **ref_gl / emulator WebGL 1 / ANGLE
+Intel Mesa UHD Graphics 620**, with `gl_sw_enabled() = 0`, guest threads and
+render Worker disabled. SwiftShader command-line flags do not override this
+observed renderer. Every downloaded module matches retained SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`;
+its compiled source commit remains unknown. This does not certify a fresh
+current-main build. All 67 registered inputs, including 65 original assets
+and the documented pak hash, remain unchanged; all 472 recorded served
+responses match their retained input hashes. The installer remains absent.
+
+Focused module/assets/save-byte/backend/trusted-input/cleanup checks pass.
+No source was changed. Static-harness HTTP 404 messages remain; no page
+exception, guest trap or `FreeLibrary failed` was recorded. The final quit
+request was followed by a controller `ERR_STREAM_WRITE_AFTER_END`, so clean
+controller exit is not claimed. All three browser PIDs and five known ports
+were independently checked absent/closed, the profile was removed, and held
+gameplay keys and attack were released. No Boat or test box was used.
+Audio, FPS, networking, further combat and level completion remain unqualified.
+
+## 2026-10-31: second guard defeated; room crossed
+
+Run `scratch/runs/20261031T0010Z-quake2-second/result.json` continues the
+unchanged retained native health-42 post-combat save. Personally inspected
+captures show the second guard pursuing the player into the corridor, native
+mouse-one fire, and the guard falling. The ordinary F1 screen reads **kills
+2/18**. Native F6 saved the result at health 12; native F9 subsequently
+reloaded it, and a second F1 capture still reads **2/18**. The player then
+crossed the room and collected armor shards (HUD armor 2, then 4). A further
+guard killed the player during room exploration. Another room or level
+transition is not established; the visible health box was not collected.
+
+The run preserves separate byte-for-byte native save exports: the original
+health-42 starting save, `second-guard-save-manifest.json` (recommended new
+checkpoint, health 12 in the corridor, two kills), and
+`room-save-manifest.json` (health 12 near the health box, after reloading the
+two-kill save). Recovery instructions accompany them. Three earlier combat
+attempts ended in inspected player deaths; another was abandoned alive at
+health 2. Opening the native menu clears the guest's attack state, so resuming
+requires a fresh native fire press. The successful corridor engagement
+renewed mouse-one after closing the menu. This is a control finding, not an
+emulator repair. Gameplay occupied about nine minutes, below the 20-minute
+limit. No guest patch, console command, cheat, memory write or synthetic game
+state was used.
+
+Actual provenance remains retained module SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source commit unknown, original `ref_gl`, emulator WebGL 1, ANGLE
+Intel Mesa UHD Graphics 620, software flag 0, threads and render Worker off.
+The harness's SwiftShader flags do not describe the observed context. All 67
+registered inputs, including 65 original assets and the documented pak hash,
+are unchanged. All 164 served responses were hash-verified. Shared `host.js`
+changed after launch; its exact served bytes were recovered from launch HEAD
+`a3ab89d44` and retained with their matching hash. This does not certify a
+fresh current-main module. The installer remains unavailable.
+
+Focused module, asset, served-byte, native-save, backend, trusted-input and
+cleanup checks pass; no runtime source changed. No page exception, guest trap
+or `FreeLibrary failed` was recorded. Static-harness HTTP 404s remain. Quit
+again produced controller `ERR_STREAM_WRITE_AFTER_END`; clean controller exit
+is not claimed. Browser PID 1175593 and all three known ports were independently
+absent/closed, profile removed, attack and gameplay keys released. No Boat or
+assigned test box was used. Further combat, audio, FPS and level completion
+remain unqualified.
+
+## 2026-10-31: health pickup and recoverable two-kill checkpoint
+
+Run `scratch/runs/20261031T0023Z-quake2-third/result.json` continues the
+unchanged native room save. Personally inspected `health.png` shows the Health
+pickup and HUD increase from 12 to **22**. Native F6 writes a quicksave; eight
+resident current/quick files were exported byte-for-byte. Ordinary remount and
+F9 restore health 22 (`recovered22-resume.png`), and the native F1 screen still
+reads **kills 2/18** (`health22-kills.png`). `health22-save-manifest.json` and
+`recovery.txt` retain this checkpoint separately from the earlier health-12 save.
+An armor-shard pickup followed. Further encounters ended in inspected deaths;
+no third kill, next-room completion or level transition is established.
+
+The harness initially tried to read two lazy save0 headers synchronously,
+raising VfsPendingError before capture; the export skips those unmaterialized
+headers. Direct CDP capture works. The mouse was also left over the host Launch
+button, so a native firing click restarted the app. Moving it inside the game
+area avoids that target error; the exported save recovered the progress. These
+are harness limitations, not demonstrated emulator defects. No guest-memory
+write, cheat, console command or original-asset edit supplied progress.
+
+The retained module is SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown. Actual rendering is original ref_gl through WebGL 1,
+ANGLE Intel Mesa UHD 620, software flag 0, threads/render Worker off. All 67
+registered inputs (65 originals), 240 served responses and eight exported save
+files pass hash checks; all 95 recorded input events are trusted. Physical
+mouse buttons were released, although the dead guest retained attack state 1.
+No further execution occurred after shutdown. No runtime source changed.
+
+Focused verification passes. Cleanup required SIGTERM followed by a targeted
+SIGKILL of the controller after its browser closed but servers remained open;
+clean controller exit is not claimed. Both owned PIDs are absent, all three
+ports closed and profile removed, with over 7 GB free. No Boat was used.
+Next: continue the health-22 native checkpoint and engage the remaining guards
+from cover, keeping the mouse inside the game area.
+
+## 2026-10-31: four kills and passage beyond the guards
+
+Run `scratch/runs/20261031T0032Z-quake2-health22/result.json` continues the
+preserved health-22/two-kill checkpoint. Personally inspected captures show
+two guards near the passage pursuing the player, native blaster fire from
+the corner, hit reactions and both guards falling. The ordinary F1 screen
+confirms **kills 4/18**, with the player alive at **health 11**. Native F6
+saves that checkpoint. F9 recovery retains four kills. Eight exported native
+save files were then mounted as ordinary app files after stopping/restarting
+the app; F9 and F1 again confirm health 11 and kills 4/18. Exported bytes
+after this external recovery match the combat save exactly.
+
+The player subsequently entered the slatted passage beyond those guards.
+A further guard killed the player there; no fifth kill, completed next room
+or level transition is established. The recommended recovery is
+`combat-save-manifest.json`, before passage entry. `recovery.txt`,
+`remount.cjs`, the eight native files and the original starting health-22
+files are retained separately. The corner save is an earlier position, not
+the recommended four-kill checkpoint. Browser gameplay and recovery ran from
+approximately 00:29:01Z to 00:36:43Z, below eight minutes and the 20-minute
+bound. No guest-memory writes, console commands, cheats or original-asset changes
+supplied progress. No emulator defect or runtime repair is demonstrated.
+
+The exact retained module remains SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown. Actual backend probes report original ref_gl,
+WebGL 1, ANGLE Intel Mesa UHD 620, software flag 0, threads/render Worker off.
+This does not certify a fresh current-main build. All 67 prior registered
+inputs, including 65 original assets, remain unchanged; the current manifest
+has 74 entries including eight checkpoint files. All 158 served responses
+pass hash verification. The original installer remains unavailable.
+
+Focused module/assets/served-byte/native-save/backend/input/cleanup checks
+pass. All 212 recorded input events are trusted; final physical mouse mask
+and native attack bit are clear. A redundant release request returned
+`left is not pressed`; no page exception, guest trap or FreeLibrary failure
+was recorded. Static-harness HTTP 404s remain. Browser close was requested;
+the controller records browser SIGKILL, with its precise sender unknown.
+Controller shutdown required SIGTERM followed by targeted SIGKILL, so clean
+process exit is not claimed. Both owned PIDs are absent, three ports closed,
+profile removed and over 7 GB free. No Boat or assigned test box was used.
+Next: recover the four-kill save and engage the passage guard from cover;
+health 11 remains fragile.
+
+## 2026-10-31: passage guard defeated; five-kill save recovered
+
+Run `scratch/runs/20261031T0042Z-quake2-passage/result.json` continues the
+unchanged four-kill/health-11 checkpoint. Personally inspected captures show
+entry into the slatted passage, the next guard approaching, and native blaster
+fire while retreating down the passage. The guard falls; the ordinary F1
+screen confirms **kills 5/18**, with **health 11** retained. Native F6 saves
+the result. Eight native current/quick files were exported without alteration
+to `fifth-save-manifest.json`, then mounted as ordinary files after stopping
+and restarting the app. Native F9 recovery and inspected
+`external-five-kills.png` / `external-resume.png` confirm five kills and health
+11. The recovered save hashes exactly match the exported checkpoint.
+
+The recommended successor checkpoint is that fifth-guard save; `recovery.txt`
+and `remount.cjs` describe recovery. The earlier four-kill save remains intact.
+No later room or level transition is established. Browser gameplay and recovery
+occupied approximately 00:39:30Z–00:41:38Z, below the 20-minute bound. All
+progress used native browser keyboard/mouse input; no guest-memory writes,
+console commands, cheats or original-asset changes were used. No runtime
+repair was needed.
+
+Exact retained module SHA-256 remains
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown. Actual probes report original ref_gl, WebGL 1, ANGLE
+Intel Mesa UHD 620, software flag 0, threads/render Worker off. This does not
+certify a fresh current-main build. All 67 prior registered inputs, including
+65 original assets, remain unchanged; all 158 served responses and eight
+native save files pass hash verification. All 92 recorded input events are
+trusted; final physical mouse mask and native attack bit are clear. The
+installer remains unavailable. Audio, FPS, networking and level completion
+remain unqualified.
+
+Focused evidence verification passes; this is a documentation-only change.
+No page exception, guest trap or FreeLibrary failure was recorded; static
+harness HTTP 404s remain. Browser exit reports code 0 with no signal; the
+controller was stopped with targeted SIGTERM. Both owned PIDs are absent,
+all three ports closed and profile removed. No Boat or assigned test box was
+used (ID/state/expiry N/A); ownership is handed back. Next: continue down the
+cleared passage from the five-kill save and seek health before further combat.
+
+## 2026-10-31: health 21, sixth guard and open courtyard
+
+Run `scratch/runs/20261031T0046Z-quake2-next/result.json` resumes the native
+five-kill/health-11 checkpoint. Personally inspected captures confirm F1
+**kills 5/18**, passage exploration, and return to the adjoining room. A live
+guard approached through the opposite doorway. Native blaster fire while
+retreating collected Health, raising the HUD to **21** (`sixth-fight.png`).
+Further fire defeated the guard; `sixth-kills.png` confirms **6/18**, health
+21. Native F6 saved this result, and eight unchanged native current/quick
+files were exported to `sixth-save-manifest.json`.
+
+The player then crossed that doorway into the open red-sky courtyard with
+crates, ramps and a lower water channel. Exploration reached the channel;
+health subsequently read 18, with the damage source unqualified. F9 restored
+the six-kill/health-21 checkpoint. A second courtyard entry and F6 export
+preserve `courtyard-save-manifest.json` at health 21, with another live guard
+visible below the entrance. No seventh kill or level transition is claimed.
+The safer recommended recovery is the **sixth** save, before courtyard entry;
+the courtyard save is a separate, more exposed position.
+
+The browser received SIGKILL during an in-page stop/relaunch remount check;
+its sender is unknown. A fresh browser mounted the exported sixth save as
+ordinary files. Native F9 and personally inspected
+`recovery/external-six-kills.png` / `recovery/external-resume.png` confirm six
+kills and health 21. All eight recovered file hashes match the export.
+`recovery.txt`, `recovery-driver.cjs` and the manifests preserve recovery.
+Gameplay and recovery occupied approximately 00:45:30Z–00:50:27Z, below the
+20-minute limit. No guest-memory write, console command, cheat, original-asset
+edit or emulator repair supplied progress.
+
+Both sessions loaded exact retained module SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown. Fresh recovery probes report original ref_gl,
+WebGL 1, ANGLE Intel Mesa UHD 620, software flag 0, threads/render Worker off.
+This does not certify a current-main module. All 67 prior registered inputs,
+including 65 original assets, and all recorded served bytes pass hash checks.
+Recovery input events are trusted and native attack is clear; the initial
+session's full trust/held-state snapshot was lost with Chrome, so complete
+initial-event verification is unavailable. The native action log remains.
+No page exception, guest trap or FreeLibrary failure was recorded; static
+harness HTTP 404s remain. The original installer remains unavailable.
+
+Focused module/assets/served-byte/native-save/recovery/cleanup checks pass.
+No runtime source changed. The recovery browser exited code 0; both
+controllers were stopped with targeted SIGTERM. All four owned PIDs are
+absent, four known ports closed and both profiles removed, with over 7 GB
+free. No Boat or assigned test box was used (ID/state/expiry N/A); ownership
+is handed back. Next: recover the six-kill/health-21 save, enter the courtyard
+and engage its next guard from the doorway before exploring the ramps.
+
+## 2026-10-31: courtyard guard defeated; safer seven-kill checkpoint
+
+Run `scratch/runs/20261031T0055Z-quake2-courtyard/result.json` resumes the
+exported six-kill/health-21 native checkpoint. Personally inspected frames
+confirm the starting F1 count **6/18** and health **21**. The first doorway
+engagement ended in player death while adjusting aim. Ordinary F9 restored
+the unchanged checkpoint. On the retry, native blaster fire and S retreat
+drew the courtyard guard through the doorway into the room. Inspected
+`guard-lured.png`, `guard-hit.png` and `guard-fall.png` show his approach and
+defeat; `seventh-kills.png` confirms **7/18**, still at **health 21**.
+
+Native F6 saved from farther inside the room, behind the courtyard doorway.
+Eight untouched current/quick files are exported in
+`seventh-save-manifest.json`. A fresh browser mounted those exports as
+ordinary files; native F9, F1 and inspected `recovery/external-seven-kills.png`
+and `recovery/external-resume.png` confirm seven kills and health 21. All eight
+recovered file hashes exactly match the export. This is the recommended new
+checkpoint; `recovery.txt` and `recovery-driver.cjs` pin the recovery recipe.
+The earlier sixth checkpoint remains unchanged. The bounded session and
+recovery took approximately four minutes, below 20 minutes. No eighth kill,
+completed courtyard traversal or level transition is established. No
+guest-memory writes, cheats, console commands or original-asset edits were used.
+
+Both sessions loaded retained module SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown. Actual probes report original ref_gl, WebGL 1,
+ANGLE Intel Mesa UHD 620, software flag 0, threads/render Worker off; requested
+SwiftShader flags do not describe the observed context. All 67 prior inputs,
+including 65 original assets, 424 served responses and eight exported save
+files pass hash checks. All 75 gameplay and 11 recovery input events are
+trusted; final physical mouse mask and native attack bit are clear. The
+installer remains unavailable; this does not certify a current-main module.
+Audio, FPS and networking remain unqualified.
+
+Focused verification passes; no runtime source changed or causal emulator
+defect was proved. The initial background controller ended before READY;
+its owned Chrome was terminated and a persistent foreground session used.
+The gameplay controller's quit produced `ERR_STREAM_WRITE_AFTER_END`, and
+the recovery controller required targeted SIGKILL after SIGTERM left HTTP
+ports open. Recovery Chrome records SIGKILL after an explicit CDP close;
+its signal sender is unqualified. The copied backend query inherited an old
+action timestamp; its DOM event times and surrounding actions retain this
+run's times. Clean controller exit is not claimed. No page exception, guest
+trap or FreeLibrary failure was recorded; static-harness HTTP 404s remain.
+The task explicitly delegated own browser/server/profile cleanup: all owned
+browsers/controllers are absent, five known ports closed, both profiles
+removed and watcher stopped, with over 7 GB free. No Boat or assigned test
+box was used (ID/state/expiry N/A); ownership is handed back. Next: recover
+the seven-kill save and explore the courtyard ramps while seeking health.
+
+## 2026-10-31: courtyard channel explored; flooded pillar passage reached
+
+Run `scratch/runs/20261031T0101Z-quake2-ramps/result.json` resumes the
+seven-kill indoor checkpoint. Inspected `start-kills.png` confirms **7/18**
+and **health 21**. The first launch accidentally passed export-manifest rows
+without converting `path` to registration `vfsPath`; native F9 reported no
+save. Closing it and using the original mount format recovered the unchanged
+checkpoint. This was a harness setup error, not a game or emulator blocker.
+
+Native movement crossed the courtyard, descended into its lower channel and
+checked the sloped supports. Forward/jump did not climb those supports.
+`bank.png`, `ramp-top.png` and `climb2.png` show the accessible bank/stairs
+returning to the cleared room. Further channel exploration entered the dark
+water-level opening; `tunnel-out.png` and `sewer.png` show a new red-lit,
+flooded pillar chamber. No health pickup or new live enemy was found.
+
+The deeper chamber requires swimming: pausing there twice led to drowning
+and death. Ordinary F9 recovered each time, and trusted CDP jump held down
+kept the player at the surface at health 21. Final native F1 still shows
+**7/18**; `exploration-save-manifest.json` exports eight untouched F6
+current/quick files from the passage. A fresh browser mounted them as ordinary
+files; native F9 and inspected `recovery/external-world.png` /
+`recovery/external-count.png` confirm health 21 and seven kills. All eight
+recovered hashes match. This exploration save needs prompt jump/swim-up
+input; it is **not safer than the original indoor checkpoint**, which remains
+unchanged in `starting-save-manifest.json`. `recovery.txt` documents both
+recipes, including the `hold-space.cjs` helper and native export commands.
+No eighth kill, health gain, dry exit or level transition is established.
+
+Gameplay/setup and fresh recovery ran approximately 00:59Z–01:10Z, within the
+20-minute bound. No cheats, guest-memory writes, console commands, asset
+edits or emulator repair supplied progress. Both valid sessions loaded exact
+retained SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown. Actual probes report original ref_gl, WebGL 1,
+ANGLE Intel Mesa UHD 620, software flag 0, threads/render Worker off, despite
+requested SwiftShader flags. This does not certify a current-main module.
+All 67 prior registered inputs, including 65 original extracted assets,
+324 served responses and the eight recovered save files pass hash checks.
+All 209 gameplay and 19 recovery recorded input events are trusted; final
+mouse mask and native attack bit are clear. The installer remains unavailable;
+audio, FPS and networking remain unqualified.
+
+Focused verification passes; no runtime source changed. The malformed-mount
+browser quit hit the inherited controller `ERR_STREAM_WRITE_AFTER_END`.
+Both valid browsers closed through CDP with exit 0; their controllers were
+stopped with targeted SIGTERM. No page exception, guest trap or FreeLibrary
+failure was recorded; static-harness HTTP 404s remain. Own cleanup was
+explicitly delegated: browsers/controllers are absent, five ports closed,
+three profiles removed and watcher absent, with over 7 GB free. No Boat or
+assigned test box was used (ID/state/expiry N/A); ownership is handed back.
+Next: use the safer indoor save to seek the outer ledge pickups, or continue
+the flooded exploration save while holding jump and locate its dry exit.
+
+## 2026-10-31: far-side flooded duct located; entrance remains blocked
+
+Run `scratch/runs/20261031T0114Z-quake2-dry-exit/result.json` continues the
+seven-kill/health-21 checkpoint with the same retained driver and module.
+Inspected courtyard jump attempts did not reach the opposite ledge pickups.
+The prior final exploration export restores near the courtyard-side passage;
+it should not be interpreted as a deep pillar-room checkpoint. The separately
+retained `sewer-save-manifest.json` restores inside that chamber.
+
+One sewer recovery attempt ended in drowning before swim-up took effect.
+Native F9 recovered it. Closing the native load menu and issuing a fresh jump
+press, then holding jump, surfaced the player at health 21. Input held across
+loading/menu changes alone was insufficient in this attempt. Native movement
+then traversed the far side of the red-lit flooded chamber and located a low,
+red-lit duct opening (`sewer/far-corridor-right.png`). Forward and crouch/swim
+attempts reached its lip but did not establish traversal. No dry exit, health
+pickup, new live enemy, eighth kill or level transition is claimed. This is
+a navigation blocker, not an isolated emulator defect.
+
+Native F6 exported eight untouched current/quick files to
+`sewer/duct-save-manifest.json`. A fresh browser mounted them as ordinary
+files; F9 and inspected `recovery/external-count.png` confirm **kills 7/18,
+health 21**. All eight recovered hashes exactly match. This save is submerged
+at the duct approach and requires prompt swim-up/retreat; it is not a safer
+replacement for the unchanged indoor checkpoint. `recovery.txt` retains the
+recipes and that limitation. Gameplay and external recovery ran approximately
+01:13Z–01:27Z, within 20 minutes. No cheats, console commands, guest-memory
+writes or original-asset edits supplied progress.
+
+All four browsers loaded retained module SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown; this does not certify a current-main build. Actual
+rendering remains original ref_gl, WebGL 1, ANGLE Intel Mesa UHD 620,
+software flag 0, threads/render Worker off despite requested SwiftShader
+flags. Verification passes for 67 prior registered inputs (65 originals),
+648 served responses, all 232 recorded trusted input events, and eight
+byte-exact recovered save files. Final mouse masks and native attack bits are
+clear. No page exception, guest trap or FreeLibrary failure was recorded;
+static-harness HTTP 404s remain. The installer remains unavailable; audio,
+FPS and networking remain unqualified. No runtime source changed.
+
+All four owned browsers exited code 0 through CDP close; their controllers
+were stopped with targeted SIGTERM. All eight owned PIDs are absent, twelve
+known ports closed, four profiles removed and the watcher stopped, with over
+7 GB free. No Boat or assigned test box was used (ID/state/expiry N/A);
+ownership is handed back. Next: recover the duct approach only with immediate
+swim-up input and solve the low entrance alignment, or return to the safer
+indoor checkpoint to investigate another courtyard route.
+
+
+## 2026-10-31: flooded lip traversed; dry duct refuge recovered
+
+Run `scratch/runs/20261031T0129Z-quake2-route/result.json` first recovered
+and explored the unchanged seven-kill indoor checkpoint. Courtyard ledge
+attempts did not collect health; the channel's left bank returned toward the
+entrance. The worker then switched to the retained submerged duct approach.
+Fresh swim-up and retreat after closing the load menu surfaced the player,
+with two health lost (**21 → 19**), but no death in this run.
+
+Long forward/crouch input submerged the player below the opening. A later
+short **W+C 400 ms, then W 700 ms**, with held swim-up released, entered the
+low red-lit duct (`duct/lip-middle.png`). Subsequent native crouch movement
+traversed its interior. Exploration returned to a **dry standing shelf inside
+the duct mouth**, looking toward the flooded pillars (`duct/stand-exit.png`).
+This establishes escape from submersion into a dry refuge, not a route to a
+new room. Fifteen seconds without movement or swim-up retained **health 19**.
+F1 confirmed **kills 7/18**. No pickup, new enemy, eighth kill, next room or
+level transition is claimed; onward navigation remains unresolved.
+
+Native F6 exported eight untouched files to `duct/dry-save-manifest.json`.
+A fresh browser mounted them as ordinary files; native F9 and inspected
+`recovery/external-dry-wait.png` / `recovery/external-count.png` confirm the
+same dry shelf, health 19 and seven kills. Another 15-second no-input wait
+caused no damage. All eight recovered file hashes exactly match the export.
+This new dry checkpoint needs no swim-up; the original indoor health-21 save
+remains intact. `recovery.txt` and `recovery-driver.cjs` retain both recipes.
+Gameplay and fresh recovery ran approximately 01:29Z–01:41Z, within 20 minutes.
+No cheats, console commands, guest-memory writes, binding changes or original
+asset edits supplied progress. No emulator defect was isolated.
+
+Read-only inspection of the mounted config and original `default.cfg` clarified
+navigation: always-run is already enabled (`cl_run 1`), so Shift slows movement;
+C/Ctrl are swim-down/crouch; End centers the view; Z looks down; PageDown looks
+up. PageUp has no default binding. These controls were not remapped.
+
+All three browsers loaded retained module SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown. This does not certify a current-main build. Actual
+valid-session backend probes report original ref_gl, WebGL 1, ANGLE Intel
+Mesa UHD 620, software flag 0, threads/render Worker off. Verification passes
+for 67 prior inputs including 65 original assets, 486 served responses, eight
+byte-exact recovered files, and all 123 duct / 13 recovery trusted input events.
+The initial browser's full input snapshot was lost; its action log remains.
+The installer remains unavailable; audio, FPS and networking are unqualified.
+
+The initial indoor Chrome disappeared with SIGKILL before requested close;
+its sender is unknown. The subsequent close attempt produced an unhandled
+ErrorEvent. Both valid duct/recovery browsers exited code 0 through CDP close;
+all three controllers were stopped with targeted SIGTERM. Six owned PIDs are
+absent, nine ports closed and three profiles removed, with over 6 GB free.
+No page exception was recorded; static-harness HTTP 404s remain. No runtime
+source changed. No Boat or assigned test box was used (ID/state/expiry N/A);
+ownership is handed back. Next: recover the dry shelf and investigate the
+remaining duct/chamber route, keeping the indoor checkpoint as health fallback.
+
+## 2026-10-31: dry duct onward sweep; navigation remains unresolved
+
+Run `scratch/runs/20261031T0145Z-quake2-onward/recovery.txt` copies the prior
+recovery driver to new ports and mounts all eight native save files byte for
+byte. Both browser restores reached the dry shelf at **health 19, kills 7/18**.
+Backward crouching first moved deeper into the duct. Native turns and crawls
+then traversed the red-lit stretch to a wall (`retry/far-end.png`); the adjacent
+dark corners and sideways movement showed openings toward the same flooded
+pillars (`retry/corner-return.png`). A short native blaster wall/fixture-direction
+probe did not visibly open a route. No onward room, health pickup, new enemy,
+eighth kill or level transition was established. The blocker is unresolved
+navigation at this duct's wall/corners; these observations do not prove that
+all possible routes are closed. No drowning, death or health loss was observed,
+and no lip calibration was repeated.
+
+The first Chrome disappeared with **SIGKILL at 01:48:45 UTC**, sender unknown.
+Its frames and action log remain, but its full trusted-input snapshot was lost.
+A fresh browser recovered successfully and repeated the deeper crawl. Final F9
+returned to the original shelf; an extra Escape opened the menu and was
+corrected before the measured **15-second unpaused world wait**, which retained
+health 19 (`retry/restored-world-wait.png`). F1 confirms seven kills
+(`retry/restored-count.png`). Read-only export
+`retry/retained-save-manifest.json` matches all eight starting files exactly;
+no new F6 checkpoint was made. The prior safer indoor health-21 save remains
+unchanged. `recovery.txt` retains the new ports, scripts and navigation limits.
+The bounded attempt ran approximately 01:45Z–01:52Z, below 20 minutes. No
+cheats, console commands, guest-memory writes, binding changes or asset edits
+supplied progress; no emulator defect was isolated.
+
+Both browsers loaded retained module SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+whose exact compiled source remains unknown. This does not certify a current-main
+build. The retry reports original ref_gl, WebGL 1, ANGLE Intel Mesa UHD 620,
+software flag 0 and threads/render Worker off. `verification.json` passes for
+65 original assets, 67 prior inputs, 324 served responses, eight exact native
+save files, all 53 retry input events trusted, no held keys and mouse mask 0.
+The initial input snapshot limitation remains explicit. No page exception was
+recorded; static-harness HTTP 404s remain. Audio, FPS and networking remain
+unqualified. No runtime source changed, so no build was run.
+
+Retry Chrome exited code 0 through CDP close; controllers were stopped with
+targeted SIGTERM. Both owned browsers/controllers are absent, six known ports
+closed and two profiles removed, with over 6 GB free. No Boat or assigned test
+box was used (ID/state/expiry N/A); ownership is handed back. Next: establish
+an onward route beyond this local wall/corner sweep, or use the unchanged
+indoor health-21 checkpoint to investigate another route.
+
+## 2026-10-31: indoor side door reaches a live stair guard
+
+Run `scratch/runs/20261031T0154Z-quake2-indoor/` uses fresh native F9 to
+recover the unchanged **health-21, kills-7/18 indoor checkpoint**. A courtyard
+running jump landed in the lower channel without collecting the opposite
+ledge pickups. F9 restored the indoor position; no dry-duct corner sweep was
+repeated. Turning left from the saved view instead enters a slatted corridor.
+Its mechanical door opens into a room with two barrels and stairs toward
+red-sky openings (`live/door-through.png`, `live/retry-door.png`).
+
+The first stair approach ended in death (HUD -2); the damage source was not
+identified in that attempt. Native F9 restored the original save again.
+On the retry, inspected `live/stair-fight.png` and `live/stair-retreat.png`
+show a **live guard on the stairs**, with health reduced to **9**. Native
+blaster fire was visibly aimed too high after PageDown; no hit or eighth kill
+is established. This is a newly inspected enemy encounter reached by the
+indoor side route, not a claim that the room itself was previously unvisited.
+The next engagement request failed because Chrome received SIGKILL at
+01:58:57Z, sender unknown. No new F6 checkpoint was made.
+
+A fresh browser remounted all eight original indoor save files. Its initial
+F9 was issued during startup, so early captures remain loading evidence only.
+Actual world recovery is confirmed by `retry/load-wait.png` (F1 **7/18**, HP
+**21**) and `retry/restored-wait.png` (same room and health after 15 seconds
+without input). Read-only VFS exports in `retry/retained-save-manifest.json`
+match the starting checkpoint byte for byte. `recovery.txt`, `driver.cjs`,
+`retry-driver.cjs`, and the action logs retain the route and recovery details.
+Gameplay/recovery ran about 01:54Z–02:04Z, within 20 minutes. No cheats,
+game/console commands, memory edits, binding changes or asset changes were used.
+
+Both browsers loaded retained module SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown; this does not certify current main. Fresh recovery
+probes report original ref_gl, WebGL 1, ANGLE Intel Mesa UHD 620, software
+flag 0, threads/render Worker off. Focused verification passes for 65 original
+assets, 67 prior inputs, 324 served responses, eight exact save files, and
+107 initial / 11 recovery trusted input events. The last retained snapshots
+have no held keys or mouse buttons; rejected post-disconnect requests are not
+counted as delivered. No page exception was recorded; static HTTP 404s remain.
+Audio, FPS and networking remain unqualified. No runtime source changed, so
+no build was run.
+
+The first controller was stopped with targeted SIGTERM. Fresh recovery quit
+responded successfully, then its controller raised the inherited
+`ERR_STREAM_WRITE_AFTER_END`; no browser exit event was retained, so clean
+exit is not claimed. All owned browser/controller processes are absent, six
+known ports closed, two profiles removed and over 6 GB free. No Boat or test
+box was used (ID/state/expiry N/A); ownership is handed back. Next: recover
+indoor21, follow the left corridor through the mechanical door, and engage
+or lure the stair guard from doorway cover with centered aim before advancing.
+
+## 2026-10-31: centered doorway lure draws multiple guards; checkpoint retained
+
+Run `scratch/runs/20261031T0213Z-quake2-door/` makes one bounded native
+engagement from the unchanged indoor **21 HP, kills 7/18** checkpoint. The
+initial Chrome received **SIGKILL at 02:07:37Z**, sender unknown, during F9
+loading; it established no gameplay recovery. A fresh profile remounted the
+same eight save files, and inspected `retry/starting-count.png` confirms the
+actual world, 21 HP and seven kills.
+
+The verified left corridor/mechanical-door route reached the barrel/stair
+room. Native End centered the view, avoiding the earlier excessive PageDown
+pitch. A short forward firing peek and backward retreat drew **multiple live
+guards** into the room: `retry/lure-retreat.png` shows one close at the right,
+another by the barrels and another on the stairs. Health fell to 9. A further
+brief right turn and retreating burst ended in **one player death**, HUD -2
+and explicit `Player died.` (`retry/cover-retreat.png`). No eighth kill,
+pickup, onward room or new F6 checkpoint was established. The concrete blocker
+is this multi-guard encounter overwhelming the attempted retreat at low health;
+no emulator defect was isolated. Next attempt should establish cover farther
+back before firing and avoid the forward peek that exposed the player here.
+
+Native F9 restored indoor21. Inspected `retry/restore-count.png` again reads
+**7/18**, and `retry/restore-stable.png` retains **21 HP after 15 seconds
+unpaused without input**. Read-only VFS export
+`retry/retained-save-manifest.json` matches all eight original checkpoint files
+exactly. The original save remains the recommended recovery. `recovery.txt`
+and the action logs retain timings and evidence. Gameplay and recovery ran
+approximately 02:07Z–02:10Z, within 20 minutes. No cheats, game/console commands,
+memory writes, binding changes or asset changes supplied progress.
+
+Both downloaded modules match retained SHA-256
+`d69d1158f7707c8f46d5f4c0909494913db73bfcb745ca1a3f320be9ad62db91`,
+compiled source unknown; this does not certify current main. Actual recovery
+backend is original ref_gl / WebGL 1 / ANGLE Intel Mesa UHD 620, software flag
+0, threads/render Worker off. Original assets, served-file hashes, native save
+bytes and recorded trusted inputs pass focused checks. The initial browser's
+F9-event snapshot was lost at disconnect; its action log remains, so complete
+initial-event verification is unavailable. Final recovery keys/buttons are
+released. Installer remains unavailable; audio, FPS and networking remain
+unqualified. Static HTTP 404s remain; no page exception was recorded. No runtime
+source changed, so no build was run.
+
+Recovery Chrome exited code 0 through explicit CDP close. The initial controller
+was stopped with targeted SIGTERM; the retry controller exited 143 after browser
+close, sender unknown, before its requested SIGTERM. All four owned PIDs are absent, six ports
+closed and two profiles removed, with over 1.5 GB free. Other sessions were
+preserved. No Boat or assigned test box was used (ID/state/expiry N/A);
+ownership is handed back. The bounded attempt stops with the original safe
+checkpoint retained and the combat objective unmet.
+
+## 2026-11-01: native indoor restore; door approach interrupted
+
+Run `scratch/runs/20261101-quake2-indoor-guard/` retained one native
+`quake2_demo` original, using the registered renderer/config and supported
+`--vfs-mount` for the eight unchanged indoor21 save files. Ordinary F9 at
+batches 100/101 restored the world; startup/menu frames alone were not treated
+as recovery. Inspected `starting-count.png` shows the saved indoor room and
+**21 HP**; `starting-count-stable.png` shows **kills 7/18, goals 0/1** after
+the F1 pair and eight further batches without input. Left turns and W movement
+then followed the slatted corridor toward its mechanical door. End centered
+the view at batches 1067/1068. The final W hold at 1075–1077 has before, held,
+released and settled captures; `door-approach-settled.png` at batch 1080 and
+the identical `final.png` show the closed door close ahead and **21 HP**.
+No live guard engagement, outgoing hit, eighth kill or onward room is visibly
+established. No attack or F6 input appears in the retained input trace.
+
+The blocker for this attempt is **worker/launcher interruption before the
+planned encounter**, not an established door or emulator defect. The bounded
+last worker events end after the door approach. Worker
+`01a1971b-bad6-77b1-942e-50435034f369`, launcher handle 2746, exited 143
+without launcher final/result artifacts; its signal sender/cause is not
+established here. The coordinator requested `finish.json` at
+**12:51:22Z**. `exit.json` records original PID 3661918 exiting **0 after
+318.559 seconds**, ending at batch 1080; `coordinator-interruption.json`
+records cleanup at 12:51:49Z. Original exit 0 does not establish gameplay
+success or a clean worker completion. A fresh evidence-only worker finished
+this note without resuming the old worker or starting another original.
+
+Focused artifact validation passes: all **61 PNGs** pass chunk CRC and IDAT
+decompression checks, the complete runtime gzip decodes, all **32 ordinary
+key edges (16 pairs)** are dequeued, routed and dispatched to hwnd `0x10001`,
+and all eight retained host save files still match their starting sizes and
+SHA-256 values. `save-mounts.json`, `checkpoint-before.json` and `recovery.txt`
+preserve the byte-exact recovery recipe. No fresh guest VFS export or final
+F1 count was retained, so post-run guest-save equality and a final kill-count
+readout are unavailable. The final known scheduled/pending/cross-thread/
+renderer queues are empty. Sampled physical/async movement keys are released;
+pressed latches are not held keys. W, D and End lack final per-key samples,
+although their up events were dispatched. Guest post queue, button state and
+SDL consumption remain unknown. The short settled captures are not a matched
+long no-input control for the final door approach.
+
+The accepted-build receipt matches **4,392 source pins and 141 prior observed
+reads** from accepted build `d86935e8274cd5d70a53bcc50c5d8bf5632d95c3`.
+Actual run baseline was main `f581e849f29be47c3d68da7cdf1c72a93ecde4df`.
+Recovery validation finds **4,444 source/module pins, 67 original/manifest
+inputs and original-tree membership unchanged**, with all **132 actual
+runtime reads** still matching. The runtime compiled module SHA-256 is
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+Retained observer validation exercised actual sync/async compilation, whole
+512 MB shared-memory read-only behavior, clock identity and late event 10001
+retention. String-path file reads are observed; descriptor/direct OS reads
+are not comprehensively covered. Runtime compilation identifies module bytes,
+not compiler-source reads. This native software-bridge run does not establish
+browser/GPU, audio, FPS, networking or full-suite parity. No new runtime,
+build or gameplay tests were run during evidence-only completion; no tracked
+code, configuration or assets changed.
+
+The retained runtime minimum free disk was **2,068,029,440 bytes**. Coordinator
+cleanup and a fresh process check find the original/controller, gate waiter,
+disk guard and their known groups absent, with no matching own helpers or new
+`wa-child-*` temporary directories. Evidence remains in the existing scratch
+run. Native box ID/state/expiry are **N/A**; shutdown was delegated to the
+coordinator and ownership is handed back. The original checkpoint remains
+intact. Next gameplay work, if separately authorized, still needs visible
+proof of the stair-guard outcome or an onward room; this interrupted attempt
+does not resolve that objective.
+
+## 2026-11-01: native doorway cover yields the eighth kill
+
+Run `scratch/runs/20261101-quake2-native-door-encounter/` completes the
+guard objective with **8/18 kills and 21 HP**. Supported `--vfs-mount`
+mounted the eight unchanged indoor21 files from
+`20261031T0213Z-quake2-door/retry/`; ordinary F9 at batches 100/101
+restored the checkpoint. Startup/menu images were not accepted as recovery.
+`starting-count-stable.png` confirms the indoor world, **7/18 kills,
+goals 0/1 and 21 HP** at batch 989.
+
+Short observed turns, W movement and a D offset followed the left slatted
+corridor and cleared its corner pillar. End centered the view. A three-batch
+W approach and one-batch touch reached the mechanical door. The subsequent
+20-batch no-input interval shows it **open**, with the barrel/stair room and
+an upright guard at the right jamb (`door-opening-wait-settled.png`, batch
+1144). The closed approach frame was therefore not an obstruction. No further
+forward input was issued after that touch. The player remained at the doorway
+while the guard approached, avoiding the earlier exposed forward firing peek.
+
+Enter bursts and small ordinary keyboard/relative-mouse aim corrections
+initially produced sparks near the jamb; those frames alone do not prove hits.
+`close-guard-burst-settled.png` at batch 1208 clearly shows blood from the
+identified guard. The final eight-batch burst has before/held/released/settled
+captures (`pointblank-burst-*`, batches 1242/1250/1251/1253), showing heavy
+blood and backward collapse; `pointblank-settle-settled.png` continues the
+collapse. `verified-count-wait.png` at batch 1290 and `final-count.png` at
+1344 both read **8/18**, with **21 HP** and goals **0/1**. This establishes
+one guard defeated, without establishing a level transition or another room
+beyond this encounter.
+
+Matched no-input sequences are retained alongside the action sequences,
+including three-batch `door-neutral-*` versus the three-batch approach and
+eight-batch `final-neutral-*` versus the final burst. In the door control,
+the complete upper scene rectangle `(0,0)–(640,270)` is pixel-identical
+before/held/settled; weapon motion changes the full frame. The final neutral
+sequence includes delayed F1 closing and is not a stationary full-frame
+control. Other settle frames also show delayed aim/menu effects or enemy
+animation. Browser milliseconds were not converted into native batches, and
+scheduled input times are not asserted as guest effect times.
+
+Focused validation passes all **196 PNGs** through chunk CRC/IDAT decoding,
+the complete runtime gzip, and **74 key edges / 37 balanced pairs**, dequeued
+and dispatched in order to hwnd `0x10001`. Three relative-mouse inputs bring
+the final scheduled/dequeued/routed/dispatched totals to **77**. Final known
+scheduled, pending, cross-thread and renderer queues are empty. All sampled
+physical/async keys, explicitly including **W, D, End and Enter**, are
+released; pressed latches are not held keys. Guest post queue, button state
+and SDL consumption remain unknown. No console, save-byte, binding, asset or
+guest-memory edits supplied progress.
+
+Supported `--save-vfs` exported all eight guest save files on exit.
+`focused-validation.json` verifies each exported file and each original host
+file against the retained size/SHA-256: **all eight match exactly**. No F6
+checkpoint was made, so recovery remains the original **21 HP / seven-kill**
+save; the eighth kill is evidenced in this run, not persisted as a new save.
+`save-mounts.json`, the controller scripts and exported `guest-vfs/` retain
+the recovery recipe. Identical PNGs within this run share hardlinks to save
+disk without changing their bytes; no external artifacts were removed.
+
+The Thief II fresh launcher final/result and explicit runtime/source/build
+release opened the gate at **13:04:29Z**, actual main
+`e6814d7b96263fdd354c1eae8fafa4da99e3e427` (dispatch was `90aa4059d`).
+All **4,392 accepted source pins and 141 prior observed reads** matched,
+allowing accepted module reuse. Fresh before/after validation finds **4,444
+source/module pins, 67 original/manifest inputs, original-tree membership
+and 132 actual runtime reads unchanged**. Actual compiled module SHA-256 is
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+Before original use, the observer passed actual sync/async compilation and
+execution, whole-512 MB shared-memory read-only checks, native/host clock
+identity and emitted late-event-10001 retention. Its string-path file-read
+coverage does not comprehensively cover descriptors/direct OS reads;
+runtime compilation identifies module bytes, not compiler-source reads.
+This native software-bridge result does not qualify browser/GPU, audio, FPS,
+networking or full-suite parity. No tracked runtime/helper/test/configuration
+or backend changed, so no new build was needed.
+
+One original, PID 3681491, exited **0 after 499.982 seconds**, ending at
+batch 1344, within the 25-minute gate window. Runtime and auxiliary disk
+guards retained a minimum of **2,017,398,784 bytes free**, above the required
+2,000,000,000-byte floor. Own runtime/controller, gate monitor, guards and
+watchers are absent with no remaining own groups or new `wa-child-*` temps;
+cleanup and publication checks are retained. Native local box ID/state/expiry
+are **N/A**. Explicitly delegated shutdown is complete and ownership is handed
+back. The requested eighth-kill objective is complete; no second original or
+further gameplay is needed for this assignment.
+
+## 2026-11-01: eighth-kill F6 exported; disk floor stops further recovery
+
+Run `scratch/runs/20261101-quake2-eighth-kill-checkpoint/` reproduced the
+covered encounter with one native `quake2_demo` original. Supported
+`--vfs-mount` mounted the unchanged eight-file checkpoint from
+`20261031T0213Z-quake2-door/retry/`; ordinary F9 restored **21 HP, 7/18**
+(`starting-count-stable.png`, batch 989). The previous controller's ordinary
+turns/movement were replayed through the mechanical door. The three-batch
+no-input door control retained identical pixels throughout the upper
+640×270 scene, while the matched approach advanced to the door. A further
+touch and 20-batch wait opened it normally. There was no exposed forward
+peek after the touch at batch 1121.
+
+Covered Enter bursts and the previous small aim corrections reproduced the
+guard's blood/collapse (`pointblank-burst-*`, batches 1242–1253).
+`verified-count-wait.png` at 1290 shows **8/18, 21 HP, goals 0/1**.
+Ordinary **F6 at 1290/1291** then produced visible **Quick Saving...** while
+the same eight-kill overlay remained visible (`checkpoint-f6-settled.png`,
+1294). After 40 more batches, a read-only export copied actual
+`ctx.vfs.files` entry bytes to `checkpoint-eight/save-0.bin` through
+`save-7.bin`. This is a game-created save, with no edited save bytes, memory,
+bindings, assets or console commands.
+
+`checkpoint-eight/manifest.json` records all eight actual guest-to-host
+mappings. Each row below applies to both guest directories
+`c:\baseq2\save\current\` and `c:\baseq2\save\quick\`:
+
+| Guest filename | Export indexes: current / quick | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| `server.ssv` | 0 / 4 | 2464 | `33717c18914725eb1a5155f2ac14635084bf7530cea888b51a8f7f79dacda0d8` |
+| `game.ssv` | 1 / 5 | 5308 | `156d97736cef1ea136107a9d2c13c2dc4a5a8a3d494b114ffdb2c972b3903985` |
+| `demo1.sav` | 2 / 6 | 323095 | `83cb6c6ef993f8f0ba35caad600a6731b63d9f2703dc625d108cc51731a597d0` |
+| `demo1.sv2` | 3 / 7 | 104448 | `6ad6c039d4efb8e81628badb5bfaeb8d50ff8e5974aad0b55d3eccaf0b3086c3` |
+
+All eight differ from the original seven-kill saves. On clean runtime exit,
+supported `--save-vfs` exported the guest save tree again;
+`save-export-validation.json` verifies **all eight files byte-for-byte equal
+to the earlier actual guest-byte exports**, not merely to host copies.
+`mounted-guest-validation.json` independently compares the pre-F6 guest
+response bytes against all eight unchanged original host files. Two initial
+read-only observation attempts encountered a JavaScript quoting error and
+an incomplete streamed JSON record; the complete retained runtime response
+was parsed offline for the latter comparison. Neither supplied guest state.
+
+Ordinary F9 at batches 1334/1335 returned to the doorway world at 21 HP.
+However, the attempted post-load F1 pairs, including a later attempt after
+600 no-input batches, did **not** yield a visible statistics overlay in the
+retained frames. Thus this run establishes the F6 save and exact exported
+guest bytes, but **does not independently verify 8/18 after F9**. Those
+world frames are not evidence of a stable no-input statistics control.
+The label `onward-cover-neutral-*` denotes an ordinary End centering pair,
+not a no-input control. No onward movement or room traversal was attempted
+after recovery, and no additional kill or level transition is claimed.
+
+The first terminating blocker was **free disk below 2,000,000,000 bytes**.
+The controller detected 1,999,884,288 bytes and requested ordinary runtime
+quit; the auxiliary guard subsequently recorded 1,998,979,072 bytes. PID
+3705696 exited **0 after 245.421 seconds**, final batch 2385. The continuous
+floor requirement therefore failed; it is not presented as a compliant
+runtime. No second original or runtime restart was attempted. Next, after
+disk capacity is restored, mount the eight new files using their recorded
+guest mappings, allow F9 to settle, verify the visible kill count, then use
+short consumed controls to advance from doorway cover.
+
+Thief II worker `01a1973e-91a3-7693-9c72-46cc90af1d5f` fresh launcher
+final/result and explicit runtime/source/build release opened the gate at
+**13:28:37Z**. Dispatch was `8f2f8a802db44745a1ac00fe3c65e25965eb587f`;
+the repinned main was `787aaad95b6c3bcd435e4d2186956e1c8a6d57e5`.
+All **4,392 accepted source pins and 141 prior observed reads** matched,
+allowing reuse of module SHA-256
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+Fresh before/after checks passed **4,444 source/module pins, 67 original
+and manifest inputs, original-tree membership and 132 actual runtime
+reads**. Before original execution, the observer passed actual sync/async
+module execution, whole-512 MB shared-memory read-only checks, clock
+identity and emitted late-event-10001 retention. String-path observations
+do not comprehensively cover descriptors/direct OS reads, and runtime
+module identity does not prove compiler-source reads. No tracked runtime,
+helper, test, configuration or backend changed; no new build was required.
+
+Focused checks pass **80 PNGs** through CRC/IDAT decoding, the complete
+runtime gzip, and **82 key edges / 41 balanced pairs**, all dequeued and
+dispatched in order to hwnd `0x10001`. Three relative-mouse events bring
+final scheduled/dequeued/routed/dispatched totals to **85**. Final known
+queues are empty and sampled physical/async keys, including F6/F9, are
+released; pressed latches are distinct. Guest post queue, buttons and SDL
+consumption remain unknown. Identical screenshots share hardlinks without
+byte changes; a control-log segment is retained losslessly as gzip.
+
+Own original/controller, gate monitor, guards and publication watcher are
+absent, with no own process groups or new `wa-child-*` temps remaining.
+Local native box ID/state/expiry are **N/A**; explicitly delegated own
+shutdown is complete and ownership is handed back. Cleanup, publication,
+fresh run final/result and evidence checks are retained in the run directory.
+No browser/GPU, audio, FPS, networking or full-suite claim is made. Work
+stops at the disk blocker with the new game-created checkpoint preserved.
+
+## 2026-11-01: eighth-kill recovery stopped after a false gate match
+
+Run `scratch/runs/20261101-quake2-eight-save-onward/` did **not verify
+the restored 8/18 count or advance through the guard room**. The first
+blocker was a worker gate-checking error: the substring predicate matched
+its own “WAIT coordinator … runtime/source/build RELEASE” board entry as
+though the coordinator had released the runtime. At 13:44:33Z the lighting
+`result.json` existed, but the required explicit coordinator release was
+absent. The apparent gate receipt is invalid and the append-only board
+contains a correction. This run does not satisfy the pre-runtime gate.
+
+The worker noticed the incorrect receipt and requested ordinary quit before
+any gameplay input. One original, PID 3721734, exited 0 after 19.646 seconds
+at startup batch 25. The reviewed capture is a blank gray startup frame;
+all scheduled/dequeued/routed/dispatched input counters are zero. No F9,
+F1, movement, attack or F6 was issued. Key samples at this startup stage are
+unknown, so this is not a final per-key release demonstration. There is no
+restored-world, kill-count, cover-movement, neutral-control or objective claim.
+
+All eight supplied checkpoint files and both checkpoint manifests retained
+their pinned sizes and SHA-256 values before/after. The startup command used
+exactly their supported `--vfs-mount` mappings. The game-created eighth-kill
+checkpoint remains preserved at the preceding run's `checkpoint-eight/`;
+startup shutdown exports are not promoted as a checkpoint.
+
+Before the error was noticed, the identity check recorded 4,444 source/module
+pins and matched the accepted build's 4,392 source pins and 141 observed
+reads, reusing module SHA-256
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+The observer check passed actual sync/async execution, whole-512 MB shared
+memory read-only checks, clock identity and emitted late-event-10001
+retention. These checks ran prematurely and do not cure the invalid gate.
+String-path reads do not comprehensively cover descriptor/direct OS reads;
+module identity does not prove compiler-source reads. No new build or
+tracked source/helper/test/configuration/backend change was made.
+
+The controller's minimum observed disk was 2,206,560,256 bytes; the separate
+one-second guard minimum was 2,207,477,760 bytes. Own original, controller,
+gate waiter, disk guard and board watcher PIDs and known groups are absent;
+no new `wa-child-*` temporary directory remains. Local native box
+ID/state/expiry are N/A; explicitly delegated own shutdown is complete and
+ownership is handed back. Fresh cleanup and gate-correction records are
+retained. The scratch gate predicate now requires exact coordinator/RELEASE
+tokens and has not been rerun. No second original was used. Next recovery
+requires a valid coordinator release, then F9 and a consumed, visibly
+settled F1 count check before onward input. No browser/GPU, audio, FPS or
+full-suite claim is made.
+
+## 2026-11-01: eighth-kill save restored; two more guards and upper stairs
+
+Run `scratch/runs/20261101-quake2-eight-save-restoration/` verifies the
+new game-created eighth-kill checkpoint and advances across the guard room
+onto its raised right-side stair route. One native `quake2_demo` original
+used exactly the eight ordered `--vfs-mount` arguments from
+`20261101-quake2-eighth-kill-checkpoint/checkpoint-eight/mount-arguments.json`.
+A read-only export independently matched all eight actual mounted guest
+files to those pinned host bytes. The eight files and both original manifests
+remain unchanged. No seven-kill fight was repeated.
+
+Ordinary F9 at batches 100/101 loaded the saved doorway at **21 HP**. Its
+release was initially queued during loading; at 304 both edges were consumed.
+After 700 no-input batches the restored world was visible behind the startup
+menu. Escape closed that menu. The first consumed F1 pair at 838/839 left
+help hidden, including after another 230 no-input batches. Only then was a
+second F1 pair issued at 1072/1073. `restored-eight-count.png` at 1126 and
+`restored-eight-count-stable.png` at 1146 visibly show **8/18 kills, 21 HP,
+goals 0/1**. No movement or attack preceded this verified restoration.
+
+The player first offset behind the jamb. A one-batch D pair was not consumed
+until its release batch and supplied little movement; the three-batch offset
+visibly established cover. The door subsequently closed and a short ordinary
+W touch reopened it. A lower guard approached the doorway. Covered Enter
+bursts produced blood, but did not initially kill him. A backward retreat into
+the slatted corridor restored separation; a small relative-mouse adjustment
+and further burst produced the collapse. `ninth-kill-count-settled.png` at
+1649 confirms **9/18, 17 HP**. Ordinary F6 at 1671/1672 created the exported
+`checkpoint-nine/` save.
+
+The cleared threshold was crossed with short, observed controls. A diagonal
+left approach initially remained near the jamb; the subsequent lateral
+clearance and `inside-room-step-*` sequence visibly entered the room.
+The left-wall health pickup then raised health **17 → 42**
+(`health-pickup-approach-settled.png`, 1843). Another guard approached the
+alcove wall. Retreat/fire controls, a small aim correction, and a rightward
+escape supplied further hits and his collapse. F1 at 2017/2018 produced
+`second-guard-count-settled.png` at 2031: **10/18 kills, 30 HP, goals 0/1**.
+Initial live commentary misread the small health digits as 12/22/6; enlarged
+read-only screenshot crops in `analysis/health-crops.png` establish the
+correct **17/42/30** readings. The original full captures are retained.
+
+The player then passed to the right of the barrels. Several approaches
+reached the narrow side of the stair flight; their filenames alone do not
+prove ascent. Backoff, a walking lateral adjustment, and a final ordinary
+left/jump adjustment aligned the flight. `final-flight-step-settled.png`
+shows the raised corner; `upper-route-look-left-settled.png` at 2234 shows
+the steps meeting the raised floor and the onward passage along the right
+wall. `final-count-settled.png` at 2222 still shows **10/18, 30 HP**.
+The lower-room crossing and upper stair route are established; completing
+the base elevator objective or a level transition is not. Goals remain 0/1.
+
+Ordinary F6 at 2234/2235 saved this final position. After 40 additional
+batches, `checkpoint-onward/manifest.json` records eight read-only exports
+of actual guest save entries; `mount-arguments.json` supplies the supported
+recovery command arguments. `save-export-validation.json` verifies **all
+eight byte-equal to the clean-exit `--save-vfs` exports**. Each row below
+applies to both `c:\baseq2\save\current\` and `c:\baseq2\save\quick\`:
+
+| Guest filename | Export indexes: current / quick | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| `server.ssv` | 0 / 4 | 2464 | `28bdc0cd29a209df05d997057984eb5de81cebd483b6e8ebd7881027c90c955e` |
+| `game.ssv` | 1 / 5 | 5308 | `0a1efd61231a97bba92f62086e4f5e557eb9ce2f0be28b7047c0691a85565561` |
+| `demo1.sav` | 2 / 6 | 322145 | `19ac24b934d020dcd83076efc8cb5aced10518ced310ff1cc6659de33c91cfbe` |
+| `demo1.sv2` | 3 / 7 | 104448 | `6ad6c039d4efb8e81628badb5bfaeb8d50ff8e5974aad0b55d3eccaf0b3086c3` |
+
+This final save has not itself been F9-restored. For further play, mount its
+recorded exact bytes and verify the settled F1 count before continuing along
+the upper passage. The original eighth-kill checkpoint and the intermediate
+nine- and ten-kill exports remain available. No console, memory/save edits,
+new bindings or guest assets supplied progress.
+
+The valid gate opened **14:00:13Z**, after exact author/action parsing of
+`thief2-left-route-interaction DONE/PUSH RELEASE ... runtime/source/build`,
+both fresh launcher final/result files, launcher termination, and direct
+verification that the predecessor's owned PIDs/groups were absent. The
+predecessor's cleanup schema differed from Quake's; the scratch waiter was
+adapted before any validation or original execution. The old false-positive
+worker's WAIT predicate and startup were not accepted as restoration.
+Dispatch was `4942ab64b3dbb341e1dc7892277782b3b82c53ba`; repinned main was
+`8552125804a6994de385d7f00858e789fd59024f`.
+
+Accepted-module reuse matched **4,392 source pins and 141 prior observed
+reads**, module SHA-256
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`.
+Fresh before/after validation passed **4,444 source/module pins, 77 original,
+manifest and checkpoint inputs, original-tree membership, and 136 actual
+runtime reads**. The observer passed actual sync/async execution, whole
+512 MB shared-memory read-only comparison, unchanged clock identity, and
+emitted late-event-10001 retention before the original. String-path read
+observations do not comprehensively cover descriptor/direct OS IO; module
+identity does not prove compiler-source reads. No new build or tracked
+source/helper/test/configuration/backend change was made.
+
+Focused validation passes **259 PNGs** through CRC/IDAT checks, the complete
+runtime gzip, and **132 ordered keyboard edges / 66 balanced pairs**.
+Two relative-mouse events bring final scheduled/dequeued/routed/dispatched
+totals to **134**. Final batch 2280 has empty known input queues and released
+physical/async samples for every used key, including Shift, Space, A/D/W/S,
+Enter, turns, Escape, F1/F6/F9. Sampled mouse virtual keys are also released;
+the mouse-button mask, guest post queue and SDL consumption remain unknown.
+Before/held/released/settled captures and matched no-input controls are
+retained. The 1/1/20-batch neutral has zero changed pixels throughout the
+upper 640×270 scene; other matched 3/1/20 and 6/1/20 controls contain small
+scene changes (including the active door/enemy), so are not claimed stable.
+PNG IDAT recompression was verified lossless; equal captures share hardlinks.
+
+PID 3738515 exited **0 after 1380.730 seconds**, final batch 2280. The
+controller's outer deadline won just before the requested finish file; the
+enclosing tool shell reported 143, with its signal cause unknown. These
+limits do not erase the earlier reviewed gameplay/save evidence. The
+controller minimum free disk was **2,110,734,336 bytes**; the one-second
+auxiliary runtime guard minimum was **2,115,596,288 bytes**, above the
+2,000,000,000-byte floor. Subsample excursions cannot be ruled out and the
+auxiliary retains its latest sample/minimum, not a full history. No RAM gate
+or foreign cleanup was used. No second original was started.
+
+The run-local artifact check passes without missing files or containment/schema
+errors; the global checker reports ten unrelated containment errors, left
+untouched. The original, controller, gate waiter and runtime disk guard have
+exited. Cleanup and publication records accompany the final run result.
+Local native box ID/state/expiry are **N/A**; explicitly delegated local
+shutdown is complete and ownership is handed back. The task stops with the
+new checkpoint preserved; further objective progress is untested.

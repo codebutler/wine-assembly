@@ -22,7 +22,7 @@ node test/run.js --no-build --wasm=build/wine-assembly.wasm \
   --exe=test/binaries/candidates/reflexive-ricochet-xtreme/game/Ricochet.exe \
   --dll-seed=IFC22.dll '--vfs-include=**/*' --no-close \
   --quiet-api --quiet-blocks --batch-size=200000 \
-  --max-batches=100000 --max-seconds=300 --png=/tmp/ricochet-menu.png
+  --max-batches=100000 --max-seconds=300 --png=ricochet-menu.png
 ```
 
 Repeated EIPs in `0x004e4aXX`/`0x004e51XX` during the Reflexive logo belong
@@ -61,12 +61,12 @@ guest patches, runtime fixes, or CPU/timing workarounds were needed.
 
 Evidence retained locally:
 
-- `/private/tmp/ricochet-300.png`: main menu.
-- `/private/tmp/ricochet-game.png`: Round 1-1 entrance.
-- `/private/tmp/ricochet-gameplay-before.png`: active ball/brick destruction.
-- `/private/tmp/ricochet-gameplay-left.png` and `ricochet-gameplay-right.png`:
+- `ricochet-300.png`: main menu.
+- `ricochet-game.png`: Round 1-1 entrance.
+- `ricochet-gameplay-before.png`: active ball/brick destruction.
+- `ricochet-gameplay-left.png` and `ricochet-gameplay-right.png`:
   shield response to opposite relative mouse inputs.
-- `/private/tmp/ricochet-control.log`: control commands and batch numbers.
+- `ricochet-control.log`: control commands and batch numbers.
 
 The tested runtime was compiled once with `node tools/build-compile-wat.js`;
 its SHA-256 is
@@ -80,10 +80,10 @@ Round 1-1. It can be exported from a live controlled session using the existing
 save-bundle API (the controller evaluates host diagnostics, not guest code):
 
 ```sh
-node tools/ctl.js -s :8128 eval '(()=>{const r=process.mainModule.require.bind(process.mainModule);const b=r("../lib/save-bundle").exportBundle({appId:"ricochet_xtreme",vfs:ctx.vfs,patterns:["c:/data/cache/**/*"]});r("fs").writeFileSync("/private/tmp/ricochet-cache-menu.zip",b);return b.length})()'
-node tools/save-bundle.js /private/tmp/ricochet-cache-menu.zip --verify
-node tools/save-bundle.js /private/tmp/ricochet-cache-menu.zip \
-  --extract=/private/tmp/ricochet-cache-extracted
+node tools/ctl.js -s :8128 eval '(()=>{const r=process.mainModule.require.bind(process.mainModule);const b=r("../lib/save-bundle").exportBundle({appId:"ricochet_xtreme",vfs:ctx.vfs,patterns:["c:/data/cache/**/*"]});r("fs").writeFileSync("ricochet-cache-menu.zip",b);return b.length})()'
+node tools/save-bundle.js ricochet-cache-menu.zip --verify
+node tools/save-bundle.js ricochet-cache-menu.zip \
+  --extract=ricochet-cache-extracted
 ```
 
 The verified bundle is 15,596,892 bytes, SHA-256
@@ -118,7 +118,7 @@ animation both outlasted short waits. Wait for the menu, then wait for the
 bricks and running round timer before launching. This is not a performance
 measurement; the host load was high throughout.
 
-Browser evidence in `/private/tmp/reflexive-probe/`:
+Browser evidence in ``:
 
 - `ricochet-browser-menu3.png`: menu from the final acceptance run.
 - `ricochet-browser-options2.png`: round selection.
@@ -128,3 +128,99 @@ Browser evidence in `/private/tmp/reflexive-probe/`:
   movement changes the shield's position during active play.
 - `ricochet-browser3.log` and `ricochet-browser3-console.log`: input route and
   browser log; no guest API traps or JavaScript runtime failures.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## Fixed-route EMMS benchmark acceptance (2026-09-30)
+
+The fallback host `fast-near-9tb-1` (i9-9900K, Node 20.11.1) runs the frozen
+EMMS before/after WASMs without extra V8 flags. Use the registered app, prepared
+local cache, `--no-threads --branch-clock --batch-size=200000`,
+`--tick-ms-per-batch=200 --wall-clock-ms=1790673326000 --max-batches=5500`.
+The main menu is visible at batch 2400. Move/down/up at batches B/B+1/B+100
+for Play Game `(445,55)` at B=2500, Anonymous Guest `(320,234)` at B=3000,
+Round 1-1 `(75,170)` at B=3500, and ball launch `(320,450)` at B=4400.
+Then relative movement -150 at 4700, +250 at 4900, and another held click
+at B=5000. The earlier ten-batch holds left the game in round selection;
+the hundred-batch holds reach the complete round and score 3.
+
+A separate diagnostic module counted 36,270 executions of compiled EMMS,
+including 16,331 over the measured 4500..5500 gameplay window. This is
+coverage, not a speedup measurement. Captures at 2400/2900/3400/4200/4600/5400
+and the end prove the menu sequence, level, launched ball, and changed bricks.
+Local evidence: `ricochet-census-0`.
+The isolated remote harness is `/home/vg/emms-app-bench`; both timing arms
+must run there, rather than comparing this host's CPU times with BOX2.
+
+The uninstrumented before/after/after/before comparison completed all four
+5500-batch runs. Total process user CPU was 100.18/99.35s before versus
+99.67/99.11s after: means 99.765 versus 99.390s (-0.38%). The gameplay
+window was 21.142/20.892s before versus 21.127/20.987s after: means 21.017
+versus 21.057s (+0.19%). Both changes are smaller than the same-build spread;
+there is no measured meaningful speedup or regression. All seven screenshot
+checkpoints are pixel-identical across all four timed runs. Summary and raw
+logs: `summary.json`.
+These are the frozen EMMS-only comparison builds, preceding the subsequent
+main-branch micro-op trace changes and IR-kind renumbering.
+
+## Cache timestamps on remount (2026-09-29 follow-up)
+
+The loading screen can recur even with all 351 decoded cache files present.
+Guest cache validation compares exact 64-bit last-write times: calls to
+`0x452330` at `0x45ea4f` and `0x45ea6b`, then low/high comparisons at
+`0x45ea73` / `0x45ea77`. A mismatch branches to regeneration at `0x45eade`.
+After generation, `0x45ec0b` / `0x45ec23` copy source time onto the cache.
+The disk helper `0x454fc0` calls GetFileTime through IAT `0x51d1dc` at
+`0x45500e`.
+
+Copying bundle bytes into the fixture discarded those timestamps. VFS mounts
+then initialized times from the current host clock, invalidating the cache.
+The original menu bundle retains exact FILETIME metadata: 347 cache files use
+`{lo:265692960, hi:31281240}`; four Round 5 add-on caches use
+`{lo:2090469120, hi:29475155}`. The former is the original archive mount time,
+not the host timestamp of the later extracted cache file.
+
+Local inventories now carry optional creationTime / lastAccessTime /
+lastWriteTime fields through both browser and CLI mounts. Preparation merges
+an ignored `.wine-assembly-file-metadata.json` sidecar keyed by fixture-relative
+URL. This Ricochet fixture restores all 351 cache records from the original
+bundle and the original common last-write time on DATA.dat and the three RED
+archives. Re-running `--prepare` retains this metadata. `test-asset-parts.js`
+verifies alias mounts, cloned metadata, invalid-value rejection, and exact
+source/cache GetFileTimes equality without reading lazy archive bytes.
+Runtime cache-hit acceptance after this change is recorded separately by the
+root investigation; the metadata unit test alone is not gameplay evidence.
+
+## Current browser gameplay and observer viewport repair (2026-11-11)
+
+One fresh private browser session on main `02d373b5d385` with module
+`75ecda5701c15f6fe2c269455ead4e15457b90653733df15d35674b08e8849d5`
+followed Play Game → Anonymous Guest → Normal / Round 1-1. The actual backend
+was guest Worker / DirectDraw with `canvas-nearest` browser presentation;
+the shell's WebGL selector does not establish the presentation backend.
+Full captures 24 and 26 show ordinary mouse movement taking the paddle from
+the left toward the center. Capture 26 has score 0 and intact lower-right
+bricks. A balanced ordinary left click of 500 ms launches the ball; capture
+28 shows the silver brick near page pixel `(417,419)` missing, speed 18,
+one remaining ion sphere, and “Out of bounds penalty”. Score remains 0;
+this proves a brick consequence, not a retained positive score or a completed
+round. Evidence: `scratch/runs/20261111-ricochet-xtreme-current-paddle-score-0700/`.
+
+This run also exposed a control failure in its diagnostic attachment: default
+`puppeteer.connect()` applies an 800×600 viewport to existing pages. The
+original driver's screenshot retained its 1024×768 expectation while the live
+canvas shrank to x=10..470, so the attempted `(490,265)` menu click landed on
+the log pane. The full screenshots alone hid that mismatch. Restoring the
+original viewport recovered the same game session; the next mouse move
+highlighted Play Game and the next click opened Select Player.
+
+Use `connectObserver` from `tools/ricochet-browser-observer.cjs` for a second
+diagnostic client. It passes `defaultViewport: null`; enumerate/read pages
+through that connection and disconnect when done. The Chrome regression
+test reproduces the default viewport reset and verifies that the repaired
+attachment preserves viewport dimensions and canvas hit coordinates.
+No guest-state writes or emulator changes were needed. All unique evidence
+was retrieved and hash-verified before normal shutdown; box `bx_6qh8h23q`
+was archived unforced under stop `stop_646bd6b42c16f5c0`.

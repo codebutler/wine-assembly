@@ -26,18 +26,21 @@ function helpers(isa) {
   const dataSegments = [[0, 'es'], [3, 'ds'], [4, 'fs'], [5, 'gs']];
   // Intel SDM RET pseudocode uses DPL in the hidden segment-register cache.
   // Never consult a subsequently modified descriptor table during outer RETF.
-  const dataCache = dataSegments.map(([index, name]) => `
+  const dataCache = [[1, 'cs'], ...dataSegments].map(([index, name]) => `
   (if (i32.eq (local.get $i) (i32.const ${index})) (then
-    (global.set $pm_${name}_valid (i32.const 0))
     (if (i32.eqz (call $pm_active)) (then (return)))
+    (global.set $pm_${name}_valid (i32.const 0))
     (local.set $d (call $pm_desc (local.get $selector)))
     (if (i32.eqz (local.get $d)) (then (return)))
     (local.set $d (i32.sub (local.get $d) (i32.const 1)))
     (if (i32.ne (call $pm_base (local.get $d)) (call $sbase (local.get $i))) (then (return)))
     (local.set $a (i32.load8_u offset=5 (local.get $d)))
     (if (i32.ne (i32.and (local.get $a) (i32.const 144)) (i32.const 144)) (then (return)))
-    (if (i32.and (i32.ne (i32.and (local.get $a) (i32.const 8)) (i32.const 0))
+    ${name === 'cs' ? '(if (i32.eqz (i32.and (local.get $a) (i32.const 8))) (then (return)))' : `(if (i32.and (i32.ne (i32.and (local.get $a) (i32.const 8)) (i32.const 0))
       (i32.eqz (i32.and (local.get $a) (i32.const 2)))) (then (return)))
+    `}
+    (global.set $pm_${name}_limit (call $pm_limit (local.get $d)))
+    ${name === 'cs' ? '' : `(global.set $pm_${name}_mask (call $pm_mask (local.get $d)))`}
     (global.set $pm_${name}_access (local.get $a))
     (global.set $pm_${name}_valid (i32.const 1))))`).join('');
   const clearData = dataSegments.map(([index, name]) => `
@@ -59,6 +62,27 @@ function helpers(isa) {
   (global.set $left (global.get $steps))
   (global.set $halt (i32.const 1))
   (i32.const 1))
+
+
+;; PE/PG writes do not load segment registers (Intel SDM 9.9). In real
+;; mode a data/stack load replaces its paragraph base while retaining the
+;; hidden limit and attributes, including SS.B independently of CS.D.
+;; VM86 loads instead establish the fixed 64K, D/B=0, DPL3 caches.
+(func $pm_paragraph_cache (param $i i32)
+  ${isa.SEG.map((name, index) => `
+  (if (i32.eq (local.get $i) (i32.const ${index})) (then
+    ${name !== 'cs' ? `(if (i32.eqz (global.get $pm_${name}_valid)) (then
+      (global.set $pm_${name}_limit (i32.const 65535))
+      (global.set $pm_${name}_access (i32.const 147))
+      ${name === 'ss' ? '(global.set $spm (i32.const 65535))' : `(global.set $pm_${name}_mask (i32.const 65535))`}))` : ''}
+    (global.set $pm_${name}_valid (i32.const 1))
+    ${name === 'cs' ? `(global.set $pm_cs_limit (i32.const 65535))
+    (global.set $pm_cs_access (select (i32.const 251) (i32.const 155) (global.get $vm86)))` : ''}
+    (if (global.get $vm86) (then
+      (global.set $pm_${name}_limit (i32.const 65535))
+      (global.set $pm_${name}_access (i32.const ${name === 'cs' ? 251 : 243}))
+      ${name === 'ss' ? '(global.set $spm (i32.const 65535))' : name === 'cs' ? '(global.set $d32 (i32.const 0))' : `(global.set $pm_${name}_mask (i32.const 65535))`}))))`).join('')}
+)
 
 (func $pm_active (result i32)
   (i32.and (i32.and (global.get $cr0) (i32.const 1))
@@ -171,8 +195,8 @@ function helpers(isa) {
 ;; SS access/limit are captured on load. A later descriptor-table write must
 ;; not retroactively change the loaded segment's limits or access rights.
 (func $pm_cache_ss (param $selector i32) (local $d i32)
-  (global.set $pm_ss_valid (i32.const 0))
   (if (i32.eqz (call $pm_active)) (then (return)))
+  (global.set $pm_ss_valid (i32.const 0))
   (local.set $d (call $pm_desc (local.get $selector)))
   (if (i32.eqz (local.get $d)) (then (return)))
   (local.set $d (i32.sub (local.get $d) (i32.const 1)))
@@ -191,6 +215,59 @@ function helpers(isa) {
   (global.set $pm_tr_limit (call $pm_limit (local.get $d)))
   (global.set $pm_tr_access (i32.load8_u offset=5 (local.get $d)))
   (global.set $pm_tr_valid (i32.const 1)))
+
+;; Intel 80386 PRM, LTR: load an AVAILABLE TSS and mark it busy. This is
+;; initialization of TR, not a task switch: no TSS field, CR3, NT or TS changes.
+;; Paged execution can deliver faults; nonpaged protected exception delivery
+;; retains the explicit pm_stop contract above. Never use that permissive
+;; cache-only operation as the guest LTR instruction.
+(func $pm_ltr_reject (param $vector i32) (param $selector i32) (param $why i32) (result i32)
+  (if (call $pg_on)
+    (then
+      (global.set $errc (i32.and (local.get $selector) (i32.const 65532)))
+      (call $fault (local.get $vector) (global.get $gip)))
+    (else (drop (call $pm_stop (local.get $why) (local.get $selector)))))
+  (i32.const 1))
+(func $pm_ltr_priv (result i32)
+  (if (i32.or (i32.eqz (i32.and (global.get $cr0) (i32.const 1))) (global.get $vm86))
+    (then (return (call $pm_ltr_reject (i32.const 6) (i32.const 0) (i32.const ${STOP.unsupportedSystem})))))
+  (if (i32.and (call $sget (i32.const 1)) (i32.const 3))
+    (then (return (call $pm_ltr_reject (i32.const 13) (i32.const 0) (i32.const ${STOP.privilege})))))
+  (i32.const 0))
+(func $pm_ltr (param $selector i32) (result i32)
+  (local $d i32) (local $a i32) (local $base i32) (local $limit i32)
+  (local.set $selector (i32.and (local.get $selector) (i32.const 65535)))
+  (if (i32.or (i32.eqz (i32.and (local.get $selector) (i32.const 65528)))
+      (i32.or (i32.and (local.get $selector) (i32.const 4))
+        (i32.gt_u (i32.add (i32.and (local.get $selector) (i32.const 65528)) (i32.const 7)) (global.get $gdtl))))
+    (then (return (call $pm_ltr_reject (i32.const 13) (local.get $selector) (i32.const ${STOP.descriptor})))))
+  (local.set $d (call $pm_gdt (local.get $selector)))
+  (if (i32.eqz (local.get $d))
+    (then (return (call $pm_stop (i32.const ${STOP.mapping}) (local.get $selector)))))
+  (local.set $d (i32.sub (local.get $d) (i32.const 1)))
+  (local.set $a (i32.load8_u offset=5 (local.get $d)))
+  ;; Type is checked before P; descriptor DPL and selector RPL do not restrict
+  ;; privileged LTR. Both available 286 (1) and 386 (9) TSS types are legal.
+  (if (i32.and (i32.ne (i32.and (local.get $a) (i32.const 31)) (i32.const 1))
+               (i32.ne (i32.and (local.get $a) (i32.const 31)) (i32.const 9)))
+    (then (return (call $pm_ltr_reject (i32.const 13) (local.get $selector) (i32.const ${STOP.type})))))
+  (if (i32.eqz (i32.and (local.get $a) (i32.const 128)))
+    (then (return (call $pm_ltr_reject (i32.const 11) (local.get $selector) (i32.const ${STOP.notPresent})))))
+  ;; LTR does not validate the task-switch minimum TSS limit or read the TSS.
+  ;; Stage the complete hidden cache before any descriptor write (which can
+  ;; alias a page table); publish TR only after the busy write succeeds.
+  (local.set $base (call $pm_base (local.get $d)))
+  (local.set $limit (call $pm_limit (local.get $d)))
+  (local.set $a (i32.or (local.get $a) (i32.const 2)))
+  (if (call $pg_on)
+    (then (call $pg_write (i32.add (local.get $d) (i32.const 5)) (i32.const 1) (local.get $a) (i32.const 0)))
+    (else (i32.store8 offset=5 (local.get $d) (local.get $a))))
+  (global.set $tr (local.get $selector))
+  (global.set $pm_tr_base (local.get $base))
+  (global.set $pm_tr_limit (local.get $limit))
+  (global.set $pm_tr_access (local.get $a))
+  (global.set $pm_tr_valid (i32.const 1))
+  (i32.const 0))
 (func $pm_current_stack (result i32)
   (if (i32.or (i32.eqz (global.get $pm_ss_valid))
     (i32.ne (i32.and (global.get $pm_ss_access) (i32.const 154)) (i32.const 146)))
@@ -209,7 +286,10 @@ function helpers(isa) {
   (i32.store (i32.add (i32.const ${isa.REGFILE_SEL}) (i32.shl (local.get $index) (i32.const 2))) (local.get $selector))
   (i32.store (i32.add (i32.const ${isa.REGFILE_SEGB}) (i32.shl (local.get $index) (i32.const 2))) (call $pm_base (local.get $d)))
   (if (i32.eq (local.get $index) (i32.const 1))
-    (then (global.set $d32 (i32.and (i32.shr_u (i32.load8_u offset=6 (local.get $d)) (i32.const 6)) (i32.const 1)))))
+    (then (global.set $d32 (i32.and (i32.shr_u (i32.load8_u offset=6 (local.get $d)) (i32.const 6)) (i32.const 1)))
+      (global.set $pm_cs_limit (call $pm_limit (local.get $d)))
+      (global.set $pm_cs_access (i32.or (i32.load8_u offset=5 (local.get $d)) (i32.const 1)))
+      (global.set $pm_cs_valid (i32.const 1))))
   (if (i32.eq (local.get $index) (i32.const 2))
     (then
       (global.set $spm (call $pm_mask (local.get $d)))

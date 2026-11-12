@@ -44,14 +44,26 @@
 
   ;; Widen a NUL-terminated ANSI string at `src` (a linear address in the staged
   ;; image) into a UTF-16 one, terminator included, and answer where the source
-  ;; ended.
+  ;; ended. The bytes are text in the process ANSI page, so they decode
+  ;; through it — a CP950 caption is Big5 pairs, and widening byte by byte
+  ;; (Latin-1) drew a Traditional Chinese Minesweeper's dialogs as mojibake.
+  ;; Pages without tables keep the old one-byte-per-unit identity. A pair
+  ;; only ever shrinks, so $win16_dlg_to32's destination sizing still holds.
   (func $win16_dlg_emit_sz (param $src i32) (result i32)
-    (local $c i32)
+    (local $c i32) (local $cp i32) (local $d i32)
+    (local.set $cp (call $resolve_code_page (i32.const 0)))
     (block $done (loop $copy
       (local.set $c (i32.load8_u (local.get $src)))
-      (call $win16_dlg_emit16 (local.get $c))
-      (local.set $src (i32.add (local.get $src) (i32.const 1)))
-      (br_if $done (i32.eqz (local.get $c)))
+      (if (i32.eqz (local.get $c))
+        (then
+          (call $win16_dlg_emit16 (i32.const 0))
+          (local.set $src (i32.add (local.get $src) (i32.const 1)))
+          (br $done)))
+      (local.set $d (call $ansi_char_decode_wa (local.get $cp) (local.get $src)
+                      (i32.const 0x7FFFFFFF)))
+      (call $win16_dlg_emit16 (i32.and (local.get $d) (i32.const 0xFFFF)))
+      (local.set $src (i32.add (local.get $src)
+        (i32.and (i32.shr_u (local.get $d) (i32.const 16)) (i32.const 0xFF))))
       (br $copy)))
     (local.get $src))
 
@@ -174,6 +186,9 @@
     (drop (call $wnd_set_style (local.get $hwnd)
       (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
     (call $host_dialog_loaded (local.get $hwnd) (local.get $parent))
+    ;; Template coordinates are owner-client relative unless DS_ABSALIGN.
+    ;; Use the same placement as Win32 before WM_INITDIALOG can move it.
+    (call $dlg_place_owner_relative (local.get $hwnd))
     (call $defwndproc_do_nccalcsize (local.get $hwnd))
     (call $dlg_fill_bkgnd (local.get $hwnd))
     ;; Chrome and background both owed, and owed *before* the window is shown:
@@ -558,6 +573,54 @@
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end))
 
+  ;; The far destroy walk has returned. Only this invocation owns these
+  ;; saved bounds/owner and its DialogBox result/return record underneath.
+  (global $WIN16_DLG_DESTROY_RET i32 (i32.const 0xFFE4))
+  (func $win16_dlg_destroy_complete
+    (local $scratch i32) (local $restore_owner i32) (local $owner i32)
+    (local $dlg_x i32) (local $dlg_y i32) (local $dlg_w i32) (local $dlg_h i32)
+    (local.set $scratch (i32.load offset=16 (global.get $reg_base)))
+    (local.set $restore_owner (call $gl32 (local.get $scratch)))
+    (local.set $owner (call $gl32 (i32.add (local.get $scratch) (i32.const 4))))
+    (local.set $dlg_x (call $gl32 (i32.add (local.get $scratch) (i32.const 8))))
+    (local.set $dlg_y (call $gl32 (i32.add (local.get $scratch) (i32.const 12))))
+    (local.set $dlg_w (call $gl32 (i32.add (local.get $scratch) (i32.const 16))))
+    (local.set $dlg_h (call $gl32 (i32.add (local.get $scratch) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $scratch) (i32.const 24)))
+    ;; A destroyed owner is never recreated by restoration. Keep its full
+    ;; HWND here rather than a narrow handle that can be recycled.
+    (if (i32.and (i32.ne (local.get $restore_owner) (i32.const 0))
+          (i32.ge_s (call $wnd_table_find (local.get $restore_owner)) (i32.const 0)))
+      (then (call $win16_dlg_enable_owner (local.get $restore_owner) (i32.const 1))))
+    (call $gdi_screen_surface_clear_rect
+      (local.get $dlg_x) (local.get $dlg_y)
+      (local.get $dlg_w) (local.get $dlg_h))
+    ;; Destroying the popup exposes its owner and every visible child
+    ;; region, not just the owner's client background. Queue that complete
+    ;; exposed subtree before returning to the task.
+    (if (i32.eqz (local.get $owner))
+      (then (local.set $owner (global.get $main_hwnd))))
+    (if (local.get $owner)
+      (then
+        (call $invalidate_hwnd (local.get $owner))
+        (drop (call $paint_seed_child_paints (local.get $owner)))
+        ;; $win16_dlg_run published the dialog as foreground; hand the
+        ;; foreground back to the owner it was modal over. USER's active
+        ;; window never left the owner, so the focus transaction below
+        ;; sees no transition and would not republish it.
+        (if (i32.and (call $wnd_is_effectively_visible (local.get $owner))
+                     (i32.eqz (call $wnd_get_parent (local.get $owner))))
+          (then (drop (call $host_activate_window (local.get $owner)))))))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $steps (i32.const 0))
+    ;; Removal clears focus only when its HWND dies. Preserve a surviving
+    ;; callback-selected window; otherwise finish the owner's far focus
+    ;; transaction before returning DialogBox's invocation-owned result.
+    (if (i32.and (i32.ne (global.get $focus_hwnd) (i32.const 0))
+          (i32.ge_s (call $wnd_table_find (global.get $focus_hwnd)) (i32.const 0)))
+      (then (call $win16_cont_resume))
+      (else (call $win16_focus_start (local.get $owner) (i32.const 0)))))
+
   (func $win16_dlg_pump
     (local $dlg i32) (local $proc i32) (local $scratch i32) (local $packed i32)
     (local $hwnd i32) (local $msg i32) (local $owner i32) (local $restore_owner i32)
@@ -607,42 +670,20 @@
         (local.set $dlg_y (call $wnd_window_screen_y (local.get $dlg)))
         (local.set $dlg_w (call $wnd_screen_w (local.get $dlg)))
         (local.set $dlg_h (call $wnd_screen_h (local.get $dlg)))
-        (call $wnd_destroy_children (local.get $dlg))
-        (call $wnd_table_remove (local.get $dlg))
-        (call $host_destroy_window (local.get $dlg))
-        ;; A destroyed owner is never recreated by restoration. Keep its full
-        ;; HWND here rather than a narrow handle that can be recycled.
-        (if (i32.and (i32.ne (local.get $restore_owner) (i32.const 0))
-              (i32.ge_s (call $wnd_table_find (local.get $restore_owner)) (i32.const 0)))
-          (then (call $win16_dlg_enable_owner (local.get $restore_owner) (i32.const 1))))
-        (call $gdi_screen_surface_clear_rect
-          (local.get $dlg_x) (local.get $dlg_y)
-          (local.get $dlg_w) (local.get $dlg_h))
-        ;; Destroying the popup exposes its owner and every visible child
-        ;; region, not just the owner's client background. Queue that complete
-        ;; exposed subtree before returning to the task.
-        (if (i32.eqz (local.get $owner))
-          (then (local.set $owner (global.get $main_hwnd))))
-        (if (local.get $owner)
-          (then
-            (call $invalidate_hwnd (local.get $owner))
-            (drop (call $paint_seed_child_paints (local.get $owner)))
-            ;; $win16_dlg_run published the dialog as foreground; hand the
-            ;; foreground back to the owner it was modal over. USER's active
-            ;; window never left the owner, so the focus transaction below
-            ;; sees no transition and would not republish it.
-            (if (i32.and (call $wnd_is_effectively_visible (local.get $owner))
-                         (i32.eqz (call $wnd_get_parent (local.get $owner))))
-              (then (drop (call $host_activate_window (local.get $owner)))))))
-        (global.set $yield_reason (i32.const 0))
-        (global.set $steps (i32.const 0))
-        ;; Removal clears focus only when its HWND dies. Preserve a surviving
-        ;; callback-selected window; otherwise finish the owner's far focus
-        ;; transaction before returning DialogBox's invocation-owned result.
-        (if (i32.and (i32.ne (global.get $focus_hwnd) (i32.const 0))
-              (i32.ge_s (call $wnd_table_find (global.get $focus_hwnd)) (i32.const 0)))
-          (then (call $win16_cont_resume))
-          (else (call $win16_focus_start (local.get $owner) (i32.const 0))))
+        ;; Keep completion state on this invocation's stack: a callback may
+        ;; open another modal dialog or destroy its owner before returning.
+        (local.set $scratch (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (local.get $scratch))
+        (call $gs32 (local.get $scratch) (local.get $restore_owner))
+        (call $gs32 (i32.add (local.get $scratch) (i32.const 4)) (local.get $owner))
+        (call $gs32 (i32.add (local.get $scratch) (i32.const 8)) (local.get $dlg_x))
+        (call $gs32 (i32.add (local.get $scratch) (i32.const 12)) (local.get $dlg_y))
+        (call $gs32 (i32.add (local.get $scratch) (i32.const 16)) (local.get $dlg_w))
+        (call $gs32 (i32.add (local.get $scratch) (i32.const 20)) (local.get $dlg_h))
+        (call $win16_cont_push
+          (i32.or (i32.shl (global.get $WIN16_THUNK_SEL) (i32.const 16))
+            (global.get $WIN16_DLG_DESTROY_RET)) (i32.const 1))
+        (call $win16_destroy_begin (local.get $dlg) (i32.const 1))
         (return)))
 
     ;; The MSG buffer is the same scratch $win16_GetMessage uses, so it still

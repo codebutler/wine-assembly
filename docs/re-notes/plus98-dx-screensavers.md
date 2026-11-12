@@ -12,6 +12,97 @@ DirectDraw and Direct3D Immediate Mode underneath it. That makes them a good
 test of the D3DIM surface: d3drm is unmodified and will simply decline to
 render if it does not like what it is given.
 
+## October 31: Sci-Fi owning WebGL motion verified
+
+Run `20261031T0150Z-scifi-webgl-motion` confirms the exact registered app is
+`scr_scifi`, launching original `SCIFI.SCR /s` with `SCIFI.SCN`, `SF_BACK.GIF`,
+`SF_BIRD.GIF` and `SF_PINCE.X`. All five input hashes match the October 30
+paired batch. No scene assets or emulator code were changed.
+
+Personally inspected `webgl/scr_scifi/frame1.png` through `frame4.png` show
+orange/yellow birdlike creatures changing position and pose, with moving
+shadows over textured dunes beneath a red sky. The four rendered captures span
+31.827 seconds, approximately ten seconds apart. Scene-only pixel comparisons
+exclude the UI and clock and find 5,079, 5,833 and 4,328 changed pixels between
+successive frames. Each state sample records the owning host's GPU enabled,
+guest threads off and WebGL selected; GPU draws increase 328 → 3,471 and async
+flips 61 → 516, with zero recorded executor errors or fallbacks.
+
+This reuses the paired batch's retained module SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`,
+Chrome 151 and ANGLE SwiftShader. All 150 successful served-file hashes,
+including guest `d3drm.dll`/`d3dxof.dll`, were checked against retained bytes
+and the unchanged files after the run. `verification.json` pins inputs,
+module, guest DLLs, captures and counters; `recovery.txt` retains commands.
+Console output includes missing optional DLL/resource messages and repeated
+ANGLE READ-usage performance warnings; this is not a warning-free-run claim.
+
+The earlier WebGL motion gap was an inspection/budget limitation: its first
+two screenshots are byte-identical white startup, and only its third shows the
+scene. The retained original scene now demonstrably animates through WebGL;
+no emulator motion defect is established and no code fix or build was needed.
+This does not certify a current-main module, native Windows parity, physical
+GPU performance, complete scene correctness or a complete saver cycle. The
+owned controller exited 0; Chrome is absent, its HTTP port is closed and its
+private profile removed. No Boat or test box was used.
+
+## October 30: six screensavers, consolidated paired browser captures
+
+Run `20261030T2340Z-screensaver-browser-batch` completes inspected scene
+captures for the six siblings of Architecture on both browser routes:
+
+| App | Personally inspected result |
+| --- | --- |
+| Falling Leaves | Leaves and shadows change over the textured leaf background on both routes. |
+| Geometry | Gold polyhedra change arrangement over the blue radial background on both routes. |
+| Jazz | White musical-note clusters change on black on both routes. |
+| OrganicArt | Software changes from a patterned tunnel to rings; WebGL rings change orientation. A white lower-right rectangle remains unexplained. |
+| Rock & Roll | Guitars and picks change orientation on both routes. |
+| Sci-Fi | Birdlike objects render over the textured alien landscape on both routes; motion was inspected only on software. |
+
+These are original registered executables and scene assets, launched normally
+with `/s`, guest threads off, Chrome 151 and ANGLE SwiftShader. Every launch
+served retained canonical module SHA-256
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`). Per-frame owning-host GPU state matches the selected
+route. The six registrations contain 114 executable/scene input entries,
+all hash-pinned. Of 2,270 served responses across the batch and retries, 2,263
+were reverified against current bytes or retained matching HEAD bytes. Seven
+intermediate `lib/host-audio.js` responses cannot be reverified after concurrent
+worker edits; their exact recorded hashes remain in the route verification
+records. This is an explicit provenance limitation, not a full immutable
+source replay.
+
+Initial WebGL Jazz captures caught startup; a longer fresh run produced the
+inspected notes. The software browser target closed after OrganicArt, with no
+established cause; a fresh bounded run captured only Rock & Roll and Sci-Fi.
+All four browsers are absent, static ports closed and private profiles removed;
+no Boat was used. `investigation.json` records exact inspected images,
+verification counts and limitations. This establishes visible scenes, with
+motion where stated, not same-frame parity, FPS, physical GPU performance,
+complete scene correctness, complete saver cycles or the full 27-app goal.
+
+## October 30: Architecture browser scene on both routes
+
+Runs `20261030T2338Z-architecture-webgl` and
+`20261030T2338Z-architecture-software` launch registered original
+`ARCHITEC.SCR /s`, with its seven registered scene assets, through the normal
+browser launcher. Personally inspected WebGL frames 2/3 and software frames
+1/2 show the textured marble interior and changing central green objects.
+WebGL frame 1 records startup's white area; it is superseded by the later
+rendered captures, not counted as a scene failure.
+
+Both Chrome 151/ANGLE SwiftShader runs load retained canonical module
+`d83e413fbc38ca5aa5447a7be62d10010783fd5490c98ec07c076553897950e5`
+(source fix `de2e338c4`), with guest threads off. Backend records verify the
+owning host's GPU enabled only for WebGL. All eight registered input hashes
+and every served-response hash are verified separately in each run. Exact
+identities, inspected frames and cleanup appear in `investigation.json`.
+Both browsers are absent, their six ports closed and private profiles removed;
+no Boat was used. This establishes a visible animated scene on both routes,
+not same-frame pixel parity, FPS, physical GPU behavior, a full screensaver
+cycle or completion of the historical 27-app set.
+
 ## Status 2026-10-06 (software D3DIM arm, main 80dfe68e)
 
 All seven render. Reviewed runs: `scratch/runs/20261006T0250Z-<app>-w4-software/`
@@ -445,3 +536,51 @@ none puts up a message box:
 `scr_geometry` gave 1 colour at 8000 batches and 44 at 4000, so these are
 animating and a single capture is a sample, not a verdict — take several
 budgets before reading anything into one number.
+
+### 2026-10-30: original Jazz scene after 180000 batches
+
+Run `20261030T2236Z-jazz-scene` used registered `scr_jazz`, original assets,
+software D3DIM and guest `d3drm.dll`, `--tick-ms-per-batch=2`, no guest threads,
+and a 50-second wall guard. The retained module is SHA-256
+`1dbddeafbeff685596095d18a4fd9240820b00b0fa293d21ac03393f9f652fb1`, compiled
+from `d4fb06b465988b52d98f5c9299c47c8391537f1e`; this is not a test of later main.
+It exited 0 after 180000 batches in 45.599 seconds. The final PNG explicitly
+selected primary DX slot 3 (640×480), rather than the offscreen surface.
+
+Personally inspected `jazz-80000.png` shows a small cluster of white shapes;
+`jazz-final.png` clearly shows five large lit musical notes and many smaller
+notes radiating over black. This resolves the partial-scene limitation of the
+earlier `20261030T2226Z-d3drm-four-scenes` Jazz capture. The sparse early image
+does not establish a renderer defect. This run establishes an original software
+scene, not browser/WebGL parity, audio, physical GPU behavior or current-main
+validation. Commands, asset hashes and inspected artifacts are in the run folder.
+
+### 2026-10-31: Falling Leaves with browser guest threads
+
+Run `20261031T0248Z-fallingl-threaded` launched registered `scr_fallingl`
+with its original executable and six scene assets in Chrome 151.0.7922.108,
+cross-origin isolation and guest threads enabled. Sequential WebGL and software
+arms each captured the original scene three times, approximately 25, 35 and 45
+seconds after launch. Personally inspected first/last images show moving gold
+and green leaves with shadows on both routes. In the scene-only rectangle
+`(10,205,683,524)`, first/last captures differ at 39,455 pixels for WebGL and
+18,279 for software. These are separate animation samples, not pixel parity.
+
+Both arms used retained module SHA-256
+`8333a35b1efa694462033e87f62ce4a3f5497941d1423540b39a590c9d31134a`;
+its complete compiled source identity is unknown. Host code was cached by first
+served bytes and reused across arms; 105 cached files are preserved by hash.
+All seven original input hashes remained unchanged. Samples confirm threads
+enabled and the selected route; WebGL additionally created a D3D render worker.
+Owning GPU draw/error counters were not recovered, so this does not establish
+absence of fallback or hardware-GPU behavior (Chrome used SwiftShader).
+
+No page exceptions were recorded. Expected missing-DLL stub warnings and a
+resource 404 remain in the console logs. The first script stopped after the
+WebGL captures because its browser cleanup API was incompatible with the
+installed Puppeteer; the corrected software continuation reused the saved
+host bytes and module. Both browser PIDs are absent, profiles removed, and
+servers closed. No Boat was created. Evidence includes scripts, input hashes,
+served snapshots, captures, samples and `verification.json` in the run folder.
+This extends the earlier cooperative-thread coverage; it is not current-main
+source validation, physical-GPU acceptance or a full-corpus result.

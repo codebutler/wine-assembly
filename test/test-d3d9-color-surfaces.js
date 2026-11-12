@@ -315,7 +315,7 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     const makeUpdateTexture=(w,h,levels,fmt,pool,kind=3)=>{
       ok(e.update_texture_create(ad,w,h,levels,fmt,pool,kind,out));return read(out);
     };
-    for(const kind of[3,5])for(const fmt of[21,22,50,51,62,0x31545844,0x33545844,0x35545844]){
+    for(const kind of[3,5])for(const fmt of[21,22,50,51,62,63,0x31545844,0x33545844,0x35545844]){
       const source=makeUpdateTexture(8,8,4,fmt,2,kind),destination=makeUpdateTexture(4,4,3,fmt,0,kind);
       const count=kind===5?6:1,record=(t,i)=>t+64+i*32;
       for(let i=0;i<count*4;i++){
@@ -368,7 +368,8 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       assert.strictEqual(read(destination+64+28),0,'foreign-device update preserves destination generation');
       await invoke(e.Device9_Release,other);e.Texture9_Release(source);e.Texture9_Release(destination);
     }
-    for(const format of[62,0x31545844,0x35545844]){
+    for(const format of[62,63,0x31545844,0x35545844]){
+      const signed=format===62||format===63;
       ok(e.raw_texture(ad,2,format,out),'raw system texture');const st=read(out);
       ok(e.raw_texture(ad,0,format,out),'raw default texture');const dt=read(out);
       const point=alloc(8);
@@ -385,12 +386,12 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
           // Upper-right source block/region -> lower-left destination.
           write(rect,[4,0,8,4]);write(point,[0,4]);
           ok(await invoke(e.Device9_UpdateSurface,ad,ss,rect,ds,point),'raw subrectangle');
-          const expected=want.slice(),pitch=read(sr+8),unit=format===62?4:format===0x31545844?8:16;
-          const rows=format===62?4:1,rowBytes=format===62?16:unit;
-          for(let y=0;y<rows;y++)expected.set(want.subarray(y*pitch+(format===62?16:unit),y*pitch+(format===62?16:unit)+rowBytes),
-            (y+(format===62?4:1))*pitch);
+          const expected=want.slice(),pitch=read(sr+8),unit=signed?4:format===0x31545844?8:16;
+          const rows=signed?4:1,rowBytes=signed?16:unit;
+          for(let y=0;y<rows;y++)expected.set(want.subarray(y*pitch+(signed?16:unit),y*pitch+(signed?16:unit)+rowBytes),
+            (y+(signed?4:1))*pitch);
           assert.deepStrictEqual(new Uint8Array(memory.buffer,wa(dp),bytes),expected,'raw pitched subrectangle preserves other blocks');
-          if(format!==62){
+          if(!signed){
             for(const invalidRect of[[1,0,5,4],[0,1,4,5],[0,0,3,4],[0,0,4,3]]){
               write(rect,invalidRect);bad(await invoke(e.Device9_UpdateSurface,ad,ss,rect,ds,0));
             }

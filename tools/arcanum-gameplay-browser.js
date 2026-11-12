@@ -5,6 +5,7 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const cp=require('node:child_process'),crypto=require('node:crypto'),http=require('node:http');
 const {installArcanumPresentationCounter}=require('./arcanum-presentation-counter');
+const {validateSoftwareSamples}=require('./arcanum-software-samples');
 const root=path.resolve(__dirname,'..'),out=path.resolve(process.argv[2]);
 const backend=process.argv[3];
 let activeBackend=backend;
@@ -15,6 +16,7 @@ const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
 const save=(name,v)=>fs.writeFileSync(out+'/'+name,JSON.stringify(v,null,2)+'\n');
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 let browser,server,page,profile,poll,deadlineTimer,closing=false,counterActive=false;
+let softwareGate=null;
 const errors=[],consoleRows=[],inputs=[],requests=[],commands=[];
 const start=Date.now(),deadline=start+1200000;
 async function close(reason){
@@ -83,12 +85,33 @@ async function command(c){
   }
   if(c.action==='measure'){
     if(!Number.isInteger(c.seconds)||c.seconds<5||c.seconds>60)throw Error('measurement bound');
+    if(activeBackend==='software'&&c.phase!=='gate'&&(!softwareGate||c.seconds<20||c.seconds>30||softwareGate.hwnd!==c.hwnd))throw Error('valid short owner gate and bounded interval required');
     const s=await state();if(s.guestWorker||s.backend!==activeBackend||(activeBackend==='webgl'&&(s.gpuUnavailable||!s.d3dimGpu?.draws)))throw Error('explicit live backend required');
+    const owner=await page.evaluate(hwnd=>{
+      const apps=runningApps.filter(a=>a.name==='arcanum_demo'),w=apps[0]?.wine,r=w?.renderer,win=r?.windows[hwnd];
+      const layer=win?._dxFrameLayer||win?._dxOwnerCanvas?._waCanonicalPresentation;
+      const canvas=win?._dxFrameLayer?.canvas||win?._dxOwnerCanvas;
+      return {appCount:apps.length,hasInstance:!!w?.instance,guestWorker:!!w?.guestWorker,hwnd,
+        selectedWindow:win?{title:win.title,visible:win.visible,minimized:!!win.minimized}:null,
+        layerKind:win?._dxFrameLayer?'overlay':'canonical',writeSeq:layer?.writeSeq,
+        canvas:canvas?{width:canvas.width,height:canvas.height,type:canvas.constructor.name}:null,
+        contextPrototypes:[...new Set([r?.ctx,canvas?.getContext('2d'),r?.presentationFilter?.ctx].filter(Boolean).map(x=>Object.getPrototypeOf(x).constructor.name))],
+        rendererShared:runningApps.filter(a=>a.wine?.renderer===r).length,
+        gpuFlag:window.WINE_D3DIM_GPU,backend:window.WineD3D?.renderer};
+    },c.hwnd);
+    save(c.name+'-owner.json',owner);
+    if(activeBackend==='software'&&(owner.appCount!==1||!owner.hasInstance||owner.guestWorker||owner.rendererShared!==1||owner.backend!=='software'||owner.canvas?.width!==c.width||owner.canvas?.height!==c.height))throw Error('selected software owner attribution failed');
     await shot(c.name+'-before');
     await page.evaluate(installArcanumPresentationCounter.toString()+`;globalThis.__arcanumCounter=installArcanumPresentationCounter(runningApps.find(a=>a.name==='arcanum_demo').wine.renderer,${Number(c.hwnd)},${Number(c.width)},${Number(c.height)});`);
     counterActive=true;
     try{for(let i=0;i<c.seconds;i++){await pause(1000);await page.evaluate(()=>globalThis.__arcanumCounter.sample());}
-      save(c.name+'-samples.json',await page.evaluate(()=>globalThis.__arcanumCounter.stop()));counterActive=false;
+      const result=await page.evaluate(()=>globalThis.__arcanumCounter.stop());counterActive=false;save(c.name+'-samples.json',result);
+      if(activeBackend==='software'){
+        const validation=validateSoftwareSamples(result,c.phase==='gate'?4:20,c.phase==='gate'?8:32);
+        save(c.name+'-validation.json',validation);
+        if(!validation.ok)throw Error('invalid software samples: '+validation.reasons.join('; '));
+        if(c.phase==='gate')softwareGate={hwnd:c.hwnd,owner,result:validation};
+      }
       await shot(c.name+'-after');
     }finally{if(counterActive){save(c.name+'-interrupted.json',await page.evaluate(()=>globalThis.__arcanumCounter.stop()));counterActive=false;}}
     return;
@@ -118,7 +141,7 @@ async function main(){
   page.on('console',m=>{if(consoleRows.length<4000)consoleRows.push({at:Date.now(),type:m.type(),text:m.text().slice(0,2000)});});page.on('pageerror',e=>errors.push(String(e)));
   await page.evaluateOnNewDocument(()=>{globalThis.__arcanumInputs=[];for(const type of ['mousemove','mousedown','mouseup','keydown','keyup'])document.addEventListener(type,e=>{const q=globalThis.__arcanumInputs;if(q.length>=256)q.shift();q.push({time:performance.now(),type,isTrusted:e.isTrusted,key:e.key,movementX:e.movementX,movementY:e.movementY,locked:!!document.pointerLockElement});},true);});
   await page.goto('http://127.0.0.1:'+server.address().port+'/index.html?app=arcanum_demo&debug&no-threads&d3d-renderer='+backend,{waitUntil:'load',timeout:45000});
-  save('identity.json',{startedAt:new Date(start).toISOString(),deadline:new Date(deadline).toISOString(),budgetSeconds:1200,boat:'bx_bdrvj38f',backend,commit:pins.commit,wasmSha256:sha(module),browserVersion:await browser.version(),node:process.version,pid:process.pid,chromePid:browser.process().pid,profile,servedModuleHashes,command:process.argv,scope:'registered original app; cooperative origins; ordinary trusted pointer/keyboard events only'});
+  save('identity.json',{startedAt:new Date(start).toISOString(),deadline:new Date(deadline).toISOString(),budgetSeconds:1200,boat:process.env.WINE_TEST_BOX||'unspecified',backend,commit:pins.commit,wasmSha256:sha(module),browserVersion:await browser.version(),node:process.version,pid:process.pid,chromePid:browser.process().pid,profile,servedModuleHashes,command:process.argv,chromeArgs:browser.process().spawnargs,cpus:os.cpus(),scope:'registered original app; cooperative origins; ordinary trusted pointer/keyboard events only'});
   console.log(JSON.stringify({ready:true,pid:process.pid,chromePid:browser.process().pid,deadline:new Date(deadline).toISOString()}));
   let i=0,queue=Promise.resolve();
   poll=setInterval(()=>{const p=out+'/commands/'+i+'.json';if(fs.existsSync(p)){const c=JSON.parse(fs.readFileSync(p));i++;queue=queue.then(()=>closing?null:command(c)).then(()=>{save('progress.json',{done:i,time:new Date().toISOString()});}).catch(e=>{errors.push(String(e));save('command-error.json',{i,error:String(e)});});}},250);

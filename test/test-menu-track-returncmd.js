@@ -61,7 +61,11 @@ const extraWat = String.raw`
 `;
 
 (async () => {
-  const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  // The browser compositor has a separate instance over the guest's memory.
+  // It must see guest-opened popups, and its picks must reach the guest call.
+  const { exports: ui } = await bootRenderHarness({ extraWat, fonts: 'none', memory });
+  assert.strictEqual(ui.menu_open_top(), -1, 'fresh shared menu has no selection');
   const strA = text => {
     const p = e.guest_alloc(text.length + 1) >>> 0;
     for (let i = 0; i < text.length; i++) e.guest_write8(p + i, text.charCodeAt(i));
@@ -87,8 +91,10 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_eax(), 1, 'plain TrackPopupMenu returns TRUE');
   assert.strictEqual(e.test_esp() >>> 0, (sp + 32) >>> 0, 'plain call pops its 7-arg frame');
   assert.strictEqual(e.get_yield_reason(), 0, 'plain call does not park');
-  e.menu_set_hover(1);
-  assert.strictEqual(e.menu_activate(), 202);
+  assert.strictEqual(ui.menu_open_hwnd() >>> 0, hwnd, 'compositor sees guest popup owner');
+  assert.strictEqual(ui.menu_child_count(hwnd, 0), 3, 'compositor sees guest popup contents');
+  ui.menu_set_hover(1);
+  assert.strictEqual(ui.menu_activate(), 202);
   assert.ok(e.test_posted(msgBuf), 'plain popup posts WM_COMMAND');
   assert.strictEqual(e.guest_read32(msgBuf + 4), 0x0111);
   assert.strictEqual(e.guest_read32(msgBuf + 8), 202);
@@ -108,8 +114,8 @@ const extraWat = String.raw`
   assert.strictEqual(e.get_yield_reason(), 8, 'still open: parks again');
   assert.strictEqual(e.test_esp() >>> 0, sp);
   e.clear_yield();
-  e.menu_set_hover(2);
-  assert.strictEqual(e.menu_activate(), 203);
+  ui.menu_set_hover(2);
+  assert.strictEqual(ui.menu_activate(), 203);
   assert.strictEqual(e.test_posted(msgBuf), 0, 'RETURNCMD pick is not posted');
   assert.strictEqual(e.menu_track_parked(), 0, 'closing the popup ends the wait');
   e.test_tpm_enter(0);
@@ -123,7 +129,7 @@ const extraWat = String.raw`
   e.test_tpm_enter(0);
   assert.strictEqual(e.get_yield_reason(), 8);
   e.clear_yield();
-  e.menu_close();
+  ui.menu_close();
   e.test_tpm_enter(0);
   assert.strictEqual(e.test_eax(), 0, 'a dismissed RETURNCMD popup returns 0');
   assert.strictEqual(e.test_esp() >>> 0, sp + 32);
@@ -134,8 +140,8 @@ const extraWat = String.raw`
   e.test_tpm_enter(1);
   assert.strictEqual(e.get_yield_reason(), 8, 'Ex with RETURNCMD parks');
   e.clear_yield();
-  e.menu_set_hover(0);
-  assert.strictEqual(e.menu_activate(), 201);
+  ui.menu_set_hover(0);
+  assert.strictEqual(ui.menu_activate(), 201);
   e.test_tpm_enter(1);
   assert.strictEqual(e.test_eax(), 201);
   assert.strictEqual(e.test_esp() >>> 0, (sp + 28) >>> 0, 'Ex pops its 6-arg frame');

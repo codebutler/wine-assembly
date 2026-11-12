@@ -965,7 +965,6 @@ Local immutable evidence: `scratch/new-game-morrowind-20261005/attempt6`, includ
 `cleanup.json`. Earlier attempt3 secondary-connection viewport change and
 attempt5 human-review phase timeout remain harness failures, not game failures.
 
-
 ## 2026-10-05 — ordinary New click reaches prison Name prompt
 
 The generic DirectInput live-button repair is integrated as main `520d1cde` (source `94d18605`). It separates physical mouse buttons from queued Win32 message snapshots while preserving message and OLE consumers. Its real-WAT before-control failed the new physical-button assertion; the candidate, full production/shake build, CLI mouse control and renderer message-mask regressions passed.
@@ -976,7 +975,6 @@ The click advanced to the red opening movie and then the prison Name dialog, per
 
 Local evidence: `scratch/new-game-morrowind-20261005/attempt9/analysis.json`, `host-button-census.json`, `button-observer.json`, `pointer-receipts.json`, `settled.png`, `return-prison.png` and `prison-wait.png`. The host census closed with 73 records and no observer errors. Worker coverage is main-instance only and its 128-record cap overflowed, so the unrecorded tail is unknown. Session 33855 ended at the original deadline, browser/server closed at 17:57:32.462 UTC, Chrome exited 0 and no processes remained; driver exit 2 and the screenshot TargetClose error are retained. The next ordinary route gets a predeclared 600-second total budget for Name/OK and actual player control, without repeating button diagnosis.
 
-
 ## 2026-10-05 — reviewed first-person movement after Name
 
 Ordinary continuation attempt10 used the exact built source `94d18605` and module `2e2fd8d1ca62cd87f0bc09312bc4836108df610d00cb7771bb5ae22755eceedc`, including the generic live DirectInput button repair integrated as main `520d1cde`. No private Worker, API census, instruction trace or guest-state writes were used. The original browser connection clicked New, skipped the opening movie with Space, visibly entered a Name and clicked OK. Requested text Codex rendered as cox; that partial name was accepted normally and the typing limitation remains unresolved.
@@ -984,3 +982,24 @@ Ordinary continuation attempt10 used the exact built source `94d18605` and modul
 After the tutorial popup was dismissed with Enter, ordinary W was held from18:22:36.945 to18:22:38.150 UTC (requested1200ms); the camera advanced toward the corridor and the left NPC left view. S from18:22:58.855 to18:23:00.068 reversed movement, restoring the left NPC and wider doorway. A1500ms idle observation retained the camera geometry while NPCs animated. Root personally reviewed all movement frames and input receipts and accepted narrow first-person player control inside the prison ship. This is gameplay evidence beyond the Name form, not proof of complete character generation, quests, audio quality or FPS.
 
 Immutable run: `scratch/runs/20261005-morrowind-prison-movement/result.json`, with four reviewed gameplay images, exact inputs, root review, served-response receipts, frozen source closure and SHA256 artifact manifest. Actual registered memory was2GiB with Worker/WebGL backend; rendered scene640x480 inside1024x768 browser viewport. Session78331 exited0 on ordinary quit before its original600-second deadline. Browser/server closed18:23:55.881 UTC, no cleanup errors, no pending streams, Chrome exited0 and owning processes were absent. Remaining work includes typing fidelity, later game progression and a separately justified gameplay performance counter.
+
+## 2026-10-28 — original Name consumer boundary
+
+[Static consumer analysis and observation plan](morrowind-name-consumer-20261028.md) identifies the original Name control as a buffered DirectInput consumer requesting one 20-byte record per poll. The static verifier pins the original executable and 20 instruction/data anchors, with 22 rejecting controls. Runtime character loss remains unresolved; this is not an input repair or gameplay acceptance.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## Input transport negative result (2026-10-27–28)
+
+The portable browser/renderer/Worker probe on source `be0eb25fc` did not
+reproduce Codex→cox. Rapid physical-Shift input, paced held keys, and
+one-event-per-command draining preserved all17 messages and five WM_CHAR
+values. Focus changes, left/right Shift, ArrowLeft and blur releases passed;
+deliberately omitting d rejected at message index8. The probe used actual
+browser-input listeners, Win98Renderer, host input closures and a Node OS
+Worker; DOM and guest consumer were fixtures. This rules out loss in those
+tested transport schedules, not in the real Name consumer. Its next
+unobserved API completion is `0x406926`, with edit callback `0x638050`;
+the buffered consumer requests one20-byte DirectInput record per poll.

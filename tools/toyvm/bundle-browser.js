@@ -63,9 +63,165 @@ const JIT_ROOTS = [
   'lib/compile-wat.js',
 ];
 
-// Relative `require('./x')` literals, which is the only form the walk can
-// follow -- and the only form these modules use for each other.
-const REQUIRE_RE = /require\((['"])(\.[^'"]+)\1\)/g;
+// A small lexical walk, not a source rewrite. Only direct calls with one string
+// literal argument are followed. Trivia, quoted/template text and regexp bodies
+// cannot introduce calls; template substitutions are executable and are walked.
+function literalRequires(source, importer) {
+  const tokens = [];
+  let i = source.startsWith('#!') ? source.indexOf('\n') : 0;
+  if (i < 0) return [];
+  const fail = () => { throw new Error(`bundle: ${importer}: unsupported or unterminated JavaScript token at ${i}`); };
+  const identifier = c => c !== undefined && /[\w$\u0080-\uffff]/.test(c);
+  function quoted(quote) {
+    let value = '';
+    i++;
+    while (i < source.length) {
+      let c = source[i++];
+      if (c === quote) return value;
+      if (c === '\n' || c === '\r') fail();
+      if (c !== '\\') { value += c; continue; }
+      c = source[i++];
+      if (c === '\n') continue;
+      if (c === '\r') { if (source[i] === '\n') i++; continue; }
+      const escapes = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v' };
+      if (Object.hasOwn(escapes, c)) value += escapes[c];
+      else if (c === 'x' || c === 'u') {
+        let hex;
+        if (c === 'u' && source[i] === '{') {
+          const end = source.indexOf('}', ++i);
+          if (end < 0) fail();
+          hex = source.slice(i, end); i = end + 1;
+        } else { const n = c === 'x' ? 2 : 4; hex = source.slice(i, i + n); i += n;
+          if (hex.length !== n) fail(); }
+        if (!/^[\da-f]+$/i.test(hex) || parseInt(hex, 16) > 0x10ffff) fail();
+        value += String.fromCodePoint(parseInt(hex, 16));
+      } else if (/[0-7]/.test(c)) {
+        // Legacy octal is legal in non-strict CommonJS modules too.
+        let octal = c;
+        while (octal.length < (c <= '3' ? 3 : 2) && /[0-7]/.test(source[i] || 'x')) octal += source[i++];
+        value += String.fromCharCode(parseInt(octal, 8));
+      } else if (c !== undefined) value += c;
+      else fail();
+    }
+    fail();
+  }
+  function regexp() {
+    i++;
+    let inClass = false;
+    while (i < source.length) {
+      const c = source[i++];
+      if (c === '\n' || c === '\r') fail();
+      if (c === '\\') { i++; continue; }
+      if (c === '[') inClass = true;
+      if (c === ']') inClass = false;
+      if (c === '/' && !inClass) {
+        while (identifier(source[i])) i++;
+        return;
+      }
+    }
+    fail();
+  }
+  function template() {
+    i++;
+    tokens.push({ value: '`' });
+    while (i < source.length) {
+      const c = source[i++];
+      if (c === '\\') { i++; continue; }
+      if (c === '`') { tokens.push({ value: '`' }); return; }
+      if (c === '$' && source[i] === '{') {
+        i++;
+        tokens.push({ value: '${' });
+        code(true);
+        tokens.push({ value: '}' });
+      }
+    }
+    fail();
+  }
+  function code(substitution = false) {
+    let previous = '', expression = true, pendingFunction = null, functionBody = null, pendingClass = null;
+    let statementStart = true, asyncOperand = false;
+    const parens = [], braces = [];
+    const control = new Set(['if', 'while', 'for', 'with', 'switch', 'catch']);
+    const prefix = new Set(['return', 'throw', 'case', 'delete', 'void', 'typeof', 'new', 'in', 'of', 'instanceof', 'yield', 'await', 'else', 'do']);
+    while (i < source.length) {
+      const c = source[i], next = source[i + 1];
+      if (/\s/.test(c)) { i++; continue; }
+      if (c === '/' && next === '/') {
+        i += 2; while (i < source.length && !/[\n\r\u2028\u2029]/.test(source[i])) i++;
+        continue;
+      }
+      if (c === '/' && next === '*') {
+        const end = source.indexOf('*/', i + 2); if (end < 0) fail(); i = end + 2; continue;
+      }
+      if (c === '}' && !braces.length && substitution) { i++; return; }
+      let value, kind;
+      if (c === "'" || c === '"') { value = quoted(c); kind = 'string'; expression = false; }
+      else if (c === '`') { template(); previous = '`'; expression = false; continue; }
+      else if (c === '/' && expression) { if (expression === 'ambiguous') fail(); regexp(); value = '/regexp/'; expression = false; }
+      else if (/[a-zA-Z_$\u0080-\uffff]/.test(c)) {
+        const start = i++;
+        while (identifier(source[i])) i++;
+        value = source.slice(start, i); kind = 'identifier';
+        const property = ['.', '?.'].includes(previous);
+        if (value === 'function' && !property) pendingFunction = { expression: !statementStart && (expression || (previous === 'async' && asyncOperand)) };
+        if (value === 'class' && !property) pendingClass = { expression: !statementStart && expression, depth: parens.length };
+        if (value === 'async') asyncOperand = expression;
+        expression = !property && (prefix.has(value) || ['break', 'continue', 'debugger'].includes(value));
+      } else if (/\d/.test(c)) {
+        const start = i++;
+        while (identifier(source[i]) || source[i] === '.') i++;
+        value = source.slice(start, i); expression = false;
+      } else {
+        if (c === '\\') fail();
+        value = c; i++;
+        if (['?.', '++', '--', '=>', '&&', '||', '??', '**'].includes(c + next)) { value += next; i++; }
+        if (value === '(') {
+          const property = ['.', '?.'].includes(tokens[tokens.length - 2]?.value);
+          parens.push(pendingFunction ? { function: pendingFunction } : { control: control.has(previous) && !property });
+          pendingFunction = null; expression = true;
+        } else if (value === ')') {
+          const head = parens.pop(); expression = !!head?.control;
+          functionBody = head?.function || null;
+        }
+        else if (value === '{') {
+          // A brace after a control head, statement boundary or arrow is a
+          // statement body; a brace in an operand position is an object.
+          // Optional catch bindings have no parenthesized control head. Their
+          // body is still a statement block, so its closing brace admits a
+          // regexp statement just like catch (error) {} does.
+          const block = previous === ')' || previous === '=>' || previous === 'else' || previous === 'do' || previous === 'try' || previous === 'catch' || previous === 'finally' || previous === ';' || previous === '' || previous === '{' || previous === '}';
+          if (pendingClass && parens.length === pendingClass.depth) { functionBody = pendingClass; pendingClass = null; }
+          const endExpression = previous === '=>' || functionBody?.expression;
+          // A colon may introduce either a label or an object value. Keep an
+          // ambiguity marker: a later slash must fail rather than guess and
+          // silently swallow a real import as a regexp.
+          braces.push({ regexpAfter: functionBody ? !functionBody.expression : block && !endExpression,
+            ambiguous: previous === ':' });
+          functionBody = null; expression = true;
+        } else if (value === '}') {
+          const brace = braces.pop(); expression = !!brace?.regexpAfter;
+          if (brace?.ambiguous) expression = 'ambiguous';
+        }
+        else expression = ![']', '.', '?.', '++', '--'].includes(value);
+      }
+      tokens.push({ value, kind });
+      statementStart = value === ';' || value === '{' || (value === '}' && expression === true) ||
+        (value === ')' && expression === true) || ['else', 'do', 'try', 'finally'].includes(value) ||
+        (statementStart && ['async', 'export', 'default'].includes(value));
+      previous = value;
+    }
+    if (substitution) fail();
+  }
+  code();
+  const imports = [];
+  for (let t = 0; t + 3 < tokens.length; t++) {
+    const [name, open, argument, close] = tokens.slice(t, t + 4);
+    if (name.kind === 'identifier' && name.value === 'require' &&
+        !['.', '?.'].includes(tokens[t - 1]?.value) && open.value === '(' &&
+        argument.kind === 'string' && close.value === ')' && argument.value.startsWith('.')) imports.push(argument.value);
+  }
+  return imports;
+}
 
 function moduleList(roots = ROOTS) {
   const seen = new Set();
@@ -76,13 +232,16 @@ function moduleList(roots = ROOTS) {
     const file = path.join(ROOT, id);
     if (!fs.existsSync(file)) throw new Error(`bundle: ${id} does not exist`);
     const text = fs.readFileSync(file, 'utf8');
-    for (const m of text.matchAll(REQUIRE_RE)) {
-      let dep = path.posix.join(path.posix.dirname(id), m[2]);
+    for (const request of literalRequires(text, id)) {
+      let dep = path.posix.join(path.posix.dirname(id), request);
       if (!fs.existsSync(path.join(ROOT, dep))) dep += '.js';
-      // A require the page never reaches is not an error: fnt-read.js pulls
-      // pngjs out of node_modules when it is asked to write a PNG, which is a
-      // CLI path. It just cannot be bundled.
-      if (!fs.existsSync(path.join(ROOT, dep))) continue;
+      // Relative literals are required source dependencies, including lazy
+      // ones (the ROM font loader is used only when a Machine is created).
+      // Bare Node packages and computed CLI-only requires, such as fnt-read's
+      // optional PNG writer, remain outside this literal-source walk.
+      if (!fs.existsSync(path.join(ROOT, dep))) {
+        throw new Error(`bundle: ${id} requires missing literal dependency ${request} (resolved ${dep})`);
+      }
       visit(dep);
     }
     order.push(id);           // dependencies first, for a readable listing

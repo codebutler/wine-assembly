@@ -10,6 +10,9 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_edit_class") (param $hwnd i32)
+    (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_CTRL_NATIVE))
+    (call $ctrl_table_set (call $wnd_table_find (local.get $hwnd)) (i32.const 2) (i32.const 0)))
   (func (export "test_translate_message") (param $msg i32) (result i32)
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_TranslateMessage
@@ -55,7 +58,24 @@ const extraWat = String.raw`
       `non-virtual-key message 0x${message.toString(16)} returns FALSE`);
   }
 
-  console.log('PASS TranslateMessage preserves MSG and reports only virtual-key messages');
+  // Browser keydown supplies Backspace but never its character event.
+  // Custom game fields need WM_CHAR; native EDIT already deletes on keydown.
+  e.set_post_queue_count(0);
+  view.setUint32(msgWA, 0, true);
+  view.setUint32(msgWA + 8, 8, true);
+  view.setUint32(msgWA + 12, 0x000e0001, true);
+  translate(0x0100);
+  assert.strictEqual(e.post_queue_depth(), 1);
+  assert.deepStrictEqual([0, 1, 2, 3].map(i => e.post_queue_peek(0, i)),
+    [0, 0x0102, 8, 0x000e0001], 'Backspace keeps target and keystroke metadata');
+  e.set_post_queue_count(0);
+  translate(0x0101);
+  assert.strictEqual(e.post_queue_depth(), 0, 'release does not delete again');
+  e.test_edit_class(0x10001);
+  view.setUint32(msgWA, 0x10001, true);
+  translate(0x0100);
+  assert.strictEqual(e.post_queue_depth(), 0, 'native EDIT must not delete twice');
+  console.log('PASS TranslateMessage preserves MSG and translates custom-field Backspace');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

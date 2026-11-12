@@ -63,6 +63,31 @@ vm.runInNewContext(hostSource + '\n;globalThis.WineAssembly = WineAssembly;', co
 context.WineAssembly.ASSET_PART_SIZE = 2;
 
 async function run() {
+  const logs = [];
+  const originalConsole = context.console;
+  context.console = { ...console, debug: (...args) => logs.push(args) };
+  context.URL = URL;
+  context.Headers = Headers;
+  context.location = { href: 'https://example.test/?debug', search: '?debug' };
+  context.navigator = { serviceWorker: { controller: {} } };
+  const archiveResponse = new Response(Uint8Array.of(1, 2), { status: 206, headers: {
+    'Cache-Control': 'public, max-age=60', 'CF-Cache-Status': 'HIT',
+    'Content-Range': 'bytes 0-1/100', ETag: '"asset-hash"',
+  } });
+  routes = new Map([['archive.part000?token=secret', archiveResponse]]);
+  const received = await context.WineAssembly._fetchAssetResponse('archive.part000?token=secret', { headers: { Range: 'bytes=0-1' } });
+  assert.strictEqual(received, archiveResponse, 'diagnostics preserve the original response');
+  assert.strictEqual(received.bodyUsed, false, 'diagnostics never consume archive bytes');
+  assert.strictEqual(logs[0][1].browserCache, 'unknown: service worker hides cache attribution');
+  assert.strictEqual(logs[0][1].cdnCache, 'HIT', 'CDN hit is separate from browser cache');
+  assert.strictEqual(logs[0][1].range, 'bytes=0-1');
+  assert.strictEqual(logs[0][1].path, '/archive.part000', 'query credentials omitted');
+  context.location.search = '';
+  await context.WineAssembly._fetchAssetResponse('archive.part000?token=secret');
+  assert.strictEqual(logs.length, 1, 'normal mode is silent');
+  delete context.location;
+  delete context.navigator;
+  context.console = originalConsole;
   routes = new Map([['plain.bin', response(200, [1, 2, 3])]]);
   calls.length = 0;
   assert.deepStrictEqual(Array.from(await context.WineAssembly.fetchAssetBytes('plain.bin')), [1, 2, 3]);

@@ -37,7 +37,8 @@ function deferred() {
 }
 
 function wineHost() {
-  const wine = Object.create(sandbox.WineAssembly.prototype);
+  // Construct the process-owned lifecycle state before adding inert guest refs.
+  const wine = new sandbox.WineAssembly();
   Object.assign(wine, {
     running: true,
     renderer: null,
@@ -238,7 +239,8 @@ async function bounded(promise, label) {
   }
 
   {
-    const link = Object.create(WorkerLink.prototype);
+    // stop() needs the constructor-owned endpoint retirement state; no start().
+    const link = new WorkerLink({});
     const gate = deferred();
     let terminated = 0;
     Object.assign(link, {
@@ -266,7 +268,7 @@ async function bounded(promise, label) {
     const starting = deferred();
     const entered = deferred();
     let linkStops = 0;
-    const gh = Object.create(GuestThreadHost.prototype);
+    const gh = new GuestThreadHost({});
     Object.assign(gh, {
       _nextSlot: 1,
       _stopped: false,
@@ -325,7 +327,7 @@ async function bounded(promise, label) {
   {
     const gate = deferred();
     let logged = 0;
-    const gh = Object.create(GuestThreadHost.prototype);
+    const gh = new GuestThreadHost({});
     Object.assign(gh, {
       _stopPromise: null,
       _stopped: false,

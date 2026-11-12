@@ -1,16 +1,427 @@
+  ;; Opt-in NULL boundary diagnostics. Existing log_eip import only; no arena.
+  ;; Negative tags -1..-6 belong to this protocol only while explicitly armed.
+  (global $null_diag_on (mut i32) (i32.const 0))
+  (global $null_diag_count (mut i32) (i32.const 0))
+  (global $null_diag_saved_eip (mut i32) (i32.const 0))
+  (global $null_diag_saved_esp (mut i32) (i32.const 0))
+  ;; Mode 2 only: one instance-local immediate zero-transfer record. No arena,
+  ;; new import/export or extra observer event. Site IDs: 1=CACA0005,
+  ;; 2=th_ret, 3=th_ret_imm, 4=th_pop_run_ret; 0=unknown.
+  (global $null_transfer_on (mut i32) (i32.const 0))
+  (global $null_transfer_thunk_entry (mut i32) (i32.const 0))
+  (global $null_transfer_kind (mut i32) (i32.const 0))
+  (global $null_transfer_pre_eip (mut i32) (i32.const 0))
+  (global $null_transfer_pre_esp (mut i32) (i32.const 0))
+  (global $null_transfer_post_esp (mut i32) (i32.const 0))
+  (global $null_transfer_thunk (mut i32) (i32.const 0))
+  (global $null_transfer_marker (mut i32) (i32.const 0))
+  (global $null_transfer_ret_address (mut i32) (i32.const 0))
+  (global $null_transfer_ret_word (mut i32) (i32.const 0))
+  (global $null_transfer_depth (mut i32) (i32.const 0))
+  (global $null_transfer_count (mut i32) (i32.const 0))
+  (global $null_transfer_pump (mut i32) (i32.const 0))
+  (global $null_transfer_return (mut i32) (i32.const 0))
+  (global $null_transfer_ended (mut i32) (i32.const 0))
+  (global $null_transfer_shared_pump (mut i32) (i32.const 0))
+  (global $null_transfer_shared_ended (mut i32) (i32.const 0))
+  (global $null_transfer_sync_thunk (mut i32) (i32.const 0))
+  (global $null_transfer_modal_thunk (mut i32) (i32.const 0))
+  (global $null_transfer_ip (mut i32) (i32.const 0))
+  (global $null_transfer_token (mut i64) (i64.const 0))
+  (global $null_transfer_root (mut i64) (i64.const 0))
+  (func (export "set_null_diag") (param $on i32)
+    (global.set $null_diag_on (i32.ne (local.get $on) (i32.const 0)))
+    (global.set $null_transfer_on (i32.eq (local.get $on) (i32.const 2)))
+    (global.set $null_transfer_kind (i32.const 0))
+    (global.set $null_diag_count (i32.const 0)))
+  (func $null_transfer_record (param $kind i32) (param $target i32)
+      (param $post_esp i32) (param $ret_address i32) (param $ret_word i32)
+      (param $thunk i32) (param $marker i32)
+    (if (i32.eqz (global.get $null_transfer_on)) (then (return)))
+    (global.set $null_transfer_kind (i32.const 0))
+    (if (local.get $target) (then (return)))
+    ;; Inline CALL/JMP dispatch may overwrite the sentinel on return. Only
+    ;; $run's explicit thunk-entry route proves this is its final transfer.
+    (if (i32.and (i32.eq (local.get $kind) (i32.const 1))
+                 (i32.eqz (global.get $null_transfer_thunk_entry))) (then (return)))
+    (if (i32.and (i32.eq (local.get $kind) (i32.const 1))
+                 (i32.ne (global.get $eip) (local.get $thunk))) (then (return)))
+    ;; Called immediately BEFORE EIP/ESP mutation, with the already-read RET
+    ;; word or dispatcher's actual metadata. Never infer from dbg_prev_eip.
+    (global.set $null_transfer_pre_eip (global.get $eip))
+    (global.set $null_transfer_pre_esp (i32.load offset=16 (global.get $reg_base)))
+    (global.set $null_transfer_post_esp (local.get $post_esp))
+    (global.set $null_transfer_thunk (local.get $thunk))
+    (global.set $null_transfer_marker (local.get $marker))
+    (global.set $null_transfer_ret_address (local.get $ret_address))
+    (global.set $null_transfer_ret_word (local.get $ret_word))
+    (global.set $null_transfer_depth (global.get $sync_msg_depth))
+    (global.set $null_transfer_count (global.get $null_diag_count))
+    (global.set $null_transfer_token (call $invocation_current))
+    (global.set $null_transfer_root (global.get $invocation_root))
+    (global.set $null_transfer_pump (global.get $dlg_pump_hwnd))
+    (global.set $null_transfer_return (global.get $dlg_ret_addr))
+    (global.set $null_transfer_ended (global.get $dlg_ended))
+    (global.set $null_transfer_shared_pump (i32.load (global.get $SHARED_DLG_PUMP_HWND)))
+    (global.set $null_transfer_shared_ended (i32.load (global.get $SHARED_DLG_ENDED)))
+    (global.set $null_transfer_sync_thunk (global.get $sync_msg_ret_thunk))
+    (global.set $null_transfer_modal_thunk (global.get $dlg_loop_thunk))
+    (global.set $null_transfer_ip (global.get $ip))
+    (global.set $null_transfer_kind (local.get $kind)))
+  (func $null_transfer_check
+    ;; Any intervening diagnostic boundary or invocation change invalidates the
+    ;; record. Uninstrumented transfers retain kind=0, never a guessed writer.
+    (if (i32.eqz (global.get $null_transfer_on)) (then (return)))
+    (if (i32.ne (global.get $null_transfer_count) (global.get $null_diag_count))
+      (then (global.set $null_transfer_kind (i32.const 0))))
+    (if (i32.ne (global.get $null_transfer_depth) (global.get $sync_msg_depth))
+      (then (global.set $null_transfer_kind (i32.const 0))))
+    (if (i64.ne (global.get $null_transfer_token) (call $invocation_current))
+      (then (global.set $null_transfer_kind (i32.const 0))))
+    (if (i64.ne (global.get $null_transfer_root) (global.get $invocation_root))
+      (then (global.set $null_transfer_kind (i32.const 0))))
+    (if (i32.ne (global.get $null_transfer_post_esp) (i32.load offset=16 (global.get $reg_base)))
+      (then (global.set $null_transfer_kind (i32.const 0)))))
+  (func $null_diag_event (param $kind i32) (param $saved_eip i32) (param $saved_esp i32)
+    (if (global.get $null_diag_on) (then
+      (global.set $null_diag_saved_eip (local.get $saved_eip))
+      (global.set $null_diag_saved_esp (local.get $saved_esp))
+      (global.set $null_diag_count (i32.add (global.get $null_diag_count) (i32.const 1)))
+      (if (i32.gt_u (global.get $null_diag_count) (i32.const 32))
+        (then (call $host_log_eip (i32.const -6)) (unreachable)))
+      (call $host_log_eip (i32.sub (i32.const 0) (local.get $kind)))
+      ;; A returning/misconfigured observer must never resume a zero guest.
+      (if (i32.eq (local.get $kind) (i32.const 5)) (then (unreachable))))))
+  (func (export "null_diag_field") (param $field i32) (result i32)
+    (if (i32.eq (local.get $field) (i32.const 0)) (then (return (global.get $null_diag_saved_eip))))
+    (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $null_diag_saved_esp))))
+    (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $dlg_pump_hwnd))))
+    (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $dlg_ret_addr))))
+    (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $dlg_ended))))
+    (if (i32.eq (local.get $field) (i32.const 5)) (then (return (i32.load (global.get $SHARED_DLG_PUMP_HWND)))))
+    (if (i32.eq (local.get $field) (i32.const 6)) (then (return (i32.load (global.get $SHARED_DLG_ENDED)))))
+    (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $sync_msg_depth))))
+    (if (i32.eq (local.get $field) (i32.const 8)) (then (return (global.get $null_diag_count))))
+    ;; Versioned extension; only kind is meaningful when kind=0. Existing 0..8
+    ;; fields and token/root exports keep their signatures and meanings.
+    (if (i32.eq (local.get $field) (i32.const 9)) (then (return (i32.const 1))))
+    (if (i32.eq (local.get $field) (i32.const 10)) (then (return (global.get $null_transfer_kind))))
+    (if (i32.eq (local.get $field) (i32.const 11)) (then (return (global.get $null_transfer_pre_eip))))
+    (if (i32.eq (local.get $field) (i32.const 12)) (then (return (global.get $null_transfer_pre_esp))))
+    (if (i32.eq (local.get $field) (i32.const 13)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $field) (i32.const 14)) (then (return (global.get $null_transfer_post_esp))))
+    (if (i32.eq (local.get $field) (i32.const 15)) (then (return (global.get $null_transfer_thunk))))
+    (if (i32.eq (local.get $field) (i32.const 16)) (then (return (global.get $null_transfer_marker))))
+    (if (i32.eq (local.get $field) (i32.const 17)) (then (return (global.get $null_transfer_ret_address))))
+    (if (i32.eq (local.get $field) (i32.const 18)) (then (return (global.get $null_transfer_ret_word))))
+    (if (i32.eq (local.get $field) (i32.const 19)) (then (return (global.get $null_transfer_depth))))
+    (if (i32.eq (local.get $field) (i32.const 20)) (then (return (global.get $null_transfer_count))))
+    (if (i32.eq (local.get $field) (i32.const 21)) (then (return (global.get $null_transfer_pump))))
+    (if (i32.eq (local.get $field) (i32.const 22)) (then (return (global.get $null_transfer_return))))
+    (if (i32.eq (local.get $field) (i32.const 23)) (then (return (global.get $null_transfer_ended))))
+    (if (i32.eq (local.get $field) (i32.const 24)) (then (return (global.get $null_transfer_shared_pump))))
+    (if (i32.eq (local.get $field) (i32.const 25)) (then (return (global.get $null_transfer_shared_ended))))
+    (if (i32.eq (local.get $field) (i32.const 26)) (then (return (global.get $null_transfer_sync_thunk))))
+    (if (i32.eq (local.get $field) (i32.const 27)) (then (return (global.get $null_transfer_modal_thunk))))
+    (if (i32.eq (local.get $field) (i32.const 28)) (then (return (global.get $null_transfer_ip))))
+    (i32.const -1))
+  (func (export "null_diag_token") (result i64) (call $invocation_current))
+  (func (export "null_diag_root") (result i64) (global.get $invocation_root))
+  ;; End opt-in NULL boundary diagnostic declarations.
   ;; ============================================================
   ;; MAIN RUN LOOP
   ;; ============================================================
+  (func (export "pending_context_version") (result i32) (i32.const 1))
+  ;; A successful arm is possible exactly once, before any guest execution.
+  ;; Epoch is supplied by the authenticated owner; native lease is instance local.
+  (func $pending_context_arm (export "pending_context_arm") (param $epoch i32) (result i32)
+    (local $lease i32)
+    (if (i32.or (global.get $pending_seen) (global.get $pending_armed))
+      (then (if (i32.eqz (global.get $pending_reason))
+        (then (call $pending_failure (i32.const 1) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))) (return (i32.const 0))))
+    (global.set $pending_armed (i32.const 1))
+    (global.set $pending_epoch (local.get $epoch))
+    (global.set $pending_thread (global.get $current_thread_id))
+    (if (i32.or (i32.eqz (local.get $epoch))
+          (i32.ne (global.get $current_thread_id) (i32.const 1)))
+      (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return (i32.const 0))))
+    (loop $lease_slot
+      (local.set $lease (i32.atomic.load (global.get $PENDING_CONTEXT)))
+      (if (i32.ge_u (local.get $lease) (i32.const 16))
+        (then (call $pending_failure (i32.const 6) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (return (i32.const 0))))
+      (br_if $lease_slot (i32.ne (local.get $lease)
+        (i32.atomic.rmw.cmpxchg (global.get $PENDING_CONTEXT) (local.get $lease)
+          (i32.add (local.get $lease) (i32.const 1))))))
+    (global.set $pending_slot (i32.add (global.get $PENDING_CONTEXT)
+      (i32.add (i32.const 4096) (i32.shl (local.get $lease) (i32.const 11)))))
+    (i32.const 1))
+  (func (export "pending_context_epoch") (result i32)
+    (global.get $pending_epoch))
+  (func (export "pending_context_profile") (result i32)
+    (global.get $pending_profile))
+  (func (export "pending_context_image_base") (result i32)
+    (global.get $pending_image_base))
+  ;; Explicit profile arm has the same once-before-execution lifetime rule.
+  ;; Invalid requests consume the arm; changing profile cannot revive proof.
+  ;; The owning JS preload additionally binds the full executable SHA-256
+  ;; and exact Worker/module/memory/endpoint epoch before returning init.
+  (func (export "pending_context_arm_profile")
+    (param $epoch i32) (param $profile i32) (param $image i32) (result i32)
+    (if (i32.or (global.get $pending_seen) (global.get $pending_armed))
+      (then (if (i32.eqz (global.get $pending_reason))
+        (then (call $pending_failure (i32.const 1) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))) (return (i32.const 0))))
+    (if (i32.or (i32.ne (local.get $profile) (i32.const 2))
+                (i32.ne (local.get $image) (i32.const 0x400000)))
+      (then
+        (global.set $pending_armed (i32.const 1))
+        (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+        (return (i32.const 0))))
+    (global.set $pending_profile (local.get $profile))
+    (global.set $pending_image_base (local.get $image))
+    (call $pending_context_arm (local.get $epoch)))
+  (func $pending_coverage (export "pending_context_coverage") (param $epoch i32) (result i32)
+    (if (i32.ne (local.get $epoch) (global.get $pending_epoch))
+      (then (if (i32.and (global.get $pending_armed) (i32.eqz (global.get $pending_reason)))
+        (then (call $pending_failure (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))))
+    (call $pending_valid))
+  (func (export "pending_context_status") (param $epoch i32) (result i32)
+    ;; A trap/aborted run leaves this bit set. No snapshot inside execution,
+    ;; or after that coverage gap, can certify absence.
+    (if (global.get $pending_active) (then (call $pending_gap)))
+    (call $pending_coverage (local.get $epoch)))
+  ;; Versioned, read-only snapshot. Field names and site IDs are documented
+  ;; with the focused regression. Zero reason means no retained failure.
+  (func (export "pending_context_first_failure_version") (result i32) (i32.const 1))
+  (func (export "pending_context_first_failure") (param $field i32) (result i32)
+    (if (i32.eq (local.get $field) (i32.const 0)) (then (return (global.get $pending_first_reason))))
+    (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $pending_first_site))))
+    (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $pending_first_eip))))
+    (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $pending_first_esp))))
+    (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $pending_first_thread))))
+    (if (i32.eq (local.get $field) (i32.const 5)) (then (return (global.get $pending_first_owner_thread))))
+    (if (i32.eq (local.get $field) (i32.const 6)) (then (return (global.get $pending_first_depth))))
+    (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $pending_first_epoch))))
+    (if (i32.eq (local.get $field) (i32.const 8)) (then (return (global.get $pending_first_profile))))
+    (if (i32.eq (local.get $field) (i32.const 9)) (then (return (global.get $pending_first_image))))
+    (if (i32.eq (local.get $field) (i32.const 10)) (then (return (global.get $pending_first_active))))
+    (if (i32.eq (local.get $field) (i32.const 11)) (then (return (global.get $pending_first_entries))))
+    (if (i32.eq (local.get $field) (i32.const 12)) (then (return (global.get $pending_first_returns))))
+    (if (i32.eq (local.get $field) (i32.const 13)) (then (return (global.get $pending_first_compiled_pc))))
+    (if (i32.eq (local.get $field) (i32.const 14)) (then (return (global.get $pending_first_compiled_eip))))
+    (if (i32.eq (local.get $field) (i32.const 15)) (then (return (global.get $pending_first_yield))))
+    (if (i32.eq (local.get $field) (i32.const 16)) (then (return (global.get $pending_first_a))))
+    (if (i32.eq (local.get $field) (i32.const 17)) (then (return (global.get $pending_first_b))))
+    (if (i32.eq (local.get $field) (i32.const 18)) (then (return (global.get $pending_first_c))))
+    (if (i32.eq (local.get $field) (i32.const 19)) (then (return (global.get $pending_first_prior_reason))))
+    (if (i32.eq (local.get $field) (i32.const 20)) (then (return (global.get $pending_first_frame0))))
+    (if (i32.eq (local.get $field) (i32.const 21)) (then (return (global.get $pending_first_frame1))))
+    (if (i32.eq (local.get $field) (i32.const 22)) (then (return (global.get $pending_first_frame2))))
+    (if (i32.eq (local.get $field) (i32.const 23)) (then (return (global.get $pending_first_frame3))))
+    (if (i32.eq (local.get $field) (i32.const 24)) (then (return (global.get $pending_first_frame4))))
+    (if (i32.eq (local.get $field) (i32.const 25)) (then (return (global.get $pending_first_frame5))))
+    (if (i32.eq (local.get $field) (i32.const 26)) (then (return (global.get $pending_first_frame6))))
+    (if (i32.eq (local.get $field) (i32.const 27)) (then (return (global.get $pending_first_frame7))))
+    (if (i32.eq (local.get $field) (i32.const 28)) (then (return (global.get $pending_first_process_epoch_lo))))
+    (if (i32.eq (local.get $field) (i32.const 29)) (then (return (global.get $pending_first_process_epoch_hi))))
+    (if (i32.eq (local.get $field) (i32.const 30)) (then (return (global.get $pending_first_root_lo))))
+    (if (i32.eq (local.get $field) (i32.const 31)) (then (return (global.get $pending_first_root_hi))))
+    (if (i32.eq (local.get $field) (i32.const 32)) (then (return (global.get $pending_first_dispatch_ret))))
+    (if (i32.eq (local.get $field) (i32.const 33)) (then (return (global.get $pending_first_dispatch_thunk_index))))
+    (if (i32.eq (local.get $field) (i32.const 34)) (then (return (global.get $pending_first_dispatch_metadata))))
+    (if (i32.eq (local.get $field) (i32.const 35)) (then (return (global.get $pending_first_current_thunk_eip))))
+    (i32.const 0))
+  (func (export "pending_context_reason") (result i32) (global.get $pending_reason))
+  (func (export "pending_context_depth") (result i32) (global.get $pending_depth))
+  (func (export "pending_context_callback_version") (result i32) (i32.const 1))
+  (func (export "pending_context_callback_entries") (result i32) (global.get $pending_callback_entries))
+  (func (export "pending_context_callback_returns") (result i32) (global.get $pending_callback_returns))
+  (func (export "pending_context_entry") (param $index i32) (param $field i32) (result i32)
+    (if (i32.or (i32.ge_u (local.get $index) (global.get $pending_depth))
+                (i32.ge_u (local.get $field) (i32.const 3))) (then (return (i32.const 0))))
+    (i32.load (i32.add (global.get $pending_slot)
+      (i32.add (i32.shl (local.get $index) (i32.const 5))
+               (i32.shl (local.get $field) (i32.const 2))))))
+
+  ;; A loader cannot manufacture continuous history by restoring EIP/ESP.
+  ;; This native continuation constructs the same stdcall frame and retains
+  ;; the authenticated parent until a real RET 12 reaches its zero sentinel.
+  (func $pending_loader_row (param $target i32) (result i32)
+    (local $i i32) (local $row i32) (local $state i32)
+    (block $done (loop $next_row
+      (br_if $done (i32.ge_u (local.get $i) (i32.atomic.load (global.get $DLL_SHARED))))
+      (local.set $row (call $dll_lifecycle_row (local.get $i)))
+      (local.set $state (i32.atomic.load (local.get $row)))
+      (if (i32.and (i32.eq (i32.load offset=24 (local.get $row)) (local.get $target))
+            (i32.or (i32.eq (local.get $state) (global.get $DLL_LIFE_INITIALIZING))
+                    (i32.eq (local.get $state) (global.get $DLL_LIFE_LIVE))))
+        (then (return (local.get $row))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $next_row)))
+    (i32.const 0))
+  (func (export "pending_context_loader_begin") (param $epoch i32)
+      (param $module i32) (param $target i32) (param $reason i32) (param $reserved i32) (result i64)
+    (local $row i32) (local $index i32) (local $p i32) (local $esp i32) (local $token i64)
+    (if (i32.or (i32.ne (global.get $pending_profile) (i32.const 2))
+          (i32.eqz (call $pending_coverage (local.get $epoch))))
+      (then (return (i64.const 0))))
+    (if (global.get $pending_active) (then (call $pending_gap) (return (i64.const 0))))
+    (local.set $index (call $dll_index_from_module (local.get $module)))
+    (local.set $row (call $pending_loader_row (local.get $target)))
+    (if (i32.or (i32.eq (local.get $index) (i32.const -1)) (i32.eqz (local.get $row)))
+      (then (call $pending_gap) (return (i64.const 0))))
+    (if (i32.ne (local.get $row) (call $dll_lifecycle_row (local.get $index)))
+      (then (call $pending_gap) (return (i64.const 0))))
+    (call $invocation_validate)
+    (global.set $pending_seen (i32.const 1))
+    (if (i32.eqz (call $pending_valid)) (then (return (i64.const 0))))
+    (if (i32.eq (global.get $pending_loader_serial) (i32.const -1))
+      (then (call $pending_gap) (return (i64.const 0))))
+    (global.set $pending_loader_serial (i32.add (global.get $pending_loader_serial) (i32.const 1)))
+    (local.set $token (i64.or (i64.extend_i32_u (global.get $pending_loader_serial))
+      (i64.shl (i64.extend_i32_u (i32.load offset=4 (local.get $row))) (i64.const 32))))
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $p (call $pending_frame_push (local.get $target) (i32.const 0)
+      (i32.sub (local.get $esp) (i32.const 16))
+      (i32.or (i32.const 2) (i32.shl (local.get $index) (i32.const 8)))))
+    (if (i32.eqz (local.get $p)) (then (return (i64.const 0))))
+    (i32.store offset=16 (local.get $p) (global.get $eip))
+    (i32.store offset=20 (local.get $p) (local.get $esp))
+    (i64.store offset=24 (local.get $p) (local.get $token))
+    (call $gs32 (i32.sub (local.get $esp) (i32.const 4)) (local.get $reserved))
+    (call $gs32 (i32.sub (local.get $esp) (i32.const 8)) (local.get $reason))
+    (call $gs32 (i32.sub (local.get $esp) (i32.const 12)) (local.get $module))
+    (call $gs32 (i32.sub (local.get $esp) (i32.const 16)) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $esp) (i32.const 16)))
+    (global.set $eip (local.get $target))
+    (global.set $pending_callback_entries (i32.add (global.get $pending_callback_entries) (i32.const 1)))
+    (local.get $token))
+  (func (export "pending_context_loader_finish") (param $token i64) (param $completed i32) (result i32)
+    (local $p i32) (local $row i32)
+    (if (i32.or (i32.ne (global.get $pending_profile) (i32.const 2))
+          (i32.eqz (global.get $pending_depth)))
+      (then (call $pending_gap) (return (i32.const 0))))
+    (local.set $p (i32.add (global.get $pending_slot)
+      (i32.shl (i32.sub (global.get $pending_depth) (i32.const 1)) (i32.const 5))))
+    (local.set $row (call $pending_loader_row (i32.load (local.get $p))))
+    (if (i32.or (i64.eqz (local.get $token))
+          (i32.or (i64.ne (local.get $token) (i64.load offset=24 (local.get $p)))
+            (i32.or (i32.eqz (local.get $row))
+              (i32.or (i32.lt_u (i32.and (i32.load offset=12 (local.get $p)) (i32.const 255)) (i32.const 2))
+                      (i32.gt_u (i32.and (i32.load offset=12 (local.get $p)) (i32.const 255)) (i32.const 3))))))
+      (then (call $pending_gap) (return (i32.const 0))))
+    (if (i32.ne (local.get $row) (call $dll_lifecycle_row
+          (i32.shr_u (i32.load offset=12 (local.get $p)) (i32.const 8))))
+      (then (call $pending_gap) (return (i32.const 0))))
+    (if (i32.ne (i32.load offset=4 (local.get $row))
+          (i32.wrap_i64 (i64.shr_u (local.get $token) (i64.const 32))))
+      (then (call $pending_gap) (return (i32.const 0))))
+    (call $invocation_validate)
+    (if (global.get $pending_active) (then (call $pending_gap)))
+    (if (i32.eqz (local.get $completed)) (then (call $pending_gap)) (else
+      (if (i32.or (i32.ne (i32.and (i32.load offset=12 (local.get $p)) (i32.const 255)) (i32.const 3))
+            (i32.or (i32.ne (global.get $eip) (i32.const 0))
+              (i32.or (i32.ne (i32.load offset=16 (global.get $reg_base)) (i32.load offset=20 (local.get $p)))
+                (i32.or (i32.ne (global.get $last_run_halt) (i32.const 2))
+                        (i32.ne (global.get $yield_reason) (i32.const 0))))))
+        (then (call $pending_gap)))))
+    ;; Failure restores the owned CPU continuation exactly as the old loader
+    ;; did, but keeps its failed shadow history and never clears the latch.
+    (if (call $pending_valid)
+      (then (global.set $pending_depth (i32.sub (global.get $pending_depth) (i32.const 1)))))
+    (global.set $eip (i32.load offset=16 (local.get $p)))
+    (i32.store offset=16 (global.get $reg_base) (i32.load offset=20 (local.get $p)))
+    (i32.const 1))
+
+  ;; JS COM frames retain this exact i64 child token, never a depth surrogate.
+  ;; A failed/aborted call deliberately leaves its child live: only explicit
+  ;; process/thread retirement may discard it, not a JS exception handler.
+  (func $com_callback_enter (export "com_callback_enter") (result i64)
+    (call $sync_depth_enter)
+    (call $invocation_current))
+  (func $com_callback_check (export "com_callback_check") (param $expected i64)
+    (if (i64.ne (local.get $expected) (call $invocation_current))
+      (then (unreachable))))
+  (func $com_callback_leave (export "com_callback_leave") (param $expected i64)
+    (call $com_callback_check (local.get $expected))
+    (call $sync_depth_leave))
+  ;; Sequential JS callbacks must re-enter with the suspended stream's IP:
+  ;; sync_depth_enter uses it to pin spill code. Guest EIP is not this cursor.
+  (func $com_callback_get_ip (export "com_callback_get_ip") (result i32)
+    (global.get $ip))
+  (func $com_callback_set_ip (export "com_callback_set_ip") (param $value i32)
+    (global.set $ip (local.get $value)))
+  (func $com_callback_get_thunk (export "com_callback_get_thunk") (result i32)
+    (global.get $current_thunk_eip))
+  (func $com_callback_set_thunk (export "com_callback_set_thunk") (param $value i32)
+    (global.set $current_thunk_eip (local.get $value)))
+
   (func $cdecl_return
     (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $writer_opcode_check
+    (local $op i32)
+    (local.set $op (call $gl8 (global.get $eip)))
+    (if (i32.or
+          (i32.and (i32.ge_u (local.get $op) (i32.const 0x50)) (i32.le_u (local.get $op) (i32.const 0x5F)))
+          (i32.or
+            (i32.and (i32.ge_u (local.get $op) (i32.const 0x88)) (i32.le_u (local.get $op) (i32.const 0x8B)))
+            (i32.or
+              (i32.and (i32.ge_u (local.get $op) (i32.const 0xB0)) (i32.le_u (local.get $op) (i32.const 0xBF)))
+              (i32.or (i32.eq (local.get $op) (i32.const 0x90))
+                (i32.or (i32.eq (local.get $op) (i32.const 0xC2))
+                  (i32.eq (local.get $op) (i32.const 0xC3)))))))
+      (then (return)))
+    (call $writer_invalidate (i32.const 3)))
 
   (func $run (export "run") (param $max_blocks i32)
     (local $thread i32)
     (local $hc_i i32) (local $hc_slot i32) (local $hc_fp i32)
     (local $prev_eip i32) (local $prev_esp i32)
     (local $saved_budget i32) (local $saved_start i32) (local $shared_cache_generation i32)
+    (local $saved_running_outer i32)
     (local $saved_api_depth i32)
+    (if (i32.atomic.load offset=4 (global.get $WRITER_SESSION)) (then
+      (drop (call $writer_check))
+      (if (i32.or (global.get $help_macro_frames) (global.get $help_vfs_phase))
+        (then (call $writer_invalidate (i32.const 3))))
+      ;; These entry services can execute outside the gsN barriers.
+      (if (i32.or (global.get $code16)
+            (i32.or (i32.eqz (global.get $native_store_on))
+              (i32.or (global.get $apc_alert_sleep)
+                (i32.or (global.get $anim_live_count)
+                  (i32.eq (global.get $eip) (global.get $WIN16_TASK_ENTRY))))))
+        (then (call $writer_invalidate (i32.const 3))))))
+    (call $help_macro_resume_check)
+    (call $help_document_vfs_resume_check)
+    (if (global.get $pending_active) (then (call $pending_gap)))
+    (global.set $pending_active (i32.const 1))
+    (global.set $pending_seen (i32.const 1))
+    (drop (call $pending_valid))
+    ;; These entry services have no per-store architectural continuation.
+    ;; Refuse their whole entry state in REP debugger mode, before attribution,
+    ;; budgets, queue import/pop, stack writes, host calls or callback setup.
+    ;; In particular do not import the shared APC queue during preflight:
+    ;; that would change the state that a rejected entry must preserve.
+    ;; An alertable-sleep mark is conservatively unsupported even when no APC
+    ;; is currently visible; a producer may enqueue one concurrently.
+    (if (global.get $rep_store_step) (then
+      ;; A stepped CALL may have just committed its architectural frame and
+      ;; stopped at an import. Service execution remains unsupported; reject
+      ;; before diagnostics, budgets, callbacks or any memory can change.
+      (if (thunk-contains (global.get $eip)) (then (unreachable)))
+      (if (i32.or
+            (i32.eq (global.get $eip) (global.get $WIN16_TASK_ENTRY))
+            (i32.or (global.get $apc_alert_sleep)
+              (i32.or
+                (i32.or (i32.ne (global.get $wave_callback_saved) (i32.const 0))
+                        (i32.ne (global.get $mm_timer_in_cb) (i32.const 0)))
+                (i32.and (i32.ne (global.get $anim_live_count) (i32.const 0))
+                  (i32.and (i32.eq (global.get $current_thread_id) (i32.const 1))
+                           (i32.eqz (global.get $anim_in_service)))))))
+        (then (unreachable)))))
+    ;; A fresh run may have host-supplied EIP; never inherit attribution.
+    (global.set $null_transfer_kind (i32.const 0))
+    (global.set $null_transfer_thunk_entry (i32.const 0))
     ;; A global rather than a local because $branch_end spends it too — see the
     ;; comment on $block_budget in 01-header.wat. Saved and restored because
     ;; run() is re-entrant: a COM class-factory callback is driven by calling
@@ -19,6 +430,10 @@
     ;; loop whatever the nested one left behind, and it would halt early.
     (local.set $saved_budget (global.get $block_budget))
     (local.set $saved_start (global.get $run_budget_start))
+    (local.set $saved_running_outer (global.get $blocks_running_outer))
+    (global.set $blocks_running_outer
+      (i32.add (local.get $saved_running_outer)
+        (i32.sub (local.get $saved_start) (local.get $saved_budget))))
     (local.set $saved_api_depth (global.get $api_handler_depth))
     (global.set $api_handler_depth (i32.const 0))
     (global.set $block_budget (local.get $max_blocks))
@@ -44,8 +459,17 @@
           (local.get $shared_cache_generation))
         (global.set $thread_flush_pending (i32.const 1))))
     (block $halt (loop $main
+      (if (call $help_macro_resume_boundary)
+        (then (global.set $last_run_halt (i32.const 4)) (br $halt)))
+      (call $pending_entry (global.get $eip) (i32.load offset=16 (global.get $reg_base)))
       (if (i32.eqz (global.get $eip))
-        (then (global.set $last_run_halt (i32.const 2)) (br $halt)))
+        (then
+          (call $null_transfer_check)
+          (call $null_diag_event (i32.const 5) (i32.const 0) (i32.const 0))
+          (global.set $last_run_halt (i32.const 2)) (br $halt)))
+      ;; Only the immediately preceding terminating transfer may own a zero.
+      (global.set $null_transfer_kind (i32.const 0))
+      (global.set $null_transfer_thunk_entry (i32.const 0))
       ;; A block whose quantum expired part-way through. Give it a fresh one and
       ;; carry on from the op $next declined to run — looking $eip up again would
       ;; restart the block and re-run everything before that op. Finish it even
@@ -184,9 +608,9 @@
       (if (global.get $code16)
         (then
           (if (i32.or
-                (i32.lt_u (global.get $eip) (global.get $WIN16_ARENA))
+                (i32.lt_u (global.get $eip) (call $win16_arena_base))
                 (i32.ge_u (global.get $eip)
-                  (i32.add (global.get $WIN16_ARENA)
+                  (i32.add (call $win16_arena_base)
                     (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000)))))
             (then
               (call $host_log_i32 (i32.const 0xCA165E21))
@@ -202,6 +626,8 @@
       ;; 16 = render_wait: immutable command already submitted; retry consumes
       ;; its broker token only after the host has observed actual completion.
       (if (i32.eq (global.get $yield_reason) (i32.const 16))
+        (then (global.set $last_run_halt (i32.const 4)) (br $halt)))
+      (if (i32.eq (global.get $yield_reason) (i32.const 18))
         (then (global.set $last_run_halt (i32.const 4)) (br $halt)))
       (if (i32.or
         (i32.eq (global.get $yield_reason) (i32.const 1))
@@ -259,8 +685,10 @@
           (local.set $prev_esp (i32.load offset=16 (global.get $reg_base)))
           (global.set $current_thunk_eip (global.get $eip))
           (global.set $handler_set_eip (i32.const 0))
+          (global.set $null_transfer_thunk_entry (global.get $null_transfer_on))
           (call $win32_dispatch (i32.div_u
             (i32.sub (global.get $eip) (global.get $thunk_guest_base)) (i32.const 8)))
+          (global.set $null_transfer_thunk_entry (i32.const 0))
           ;; If handler didn't redirect EIP, pop the saved return address.
           ;; Normal API handlers do `esp += 4 + nargs*4` but never set EIP;
           ;; without this, re-entry to the same thunk loops forever and
@@ -275,7 +703,11 @@
       ;; A wndproc marker (0xFFFE____/0xFFFF____) called directly as code.
       (if (i32.ge_u (global.get $eip) (i32.const 0xFFFE0000))
         (then
+          (call $writer_invalidate (i32.const 3))
           (if (call $wndproc_marker_direct_call) (then (br $main)))))
+      ;; Invalidate unsupported instructions before any block can be emitted.
+      (if (i32.atomic.load offset=4 (global.get $WRITER_SESSION))
+        (then (call $writer_opcode_check)))
       ;; $dbg_prev_eip is set to the block about to run, so anything reading it
       ;; *during* that block sees the block itself, not its predecessor. That
       ;; is what $bp_first_caller and the debug prompt want, because they run
@@ -309,7 +741,8 @@
       (if (i32.or (i32.eq (global.get $eip) (global.get $sbh_eip_a))
                   (i32.eq (global.get $eip) (global.get $sbh_eip_b)))
         (then
-          (if (call $fast_msvc_sbh_scan)
+          (if (if (result i32) (global.get $native_store_on)
+                (then (i32.const 0)) (else (call $fast_msvc_sbh_scan)))
             (then (br $main)))))
       ;; The page index is the only lookup there is now: it is exact, so a miss
       ;; here really does mean nothing is compiled at this address. The hash
@@ -325,7 +758,11 @@
       ;; $jcc_end fall-through frames and on how long the input-wake check
       ;; above waits, both of which used to be 1000 ops.
       (global.set $steps (i32.const 256))
+      (if (global.get $native_store_on)
+        (then (call $native_store_set_pc (global.get $eip))))
       (call $next)
+      (if (global.get $native_store_on)
+        (then (call $native_store_set_pc (i32.const 0))))
       (if (global.get $page_chunk_deferred)
         (then (call $page_chunk_reclaim_deferred)))
       (br $main)))
@@ -345,14 +782,17 @@
     (global.set $blocks_retired_base
       (i32.add (global.get $blocks_retired_base) (global.get $last_run_blocks)))
     (global.set $run_budget_start (local.get $saved_start))
+    (global.set $blocks_running_outer (local.get $saved_running_outer))
     (global.set $api_handler_depth (local.get $saved_api_depth))
-    (global.set $block_budget (local.get $saved_budget)))
+    (global.set $block_budget (local.get $saved_budget))
+    (global.set $pending_active (i32.const 0)))
 
   ;; Blocks retired since the instance started, including the running call's
   ;; progress so far. Wraps; only ever used as a difference.
   (func $blocks_now (result i32)
     (i32.add (global.get $blocks_retired_base)
-      (i32.sub (global.get $run_budget_start) (global.get $block_budget))))
+      (i32.add (global.get $blocks_running_outer)
+        (i32.sub (global.get $run_budget_start) (global.get $block_budget)))))
 
   ;; Blocks the last run() call retired, and the halt reason behind it (see the
   ;; $last_run_halt comment in 01-header.wat for the codes).
@@ -561,6 +1001,7 @@
   (func (export "test_shared_post_read") (param $msg_ptr i32) (param $remove i32) (result i32)
     (call $shared_post_queue_read (local.get $msg_ptr) (local.get $remove)))
   (func (export "reset_thread_message_queue") (param $tid i32)
+    (call $cursor_thread_reset (local.get $tid))
     (call $getmessage_hook_reset (local.get $tid))
     (call $shared_post_queue_reset_tid (local.get $tid)))
   (func (export "test_timer_set")
@@ -598,7 +1039,7 @@
   (func (export "get_sync_msg_depth") (result i32) (global.get $sync_msg_depth))
   (func (export "get_window_thread") (param $hwnd i32) (result i32)
     (call $wnd_get_thread (local.get $hwnd)))
-  (func (export "set_current_thread_id") (param i32) (global.set $current_thread_id (local.get 0)))
+  (func (export "set_current_thread_id") (param i32) (if (global.get $pending_seen) (then (call $pending_gap))) (global.set $current_thread_id (local.get 0)))
   (func (export "set_host_shadow") (param i32)
     (global.set $host_shadow (i32.ne (local.get 0) (i32.const 0))))
   (func (export "get_image_base") (result i32) (global.get $image_base))
@@ -780,7 +1221,7 @@
   ;; compositor that the surface it is presenting is that window's client
   ;; area at (0,0) rather than a screen-coordinate DirectDraw primary.
   (func (export "get_d3d9_windowed_hwnd") (result i32)
-    (global.get $d3d9_windowed_hwnd))
+    (call $d3d9_windowed_hwnd_get))
 
   ;; Vertex declarations $d3d9_declaration_create refused. It refuses by
   ;; returning D3DERR_INVALIDCALL with *out left at 0, which a guest that does
@@ -1152,9 +1593,6 @@
       (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
       (local.get 5) (local.get 6) (local.get 7) (local.get 8)
       (local.get 9) (local.get 10) (local.get 11) (local.get 12)))
-  (func (export "test_gdi_ext_text_out_w_packed_ansi_len")
-        (param i32 i32) (result i32)
-    (call $gdi_ext_text_out_w_packed_ansi_len (call $g2w (local.get 0)) (local.get 1)))
   (func (export "test_start_LineDDA")
         (param i32 i32 i32 i32 i32 i32) (result i32)
     (local $start_esp i32)
@@ -1171,6 +1609,13 @@
         (param i32) (param i32) (param i32) (param i32) (param i32)
     (call $client_rect_set
       (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)))
+  (func (export "gl_window_readback_version") (result i32) (i32.const 1))
+  (func (export "gl_window_set_gpu_owned") (param $hwnd i32) (param $owned i32) (result i32)
+    (local $p i32)
+    (local.set $p (call $gdi_window_surface_record (local.get $hwnd) (i32.const 0)))
+    (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
+    (i32.atomic.store offset=28 (local.get $p) (local.get $owned))
+    (i32.const 1))
   (func (export "test_gdi_window_surface_record") (param i32) (result i32)
     (call $gdi_window_surface_record (local.get 0) (i32.const 0)))
   (func (export "test_gdi_menu_overlay_dc") (result i32)
@@ -1356,6 +1801,13 @@
                              (call $client_rect_get_t (local.get $hwnd))))
     (if (i32.lt_s (local.get $cw) (i32.const 0)) (then (local.set $cw (i32.const 0))))
     (if (i32.lt_s (local.get $ch) (i32.const 0)) (then (local.set $ch (i32.const 0))))
+    ;; Show-state transitions change the outer frame after placement's normal
+    ;; position transaction. Publish their recalculated client to the same
+    ;; host mirror before delivering the corresponding resize notification.
+    (call $host_sync_window_client (local.get $hwnd)
+      (call $wnd_client_screen_x (local.get $hwnd))
+      (call $wnd_client_screen_y (local.get $hwnd))
+      (local.get $cw) (local.get $ch))
     (drop (call $post_queue_push (local.get $hwnd) (i32.const 0x0003) ;; WM_MOVE
       (i32.const 0)
       (i32.or (i32.and (local.get $x) (i32.const 0xFFFF))
@@ -1408,12 +1860,17 @@
               (i32.shl (local.get $y) (i32.const 16)))))
     (call $defwndproc_do_ncpaint (local.get $hwnd)))
   ;; Cursor state readback — for tests / JS to verify SetCursor plumbing.
-  (func (export "get_cursor") (result i32) (global.get $current_cursor))
+  (func (export "get_cursor") (result i32)
+    (call $cursor_thread_handle (global.get $current_thread_id)))
+  (func (export "get_thread_cursor") (param $tid i32) (result i32)
+    (call $cursor_thread_handle (local.get $tid)))
+  (func (export "get_thread_cursor_display_count") (param $tid i32) (result i32)
+    (call $cursor_thread_count (local.get $tid)))
   ;; ShowCursor's signed display count is also browser presentation state.
   ;; A negative count means the guest deliberately hid the system cursor and
   ;; is normally drawing/tracking its own (often through DirectInput).
   (func (export "get_cursor_display_count") (result i32)
-    (global.get $cursor_count))
+    (call $cursor_thread_count (global.get $current_thread_id)))
   ;; 1 when some DirectInput device that is a mouse (misc0 kind 2) is acquired
   ;; with DISCL_EXCLUSIVE (low bit of the DISCL_* the device flags keep): the
   ;; game reads mouse counts only and hides the system cursor, so the page
@@ -1528,6 +1985,8 @@
         (then (global.set $createwnd_move_thunk (local.get $guest))))
       (if (i32.eq (local.get $marker) (i32.const 0xCACA0031))
         (then (global.set $createwnd_size_thunk (local.get $guest))))
+      (if (i32.eq (local.get $marker) (i32.const 0xCACA003D))
+        (then (global.set $createwnd_size_ret_thunk (local.get $guest))))
       (if (i32.eq (local.get $marker) (i32.const 0xCACA0026))
         (then (global.set $child_cbt_ret_thunk (local.get $guest))))
       (if (i32.eq (local.get $marker) (i32.const 0xCACA0027))
@@ -1555,8 +2014,10 @@
   (func (export "test_crt_atexit_count") (result i32)
     (global.get $atexit_count))
   (func (export "test_crt_exit_begin") (param $code i32)
-    (global.set $atexit_exit_code (local.get $code))
-    (call $crt_atexit_run_next))
+    ;; Historical probe starts after the API return word was consumed.
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+    (call $crt_callback_begin (i32.const 1) (i32.const 0) (i32.const 0) (local.get $code)))
 
   ;; Exercise the exact cooperative retry transition: the first call parks on
   ;; another owner, the owner releases while the import frame remains live,
@@ -1613,10 +2074,17 @@
   ;; created afterwards ($init_thread) agrees with the one that chose it.
   ;;   0  default: main 512 slots (0x480000), fifteen workers 16 (0x24000)
   ;;   1  worker-heavy: main 256 (0x240000), fifteen workers 32 (0x48000)
-  ;; Both fit the one $PAGE_INDEX_ARENA (1: 0x240000 + 15*0x48000 = 0x678000).
-  ;; 32 worker slots stay inside a worker's 768KB code partition (16KB chunk
-  ;; per compiled page). Applies the stored mode to this instance's globals.
+  ;;   2  preserve main 512 and worker arena 16, add 16 worker indexes in
+  ;;      the last 0x24000 bytes of each worker's own code partition.
+  ;; Modes 0/1 fit $PAGE_INDEX_ARENA (1: 0x240000 + 15*0x48000 = 0x678000).
+  ;; Mode 2 retains mode 0's arena split and reduces worker code capacity from
+  ;; 768KiB to 624KiB, including its existing 16KiB reserve. Index capacity
+  ;; does not guarantee every indexed page's compiled chunks fit simultaneously.
+  ;; Applies the stored mode to this instance's globals.
   (func $page_index_layout_apply
+    ;; Reset on every application, including a Worker instance reused as main.
+    (global.set $PAGE_INDEX_EXTRA (i32.const 0))
+    (global.set $PAGE_INDEX_WORKER_EXTRA_BYTES (i32.const 0))
     (if (i32.eq (i32.atomic.load offset=40 (global.get $SHARED_COUNTERS)) (i32.const 1))
       (then
         (global.set $PAGE_INDEX_MAIN_BYTES (i32.const 0x00240000))
@@ -1625,27 +2093,56 @@
       (else
         (global.set $PAGE_INDEX_MAIN_BYTES (i32.const 0x00480000))
         (global.set $PAGE_INDEX_STRIDE (i32.const 0x00024000))
-        (global.set $PAGE_INDEX_WORKER_SLOTS (i32.const 16)))))
+        (global.set $PAGE_INDEX_WORKER_SLOTS (i32.const 16))
+        (if (i32.eq (i32.atomic.load offset=40 (global.get $SHARED_COUNTERS)) (i32.const 2))
+          (then
+            (global.set $PAGE_INDEX_WORKER_SLOTS (i32.const 32))
+            (global.set $PAGE_INDEX_WORKER_EXTRA_BYTES (i32.const 0x24000)))))))
 
-  ;; Host-side opt-in (lib/apps.js `workerHeavyCodeCache`). Call on the first
+  ;; Host-side opt-in (lib/apps.js `workerHeavyCodeCache` or
+  ;; `expandedWorkerCodeCache`). Call on the first
   ;; instance before anything is decoded and before any worker is spawned. The
   ;; calling instance is the main thread here (a CLI or page main never runs
   ;; $init_thread), so its own slot count is set too; workers and a Worker-
   ;; hosted main pick the mode up in $init_thread. Returns the mode in force.
   (func (export "set_page_index_layout") (param $mode i32) (result i32)
     (i32.atomic.store offset=40 (global.get $SHARED_COUNTERS)
-      (select (i32.const 1) (i32.const 0) (i32.eq (local.get $mode) (i32.const 1))))
+      (select (local.get $mode) (i32.const 0)
+        (i32.or (i32.eq (local.get $mode) (i32.const 1))
+          (i32.eq (local.get $mode) (i32.const 2)))))
     (call $page_index_layout_apply)
     (global.set $PAGE_INDEX_SLOTS
       (i32.div_u (global.get $PAGE_INDEX_MAIN_BYTES) (global.get $PAGE_INDEX_BYTES)))
     (i32.atomic.load offset=40 (global.get $SHARED_COUNTERS)))
 
   ;; Thread init — called by host after creating worker instance
+  ;; Raster kernels may run concurrently, and a rendering host call can pause
+  ;; one instance while another paints. A shared descriptor is therefore not
+  ;; temporary storage, even when each individual API is synchronous.
+  (func $gdi_thread_scratch_init (param $tid i32)
+    (local $base i32)
+    (local.set $base (i32.add (region.addr $GDI_THREAD_SCRATCH 0)
+      (i32.mul (select (i32.const 16) (local.get $tid) (global.get $host_shadow))
+        (i32.const 4096))))
+    (global.set $GDI_LINE_DESC (local.get $base))
+    (global.set $GDI_BLIT_DST_DESC (i32.add (local.get $base) (i32.const 80)))
+    (global.set $GDI_BLIT_SRC_DESC (i32.add (local.get $base) (i32.const 160)))
+    (global.set $GDI_BRUSH_DESC (i32.add (local.get $base) (i32.const 240)))
+    (global.set $GDI_BITMAP_FONT_DESC (i32.add (local.get $base) (i32.const 320)))
+    (global.set $GDI_BITMAP_PLAN (i32.add (local.get $base) (i32.const 400)))
+    (global.set $WINDOW_RECT_SCRATCH (i32.add (local.get $base) (i32.const 448)))
+    (global.set $GDI_BITMAP_NAME (i32.add (local.get $base) (i32.const 464)))
+    (global.set $GDI_BRUSH_ROW (i32.add (local.get $base) (i32.const 720)))
+    (global.set $GDI_BITMAP_INFO_SCRATCH (i32.add (local.get $base) (i32.const 976))))
+
   (func (export "init_thread") (param $tid i32)
       (param $img_base i32) (param $code_s i32) (param $code_e i32)
       (param $thunk_gs i32) (param $thunk_ge i32) (param $num_th i32)
       (param $main_rsrc_rva i32)
     (local $pe_off i32)
+    (if (global.get $pending_seen) (then (call $pending_gap)))
+    (if (global.get $native_store_on) (then (call $native_store_invalidate)))
+    (call $gdi_thread_scratch_init (local.get $tid))
     ;; A reused Worker instance must not retain heap-backed queue overflow from
     ;; its previous guest thread. Do this before replacing allocator cursors.
     (call $post_queue_reset)
@@ -1664,8 +2161,11 @@
           (i32.add (global.get $THREAD_CACHE_MAIN_BYTES)
             (i32.mul (i32.sub (local.get $tid) (i32.const 1))
                      (global.get $THREAD_CACHE_STRIDE)))))
-        (global.set $THREAD_END (i32.add (global.get $THREAD_BASE)
-          (global.get $THREAD_CACHE_STRIDE)))
+        (global.set $THREAD_END (i32.sub
+          (i32.add (global.get $THREAD_BASE) (global.get $THREAD_CACHE_STRIDE))
+          (global.get $PAGE_INDEX_WORKER_EXTRA_BYTES)))
+        (if (global.get $PAGE_INDEX_WORKER_EXTRA_BYTES)
+          (then (global.set $PAGE_INDEX_EXTRA (global.get $THREAD_END))))
         ;; This worker's micro-op arena (07d), split the same way.
         (call $uop_set_arena
           (i32.add (global.get $UOP_THREAD_ARENAS)
@@ -1685,6 +2185,7 @@
         (global.set $spill_base (region.addr $THREAD_SPILL 0))
         (global.set $spill_end (region.addr $THREAD_SPILL 0x80000))))
     (global.set $spill_active (i32.const 0))
+    (global.set $spill_saved_end (global.get $THREAD_END))
     (global.set $thread_alloc (global.get $THREAD_BASE))
     ;; The register file IS strided, unlike the three arenas above: every
     ;; thread needs exactly eight slots, so tid*64 with no special case for the
@@ -1776,6 +2277,7 @@
     (global.set $heap_sparse_end (i32.const 0))
     (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT))
     (global.set $current_thread_id (i32.add (local.get $tid) (i32.const 1)))
+    (call $invocation_thread_begin (local.get $tid))
     (call $getmessage_hook_reset (global.get $current_thread_id))
     (call $getmessage_hook_open_owner (global.get $current_thread_id))
     (call $shared_post_queue_reset_tid (global.get $current_thread_id))
@@ -2310,8 +2812,8 @@
   (func (export "get_code_end") (result i32) (global.get $code_end))
 
   ;; Register setters for test harness
-  (func (export "set_eip") (param i32) (global.set $eip (local.get 0)))
-  (func (export "set_esp") (param i32) (i32.store offset=16 (global.get $reg_base) (local.get 0)))
+  (func (export "set_eip") (param i32) (if (global.get $pending_seen) (then (call $pending_gap))) (global.set $eip (local.get 0)))
+  (func (export "set_esp") (param i32) (if (global.get $pending_seen) (then (call $pending_gap))) (i32.store offset=16 (global.get $reg_base) (local.get 0)))
   (func (export "set_ebp") (param i32) (i32.store offset=20 (global.get $reg_base) (local.get 0)))
   (func (export "set_eax") (param i32) (i32.store offset=0 (global.get $reg_base) (local.get 0)))
   (func (export "set_ecx") (param i32) (i32.store offset=4 (global.get $reg_base) (local.get 0)))
@@ -2463,6 +2965,7 @@
             (i32.or (i32.ne (global.get $trace_esp_flag) (i32.const 0))
               (i32.or (i32.ne (global.get $trace_eip_flag) (i32.const 0))
                       (i32.ne (global.get $handler_hist_enabled) (i32.const 0))))))))
+    (global.set $dbg_any (i32.or (global.get $dbg_any) (global.get $native_store_on)))
     (global.set $dbg_chain_guard (global.get $dbg_any))
     (if (global.get $benchmark_chain_bp)
       (then (global.set $dbg_chain_guard
@@ -2474,7 +2977,8 @@
     ;; Not a debug facility: a depth-0 frame owes the spill's full flush, which
     ;; only $run's desk takes (04-cache.wat $sync_depth_leave).
     (global.set $dbg_chain_guard
-      (i32.or (global.get $dbg_chain_guard) (global.get $spill_desk_forced)))
+      (i32.or (global.get $native_store_on)
+        (i32.or (global.get $dbg_chain_guard) (global.get $spill_desk_forced))))
     ;; The same set minus the histogram. Benchmark mode exempts the breakpoint
     ;; here exactly as it does above, so the tier's behaviour under
     ;; --benchmark-chain-bp is unchanged.
@@ -2486,7 +2990,9 @@
                          (i32.eqz (global.get $benchmark_chain_bp)))
           (i32.or (i32.ne (global.get $hit_count_n) (i32.const 0))
             (i32.or (i32.ne (global.get $trace_esp_flag) (i32.const 0))
-                    (i32.ne (global.get $trace_eip_flag) (i32.const 0))))))))
+                    (i32.ne (global.get $trace_eip_flag) (i32.const 0)))))))
+    ;; Store receipts require original instruction boundaries and gsN helpers.
+    (global.set $dbg_tier_guard (i32.or (global.get $dbg_tier_guard) (global.get $native_store_on))))
   (func (export "get_dbg_tier_guard") (result i32) (global.get $dbg_tier_guard))
   (func (export "set_benchmark_chain_bp") (param $on i32)
     (global.set $benchmark_chain_bp (local.get $on)) (call $dbg_recompute))
@@ -3371,8 +3877,10 @@
       (then (return (i32.const 0))))
     ;; The winmm timer thread runs the callbacks itself.
     (if (call $mm_timer_thread_owned) (then (return (i32.const 0))))
+    (call $mm_callback_begin
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 40)) (i32.const 0))
     (local.set $slot (call $mm_timer_due_slot))
-    (if (i32.eqz (local.get $slot)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $slot)) (then (call $mm_callback_cancel) (return (i32.const 0))))
     (local.set $id (i32.load (local.get $slot)))
     (local.set $dwuser (i32.load offset=12 (local.get $slot)))
     (local.set $cb (i32.load offset=8 (local.get $slot)))
@@ -3384,7 +3892,7 @@
     (global.set $yield_reason (i32.const 0))
     (global.set $yield_flag (i32.const 0))
     (global.set $mm_timer_in_cb (i32.const 1))
-    ;; Save caller-saved regs + flags (36 bytes, includes EIP for restore)
+    ;; Save caller-saved regs + flags (40 bytes, includes EIP and saved_cf for restore)
     (call $save_caller_regs)
     ;; Push 5 args: dw2=0, dw1=0, dwUser, uMsg=0, uTimerID
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
@@ -3402,6 +3910,7 @@
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $mm_timer_ret_thunk))
     ;; Redirect EIP to callback
     (global.set $eip (local.get $cb))
+    (call $callback_feed_emit (i32.const 2))
     (i32.const 1))
 
   ;; Deliver one completed waveOut buffer to a CALLBACK_FUNCTION client.
@@ -3414,6 +3923,277 @@
   (func $fire_wave_out_callback_bound (export "fire_wave_out_callback_bound")
       (param $handle i32) (param $wave_hdr i32)
       (param $cb i32) (param $instance i32) (result i32)
+    (call $fire_audio_callback_bound (local.get $handle) (local.get $wave_hdr)
+      (local.get $cb) (local.get $instance) (i32.const 0x03BD)))
+
+  ;; Cooperative MIDI delivery uses the same guarded continuation and
+  ;; invocation-owned save_caller_regs frame, with an explicit MIDI message.
+  (func $fire_midi_out_callback_bound (export "fire_midi_out_callback_bound")
+      (param $handle i32) (param $hdr i32) (param $cb i32)
+      (param $instance i32) (param $message i32) (result i32)
+    (call $fire_audio_callback_bound (local.get $handle) (local.get $hdr)
+      (local.get $cb) (local.get $instance) (local.get $message)))
+
+  ;; Bounded callback-context observations, private to this CPU instance.
+  ;; Four queued states cover suspend/admit/native RET/restore. No guest memory
+  ;; is used. Overflow is sticky until a fresh arm; draining cannot hide loss.
+  ;; This is NOT writer enrollment or an authenticated object-lifetime feed.
+  (global $callback_feed_enabled (mut i32) (i32.const 0))
+  (global $callback_feed_count (mut i32) (i32.const 0))
+  (global $callback_feed_serial (mut i32) (i32.const 0))
+  (global $callback_feed_invalid (mut i32) (i32.const 0))
+  (global $cf_0_0 (mut i32) (i32.const 0))
+  (global $cf_0_1 (mut i32) (i32.const 0))
+  (global $cf_0_2 (mut i32) (i32.const 0))
+  (global $cf_0_3 (mut i32) (i32.const 0))
+  (global $cf_0_4 (mut i32) (i32.const 0))
+  (global $cf_0_5 (mut i32) (i32.const 0))
+  (global $cf_0_6 (mut i32) (i32.const 0))
+  (global $cf_0_7 (mut i32) (i32.const 0))
+  (global $cf_0_8 (mut i32) (i32.const 0))
+  (global $cf_0_9 (mut i32) (i32.const 0))
+  (global $cf_0_10 (mut i32) (i32.const 0))
+  (global $cf_0_11 (mut i32) (i32.const 0))
+  (global $cf_0_12 (mut i32) (i32.const 0))
+  (global $cf_0_13 (mut i32) (i32.const 0))
+  (global $cf_0_14 (mut i32) (i32.const 0))
+  (global $cf_1_0 (mut i32) (i32.const 0))
+  (global $cf_1_1 (mut i32) (i32.const 0))
+  (global $cf_1_2 (mut i32) (i32.const 0))
+  (global $cf_1_3 (mut i32) (i32.const 0))
+  (global $cf_1_4 (mut i32) (i32.const 0))
+  (global $cf_1_5 (mut i32) (i32.const 0))
+  (global $cf_1_6 (mut i32) (i32.const 0))
+  (global $cf_1_7 (mut i32) (i32.const 0))
+  (global $cf_1_8 (mut i32) (i32.const 0))
+  (global $cf_1_9 (mut i32) (i32.const 0))
+  (global $cf_1_10 (mut i32) (i32.const 0))
+  (global $cf_1_11 (mut i32) (i32.const 0))
+  (global $cf_1_12 (mut i32) (i32.const 0))
+  (global $cf_1_13 (mut i32) (i32.const 0))
+  (global $cf_1_14 (mut i32) (i32.const 0))
+  (global $cf_2_0 (mut i32) (i32.const 0))
+  (global $cf_2_1 (mut i32) (i32.const 0))
+  (global $cf_2_2 (mut i32) (i32.const 0))
+  (global $cf_2_3 (mut i32) (i32.const 0))
+  (global $cf_2_4 (mut i32) (i32.const 0))
+  (global $cf_2_5 (mut i32) (i32.const 0))
+  (global $cf_2_6 (mut i32) (i32.const 0))
+  (global $cf_2_7 (mut i32) (i32.const 0))
+  (global $cf_2_8 (mut i32) (i32.const 0))
+  (global $cf_2_9 (mut i32) (i32.const 0))
+  (global $cf_2_10 (mut i32) (i32.const 0))
+  (global $cf_2_11 (mut i32) (i32.const 0))
+  (global $cf_2_12 (mut i32) (i32.const 0))
+  (global $cf_2_13 (mut i32) (i32.const 0))
+  (global $cf_2_14 (mut i32) (i32.const 0))
+  (global $cf_3_0 (mut i32) (i32.const 0))
+  (global $cf_3_1 (mut i32) (i32.const 0))
+  (global $cf_3_2 (mut i32) (i32.const 0))
+  (global $cf_3_3 (mut i32) (i32.const 0))
+  (global $cf_3_4 (mut i32) (i32.const 0))
+  (global $cf_3_5 (mut i32) (i32.const 0))
+  (global $cf_3_6 (mut i32) (i32.const 0))
+  (global $cf_3_7 (mut i32) (i32.const 0))
+  (global $cf_3_8 (mut i32) (i32.const 0))
+  (global $cf_3_9 (mut i32) (i32.const 0))
+  (global $cf_3_10 (mut i32) (i32.const 0))
+  (global $cf_3_11 (mut i32) (i32.const 0))
+  (global $cf_3_12 (mut i32) (i32.const 0))
+  (global $cf_3_13 (mut i32) (i32.const 0))
+  (global $cf_3_14 (mut i32) (i32.const 0))
+  (func (export "callback_feed_arm") (param $enabled i32) (result i32)
+    (if (global.get $mm_callback_depth) (then (return (i32.const 0))))
+    (global.set $callback_feed_enabled (local.get $enabled))
+    (global.set $callback_feed_count (i32.const 0))
+    (global.set $callback_feed_serial (i32.const 0))
+    (global.set $callback_feed_invalid (i32.const 0))
+    (i32.const 1))
+  (func (export "callback_feed_close")
+    (global.set $callback_feed_enabled (i32.const 0)))
+  (func (export "callback_feed_count") (result i32) (global.get $callback_feed_count))
+  (func (export "callback_feed_invalid") (result i32) (global.get $callback_feed_invalid))
+  (func (export "callback_feed_drain") (global.set $callback_feed_count (i32.const 0)))
+  (func $callback_feed_emit (param $kind i32)
+    (if (i32.eqz (global.get $callback_feed_enabled)) (then (return)))
+    (if (global.get $callback_feed_invalid) (then (return)))
+    (if (i32.or (i32.ge_u (global.get $callback_feed_count) (i32.const 4))
+          (i32.eq (global.get $callback_feed_serial) (i32.const -1)))
+      (then (global.set $callback_feed_invalid (i32.const 1)) (return)))
+    (global.set $callback_feed_serial (i32.add (global.get $callback_feed_serial) (i32.const 1)))
+    (if (i32.eq (global.get $callback_feed_count) (i32.const 0)) (then
+      (global.set $cf_0_0 (local.get $kind))
+      (global.set $cf_0_1 (global.get $callback_feed_serial))
+      (global.set $cf_0_2 (i32.wrap_i64 (call $invocation_current)))
+      (global.set $cf_0_3 (i32.wrap_i64 (i64.shr_u (call $invocation_current) (i64.const 32))))
+      (global.set $cf_0_4 (global.get $eip))
+      (global.set $cf_0_5 (i32.load offset=16 (global.get $reg_base)))
+      (global.set $cf_0_6 (i32.load offset=20 (global.get $reg_base)))
+      (global.set $cf_0_7 (i32.load (global.get $reg_base)))
+      (global.set $cf_0_8 (i32.load offset=4 (global.get $reg_base)))
+      (global.set $cf_0_9 (i32.load offset=8 (global.get $reg_base)))
+      (global.set $cf_0_10 (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+      (global.set $cf_0_11 (global.get $mm_callback_depth))
+      (global.set $cf_0_12 (i32.wrap_i64 (global.get $invocation_root)))
+      (global.set $cf_0_13 (i32.wrap_i64 (i64.shr_u (global.get $invocation_root) (i64.const 32))))
+      (global.set $cf_0_14 (global.get $yield_reason))
+    ))
+    (if (i32.eq (global.get $callback_feed_count) (i32.const 1)) (then
+      (global.set $cf_1_0 (local.get $kind))
+      (global.set $cf_1_1 (global.get $callback_feed_serial))
+      (global.set $cf_1_2 (i32.wrap_i64 (call $invocation_current)))
+      (global.set $cf_1_3 (i32.wrap_i64 (i64.shr_u (call $invocation_current) (i64.const 32))))
+      (global.set $cf_1_4 (global.get $eip))
+      (global.set $cf_1_5 (i32.load offset=16 (global.get $reg_base)))
+      (global.set $cf_1_6 (i32.load offset=20 (global.get $reg_base)))
+      (global.set $cf_1_7 (i32.load (global.get $reg_base)))
+      (global.set $cf_1_8 (i32.load offset=4 (global.get $reg_base)))
+      (global.set $cf_1_9 (i32.load offset=8 (global.get $reg_base)))
+      (global.set $cf_1_10 (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+      (global.set $cf_1_11 (global.get $mm_callback_depth))
+      (global.set $cf_1_12 (i32.wrap_i64 (global.get $invocation_root)))
+      (global.set $cf_1_13 (i32.wrap_i64 (i64.shr_u (global.get $invocation_root) (i64.const 32))))
+      (global.set $cf_1_14 (global.get $yield_reason))
+    ))
+    (if (i32.eq (global.get $callback_feed_count) (i32.const 2)) (then
+      (global.set $cf_2_0 (local.get $kind))
+      (global.set $cf_2_1 (global.get $callback_feed_serial))
+      (global.set $cf_2_2 (i32.wrap_i64 (call $invocation_current)))
+      (global.set $cf_2_3 (i32.wrap_i64 (i64.shr_u (call $invocation_current) (i64.const 32))))
+      (global.set $cf_2_4 (global.get $eip))
+      (global.set $cf_2_5 (i32.load offset=16 (global.get $reg_base)))
+      (global.set $cf_2_6 (i32.load offset=20 (global.get $reg_base)))
+      (global.set $cf_2_7 (i32.load (global.get $reg_base)))
+      (global.set $cf_2_8 (i32.load offset=4 (global.get $reg_base)))
+      (global.set $cf_2_9 (i32.load offset=8 (global.get $reg_base)))
+      (global.set $cf_2_10 (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+      (global.set $cf_2_11 (global.get $mm_callback_depth))
+      (global.set $cf_2_12 (i32.wrap_i64 (global.get $invocation_root)))
+      (global.set $cf_2_13 (i32.wrap_i64 (i64.shr_u (global.get $invocation_root) (i64.const 32))))
+      (global.set $cf_2_14 (global.get $yield_reason))
+    ))
+    (if (i32.eq (global.get $callback_feed_count) (i32.const 3)) (then
+      (global.set $cf_3_0 (local.get $kind))
+      (global.set $cf_3_1 (global.get $callback_feed_serial))
+      (global.set $cf_3_2 (i32.wrap_i64 (call $invocation_current)))
+      (global.set $cf_3_3 (i32.wrap_i64 (i64.shr_u (call $invocation_current) (i64.const 32))))
+      (global.set $cf_3_4 (global.get $eip))
+      (global.set $cf_3_5 (i32.load offset=16 (global.get $reg_base)))
+      (global.set $cf_3_6 (i32.load offset=20 (global.get $reg_base)))
+      (global.set $cf_3_7 (i32.load (global.get $reg_base)))
+      (global.set $cf_3_8 (i32.load offset=4 (global.get $reg_base)))
+      (global.set $cf_3_9 (i32.load offset=8 (global.get $reg_base)))
+      (global.set $cf_3_10 (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+      (global.set $cf_3_11 (global.get $mm_callback_depth))
+      (global.set $cf_3_12 (i32.wrap_i64 (global.get $invocation_root)))
+      (global.set $cf_3_13 (i32.wrap_i64 (i64.shr_u (global.get $invocation_root) (i64.const 32))))
+      (global.set $cf_3_14 (global.get $yield_reason))
+    ))
+    (global.set $callback_feed_count (i32.add (global.get $callback_feed_count) (i32.const 1))))
+  (func (export "callback_feed_get") (param $slot i32) (param $field i32) (result i32)
+    (if (i32.eq (local.get $slot) (i32.const 0)) (then
+      (if (i32.eq (local.get $field) (i32.const 0)) (then (return (global.get $cf_0_0))))
+      (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $cf_0_1))))
+      (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $cf_0_2))))
+      (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $cf_0_3))))
+      (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $cf_0_4))))
+      (if (i32.eq (local.get $field) (i32.const 5)) (then (return (global.get $cf_0_5))))
+      (if (i32.eq (local.get $field) (i32.const 6)) (then (return (global.get $cf_0_6))))
+      (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $cf_0_7))))
+      (if (i32.eq (local.get $field) (i32.const 8)) (then (return (global.get $cf_0_8))))
+      (if (i32.eq (local.get $field) (i32.const 9)) (then (return (global.get $cf_0_9))))
+      (if (i32.eq (local.get $field) (i32.const 10)) (then (return (global.get $cf_0_10))))
+      (if (i32.eq (local.get $field) (i32.const 11)) (then (return (global.get $cf_0_11))))
+      (if (i32.eq (local.get $field) (i32.const 12)) (then (return (global.get $cf_0_12))))
+      (if (i32.eq (local.get $field) (i32.const 13)) (then (return (global.get $cf_0_13))))
+      (if (i32.eq (local.get $field) (i32.const 14)) (then (return (global.get $cf_0_14))))
+    ))
+    (if (i32.eq (local.get $slot) (i32.const 1)) (then
+      (if (i32.eq (local.get $field) (i32.const 0)) (then (return (global.get $cf_1_0))))
+      (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $cf_1_1))))
+      (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $cf_1_2))))
+      (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $cf_1_3))))
+      (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $cf_1_4))))
+      (if (i32.eq (local.get $field) (i32.const 5)) (then (return (global.get $cf_1_5))))
+      (if (i32.eq (local.get $field) (i32.const 6)) (then (return (global.get $cf_1_6))))
+      (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $cf_1_7))))
+      (if (i32.eq (local.get $field) (i32.const 8)) (then (return (global.get $cf_1_8))))
+      (if (i32.eq (local.get $field) (i32.const 9)) (then (return (global.get $cf_1_9))))
+      (if (i32.eq (local.get $field) (i32.const 10)) (then (return (global.get $cf_1_10))))
+      (if (i32.eq (local.get $field) (i32.const 11)) (then (return (global.get $cf_1_11))))
+      (if (i32.eq (local.get $field) (i32.const 12)) (then (return (global.get $cf_1_12))))
+      (if (i32.eq (local.get $field) (i32.const 13)) (then (return (global.get $cf_1_13))))
+      (if (i32.eq (local.get $field) (i32.const 14)) (then (return (global.get $cf_1_14))))
+    ))
+    (if (i32.eq (local.get $slot) (i32.const 2)) (then
+      (if (i32.eq (local.get $field) (i32.const 0)) (then (return (global.get $cf_2_0))))
+      (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $cf_2_1))))
+      (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $cf_2_2))))
+      (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $cf_2_3))))
+      (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $cf_2_4))))
+      (if (i32.eq (local.get $field) (i32.const 5)) (then (return (global.get $cf_2_5))))
+      (if (i32.eq (local.get $field) (i32.const 6)) (then (return (global.get $cf_2_6))))
+      (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $cf_2_7))))
+      (if (i32.eq (local.get $field) (i32.const 8)) (then (return (global.get $cf_2_8))))
+      (if (i32.eq (local.get $field) (i32.const 9)) (then (return (global.get $cf_2_9))))
+      (if (i32.eq (local.get $field) (i32.const 10)) (then (return (global.get $cf_2_10))))
+      (if (i32.eq (local.get $field) (i32.const 11)) (then (return (global.get $cf_2_11))))
+      (if (i32.eq (local.get $field) (i32.const 12)) (then (return (global.get $cf_2_12))))
+      (if (i32.eq (local.get $field) (i32.const 13)) (then (return (global.get $cf_2_13))))
+      (if (i32.eq (local.get $field) (i32.const 14)) (then (return (global.get $cf_2_14))))
+    ))
+    (if (i32.eq (local.get $slot) (i32.const 3)) (then
+      (if (i32.eq (local.get $field) (i32.const 0)) (then (return (global.get $cf_3_0))))
+      (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $cf_3_1))))
+      (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $cf_3_2))))
+      (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $cf_3_3))))
+      (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $cf_3_4))))
+      (if (i32.eq (local.get $field) (i32.const 5)) (then (return (global.get $cf_3_5))))
+      (if (i32.eq (local.get $field) (i32.const 6)) (then (return (global.get $cf_3_6))))
+      (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $cf_3_7))))
+      (if (i32.eq (local.get $field) (i32.const 8)) (then (return (global.get $cf_3_8))))
+      (if (i32.eq (local.get $field) (i32.const 9)) (then (return (global.get $cf_3_9))))
+      (if (i32.eq (local.get $field) (i32.const 10)) (then (return (global.get $cf_3_10))))
+      (if (i32.eq (local.get $field) (i32.const 11)) (then (return (global.get $cf_3_11))))
+      (if (i32.eq (local.get $field) (i32.const 12)) (then (return (global.get $cf_3_12))))
+      (if (i32.eq (local.get $field) (i32.const 13)) (then (return (global.get $cf_3_13))))
+      (if (i32.eq (local.get $field) (i32.const 14)) (then (return (global.get $cf_3_14))))
+    ))
+    (i32.const 0))
+  ;; Only the actual native RET to the retained multimedia continuation emits.
+  (func $callback_feed_ret (param $ret i32)
+    (if (i32.and (i32.ne (global.get $callback_feed_enabled) (i32.const 0))
+          (i32.and (i32.ne (global.get $mm_callback_depth) (i32.const 0))
+            (i32.eq (local.get $ret) (global.get $mm_timer_ret_thunk))))
+      (then (call $callback_feed_emit (i32.const 3)))))
+  ;; Opt-in, per-instance, fixed-size observation only. The token is issued
+  ;; AFTER admission; return is marked only by the validated audio continuation.
+  (global $audio_trace_enabled (mut i32) (i32.const 0))
+  (global $audio_trace_serial (mut i32) (i32.const 0))
+  (global $audio_trace_active (mut i32) (i32.const 0))
+  (global $audio_trace_returned (mut i32) (i32.const 0))
+  (global $audio_trace_eip (mut i32) (i32.const 0))
+  (global $audio_trace_esp (mut i32) (i32.const 0))
+  (global $audio_trace_yield (mut i32) (i32.const 0))
+  (global $audio_trace_wait (mut i32) (i32.const 0))
+  (global $audio_trace_timeout (mut i32) (i32.const 0))
+  (global $audio_trace_stack (mut i32) (i32.const 0))
+  (func (export "set_audio_callback_trace") (param $enabled i32)
+    (global.set $audio_trace_enabled (local.get $enabled)))
+  (func (export "get_audio_callback_trace") (param $field i32) (result i32)
+    (if (i32.eqz (local.get $field)) (then (return (global.get $audio_trace_active))))
+    (if (i32.eq (local.get $field) (i32.const 1)) (then (return (global.get $audio_trace_returned))))
+    (if (i32.eq (local.get $field) (i32.const 2)) (then (return (global.get $audio_trace_eip))))
+    (if (i32.eq (local.get $field) (i32.const 3)) (then (return (global.get $audio_trace_esp))))
+    (if (i32.eq (local.get $field) (i32.const 4)) (then (return (global.get $audio_trace_yield))))
+    (if (i32.eq (local.get $field) (i32.const 5)) (then (return (global.get $audio_trace_wait))))
+    (if (i32.eq (local.get $field) (i32.const 6)) (then (return (global.get $audio_trace_timeout))))
+    (if (i32.eq (local.get $field) (i32.const 7)) (then (return (global.get $audio_trace_stack))))
+    (i32.const 0))
+
+  (func $fire_audio_callback_bound
+      (param $handle i32) (param $wave_hdr i32)
+      (param $cb i32) (param $instance i32) (param $message i32) (result i32)
     (if (i32.or (i32.eqz (local.get $cb))
           (i32.or (i32.eqz (global.get $eip))
             (i32.eqz (i32.load offset=16 (global.get $reg_base)))))
@@ -3423,6 +4203,8 @@
       (then (return (i32.const 0))))
     (if (i32.or (global.get $mm_timer_in_cb) (global.get $wave_callback_saved))
       (then (return (i32.const 0))))
+    (call $mm_callback_begin
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 40)) (i32.const 1))
     (global.set $wave_callback_saved_wait_handle (global.get $wait_handle))
     (global.set $wave_callback_saved_wait_handles_ptr (global.get $wait_handles_ptr))
     (global.set $wave_callback_saved_wait_all (global.get $wait_all))
@@ -3442,12 +4224,20 @@
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $instance))            ;; dwInstance
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x03BD))               ;; WOM_DONE
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $message))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $handle))              ;; hwo
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $mm_timer_ret_thunk))
     (global.set $eip (local.get $cb))
+    (if (global.get $audio_trace_enabled)
+      (then
+        (global.set $audio_trace_serial (i32.add (global.get $audio_trace_serial) (i32.const 1)))
+        ;; Zero means no observed admission, including after 32-bit wrap.
+        (if (i32.eqz (global.get $audio_trace_serial))
+          (then (global.set $audio_trace_serial (i32.const 1))))
+        (global.set $audio_trace_active (global.get $audio_trace_serial))))
+    (call $callback_feed_emit (i32.const 2))
     (i32.const 1))
 
   ;; Existing cooperative entry retains its public signature.
@@ -3472,6 +4262,16 @@
     ;; This continuation belongs to waveOut, not a multimedia timer. A stale
     ;; timer resume value must not overwrite the exact restored wave wait.
     (global.set $mm_timer_resume_yield (i32.const 0))
+    (if (global.get $audio_trace_enabled)
+      (then
+        (global.set $audio_trace_eip (global.get $eip))
+        (global.set $audio_trace_esp (i32.load offset=16 (global.get $reg_base)))
+        (global.set $audio_trace_yield (global.get $yield_reason))
+        (global.set $audio_trace_wait (global.get $wait_handle))
+        (global.set $audio_trace_timeout (global.get $wait_timeout))
+        (global.set $audio_trace_stack (global.get $wait_stack_bytes))
+        (global.set $audio_trace_returned (global.get $audio_trace_active))
+        (global.set $audio_trace_active (i32.const 0))))
     (if (global.get $yield_reason) (then (global.set $steps (i32.const 0)))))
 
   ;; A host-side writer that fills guest memory directly (ReadFile into the
@@ -3603,6 +4403,8 @@
     (local $cursor i32) (local $end i32) (local $next i32)
     (local $i i32) (local $rec i32) (local $base i32) (local $limit i32)
     (local $covered i32)
+    (if (call $virtual_map_lease_mutation_busy (local.get $guest) (local.get $size))
+      (then (return (i32.const 0))))
     (local.set $cursor (local.get $guest))
     (local.set $end (i32.add (local.get $guest) (local.get $size)))
     (block $done (loop $ranges
@@ -3673,7 +4475,8 @@
     (local $size i32) (local $i i32) (local $guest i32)
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
     (local.set $size (call $host_mapped_range_size (local.get $base)))
-    (if (i32.eqz (local.get $size))
+    (if (i32.or (i32.eqz (local.get $size))
+      (call $virtual_map_lease_mutation_busy (local.get $base) (local.get $size)))
       (then
         (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
         (return (i32.const 0))))
@@ -3738,9 +4541,9 @@
   ;; Paired with guest_map_alloc; heap_free cannot release a sparse mapping.
   (func (export "guest_map_free") (param $g i32) (result i32)
     (local $result i32)
-    (call $mapped_view_unregister (local.get $g))
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
-    (local.set $result (call $virtual_map_release (local.get $g)))
+    (local.set $result (call $virtual_map_release_locked (local.get $g)))
+    (if (local.get $result) (then (call $mapped_view_unregister (local.get $g))))
     (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
     (local.get $result))
 
@@ -4187,6 +4990,23 @@
   (func (export "test_mbsinc") (param $gp i32) (result i32)
     (call $mbsinc_ptr (local.get $gp)))
 
+  ;; Direct test surface for the code page conversion family (10-helpers.wat):
+  ;; the same functions the MultiByteToWideChar / WideCharToMultiByte
+  ;; handlers run, without the stdcall frame. Packed single-character
+  ;; results are documented at $ansi_char_decode.
+  (func (export "test_cp_char_decode") (param $cp i32) (param $gp i32) (param $avail i32) (result i32)
+    (call $ansi_char_decode (call $resolve_code_page (local.get $cp)) (local.get $gp) (local.get $avail)))
+  (func (export "test_cp_char_encode") (param $cp i32) (param $wc i32) (result i32)
+    (call $ansi_char_encode (call $resolve_code_page (local.get $cp)) (local.get $wc) (i32.const 0x3F) (i32.const 1)))
+  (func (export "test_multi_byte_to_wide_char") (param $cp i32) (param $flags i32) (param $src i32) (param $src_len i32) (param $dst i32) (param $dst_len i32) (result i32)
+    (call $multi_byte_to_wide_char (local.get $cp) (local.get $flags) (local.get $src) (local.get $src_len) (local.get $dst) (local.get $dst_len)))
+  (func (export "test_wide_char_to_multi_byte") (param $cp i32) (param $flags i32) (param $src i32) (param $src_len i32) (param $dst i32) (param $dst_len i32) (param $def_ptr i32) (param $used_ptr i32) (result i32)
+    (call $wide_char_to_multi_byte (local.get $cp) (local.get $flags) (local.get $src) (local.get $src_len) (local.get $dst) (local.get $dst_len) (local.get $def_ptr) (local.get $used_ptr)))
+  (func (export "test_ansi_to_wide") (param $src i32) (param $dst i32) (param $max i32) (result i32)
+    (call $ansi_to_wide (local.get $src) (local.get $dst) (local.get $max)))
+  (func (export "test_get_last_error") (result i32)
+    (global.get $last_error))
+
   ;; Direct test surface for the memory-backed OLE storage foundation. These
   ;; helpers intentionally bypass stdcall ESP bookkeeping while exercising the
   ;; same object/state helpers used by the public OLE32 and COM handlers.
@@ -4487,6 +5307,9 @@
   (export "gl_wat_stream_flush" (func $gl_wat_stream_flush))
   (export "gl_wat_encoder_reset" (func $gl_wat_encoder_reset))
   (func (export "gl_wat_stream_base") (result i32) (global.get $gl_stream_wa))
+  (func (export "gl_wat_stream_pool_version") (result i32) (i32.const 1))
+  (export "gl_wat_stream_pool_enable" (func $gl_wat_stream_pool_enable))
+  (export "gl_wat_stream_pool_base" (func $gl_wat_stream_pool_base))
   (func (export "gl_wat_stream_capacity") (result i32) (i32.const 0x00200000))
   (func (export "gl_wat_stream_used") (result i32) (global.get $gl_stream_used_bytes))
   (func (export "gl_wat_stream_commands") (result i32) (global.get $gl_stream_command_count))

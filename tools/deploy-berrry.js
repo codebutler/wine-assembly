@@ -175,7 +175,7 @@ function collectTextFiles() {
   // the repo's Markdown right before upload, so the served story is never
   // behind PROJECT_STORY.md and the docs index never misses a new note.
   const site = require('./gen-site-pages');
-  site.writePages(site.generatePages());
+  site.writePages(site.generatePages({ progress: message => console.log(`  ${message}`) }));
   // Root-level text files
   for (const entry of fs.readdirSync(ROOT)) {
     const ext = path.extname(entry);
@@ -242,6 +242,10 @@ const NEVER_PUBLISH_PREFIXES = [
   'binaries/candidates/morrowind/',
   'test/binaries/candidates/myth-the-fallen-lords/',
   'binaries/candidates/myth-the-fallen-lords/',
+  // Windows Me Traditional Chinese OS accessories (the *_cht registry ids),
+  // extracted locally from a WinWorld ISO for CP950 testing.
+  'test/binaries/winme-cht/',
+  'binaries/winme-cht/',
   'downloads/',
 ];
 const neverPublish = p => {
@@ -259,6 +263,13 @@ const neverPublish = p => {
 // this demonstration version ... to your friends, as long as you don't sell
 // it." Same footing as the RCT shareware already live.
 const PUBLISHABLE_OUTSIDE_BINARIES = [
+  // Half-Life Uplink demo installed payload, including its original readme.
+  // Keep the installer and other Half-Life editions outside this prefix.
+  'test/binaries/candidates/half-life-uplink-installer/installed/',
+  // Original Quake III 1.11 demo installation, including its bundled EULA
+  // and documentation. Desktop preparation requested 2026-10-14; no retail
+  // pak files or installer sibling directories are included.
+  'test/binaries/candidates/quake-3-arena-demo-installer/installed/',
   'test/binaries/candidates/heroes-2-demo/files/',
   // Blizzard explicitly permits non-commercial mirroring of its unmodified
   // demos when every original file remains present.  This directory retains
@@ -479,6 +490,35 @@ function collectFonts() {
       if (path.extname(entry).toLowerCase() !== '.ttf') continue;
       push('fonts/subset/' + entry, path.join(subsetDir, entry));
     }
+  }
+
+  // Optional faces tools/fetch-fonts.js built for this deploy (the CP950 Ming
+  // face and its license). Never committed; a deploy without them is normal
+  // and skips silently. host.js asks for them only for an app whose
+  // ansiCodePage names them, through fetched.json.
+  //
+  // A user's own MINGLIU.TTC build (mingliu.ttc) is Microsoft's font and must
+  // never be published: it is left out, and the published fetched.json is
+  // rewritten without it so the browser falls through to the open face
+  // instead of 404ing on the preferred one.
+  const fetchedDir = path.join(dir, 'fetched');
+  const listingPath = path.join(fetchedDir, 'fetched.json');
+  if (fs.existsSync(listingPath)) {
+    const USER_ONLY = new Set(['mingliu.ttc']);
+    const listing = JSON.parse(fs.readFileSync(listingPath, 'utf8'));
+    for (const name of USER_ONLY) delete (listing.files || {})[name];
+    for (const name of Object.keys(listing.files || {})) {
+      const full = path.join(fetchedDir, name);
+      if (!fs.existsSync(full)) { delete listing.files[name]; continue; }
+      files.push(...encodeBinaryBytes('fonts/fetched/' + name, fs.readFileSync(full)));
+    }
+    const license = path.join(fetchedDir, 'ARPHICPL.TXT');
+    if (fs.existsSync(license)) push('fonts/fetched/ARPHICPL.TXT', license);
+    files.push({
+      name: 'fonts/fetched/fetched.json',
+      content: Buffer.from(JSON.stringify(listing, null, 2) + '\n').toString('base64'),
+      encoding: 'base64',
+    });
   }
   return files;
 }

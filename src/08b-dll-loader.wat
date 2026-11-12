@@ -218,11 +218,9 @@
   ;; LoadLibrary that found it must park and retry rather than hand out a
   ;; module whose initializer has not run (Windows holds such a caller on the
   ;; loader lock). Never for the initializing thread itself -- a DllMain that
-  ;; loads its own module gets it at once -- and bounded by wall time: a host
-  ;; path that maps a module and then fails before its DllMain never marks it,
-  ;; and a guest parked on that row would never run again.
-  (global $dll_init_wait_row (mut i32) (i32.const -1))
-  (global $dll_init_wait_since (mut i32) (i32.const 0))
+  ;; loads its own module gets it at once. There is no wall-time bound: every
+  ;; host failure path ends INITIALIZING through complete_dll_initialize (FAILED)
+  ;; during rollback, so only a quarantined (trapped) load leaves waiters parked.
   (func $dll_row_init_pending (param $index i32) (result i32)
     (local $flags i32) (local $owner i32) (local $state i32)
     (local.set $state (i32.atomic.load (call $dll_lifecycle_row (local.get $index))))
@@ -929,6 +927,12 @@
     ;; TIME_ZONE_ID_* classification (0 unknown, 1 standard, 2 daylight).
     (if (call $dll_name_match (local.get $dll_name_ga) "KERNEL32.dll")
       (then
+        (if (i32.eq (local.get $ordinal) (i32.const 35))
+          (then (return (call $lookup_api_id "LoadLibrary16"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 36))
+          (then (return (call $lookup_api_id "FreeLibrary16"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 37))
+          (then (return (call $lookup_api_id "GetProcAddress16"))))
         (if (i32.eq (local.get $ordinal) (i32.const 99))
           (then (return (call $lookup_api_id "KERNEL32_Ordinal99"))))
       ))
@@ -1094,6 +1098,7 @@
   ;; Process a loaded DLL's imports — create thunks for system DLLs,
   ;; resolve against other loaded DLLs if found.
   (func $process_dll_imports (param $load_addr i32) (param $import_rva i32)
+    (local $data_addr i32)
     (local $desc_ptr i32) (local $ilt_rva i32) (local $iat_rva i32)
     (local $ilt_ptr i32) (local $iat_ptr i32) (local $entry i32) (local $thunk_addr i32)
     (local $dll_name_rva i32) (local $dll_name_ptr i32)
@@ -1211,6 +1216,16 @@
                       (i32.const 0x4F524400)) ;; "ORD\0" marker
                     (i32.store (i32.add (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8))) (i32.const 4))
                       (i32.and (local.get $entry) (i32.const 0xFFFF)))))))
+            ;; Preserve the reserved thunk slot/index, but point a CRTDLL _iob
+            ;; IAT entry at the shared FILE array. Loaded DLL exports above
+            ;; remain authoritative; this is only the system fallback path.
+            (if (i32.eqz (i32.and (local.get $entry) (i32.const 0x80000000)))
+              (then
+                (local.set $data_addr (call $resolve_crtdll_iob_import
+                  (call $g2w (local.get $dll_name_ptr))
+                  (i32.add (local.get $hint_name_wa) (i32.const 2))))
+                (if (local.get $data_addr)
+                  (then (i32.store (local.get $iat_ptr) (local.get $data_addr))))))
             (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
             (call $update_thunk_end)))
         (local.set $ilt_ptr (i32.add (local.get $ilt_ptr) (i32.const 4)))

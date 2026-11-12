@@ -2,6 +2,13 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const inbox=require('./telegram-inbox');
+const execFile=require('node:util').promisify(require('node:child_process').execFile);
+async function queueCodexInbox({root,thread,message,consumer,command=process.env.CODEX_BIN||'codex',exec=execFile}){
+  if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(thread)||!inbox.NUDGE_RE.test(message))throw Error('Invalid inbox queue target or message');
+  inbox.cursorPath('.',consumer); // Validate before including the consumer in instructions.
+  const text=message+`. Prioritize this owner request before autonomous work or worker closeouts. Run node ops/telegram-send.js --pending --consumer ${consumer}; reply using --consumer ${consumer} --reply-to ID --text-file FILE and confirm its delivery receipt. If the work is unfinished, send a truthful status reply now. A terminal answer is not Telegram delivery. Do not send duplicate replies to delivered IDs.`;
+  await exec(command,['queue','--thread',thread,'--message',text],{cwd:root,timeout:15000,maxBuffer:65536});
+}
 const hash=x=>crypto.createHash('sha256').update(JSON.stringify(x)).digest('hex');
 // TODOS owners are written both as the full session id and as its first UUID
 // group (claude:d10ba697); both name the same agent.
@@ -66,23 +73,49 @@ function message(tasks,config) {
   // whose hidden contents cannot be checked by the exact-draft delivery guard.
   return `Resume assigned work (${names}). Read TODOS.md, messageboard.txt and ops/work-watchdog.json first; reconcile merged work and collect worker results. Respect pauses and laptop-owned Heroes II. Continue the two-game lane; serialize runtime tests. Do not deploy publicly or answer approvals. If blocked, update tasks. Intentional pause: scratch/work-watchdog/control.json paused=true.`;
 }
+// Codex goal keeper: a coordinator that marks its own goal blocked stops taking
+// turns until someone types /goal resume (it sat idle 3-23h at a time, Oct 27-30).
+// Resume any watched Codex terminal stalled for goalStallMs, at most once per
+// goalResumeCooldownMs, with no attempt cap: being stalled is never the goal.
+function goalStallDecision(terminal,config,previous={},now=Date.now()) {
+  const record={stalledSince:null,lastResumeAt:previous.lastResumeAt??null,resumes:previous.resumes||0};
+  const skip=reason=>({send:false,record:{...record,reason}});
+  if(!config.enabled||config.paused||(config.pausedTerminals||[]).includes(terminal.id))return skip('paused');
+  if(terminal.provider!=='codex'||!terminal.stalled)return skip('not stalled');
+  if(terminal.promptOpen)return skip('prompt open');
+  record.stalledSince=previous.stalledSince??now;
+  if(now-record.stalledSince<(config.goalStallMs??300000))return skip('observing stalled goal');
+  if(record.lastResumeAt!=null&&now-record.lastResumeAt<(config.goalResumeCooldownMs??600000))return skip('goal resume cooldown');
+  return {send:true,record:{...record,reason:'goal stalled'}};
+}
+
 // Telegram inbox fallback: the bot never types; this nudges a consumer that has
 // left inbox entries unread past its cursor with one fixed line (see telegram-inbox.js).
 // A consumer names its terminal by agentId (full id or first UUID group), resolved
 // against ops/terminals.json through /api/work-status.
-async function inboxNudges({root,config,terminals,state,save,request,dir,now=Date.now()}) {
+async function inboxNudges({root,config,terminals,state,save,request,dir,queue=queueCodexInbox,now=Date.now()}) {
   const cfg=config.telegramInbox;if(!cfg?.consumers?.length)return;
   const file=path.join(root,inbox.INBOX),tgDir=path.join(root,'scratch/telegram');
   state.telegramInbox??={};
   for(const consumer of cfg.consumers){
-    let unread;try{unread=inbox.readUnreadSync(file,inbox.readCursorSync(inbox.cursorPath(tgDir,consumer.agent)));}catch(e){state.telegramInbox[consumer.agent]={...state.telegramInbox[consumer.agent],reason:'inbox read failed: '+e.message};continue;}
+    let unread;try{unread=inbox.readPendingSync(file,consumer);}catch(e){state.telegramInbox[consumer.agent]={...state.telegramInbox[consumer.agent],reason:'inbox read failed: '+e.message};continue;}
     const terminal=terminals.find(t=>sameAgent(consumer.agentId,t.agentId));
     const previous=state.telegramInbox[consumer.agent]||{};
-    const d=inbox.nudgeDecision({unread,terminal,consumer,previous,now,config:{...cfg,paused:config.paused||cfg.paused}});
+    const d=inbox.nudgeDecision({unread,terminal,consumer,previous,now,config:{...cfg,enabled:config.enabled!==false&&cfg.enabled!==false,
+      paused:config.paused||cfg.paused||(config.pausedTerminals||[]).includes(terminal?.id)}});
     state.telegramInbox[consumer.agent]={...d.record,terminalId:terminal?.id};
     if(!d.send)continue;
     // Persist the attempt first: an uncertain delivery still starts the cooldown.
     const record=state.telegramInbox[consumer.agent];record.lastNudgeAt=now;save();
+    if(d.transport==='codex-queue'){
+      // Persist before invoking the CLI: ambiguous failure must not flood the thread.
+      record.lastQueueAt=now;record.queuedPendingKey=d.pendingKey;save();
+      try{await queue({root,thread:d.thread,message:d.message,consumer:consumer.agent});record.reason='inbox notification queued; reply still pending';}
+      catch(e){record.reason='inbox queue not confirmed: '+e.message;}
+      save();
+      fs.appendFileSync(path.join(dir,'events.jsonl'),JSON.stringify({at:new Date(now).toISOString(),terminalId:terminal.id,telegramInbox:consumer.agent,...record})+'\n');
+      continue;
+    }
     try{
       await request('/api/work-nudge',{terminalId:terminal.id,screenHash:terminal.screenHash,kind:'telegram-inbox',message:d.message});record.reason='inbox nudge delivered';
       if(d.goalResume){
@@ -135,6 +168,15 @@ async function run({root=path.resolve(__dirname,'..'),base=process.env.OPS_URL||
         fs.appendFileSync(path.join(dir,'events.jsonl'),JSON.stringify({at:new Date().toISOString(),terminalId:target.id,dispatch:true,...dd.record})+'\n');
       }
       await inboxNudges({root,config,terminals,state,save,request,dir});
+      state.goalKeeper??={};
+      for(const terminal of watched){
+        const g=goalStallDecision(terminal,config,state.goalKeeper[terminal.id]);state.goalKeeper[terminal.id]=g.record;
+        if(!g.send)continue;
+        g.record.lastResumeAt=Date.now();g.record.resumes++;save();
+        try{await request('/api/work-nudge',{terminalId:terminal.id,screenHash:terminal.screenHash,kind:'goal-resume',message:'/goal resume'});g.record.reason='goal resume delivered';}
+        catch(e){g.record.reason='goal resume not confirmed: '+e.message;}
+        fs.appendFileSync(path.join(dir,'events.jsonl'),JSON.stringify({at:new Date().toISOString(),terminalId:terminal.id,goalKeeper:true,...g.record})+'\n');
+      }
       state.error=null;
     }catch(e){state.error=e.message;console.error(e.message);}
     state.checkedAt=new Date().toISOString();state.pid=process.pid;save();
@@ -143,4 +185,4 @@ async function run({root=path.resolve(__dirname,'..'),base=process.env.OPS_URL||
   }}finally{fs.rmSync(lock,{recursive:true,force:true});}
 }
 if(require.main===module)run().catch(e=>{console.error(e);process.exitCode=1;});
-module.exports={eligible,decide,message,unassigned,dispatch,dispatchMessage,inboxNudges};
+module.exports={eligible,decide,message,unassigned,dispatch,dispatchMessage,inboxNudges,queueCodexInbox,goalStallDecision};

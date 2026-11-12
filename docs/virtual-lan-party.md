@@ -1492,6 +1492,28 @@ an Internet transport.
 
 ## Addendum 2026-09-20: always a star
 
+### Optional local probe before publishing (2026-10-15)
+
+An app can set `lan.openOnProbe: true` alongside `lan.room: 'auto'`,
+`lan.onDemand: true` and its `lan.hostProbe`. Its first socket gets a local
+wire with no presence or WebRTC peers. The configured probe runs there; a
+positive response opens an owner room and swaps in its wire without changing
+the guest's owner address. Merely binding a socket does not publish a room,
+show a hosting card, or disable the normal solo background-pause policy.
+
+`hostProbe.response` optionally validates the reply with a regular expression.
+`hostProbe.discoveryQuery` optionally recognizes a broadcast query to the
+probe's port as an explicit request to browse hosted rooms. Selecting one
+relaunches the guest with its member IP assigned before sockets are bound,
+using the app's normal join arguments. Invitation links still join directly.
+Apps without `openOnProbe` retain the existing behavior.
+
+Q3 opts in with port 27960, `getinfo berrry`, an `infoResponse` reply pattern,
+and a broadcast `getinfo` discovery pattern. The demo ignores `getinfo` in
+single-player mode, so its open startup socket does not make it a public host.
+Once a room has been opened, existing room lifecycle rules apply; returning
+to the menu stops advertising a hosted game when its probe expires.
+
 A room is always a star, never a mesh. The room owner is seat `10.0.0.1`. It
 hands out seats `.2`-`.253` and routes (`lib/vlan-star.js` `StarOwnerWire`);
 a member holds one link, to the owner (`StarMemberWire`). Seat `.254` belongs

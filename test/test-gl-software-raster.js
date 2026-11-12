@@ -46,8 +46,14 @@ const VP = 64; // viewport is VP x VP, so a surface of the same size
 
 async function main() {
   const { exports: e, memory } = await bootRenderHarness({
-    extraWat: '(export "border_sample_test" (func $gl_sw_border_sample))',
+    extraWat: `(export "border_sample_test" (func $gl_sw_border_sample))
+      (export "key_sample_test" (func $d3dim_texture_sample_keyed))
+      (export "decal_combine_test" (func $d3dim_texture_stage_combine))`,
   });
+  assert.strictEqual(e.decal_combine_test(0x40ffffff, 0xc0000000, 13, 13) >>> 0,
+    0xa0404040, 'shared BLENDTEXTUREALPHA blends RGB and alpha');
+  assert.strictEqual(e.decal_combine_test(0x40ffffff, 0xc0000000, 13 | 0x300, 13 | 0x300) >>> 0,
+    0x60bfbfbf, 'remapped operands retain the original texture alpha as blend weight');
   const guestBase = e.get_guest_base() >>> 0, imageBase = e.get_image_base() >>> 0;
   const toWasm = guest => guestBase + (guest >>> 0) - imageBase;
 
@@ -56,7 +62,7 @@ async function main() {
   const borderPixels = toWasm(e.guest_alloc(8));
   new Uint32Array(memory.buffer, borderPixels, 2).set([0xff0000ff, 0xffffff00]);
   const borderSample = (u, v, ws, wt, linear, border = 0xff000000, ptr = borderPixels) =>
-    e.border_sample_test(2, 1, 32, 8, ptr, 0, 0, u, v, ws, wt, linear, border) >>> 0;
+    e.border_sample_test(2, 1, 32, 8, ptr, 0, 0, 0, u, v, ws, wt, linear, border) >>> 0;
   const CLAMP = 0x2900, EDGE = 0x812f, BORDER = 0x812d, REPEAT = 0x2901;
   assert.strictEqual(borderSample(0, 0.5, EDGE, EDGE, 1), 0xff0000ff);
   assert.strictEqual(borderSample(0.25, 0.5, CLAMP, CLAMP, 1), 0xff0000ff);
@@ -76,6 +82,24 @@ async function main() {
     'an outside border tap returns without dereferencing invalid image backing');
   assert.strictEqual(borderSample(0.25, 1.5, CLAMP, REPEAT, 1), 0xff0000ff,
     'the other axis retains its own wrap mode');
+
+  // DX7 explicit TRUE: index 7 is keyed, index 8 has identical RGB. Retained
+  // keyed RGB, RGB membership and post-filter matching all give wrong results.
+  const keyPixels = toWasm(e.guest_alloc(4)), keyPalette = toWasm(e.guest_alloc(1024));
+  new Uint8Array(memory.buffer, keyPixels, 4).set([7,8,7,8]);
+  const paletteView = new DataView(memory.buffer);
+  for (const index of [7,8]) paletteView.setUint32(keyPalette+index*4,0xffc08040,true);
+  const keySample = (u,v,linear=1,au=3,av=3) => e.key_sample_test(
+    2,2,8,2,keyPixels,0,keyPalette,0,u,v,au,av,linear,1,7) >>> 0;
+  assert.strictEqual(keySample(.25,.25,0),0,'key point substitutes RGBA zero');
+  assert.strictEqual(keySample(.75,.25,0),0xff4080c0,'duplicate RGB nonkey survives');
+  assert.strictEqual(keySample(.5,.5),0x7f204060,'mixed native indices filter zeroed taps');
+  assert.strictEqual(keySample(.25,.5),0,'zero-weight nonkey contributes nothing');
+  assert.strictEqual(keySample(.75,.5),0xff4080c0,'zero-weight key cannot reject');
+  assert.strictEqual(keySample(0,.5,1,1),0x7f204060,'wrap crosses keyed/nonkey seam');
+  assert.strictEqual(keySample(-.25,.5,1,2),0,'mirror resolves native keyed tap');
+  assert.strictEqual(keySample(-10,.5),0,'clamp keyed edge is all-key');
+  assert.strictEqual(keySample(10,.5),0xff4080c0,'clamp nonkey edge is all-nonkey');
 
   // --- somewhere to put three GL vertices -------------------------------
   const verts = toWasm(e.guest_alloc(VERT_BYTES * 3));
@@ -260,6 +284,24 @@ async function main() {
     `the left half samples texel 0 (blue); got 0x${pick(VP / 4, VP / 2).toString(16)}`);
   assert.strictEqual(pick(VP * 3 / 4, VP / 2), 0xFFFFFF00,
     `the right half samples texel 1 (yellow); got 0x${pick(VP * 3 / 4, VP / 2).toString(16)}`);
+  // GLTron's trail uses DECAL: transparent texture RGB must not erase the
+  // cycle colour, and texture alpha must not replace incoming fragment alpha.
+  glCall(CALL_INDEX.glBindTexture, GL_TEXTURE_2D, 8);
+  glCall(CALL_INDEX.glTexParameteri, GL_TEXTURE_2D, 0x2800, 0x2600);
+  glCall(CALL_INDEX.glTexEnvi, 0x2300, 0x2200, 0x2101);
+  const decal = (alpha, mode = 0x2101) => {
+    new Uint8Array(memory.buffer, toWasm(texels), 4).set([255, 255, 255, alpha]);
+    glCall(CALL_INDEX.glTexImage2D, GL_TEXTURE_2D, 0, 0x1908, 1, 1, 0, 0x1908, 0x1401, texels);
+    glCall(CALL_INDEX.glTexEnvi, 0x2300, 0x2200, mode);
+    quad(0, [1, 0.5, 0, 0.25]);
+    px = back();
+    return pick(VP / 2, VP / 2);
+  };
+  assert.strictEqual(decal(0), 0x40FF8000, 'transparent DECAL keeps primary RGBA');
+  assert.strictEqual(decal(255), 0x40FFFFFF, 'opaque DECAL replaces RGB and keeps primary alpha');
+  assert.strictEqual(decal(128), 0x40FFC080, 'partial DECAL blends RGB using texture alpha');
+  assert.strictEqual(decal(0, 0x1E01), 0x00FFFFFF, 'REPLACE still takes all texture channels');
+  glCall(CALL_INDEX.glBindTexture, GL_TEXTURE_2D, 7);
   // Regression: GL_CLAMP blends missing border taps; EDGE never does.
   // Constant coordinates remove interpolation/LOD ambiguity. The two-pixel
   // RGB image has blue at its left edge and the default black border.
@@ -389,6 +431,24 @@ async function main() {
   assert.strictEqual(pick(VP / 2, VP * 3 / 4) & 0xFFFFFF, 0x00FF00,
     `the floor shows below the horizon; got 0x${pick(VP / 2, VP * 3 / 4).toString(16)}`);
 
+  // A large arena polygon crosses both the left and bottom clip planes.
+  // Clamping its projected coordinates independently changes the diagonal:
+  // the true edge is x=1+100001*(y-1)/1001, far left of this sample.
+  e.gl_mtx_set_mode(PROJECTION);
+  e.gl_mtx_load_identity();
+  e.gl_mtx_ortho(-1, 1, -1, 1, -1, 1);
+  glCall(CALL_INDEX.glClear, 0x4000);
+  triangle([[-100000, -1000, 0], [1, -1000, 0], [1, 1, 0]], [0, 1, 0, 1]);
+  px = back();
+  assert.strictEqual(pick(VP / 4, VP / 2) & 0xFFFFFF, 0x00FF00,
+    'side clipping preserves a huge arena polygon instead of bending its diagonal');
+  // All six planes also reject geometry wholly outside a side plane.
+  const sideDrawn = e.gl_sw_triangles();
+  triangle([[2, -0.5, 0], [3, -0.5, 0], [2, 0.5, 0]], [1, 0, 0, 1]);
+  assert.strictEqual(e.gl_sw_triangles(), sideDrawn, 'a polygon outside the right plane draws nothing');
+  e.gl_mtx_load_identity();
+  e.gl_mtx_frustum(-1, 1, -1, 1, 1, 100);
+
   // --- linear fog --------------------------------------------------------
   // Under this frustum clip w is the eye distance. GL_LINEAR from 10 to 90
   // puts a quad at eye z=-50 exactly halfway, so green fogged toward red is
@@ -468,6 +528,27 @@ async function main() {
   px = back();
   assert.strictEqual(rgb(VP / 2, VP / 2), 0xFF0080,
     `COLOR_MATERIAL takes diffuse from the vertex colour; got 0x${rgb(VP / 2, VP / 2).toString(16)}`);
+  const backWall = () => {
+    [[-30, -30], [30, 30], [30, -30]].forEach(([x, y], i) => {
+      putVertex(i, x, y, -20, 1, 0, 0, 0.25);
+      new Float32Array(memory.buffer, verts + i * VERT_BYTES, VERT_FLOATS).set([0, 0, -1], 9);
+    });
+    e.gl_sw_emit_triangles(verts, 3);
+    px = back();
+    return rgb(VP * 3 / 4, VP * 3 / 4);
+  };
+  assert.strictEqual(backWall(), 0x000080, 'one-sided back face gets emission only');
+  glCall(CALL_INDEX.glLightModeli, 0x0B52, 1);
+  assert.strictEqual(backWall(), 0xFF0080, 'two-sided back face reverses its lighting normal');
+  glCall(CALL_INDEX.glFrontFace, 0x0900);
+  assert.strictEqual(backWall(), 0x000080, 'GL_CW makes the same polygon a front face');
+  glCall(CALL_INDEX.glFrontFace, 0x0901);
+  glCall(CALL_INDEX.glPushAttrib, 0x40);
+  glCall(CALL_INDEX.glLightModeli, 0x0B52, 0);
+  assert.strictEqual(backWall(), 0x000080, 'two-sided lighting can be disabled');
+  glCall(CALL_INDEX.glPopAttrib);
+  assert.strictEqual(backWall(), 0xFF0080, 'GL_LIGHTING_BIT restores two-sided lighting');
+  glCall(CALL_INDEX.glLightModeli, 0x0B52, 0);
   glCall(CALL_INDEX.glDisable, GL_COLOR_MATERIAL);
   glCall(CALL_INDEX.glDisable, GL_LIGHT0);
   litWall(-20, [1, 0, 0, 1], [0, 0, 1]);

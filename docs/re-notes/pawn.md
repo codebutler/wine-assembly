@@ -10,9 +10,23 @@ node test/run.js --app=pawn --no-build --headless-gl --screen=1024x768 \
   --max-batches=9000 --max-seconds=90 --quiet-api --no-close --png=/tmp/pawn.png
 ```
 
-`--headless-gl` is not optional: plain headless has no GPU window, so
+For the GPU backend, `--headless-gl` supplies the GL provider: plain headless has no GPU window, so
 `CreateDevice` fails with "D3D9 requires a GPU window" and the guest traps
 shortly afterwards at `0x0041c100`.
+The software backend instead uses `--d3d9-renderer=software` and needs no GL
+provider. Always use `--png-canvas` to inspect the composited window.
+
+## October 30 original software move
+
+Run `20261030T2238Z-pawn-software-move` loaded module
+`7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`
+(compiled source revision not independently established). All six original
+Pawn input files were hashed. The registered original executable accepted the
+scripted e2–e4 drag and replied e7–e5; the inspected composited desktop shows
+both moved pawns and the engine's yellow origin/destination outlines.
+The software D3D9 run exited 0 after 20,000 batches, 55,363 API calls and
+1.880 seconds. This is bounded CLI software gameplay evidence, not a new
+browser/WebGL run or a complete chess-game test.
 
 The window is 350,100 and the board is its 352x352 client area, so a square is
 44px and the centre of (file, rank) is screen `(350 + 44*file + 22, 123 +
@@ -26,6 +40,36 @@ Pawn outlines the engine's own last move in yellow on both squares. Those
 pixels exist only after a legal move *and* a reply, so counting them is a
 one-predicate check that the whole round trip works;
 `test/test-pawn-directinput7-gameplay.js` uses exactly that.
+
+## October 30 headless GL provider blocker
+
+Run `20261030T2247Z-pawn-gl-move` used the same pinned module and original
+inputs as the software move above, requesting `--headless-gl` for 9,000
+batches. The optional native `@node-3d/webgl` and `@node-3d/glfw` dependencies
+were unavailable. The log explicitly reports unavailable WebGL, then a guest
+NULL call at batch 1,576; execution stopped after 1,812 batches. The process
+nevertheless returned **0**, so exit status alone is not a valid gameplay
+oracle. The inspected composited image shows the initial chess position,
+without a completed move or reply. This is an environment-blocked GL attempt,
+not GL rendering acceptance. A fresh browser WebGL run remains needed; the
+successful software move does not fill that gap.
+
+## October 30 browser move and reply
+
+Run `20261030T2250Z-pawn-browser-move` bypassed the missing CLI provider with
+Chrome 151 and ANGLE SwiftShader, selecting WebGL in the ordinary browser UI.
+A trusted native mouse drag accepted e2–e4; the inspected `final.png` shows
+black's e7–e5 reply and yellow origin/destination outlines in the composited
+window. The child GPU frame sequence advanced from 2 to 25. All six original
+Pawn files remained hash-identical; the actually served Pawn payloads were
+checked too. The loaded module was the same `7e8d3194…` as above; compiled
+source revision remains unknown. Runtime inspection reported threads enabled,
+despite the driver's attempted disabled preference. The exact backend object
+and software-enable export were not captured, so this is not a hardware-GPU
+claim or full-game acceptance. The owned browser, servers and profile were
+closed/removed. A startup port collision and an accidental read-only capture
+request to SimGolf's control port were recorded on the board; the successful
+Pawn attempt used dynamically assigned ports.
 
 ## "This program requires DirectX 9 or later!"
 
@@ -133,3 +177,99 @@ Playable on both D3D9 backends: GPU (`--headless-gl`) and
 board is in the window. `test/test-pawn-directinput7-gameplay.js` runs both
 arms; `PAWN_BACKEND=software|webgl` picks one. The software arm needs 20000
 batches, because at 9000 the reply is still animating.
+
+## November 10 browser software move after native retirement repair
+
+Run `20261110-pawn-retirement-fixed-move-reply-1342` verified the actual
+software browser route in Chrome 151.0.7922.108. Source revision was
+`8e87f84b3e553d4385fbd6040767b9cee0fa0a36`, with the inherited untracked
+Wininit input retained as a patch. The guest and owning render Worker's CDP
+bytecode both hashed to
+`e587a07b7cbb9410fd52ec374c71f6c87a81e9f4bbd7404c3c64c7bb77253edd`.
+The closure differs from the accepted `20261110-pawn-final-frame-reply-1318`
+run only in published native custody repair `a815540593f9b3d5fb4982dfbe5f156f510812c8`.
+It includes D3D9 final-frame repair `35ecfae6c`; no additional runtime repair
+was needed.
+
+Ten real Chrome startup/interface controls passed before the single original.
+The actual guest's GetDC returned HRESULT 0 and HDC 2097156, and factory,
+callback, TLS and global initialization completed. The owning neutral software
+endpoint identified device 136454184, generation 1, adapter present and no
+failure. After an ordinary title-bar drag exposed the full starting board,
+the unchanged live-state guard passed and one ordinary e2–e4 drag was sent.
+Personally reviewed `retrieved/software/moved.png` shows the white move;
+`review/software/reply.png` shows the completed c7–c5 reply with yellow c7/c5
+outlines. The reply PNG SHA-256 is
+`8a82ce338345d697612806ec05fe73841d50494027d9b1728d3b6529a67de9ec`.
+No logical-board substitution, extra Present, forced repaint, guard bypass
+or original retry was used.
+
+The original supervisor waited 0, reaping all 334 owned tasks with command
+EOF and empty lineage/resume/ptrace/gate obligations. Chrome exited 0 and its
+profile was removed. All 96 remote evidence paths passed SHA/size verification
+and an independent reread before delegated normal shutdown of `bx_e7xhdvmm`;
+stop `stop_33c41c322dbaa08d` completed without force or error. The independent
+deadline watchdog also waited 0 with both output EOFs.
+
+Five observer tests, the final-frame Present regression, the real x86 COM to
+production render-Worker regression, and the locked build passed. This is
+bounded software-browser move/reply evidence. Custody used the accepted tmpfs
+route with unchanged deadlines; this run establishes neither a disk-latency
+repair, the prior original's inferred exit_group syscall, a new WebGL result,
+nor full-game acceptance. Evidence is in the named run directory; source
+recovery uses Git plus recorded patches, without source or media archives.
+
+## November 10 actual WebGL browser move and reply
+
+Run `20261110-pawn-webgl-move-reply-1351` completed the single authorized
+WebGL original in Chrome 151.0.7922.108. It reused the exact accepted
+`20261110-pawn-retirement-fixed-move-reply-1342` closure, CPU
+`e587a07b7cbb9410fd52ec374c71f6c87a81e9f4bbd7404c3c64c7bb77253edd`,
+published native repair `a815540593f9b3d5fb4982dfbe5f156f510812c8`, and
+D3D9 final-frame repair `35ecfae6c`. Only small run inputs changed. The full
+HTML/script inventory and all 376 successful HTTP responses matched pins;
+optional local 404s are listed separately in the retained graph check.
+
+Before the original, all ten accepted startup/interface/retained-owner controls
+passed in the new delegated Chrome runtime. The control supervisor waited 0,
+all 160 owned tasks were reaped, Chrome exited 0, and its profile was removed.
+The checked launcher withheld the original during a local verifier path error;
+a corrected absolute-path audit passed before the sole launch. No failed game
+original or second original occurred.
+
+I personally reviewed `review/webgl/full-board.png`, the full unobscured standard
+starting board after an ordinary title-bar drag. The unchanged live-state guard
+passed before one ordinary e2–e4 drag. `retrieved/webgl/moved.png` shows the
+white pawn on e4; `review/webgl/reply.png` shows Black's completed g7–g6 reply
+with yellow g7/g6 outlines. Reply SHA-256:
+`cca7ffcbf9696e9eed2a9bd19517364c01c0c559af551e59641f4c7091253e8a`.
+No fabricated board, forced repaint, extra Present or guard bypass was used.
+
+This is owning-backend evidence, beyond the presentation surface: read-only
+CDP inspection of the actual neutral endpoint's `execute` closure identified
+device 136454184, generation 1, its `WebGLBackend`, and its actual live
+`WebGL2RenderingContext`; the device GPU canvas equalled that context's canvas.
+Both before input and after reply, the endpoint had no failure and the context
+was not lost. Chrome reported ANGLE with Mesa Intel UHD Graphics 620. Guest
+and owning render-Worker CDP bytecode both matched CPU e587. Startup GetDC
+returned HRESULT 0 and HDC 2097156; the guest remained live without a terminal
+or observer-error latch after reply.
+
+Normal original cleanup waited 0, reaped all 334 tasks, removed the profile,
+and recorded Chrome exit 0. The independently checked journals contain 4509
+control and 9314 original contiguous records, with durable terminal/consume
+prefixes verified, command EOF, and no remaining lineage, ptrace, resume or
+gate obligations. All 98 remote evidence paths passed size/SHA checks, gzip
+CRC checks where applicable, independent reread and settled remote inventory
+comparison before delegated normal shutdown of `bx_c258h75h`. Stop operation
+`stop_c90e558c79d0596b` completed at 2026-11-10T13:56:53.149Z, forced=false,
+error=null. Independent GET confirms ARCHIVED with no expiry; initial expiry
+was 2026-11-10T14:16:54.919Z. The independent watchdog waited 0 with both EOFs.
+Evidence was rehashed after stop.
+
+Five observer tests, the final-frame Present regression, the real x86 COM to
+production render-Worker regression, and the locked build passed. No runtime
+source repair was needed. This establishes bounded actual WebGL browser
+move/reply, without full-game acceptance, a disk-latency repair, or a general
+hardware/performance claim. Source recovery uses Git plus recorded patches;
+no source/media archives, local browser, extra box, workers or public deployment.

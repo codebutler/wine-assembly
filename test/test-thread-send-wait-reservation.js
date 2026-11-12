@@ -1,0 +1,464 @@
+#!/usr/bin/env node
+'use strict';
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const { Worker } = require('worker_threads');
+const { fixture, args } = require('./test-thread-send-frame-ownership');
+const { context } = require('../tools/repro-thread-send-wait-retirement');
+const fields = ['esp', 'eax', 'eip', 'yield_reason', 'depth'];
+const state = link => Promise.all(fields.map(n => link.callExport('get_' + n)));
+const wait = (c, r, handle, timeout = 0) => c.manager.resolveThreadSendYield(c.link,
+  { ...r, waitHandle: handle, waitTimeout: timeout, waitStackBytes: 12 },
+  { waitPolls: 0, waitStartedAt: 0 }, new Set([c.link]));
+function barrier(link, method) {
+  const original = link[method].bind(link);
+  let release, entered;
+  const gate = new Promise(r => { release = r; });
+  const at = new Promise(r => { entered = r; });
+  link[method] = async (...values) => { entered(); await gate; return original(...values); };
+  return { at, release, restore: () => { link[method] = original; } };
+}
+async function lostReplies(kind, module) {
+  const c = await context(kind, module);
+  try {
+    const { link, manager } = c;
+    const event = manager.createEvent(false, true);
+    const r = await link.dispatchThreadSend(args(1, 1));
+    const reserve = link.reserveThreadSendWait.bind(link);
+    link.reserveThreadSendWait = async token => { await reserve(token); throw new Error('lost reserve ack'); };
+    assert.strictEqual(await wait(c, r, event), 'pending');
+    assert.strictEqual(Atomics.load(manager.syncView, manager._getSyncIdx(event) * 4 + 2), 1);
+    assert((await link.abortThreadSendDispatch(true, 1)).waitPending);
+    link.reserveThreadSendWait = reserve;
+    const complete = link.completeWait.bind(link);
+    link.completeWait = async (...values) => { await complete(...values); throw new Error('lost complete ack'); };
+    assert.strictEqual(await wait(c, r, event), 'pending');
+    const delivered = await state(link);
+    manager.setEvent(event); // a second independent signal must survive retry
+    link.completeWait = complete;
+    assert.strictEqual(await wait(c, r, event), 'resume');
+    assert.deepStrictEqual(await state(link), delivered, 'lost ack retry must not pop twice');
+    assert.strictEqual(manager.waitSingle(event, 0), 0, 'retry cannot consume second signal');
+    assert((await link.completeWait(0, 12, r)).duplicate);
+    await assert.rejects(link.completeWait(17, 12, r), /Conflicting/);
+    assert.deepStrictEqual(await state(link), delivered);
+    await link.resumeThreadSendDispatch(undefined, 1, r.waitEpoch);
+    assert.strictEqual(link.threadSendWaitResults.size, 0, 'acknowledged resume retires host receipt');
+  } finally { await c.close(); }
+}
+async function pendingAndFences(kind, module) {
+  const c = await context(kind, module);
+  try {
+    const { manager, host, link } = c;
+    const semaphore = manager.createSemaphore(2, 2);
+    const r = await link.dispatchThreadSend(args(1, 1));
+    const gate = barrier(link, 'completeWait');
+    const first = wait(c, r, semaphore);
+    await gate.at;
+    gate.restore();
+    const duplicateResolver = wait(c, r, semaphore);
+    const before = await state(link);
+    for (const name of ['run', 'clear_yield', 'set_esp', 'resume_message_wait',
+      'get_sleep_yielded', 'get_free_list', 'get_edit_text', 'has_pending_message']) {
+      await assert.rejects(link.callExport(name, 999), /fences export/);
+    }
+    assert((await link.completeWait(0, 12)).ownershipMismatch, 'unowned callback completion is rejected');
+    assert((await link.resumeThreadSendDispatch(undefined, 1)).waitPending);
+    if (kind === 'Worker') {
+      assert((await link.slice(1000)).threadSendPending);
+      await assert.rejects(link.readExports(['clear_yield']), /fences export/);
+      await assert.rejects(link.readExports(['get_sleep_yielded']), /fences export/);
+      await assert.rejects(link.completeThreadSend(77), /fences command/);
+    } else {
+      assert.strictEqual(manager.checkMainYield(), true);
+      const sandbox = { console, setTimeout, clearTimeout, URL, URLSearchParams };
+      vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../host.js'), 'utf8')
+        + '\n;globalThis.WineAssembly = WineAssembly;', sandbox);
+      const stats = sandbox.WineAssembly.prototype._runCooperativeSlice.call({ threadManager: manager }, 1000);
+      assert.strictEqual(stats.threadSendPending, true);
+      assert.strictEqual(stats.blocks, 0);
+    }
+    assert.deepStrictEqual(await state(link), before);
+    await link.dispatchThreadSend(args(2, 1));
+    const inner = await state(link);
+    gate.release();
+    assert.deepStrictEqual(await Promise.all([first, duplicateResolver]), ['pending', 'pending']);
+    gate.restore();
+    assert.deepStrictEqual(await state(link), inner);
+    // Run the real synchronization resolver in another actual Node Worker
+    // against the same table. Metadata mirrors the already-created handle;
+    // no sync table state or wait result is fabricated.
+    const idx = manager._getSyncIdx(semaphore);
+    const other = new Worker(`
+      const {parentPort, workerData:d} = require('worker_threads');
+      const {ThreadManager} = require(d.managerPath);
+      (async()=>{
+        const instance = await WebAssembly.instantiate(d.module);
+        const manager = new ThreadManager(d.module,d.memory,instance,null);
+        manager._syncHandleToIdx.set(d.handle,d.idx);
+        manager._syncCurrentHandles[d.idx]=d.handle;
+        parentPort.postMessage([manager.waitSingle(d.handle,0,8),manager.waitSingle(d.handle,0,8)]);
+      })().catch(e=>{throw e;});`, { eval: true, workerData: {
+      managerPath: path.resolve(__dirname, '../lib/thread-manager.js'),
+      module, memory: manager.memory, handle: semaphore, idx,
+    } });
+    try {
+      const result = await new Promise((resolve, reject) => { other.once('message', resolve); other.once('error', reject); });
+      assert.deepStrictEqual(result, [0, 0x102], 'another Worker consumes only remaining semaphore unit');
+    } finally { await other.terminate(); }
+    assert((await link.abortThreadSendDispatch(true, 2)).aborted);
+    assert.strictEqual(await wait(c, r, semaphore), 'resume', 'retained result survives another Worker consuming remaining units');
+    assert.strictEqual(await link.callExport('get_eax'), 0);
+    await link.resumeThreadSendDispatch(undefined, 1, r.waitEpoch);
+    assert.strictEqual(await link.callExport('get_sleep_yielded'), 1, 'denied getter did not clear its global');
+    assert.strictEqual(await link.callExport('get_sleep_yielded'), 0, 'ordinary destructive getter still works');
+    assert.strictEqual(host._localSendFrames.length, 0);
+  } finally { await c.close(); }
+}
+async function cancellationAndRetirement(kind, module) {
+  // An unsatisfied poll cancels its reservation without retiring the wait.
+  let c = await context(kind, module);
+  try {
+    const event = c.manager.createSemaphore(0, 1);
+    const r = await c.link.dispatchThreadSend(args(1, 1));
+    assert.strictEqual(await wait(c, r, event, 0xFFFFFFFF), 'pending');
+    assert((await c.link.abortThreadSendDispatch(true, 1)).aborted);
+    c.manager.releaseSemaphore(event, 1, 0);
+    assert.strictEqual(c.manager.waitSingle(event, 0), 0);
+  } finally { await c.close(); }
+  // Termination during the reservation acknowledgement cannot consume.
+  c = await context(kind, module);
+  const reserve = c.link.reserveThreadSendWait.bind(c.link);
+  c.link.reserveThreadSendWait = async token => { const r = await reserve(token); await c.close(); return r; };
+  const event = c.manager.createEvent(false, true);
+  const r = await c.link.dispatchThreadSend(args(1, 1));
+  await assert.rejects(wait(c, r, event), /retired/);
+  assert.strictEqual(c.manager.waitSingle(event, 0), 0);
+  // Termination after real mutex acquisition retires retained results and
+  // abandons the actual receiver's ownership; it does not restore signals.
+  c = await context(kind, module);
+  const mutex = c.manager.createMutex(false);
+  const blocked = await c.link.dispatchThreadSend(args(1, 1));
+  const gate = barrier(c.link, 'completeWait');
+  const resolving = wait(c, blocked, mutex);
+  await gate.at;
+  assert.strictEqual(c.manager.waitSingle(mutex, 0, 8), 0x102);
+  await c.close();
+  assert.strictEqual(c.link.threadSendWaitResults.size, 0);
+  assert.strictEqual(c.manager.waitSingle(mutex, 0, 8), 0x80);
+  gate.release();
+  await assert.rejects(resolving, /retired|could not post/);
+}
+async function driverAndMessages(kind, module) {
+  const c = await context(kind, module);
+  try {
+    const { host, manager, link } = c;
+    const event = manager.createEvent(false, true);
+    let injected = false, deferred = 0;
+    const resume = link.resumeThreadSendDispatch.bind(link);
+    link.resumeThreadSendDispatch = async (value, token, epoch) => {
+      const result = await resume(value, token, epoch);
+      if (result.waitPending && token === 1) {
+        deferred++;
+        assert((await link.abortThreadSendDispatch(true, 2)).aborted);
+      }
+      return result;
+    };
+    host.threadSendYieldResolver = async (target, r, polling, active) => {
+      const action = await manager.resolveThreadSendYield(target,
+        { ...r, waitHandle: event, waitTimeout: 0, waitStackBytes: 12 }, polling, active);
+      if (action === 'resume' && !injected) {
+        injected = true;
+        await link.dispatchThreadSend(args(++link.nextThreadSendFrameToken, 1));
+      }
+      return action;
+    };
+    assert.strictEqual(await host._dispatchThreadSendToLink(link, args(0, 1), 0, null, {}), 0);
+    assert.strictEqual(deferred, 1, 'driver waits for exact frame after delivery-before-resume nesting');
+    assert.strictEqual(manager.waitSingle(event, 0), 0x102);
+    const r = await link.dispatchThreadSend(args(3, 7));
+    const message = link.resumeThreadSendMessageWait.bind(link);
+    link.resumeThreadSendMessageWait = async (...values) => { await message(...values); throw new Error('lost message ack'); };
+    assert.strictEqual(await manager.resolveThreadSendYield(link, r, {}, new Set([link])), 'pending');
+    const delivered = await state(link);
+    link.resumeThreadSendMessageWait = message;
+    assert.strictEqual(await manager.resolveThreadSendYield(link, r, {}, new Set([link])), 'resume');
+    assert.deepStrictEqual(await state(link), delivered);
+    await resume(undefined, 3, r.waitEpoch);
+    // With no callback frames, the existing ordinary completion API still
+    // applies its result/stack cleanup and ordinary export mutation still runs.
+    await link.callExport('set_yield_state', 1, 1);
+    const ordinary = await state(link);
+    await link.completeWait(55, 12);
+    assert.strictEqual(await link.callExport('get_esp'), ordinary[0] + 12);
+    assert.strictEqual(await link.callExport('get_eax'), 55);
+  } finally { await c.close(); }
+}
+async function resolverFailure(kind, module) {
+  for (const consume of [false, true]) {
+    const c = await context(kind, module);
+    try {
+      const event = c.manager.createEvent(false, true);
+      const r = await c.link.dispatchThreadSend(args(1, 1));
+      const resolve = c.manager.resolveWait.bind(c.manager);
+      c.manager.resolveWait = (...values) => {
+        if (consume) resolve(...values);
+        throw new Error('injected resolver failure');
+      };
+      await assert.rejects(wait(c, r, event), /injected resolver failure/);
+      c.manager.resolveWait = resolve;
+      await assert.rejects(wait(c, r, event), /requires owner retirement/);
+      assert((await c.link.abortThreadSendDispatch(true, 1)).waitPending);
+      assert((await c.link.cancelThreadSendWait(r)).consumed);
+      assert.strictEqual(c.manager.waitSingle(event, 0), consume ? 0x102 : 0,
+        'failure cannot re-run or roll back an ambiguous consuming resolver');
+    } finally { await c.close(); }
+  }
+}
+async function lostResume(kind, module) {
+  const c = await context(kind, module);
+  try {
+    const { link, host, manager } = c;
+    await link.callExport('set_next_wait', 1);
+    const r = await link.dispatchThreadSend(args(1, 1));
+    const event = manager.createEvent(false, true);
+    assert.strictEqual(await wait(c, r, event), 'resume');
+    const owner = kind === 'Worker' ? link : host;
+    const method = kind === 'Worker' ? '_ask' : '_resumeLocalThreadSend';
+    const original = owner[method].bind(owner);
+    let calls = 0, afterFirst;
+    owner[method] = async (...values) => {
+      const result = await original(...values);
+      if (kind === 'local' || values[0].t === 'resumeThreadSendDispatch') {
+        calls++;
+        if (calls === 1) afterFirst = await state(link);
+        throw new Error('lost resume reply');
+      }
+      return result;
+    };
+    await assert.rejects(link.resumeThreadSendDispatch(undefined, 1, r.waitEpoch), /lost resume reply/);
+    assert.strictEqual(calls, 2, 'retry uses same epoch, not a new resume');
+    assert.deepStrictEqual(await state(link), afterFirst);
+    assert((await link.abortThreadSendDispatch(true, 1)).waitPending,
+      'unacknowledged resume receipt prevents aborting a newer epoch');
+    manager.setEvent(event);
+    await assert.rejects(wait(c, r, event), /ownership|owning frame/);
+    assert.strictEqual(manager.waitSingle(event, 0), 0, 'old wait cannot consume a later signal');
+    owner[method] = original;
+    const next = await link.resumeThreadSendDispatch(undefined, 1, r.waitEpoch);
+    assert.notStrictEqual(next.waitEpoch, r.waitEpoch);
+    assert.deepStrictEqual(await state(link), afterFirst);
+    await link.acknowledgeThreadSendResume(1, r.waitEpoch);
+    assert((await link.abortThreadSendDispatch(true, 1)).aborted);
+  } finally { await c.close(); }
+}
+async function continuationDiagnostics(kind, module) {
+  const c = await context(kind, module, 0);
+  const { host, link, manager } = c;
+  const original = link.callExport.bind(link);
+  const logs = [];
+  link.log = line => logs.push(line);
+  let callback, rejected;
+  try {
+    await original('set_yield_state', 17, 1);
+    const root = await state(link);
+    link.callExport = async (name, ...values) => {
+      try {
+        const value = await original(name, ...values);
+        if (name === 'set_incoming_send_pending' && values[0] === 0) {
+          // Admit real callback work after the host cleared the incoming flag,
+          // before its next unscoped clear_yield transport request.
+          callback = await link.dispatchThreadSend(args(801, 1));
+        }
+        return value;
+      } catch (error) {
+        if (name === 'clear_yield') rejected = error;
+        throw error;
+      }
+    };
+    // Retain the historical three-request transport as a diagnostic probe.
+    // Production now uses an atomic endpoint operation; this is not gameplay.
+    await (async function releaseMainMessagePointLegacyTransport() {
+      try {
+        if (((await link.callExport('get_yield_reason')) | 0) === 17) {
+          await link.callExport('set_incoming_send_pending', 0);
+          await link.callExport('clear_yield');
+        }
+      } catch (_) {} // exercise observable diagnostics even when caught
+    })();
+    link.callExport = original;
+    assert(callback && rejected, 'actual production release path must hit fence');
+    assert.match(rejected.message, /fences export clear_yield/);
+    assert(rejected.callbackReservation, 'fenced export must retain owning reservation metadata');
+    assert.deepStrictEqual(rejected.callbackReservation.frames.map(f => f.frameToken), [801]);
+    const reservation = rejected.callbackReservation.frames[0].wait;
+    assert.deepStrictEqual(reservation, { epoch: callback.waitEpoch, kind: 1, phase: 'idle' });
+    const frozenSnapshot = JSON.stringify(rejected.callbackReservation);
+    if (kind === 'Worker') {
+      assert.strictEqual(rejected.exportRequest.endpointIdentity, link.endpointIdentity);
+      assert.strictEqual(rejected.exportRequest.slot, link.slot);
+      assert.strictEqual(link.slot, 0, 'probe uses actual main Worker slot');
+      assert(Number.isSafeInteger(rejected.exportRequest.seq));
+      assert.strictEqual(rejected.exportRequest.command, 'callExport');
+      assert.strictEqual(rejected.exportRequest.exportName, 'clear_yield');
+      assert.match(rejected.exportRequest.issuerStack, /releaseMainMessagePoint/);
+      assert.strictEqual(rejected.exportRequest.pending, true);
+      assert.strictEqual(rejected.exportRequest.retiring, false);
+      assert.strictEqual(rejected.exportRequest.stopped, false);
+      assert.deepStrictEqual(rejected.commandContext, {
+        endpointIdentity: link.endpointIdentity, slot: 0, seq: rejected.exportRequest.seq,
+        command: 'callExport', exportName: 'clear_yield', retiring: false,
+      });
+      assert(logs.some(s => s.includes('releaseMainMessagePoint') && s.includes('801')),
+        'swallowed failure must retain joined issuer/reservation diagnostic');
+    }
+    console.log('OBSERVED', kind, 'historical unscoped transport', JSON.stringify({
+      reservation: rejected.callbackReservation, command: rejected.commandContext,
+      request: rejected.exportRequest,
+    }));
+    const active = await state(link);
+    assert.deepStrictEqual(active, [root[0] - 20, root[1], 42, 1, root[4] + 1],
+      'rejected continuation preserves the real callback registers and wait');
+    assert((await link.reserveThreadSendWait(callback)).reserved);
+    const nested = await link.dispatchThreadSend(args(802, 13));
+    const nestedState = await state(link);
+    await assert.rejects(original('clear_yield'), error => {
+      const d = error.callbackReservation;
+      assert(d && d.epoch > rejected.callbackReservation.epoch);
+      assert.deepStrictEqual(d.frames.map(f => f.frameToken), [801, 802]);
+      assert.strictEqual(d.frames[0].wait.phase, 'reserved');
+      assert.strictEqual(d.frames[1].scope.epoch, nested.waitEpoch);
+      assert.strictEqual(d.frames[1].scope.kind, 13);
+      assert.strictEqual(d.frames[1].scope.completed, false);
+      return /fences export/.test(error.message);
+    });
+    assert.deepStrictEqual(await state(link), nestedState, 'diagnostic rejection must not mutate nested callback');
+    assert((await link.scopedThreadSendYield({ ...nested, waitEpoch: nested.waitEpoch + 1 }, true)).ownershipMismatch);
+    assert.deepStrictEqual(await state(link), nestedState, 'stale scoped epoch stays fenced');
+    assert((await link.scopedThreadSendYield(nested, true)).completed);
+    assert((await link.resumeThreadSendDispatch(undefined, 802, nested.waitEpoch)).done);
+    await link.acknowledgeThreadSendResume(802, nested.waitEpoch);
+    assert.deepStrictEqual(await state(link), active, 'nested resume restores callback wait');
+    assert((await link.cancelThreadSendWait(callback)).cancelled);
+    const event = manager.createEvent(false, true);
+    assert.strictEqual(await wait(c, callback, event), 'resume');
+    assert.strictEqual(JSON.stringify(rejected.callbackReservation), frozenSnapshot,
+      'diagnostic is a snapshot, not a reference to mutable wait metadata');
+    await link.resumeThreadSendDispatch(undefined, callback.frameToken, callback.waitEpoch);
+    await link.acknowledgeThreadSendResume(callback.frameToken, callback.waitEpoch);
+    assert.deepStrictEqual(await state(link), root, 'owned resume restores root yield 17');
+    await host.releaseMainMessagePoint();
+    assert.strictEqual(await original('get_yield_reason'), 0, 'ordinary release still clears');
+    assert(active[3] === 1, 'fence leaves callback yield intact');
+    await original('set_yield_state', 10, 1);
+    const rootSend = await link.beginProcessSendWait();
+    const rootState = await state(link);
+    await assert.rejects(original('clear_yield'), error => {
+      assert.deepStrictEqual(error.callbackReservation.frames, []);
+      assert.deepStrictEqual(error.callbackReservation.rootSend,
+        { frameToken: 0, waitEpoch: rootSend.waitEpoch, yield: 10 });
+      return /fences export/.test(error.message);
+    });
+    assert.deepStrictEqual(await state(link), rootState, 'root send diagnostic must not consume outgoing send');
+    assert((await link.completeProcessSendWait(rootSend, 7)).completed);
+    await link.acknowledgeThreadSendResume(0, rootSend.waitEpoch);
+    await c.close();
+    await assert.rejects(original('clear_yield'), error => {
+      assert.match(error.message, /retired/);
+      assert.strictEqual(error.callbackReservation, undefined, 'retirement rejection is not a reservation violation');
+      return true;
+    });
+  } finally { link.callExport = original; await c.close(); }
+}
+async function atomicMessagePointRelease(kind, module) {
+  const c = await context(kind, module, 0);
+  const { link, host } = c;
+  const call = link.callExport.bind(link);
+  const release = link.releaseMainMessagePoint?.bind(link);
+  let callback;
+  const admit = async () => {
+    if (!callback) callback = await link.dispatchThreadSend(args(901, 12));
+  };
+  try {
+    await call('set_yield_state', 17, 1);
+    const root = await state(link);
+    // Before: admit the original's scoped ReadFile callback after the incoming
+    // flag clear, before clear_yield. After: admit before the single operation.
+    link.callExport = async (name, ...values) => {
+      const result = await call(name, ...values);
+      if (name === 'set_incoming_send_pending' && values[0] === 0) await admit();
+      return result;
+    };
+    if (release) link.releaseMainMessagePoint = async () => { await admit(); return release(); };
+    const result = await host.releaseMainMessagePoint();
+    link.callExport = call;
+    if (release) link.releaseMainMessagePoint = release;
+    assert.deepStrictEqual(result, { released: false, reason: 'callback-owned' },
+      'stale root release must explicitly defer without touching scoped I/O');
+    const active = await state(link);
+    assert.strictEqual(active[3], 12);
+    await assert.rejects(call('clear_yield'), /fences export/);
+    const nested = await link.dispatchThreadSend(args(902, 13));
+    const inner = await state(link);
+    assert.deepStrictEqual(await host.releaseMainMessagePoint(), result);
+    assert.deepStrictEqual(await state(link), inner, 'nested scope remains intact');
+    assert((await link.scopedThreadSendYield(nested, true)).completed);
+    assert((await link.resumeThreadSendDispatch(undefined, 902, nested.waitEpoch)).done);
+    await link.acknowledgeThreadSendResume(902, nested.waitEpoch);
+    assert.deepStrictEqual(await state(link), active);
+    assert((await link.scopedThreadSendYield(callback, true)).completed);
+    assert.deepStrictEqual(await host.releaseMainMessagePoint(), result,
+      'completed scope still owns context until acknowledged resume');
+    assert((await link.resumeThreadSendDispatch(undefined, 901, callback.waitEpoch)).done);
+    await link.acknowledgeThreadSendResume(901, callback.waitEpoch);
+    assert.deepStrictEqual(await state(link), root);
+    // A callback can itself stop at yield 17 without a wait reservation.
+    // The number alone must never authorize mutation of its context.
+    await link.dispatchThreadSend(args(903, 17));
+    const callbackMessagePoint = await state(link);
+    assert.deepStrictEqual(await host.releaseMainMessagePoint(), result);
+    assert.deepStrictEqual(await state(link), callbackMessagePoint);
+    assert((await link.abortThreadSendDispatch(true, 903)).aborted);
+    assert.deepStrictEqual(await state(link), root);
+    assert.deepStrictEqual(await host.releaseMainMessagePoint(), { released: true });
+    assert.strictEqual(await call('get_yield_reason'), 0);
+    assert.deepStrictEqual(await host.releaseMainMessagePoint(),
+      { released: false, reason: 'not-message-point' });
+    await call('set_yield_state', 10, 1);
+    const outgoing = await link.beginProcessSendWait();
+    const outgoingState = await state(link);
+    assert.deepStrictEqual(await host.releaseMainMessagePoint(), result);
+    assert.deepStrictEqual(await state(link), outgoingState);
+    assert((await link.completeProcessSendWait(outgoing, 5)).completed);
+    await link.acknowledgeThreadSendResume(0, outgoing.waitEpoch);
+    const endpointRelease = link.releaseMainMessagePoint.bind(link);
+    link.releaseMainMessagePoint = async () => { throw new Error('injected release transport failure'); };
+    await assert.rejects(host.releaseMainMessagePoint(), /injected release transport failure/);
+    link.releaseMainMessagePoint = endpointRelease;
+    await c.close();
+    await assert.rejects(link.releaseMainMessagePoint(), /retired/,
+      'transport/retirement errors must propagate, not become a successful defer');
+    console.log('PASS', kind, 'atomic root message-point release, scoped I/O/nesting/root-send preservation');
+  } finally {
+    link.callExport = call;
+    if (release) link.releaseMainMessagePoint = release;
+    await c.close();
+  }
+}
+const deadline = setTimeout(() => { console.error('reservation test exceeded 15 seconds'); process.exit(1); }, 15000);
+(async () => {
+  const module = await fixture();
+  for (const kind of ['Worker', 'local']) {
+    await atomicMessagePointRelease(kind, module);
+    await continuationDiagnostics(kind, module);
+    await lostReplies(kind, module);
+    await pendingAndFences(kind, module);
+    await cancellationAndRetirement(kind, module);
+    await driverAndMessages(kind, module);
+    await resolverFailure(kind, module);
+    await lostResume(kind, module);
+    console.log('PASS', kind, 'wait reservations, lost/duplicate acknowledgements, fences, shared resources, cancellation, retirement');
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => clearTimeout(deadline));

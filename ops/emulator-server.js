@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const PREFIX = '/emulator/';
-const LOCAL_DESKTOP = "    const LOCAL_DESKTOP = !new URLSearchParams(location.search).has('prod') &&\n      /^(localhost|127\\.|0\\.0\\.0\\.0|::1$|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.)/.test(location.hostname);";
+const LOCAL_DESKTOP = "    const LOCAL_DESKTOP = new URLSearchParams(location.search).has('candidates') &&\n      !new URLSearchParams(location.search).has('prod') &&\n      /^(localhost|127\\.|0\\.0\\.0\\.0|::1$|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.)/.test(location.hostname);";
 const crypto = require('node:crypto');
 const {execFile} = require('node:child_process');
 const caches = new Map(), buildCaches = new Map(), wasmDigests = new Map();
@@ -182,7 +182,7 @@ async function getBuildIdentity(root) {
 function privateIndex(bytes) {
   const source = bytes.toString('utf8');
   if (source.split(LOCAL_DESKTOP).length !== 2) throw Error('Private emulator entry anchor changed');
-  return Buffer.from(source.replace(LOCAL_DESKTOP, '    const LOCAL_DESKTOP = true; // Authenticated private emulator only.'));
+  return Buffer.from(source.replace(LOCAL_DESKTOP, '    const LOCAL_DESKTOP = true; // Authenticated private emulator only.\n    window.WINE_HTTP_RANGES = true; // This server serves uncompressed byte ranges.'));
 }
 function rangeFor(header, size) {
   if (!header) return null;

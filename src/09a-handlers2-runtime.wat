@@ -1,9 +1,6 @@
   ;; 205: exit
   (func $handle_exit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; cdecl: pop only the return address; the caller owns the status arg.
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (global.set $atexit_exit_code (local.get $arg0))
-    (call $crt_atexit_run_next)
+    (call $crt_callback_begin (i32.const 1) (i32.const 0) (i32.const 0) (local.get $arg0))
   )
 
   ;; 206: _exit
@@ -16,9 +13,9 @@
   )
 
   ;; _cexit() — cdecl, drain callbacks and return without host termination.
-  ;; Its return address remains on the stack until the returning chain finishes.
+  ;; Its return address is retained in the private callback frame during cleanup.
   (func $handle__cexit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crt_cexit_run_next)
+    (call $crt_callback_begin (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0))
   )
 
   ;; 207: __getmainargs
@@ -58,29 +55,7 @@
   ;; Iterates function pointers from [start] to [end), calling each non-NULL entry.
   ;; Uses continuation thunk (0xCACA0003) to chain calls through the emulator.
   (func $handle__initterm (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $fn i32)
-    ;; Save return address and end pointer for continuation
-    (global.set $initterm_ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
-    (global.set $initterm_end (local.get $arg1))
-    (global.set $initterm_ptr (local.get $arg0))
-    ;; cdecl: pop only the return address; the caller owns both arguments.
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    ;; Find first non-NULL entry and call it
-    (block $done (loop $scan
-      (br_if $done (i32.ge_u (global.get $initterm_ptr) (global.get $initterm_end)))
-      (local.set $fn (call $gl32 (global.get $initterm_ptr)))
-      (global.set $initterm_ptr (i32.add (global.get $initterm_ptr) (i32.const 4)))
-      (if (local.get $fn)
-        (then
-          ;; Push continuation thunk as return address, then jump to fn
-          (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-          (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $initterm_thunk))
-          (global.set $eip (local.get $fn))
-          (global.set $steps (i32.const 0))
-          (return)))
-      (br $scan)))
-    ;; All entries processed — return to original caller
-    (global.set $eip (global.get $initterm_ret))
+    (call $crt_callback_begin (i32.const 0) (local.get $arg0) (local.get $arg1) (i32.const 0))
   )
 
   ;; Translate the x87 control word into the bit layout exposed by the 32-bit
@@ -713,8 +688,9 @@
     ;; WNDCLASSEX without cbSize/hIconSm is exactly WNDCLASSA.  Copy and
     ;; publish it while the class-table writer lock is still held.
     (local.set $src (call $g2w (i32.add (local.get $arg0) (i32.const 4))))
-    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_data
-      (local.get $class_name_wa) (local.get $src)))
+    ;; Share the W registration core directly; ANSI owns encoding flag zero.
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_encoded
+      (local.get $class_name_wa) (local.get $src) (i32.const 0)))
     ;; Store first EXE-space wndproc as main (skip DLL-registered classes)
     (if (i32.and (i32.eqz (global.get $wndproc_addr))
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
@@ -741,8 +717,9 @@
     ;;   lpszMenuName(+32) lpszClassName(+36)
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))) ;; lpfnWndProc
     (local.set $class_name_wa (call $class_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 36)))))
-    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_data
-      (local.get $class_name_wa) (call $g2w (local.get $arg0))))
+    ;; Share the W registration core directly; ANSI owns encoding flag zero.
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_encoded
+      (local.get $class_name_wa) (call $g2w (local.get $arg0)) (i32.const 0)))
     ;; Store first EXE-space wndproc as main (skip DLL-registered classes)
     (if (i32.and (i32.eqz (global.get $wndproc_addr))
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
@@ -1046,6 +1023,23 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
+  ;; Result and I/O status travel separately, so every signed profile integer
+  ;; is representable. The host checks residency and reads in the same RPC.
+  (func $ini_read_result (param $kind i32) (param $app i32) (param $key i32)
+      (param $default i32) (param $buf i32) (param $size i32)
+      (param $file_wa i32) (param $wide i32) (result i32)
+    (if (i32.eq (call $host_ini_read_result
+          (local.get $kind)
+          (if (result i32) (local.get $app) (then (call $g2w (local.get $app))) (else (i32.const 0)))
+          (if (result i32) (local.get $key) (then (call $g2w (local.get $key))) (else (i32.const 0)))
+          (if (result i32) (i32.eqz (local.get $kind))
+            (then (if (result i32) (local.get $default) (then (call $g2w (local.get $default))) (else (i32.const 0))))
+            (else (local.get $default)))
+          (local.get $buf) (local.get $size) (local.get $file_wa) (local.get $wide)
+          (global.get $reg_base) (global.get $current_thread_id)) (i32.const 997))
+      (then (call $io_block (i32.const 0)) (return (i32.const 1))))
+    (i32.const 0))
+
   ;; GetPrivateProfileString{A,W}(appName, keyName, default, retBuf, nSize, fileName)
   ;; — 6 args stdcall. One INI read for both spellings; $wide picks the encoding.
   (func $ini_get_string (param $app_g i32) (param $key_g i32) (param $def_g i32)
@@ -1061,24 +1055,18 @@
       (local.get $wide)))
 
   (func $handle_GetPrivateProfileStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $ini_get_string
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
-      (i32.const 0)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
-  )
+    (if (call $ini_read_result (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+          (call $g2w (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))) (i32.const 0))
+      (then (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; GetPrivateProfileSectionA(appName, returnedString, size, fileName)
   ;; returns a double-NUL-terminated sequence of key=value strings.
   (func $handle_GetPrivateProfileSectionA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_section
-      (call $g2w (local.get $arg0))
-      (local.get $arg1)
-      (local.get $arg2)
-      (call $g2w (local.get $arg3))
-      (i32.const 0)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-  )
+    (if (call $ini_read_result (i32.const 2) (local.get $arg0) (i32.const 0) (i32.const 0) (local.get $arg1) (local.get $arg2)
+          (call $g2w (local.get $arg3)) (i32.const 0))
+      (then (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 257: __wgetmainargs
   (func $handle___wgetmainargs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

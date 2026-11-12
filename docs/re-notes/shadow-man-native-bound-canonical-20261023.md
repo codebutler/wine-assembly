@@ -1,0 +1,37 @@
+# Shadow Man native bound guard — blocked at fresh memory admission
+
+Historical source last updated, 2026-10-23. Runtime and implementation claims below describe that dated source; see current app notes and source for subsequent changes.
+
+Exact candidate `b41a7c5f4b752d1f0bdab1141a11d4fed4dc6f9a` remains **without a module from this task**. No `GUARDED_MODULE` or uninstrumented canonical qualification is established. The task-owned constructor guard is implemented and its small controls pass, but its mandatory boundary-size controls remain **unexecuted**. It is not fully qualified for reuse.
+
+## Guard and evidence
+
+Adjacent native-module-bound.cjs (historical artifact: `shadow-man-native-bound-canonical-20261023/native-module-bound.cjs`) is **2,462 bytes**, SHA256 **`47ce2e2b835be33eab6b2b24f027ecaab8ceb61c559890e51548c78199beb197`**. This preload is the explicitly authorized execution restriction; it does not modify candidate compiler/source/options/output. It replaces only `WebAssembly.Module` with a Proxy whose construct trap checks intrinsic BufferSource byte length against **8,388,608**, then delegates the original argument array and `newTarget` using `Reflect.construct`. It neither copies nor rewrites supplied bytes, view offsets, or options. Static properties and prototype are forwarded by the Proxy. Calls without `new` retain native behavior. No unreliable `--wasm-max-module-size` flag is used.
+
+Native ArrayBuffer/SharedArrayBuffer/TypedArray/DataView accessors perform brand checks without reading user-overridable `byteLength` properties. Unknown/proxied/spoofed forms fail closed before native execution. Resizable ArrayBuffers and growable SharedArrayBuffers, including views over them, are deliberately unsupported and rejected before native execution: length could otherwise change between the check and native buffer consumption. Fixed storage, including a bounded view into a larger fixed allocation, is measured by the exact view's byte length. For admitted forms, the original native constructor owns validation and error generation. The guard makes no claim to prevent hostile script code from retrieving other native entry points; this task authorizes this restriction for the audited compiler/qualifier synchronous constructor call sites only.
+
+```text
+/usr/local/bin/node --max-old-space-size=128 /home/user/wine-assembly-shadow-man-native-bound-canonical-oct23/docs/re-notes/shadow-man-native-bound-canonical-20261023/guard-controls.cjs
+```
+
+`guard-small.stdout` records six passing groups: genuine valid eight-byte module; exact native malformed-input error/prototype/static/call/subclass behavior; nonzero-offset view and options/argument identity forwarding; Node Buffer and cross-realm ArrayBuffer; unknown/proxy/spoofed rejection before the spy; and dynamic-length storage rejection before the spy. Installed V8 rejects DataView as an argument; the test proves that native error is unchanged rather than claiming DataView validation succeeds. No Memory/Instance is used. The control's `nativeCalls:2` counts its spy constructor entries only, not every native call in all groups.
+
+An initial development probe preceded the measured combined admission and exited **1** because the test incorrectly expected DataView acceptance. `development-control.json` records this deviation and the correction. Its native inputs were tiny (eight-byte valid module/offset views and one-byte malformed buffer); it is not accepted admission evidence and is not retroactively described as compliant. The later complete small-control run is separately recorded after successful measured admission. No production build failed or was retried.
+
+`guard-controls.cjs --large` contains the outstanding acceptance controls: a structurally valid custom-section module exactly 8 MiB admitted once; valid 8 MiB+1 rejected before native entry; and a guard-removal mutation detected through a sentinel constructor without ever feeding oversized bytes to native validation. **None ran.** Their buffer reservation is 34,603,008 bytes, Node heap 128 MiB, one synchronous native validation at a time, no Memory/Instance. Therefore size-bound enforcement remains only partially tested. Independent guard/result review and the missing controls are required before any subsequent authorized use or integration.
+
+The reused bounded process driver passed small output (exit 0), separate stdout overflow (observed 524,289 bytes, retained 524,288; child -15, driver 125, reaped), and finite regular-file overflow (`ftruncate(25,165,825)` rejected EFBIG, exit 1). Syntax checks passed for both CJS files and Python AST parsing. Timeout/KILL escalation was not experimentally tested. `static-abi.py` is a prospective binary/source signature and layout inspector; it was syntax checked only and never executed against a candidate module. It is not static qualification evidence.
+
+## Exact closure and resources
+
+Source review `4dab22cfefb7b7048fbb6189b81cdccdd4ab8753`, prerequisite commit `3c1bfd31b6054bdb3910b8049f20db626167ca36` and donor commit `514c644863927749a90d7d7c2aeb6e8567f2e027` are preserved. Strict SSH read-only remote lookup verified donor SHA and main `bb9c496ed13095cc832fdf607f0937fb9c14b7de`. The successful 52-Node prefix and decoder were **reused, not replayed**. The retained read-only diagnostic combined file was hash checked and compared to 127 exact fragments plus wrapper: 20,696,217 bytes, SHA256 `68cdd92ea9f1702b1bf6c6f216fe2b725d4de11fe57a154bc035e5a81e07467b`. It is never compiler input. The 1,817-byte standing pinned qualifier was hash checked to `4f8b0bbddac21abc821f7da77dc4d7a8573a81b15358a3ff75f173b40a862bdc`, never invoked.
+
+`recipe.py` preserves the one-shot refusal latch: `attempt.json` exists, so it cannot automatically retry. Its single `--run` execution returned **3** at memory admission, before large controls or staging. Proposed backend argv, **never executed**:
+
+```text
+/usr/local/bin/node --require /home/user/wine-assembly-shadow-man-native-bound-canonical-oct23/docs/re-notes/shadow-man-native-bound-canonical-20261023/native-module-bound.cjs tools/build-compile-wat.js
+```
+
+Compared with an uninstrumented command, only the explicit `--require` restriction is added. Environment removes inherited NODE_OPTIONS and WINE_REGION_SHAKE, then sets NODE_OPTIONS=`--max-old-space-size=2048`, WINE_WAT_COMPILER=`watx`, WINE_WAT_NAMES=`0`. Original mode=production, standardWat=true, runtimeBuiltins=false, strictDeclarations=true, primary tailCalls=true/compat=false, no names/shake/legacy/extraWat remain unchanged. Planned bounds remain wall/CPU 900 seconds, TERM then KILL after five seconds/reap, files 24 MiB, each stdout/stderr 512 KiB, each native module <=8 MiB before native construction. Old-space is not a total RSS bound. The explicit preload would apply only to compiler and pinned native qualifier operations; the binary-only postcompiler does not need it.
+
+No actual primary/compat module hashes, imports/exports/signatures/start/custom-layout assertions exist for this task. Required diagnostics (`set_null_diag(i32)->()`, `null_diag_field(i32)->i32`, `null_diag_token/root()->i64`), register/guest_read8/breakpoint/trace getters, host.log_eip and shared host.memory remain unqualified for a newly emitted module. The custom-layout payload is expected to be an ASCII fingerprint of exact placements, not embedded layout records; its presence alone would not prove correctness.

@@ -4,8 +4,8 @@
 //   {"id":N,"at":"<ISO>","text":"...","attachments":["/abs/path", ...]}
 // and consumers read past their own cursor file
 //   scratch/telegram/inbox.<agent>.cursor   (plain integer: last id read)
-// replying with ops/telegram-send.js. The work watchdog only nudges an idle or
-// stalled consumer with one fixed line (nudgeDecision); it never pastes text.
+// replying with ops/telegram-send.js. Opted-in Codex consumers receive native
+// queued notifications even while busy; legacy consumers use guarded TUI nudges.
 const fs=require('node:fs'),fsp=require('node:fs/promises'),path=require('node:path');
 const INBOX='scratch/telegram/inbox.jsonl';
 const cursorPath=(dir,agent)=>{
@@ -40,8 +40,21 @@ async function readUnread(file,cursor=0){return (await readInbox(file)).filter(e
 function readUnreadSync(file,cursor=0){
   try{return parseLines(fs.readFileSync(file,'utf8')).filter(e=>e.id>cursor);}catch(e){if(e.code==='ENOENT')return [];throw e;}
 }
-const nudgeLine=n=>`[Telegram inbox] ${n} unread in ${INBOX} - read past your cursor`;
-const NUDGE_RE=/^\[Telegram inbox\] \d{1,9} unread in scratch\/telegram\/inbox\.jsonl - read past your cursor$/;
+// Opt-in migration boundary: earlier history keeps its legacy read-cursor
+// semantics. New messages remain pending until a durable delivery receipt exists.
+function readPendingSync(file,consumer){
+ const dir=path.dirname(file),cursor=readCursorSync(cursorPath(dir,consumer.agent));
+ if(!Number.isSafeInteger(consumer.deliveryRequiredAfter))return readUnreadSync(file,cursor);
+ const {receiptPath}=require('./telegram-delivery');
+ return readUnreadSync(file,consumer.deliveryRequiredAfter).filter(e=>{
+  try{
+   const r=JSON.parse(fs.readFileSync(receiptPath(dir,consumer.agent,e.id),'utf8'));
+   return !(r.consumer===consumer.agent&&r.inboxId===e.id&&r.status==='delivered'&&r.chunks?.length>0&&r.messageIds?.length===r.chunks.length&&r.messageIds.every(Number.isSafeInteger));
+  }catch{return true;}
+ });
+}
+const nudgeLine=(n,delivery=false)=>delivery?`[Telegram inbox] ${n} pending in ${INBOX} - check delivery receipts`:`[Telegram inbox] ${n} unread in ${INBOX} - read past your cursor`;
+const NUDGE_RE=/^\[Telegram inbox\] \d{1,9} (?:unread in scratch\/telegram\/inbox\.jsonl - read past your cursor|pending in scratch\/telegram\/inbox\.jsonl - check delivery receipts)$/;
 // Screen states that leave a consumer unable to pick up its inbox by itself.
 const stalledScreen=screen=>/Goal stalled|usage limit|limit reached|hit your (?:usage )?limit|rate limit/i.test(String(screen||'').slice(-4000));
 // Pure decision: unread entries older than staleMs, consumer at an empty prompt
@@ -52,13 +65,22 @@ function nudgeDecision({unread=[],terminal,consumer={},previous={},now=Date.now(
   const skip=reason=>({send:false,record:{...record,reason}});
   if(config.enabled===false||config.paused)return skip('paused');
   if(!unread.length)return skip('no unread entries');
+  const queued=consumer.kind==='codex'&&consumer.deliveryMode==='codex-queue';
   const oldest=Math.min(...unread.map(e=>Date.parse(e.at)).filter(Number.isFinite));
-  if(!Number.isFinite(oldest)||now-oldest<(config.staleMs??180000))return skip('unread entries are recent');
+  if(!Number.isFinite(oldest)||now-oldest<(queued?(config.queueStaleMs??0):(config.staleMs??180000)))return skip('unread entries are recent');
   if(!terminal)return skip('consumer terminal not registered');
+  if(queued){
+    const thread=String(terminal.agentId||'').match(/^codex:([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/)?.[1];
+    if(!thread)return skip('queue requires a full Codex thread id');
+    const pendingKey=unread.map(e=>e.id).sort((a,b)=>a-b).join(',');
+    if(previous.queuedPendingKey===pendingKey&&previous.lastQueueAt&&now-previous.lastQueueAt<(config.cooldownMs??900000))return skip('queue cooldown');
+    return {send:true,transport:'codex-queue',thread,pendingKey,message:nudgeLine(unread.length,true),goalResume:false,
+      record:{...record,reason:'pending inbox for queued Codex consumer'}};
+  }
   if(terminal.promptOpen)return skip('draft or prompt open');
   if(!terminal.idle&&!terminal.stalled)return skip('consumer busy');
   if(previous.lastNudgeAt&&now-previous.lastNudgeAt<(config.cooldownMs??900000))return skip('cooldown');
-  return {send:true,message:nudgeLine(unread.length),goalResume:consumer.kind==='codex'&&!!terminal.stalled,
+  return {send:true,message:nudgeLine(unread.length,Number.isSafeInteger(consumer.deliveryRequiredAfter)),goalResume:consumer.kind==='codex'&&!!terminal.stalled,
     record:{...record,reason:terminal.stalled?'stalled consumer with unread inbox':'idle consumer with unread inbox'}};
 }
-module.exports={INBOX,cursorPath,appendInbox,readInbox,readUnread,readUnreadSync,readCursorSync,nudgeLine,NUDGE_RE,stalledScreen,nudgeDecision};
+module.exports={INBOX,cursorPath,appendInbox,readInbox,readUnread,readUnreadSync,readPendingSync,readCursorSync,nudgeLine,NUDGE_RE,stalledScreen,nudgeDecision};

@@ -20,10 +20,11 @@ const OUTPUT_WASM = OUTPUT_GUEST - IMAGE_BASE + RegionMap.BASE.GUEST_BASE;
 if (!isMainThread) {
   const sigs = require(workerData.sigsPath).sigs;
   const memory = workerData.memory;
+  let instance;
   const built = RPC.createWorkerImports(memory, sigs,
-    message => parentPort.postMessage(message), { slot: 0 });
+    message => parentPort.postMessage(message), { slot: 0, getExports: () => instance?.exports });
   const module_ = new WebAssembly.Module(workerData.wasm);
-  const instance = new WebAssembly.Instance(module_, built.imports);
+  instance = new WebAssembly.Instance(module_, built.imports);
   const e = instance.exports;
   assert.strictEqual(e.gl_wat_encoder_set_enabled, undefined,
     'production worker exposes only the native encoder');
@@ -31,6 +32,8 @@ if (!isMainThread) {
     'production worker has no runtime JS fallback selector');
   e.init_thread(1, IMAGE_BASE, 0, 0, 0, 0, 0);
   e.heap_init(0x420000);
+  if (workerData.pooled) assert.strictEqual(e.gl_wat_stream_pool_enable(1), 1);
+  const initialStats = { ...built.stats };
   const view = new DataView(memory.buffer);
   const call = (opcode, args = [], aux = 0) => {
     new Uint8Array(memory.buffer, STACK, 96).fill(0);
@@ -63,22 +66,50 @@ if (!isMainThread) {
   const finishStart = Date.now();
   const finishResult = call(11);
   const finishElapsed = Date.now() - finishStart;
+  if (workerData.pooled) {
+    // Two more barriers wrap the three-buffer writer back to its first slot.
+    for (let i = 0; i < 2; i++) { call(10, [0x0B71 + i]); call(11); }
+  }
   parentPort.postMessage({ t: 'done', queryResult, queryOutput, queryElapsed,
-    finishResult, finishElapsed, stats: built.stats });
+    finishResult, finishElapsed, stats: Object.fromEntries(Object.entries(built.stats)
+      .map(([name, count]) => [name, count - initialStats[name]])) });
 } else {
   const { compileSrcWasm } = require('./compile-src');
   const sigs = require('../lib/host-import-sigs.generated.json').sigs;
 
   async function main() {
     const wasm = compileSrcWasm();
+    for (const pooled of [false, true]) {
     const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
     const rpcView = RPC.views(memory, 0).i32;
     const batches = [];
+    const bootstraps = [];
+    let epoch;
     const broker = RPC.createMainBroker(memory, {
+      // init_thread establishes process-owned audio identity even when this
+      // focused GL harness has no audio device. Accept exactly that bootstrap.
+      beep_process_begin(lo, hi) { assert(lo || hi); epoch = [lo, hi]; bootstraps.push('process'); return 1; },
+      beep_thread_begin(tid, lo, hi, epochLo, epochHi) {
+        assert.strictEqual(tid, 2); assert(lo || hi);
+        assert.deepStrictEqual([epochLo, epochHi], epoch);
+        bootstraps.push('thread'); return 1;
+      },
       gpu_gl_batch(batch, owner) {
         assert.strictEqual(owner, 0);
-        assert.deepStrictEqual(Object.keys(batch).sort(), ['bytes', 'memoryOffset', 'softwareFront'],
+        assert.deepStrictEqual(Object.keys(batch).sort(),
+          pooled ? ['bytes', 'memoryOffset', 'pool', 'softwareFront'] : ['bytes', 'memoryOffset', 'softwareFront'],
           'native worker hands off shared stream and software presentation descriptors');
+        if (pooled) {
+          assert.strictEqual(batch.pool.version, 1);
+          assert.strictEqual(batch.pool.capacity, Stream.DEFAULT_BYTES);
+          assert.strictEqual(new Set(batch.pool.offsets).size, 3);
+          assert(batch.pool.offsets.every(base => base > 0 && base + batch.pool.capacity <= memory.buffer.byteLength));
+          assert.strictEqual(batch.memoryOffset, batch.pool.offsets[batches.length % 3]);
+          if (batches.length) assert.deepStrictEqual(batch.pool, batches[0].pool);
+          if (batches.length === 2) for (const earlier of batches) assert.deepStrictEqual(
+            Buffer.from(new Uint8Array(memory.buffer, earlier.memoryOffset, earlier.bytes)), earlier.snapshot,
+            'first two published ranges survive third-buffer encoding');
+        }
         assert.strictEqual(batch.softwareFront, 0,
           'a GL stream without a software drawable has no software front surface');
         const snapshot = Buffer.from(new Uint8Array(
@@ -107,7 +138,7 @@ if (!isMainThread) {
     }, sigs, { onError: (_name, error) => { throw error; } });
 
     const worker = new Worker(__filename, { workerData: {
-      wasm, memory,
+      wasm, memory, pooled,
       sigsPath: path.join(__dirname, '..', 'lib', 'host-import-sigs.generated.json'),
     } });
     const done = new Promise((resolve, reject) => {
@@ -122,6 +153,11 @@ if (!isMainThread) {
           // A real delay distinguishes Atomics.wait from an accidental
           // synchronous in-process callback.
           setTimeout(() => broker.serveGlBatch(message), 25);
+        } else if (message.t === 'rpc') {
+          const name = Object.keys(sigs).sort()[rpcView[RPC.SLOT.FN]];
+          assert(['beep_process_begin', 'beep_thread_begin'].includes(name), `unexpected bootstrap RPC ${name}`);
+          assert.strictEqual(batches.length, 0, 'bootstrap precedes GL work');
+          broker.serveRpc(message.slot);
         } else if (message.t === 'done') {
           clearTimeout(timer); resolve(message);
         } else {
@@ -139,25 +175,29 @@ if (!isMainThread) {
       assert(result.queryElapsed >= 15 && result.finishElapsed >= 15,
         'both barriers remained blocked until delayed main-thread replay');
       assert.deepStrictEqual(batches.map(batch => batch.opcodes),
-        [[Stream.PACKED_DRAW_OPCODE, 103], [10, 11]],
+        pooled ? [[Stream.PACKED_DRAW_OPCODE, 103], [10, 11], [10, 11], [10, 11]]
+          : [[Stream.PACKED_DRAW_OPCODE, 103], [10, 11]],
         'geometry, query, reuse, and finish preserve global order');
       assert.strictEqual(batches[0].packed.mode, 0x0004);
       assert.strictEqual(batches[0].packed.vertices.length, 3 * Stream.VERTEX_FLOATS);
       assert.deepStrictEqual(batches[0].packed.vertices.slice(0, 7),
         [1, 2, 3, 0.25, 0.5, 0.75, 1]);
-      assert.strictEqual(batches[1].memoryOffset, batches[0].memoryOffset,
+      const reused = batches[pooled ? 3 : 1];
+      assert.strictEqual(reused.memoryOffset, batches[0].memoryOffset,
         'stream range is reused only after the first response wakes the worker');
-      const reusedBytes = Math.min(batches[0].bytes, batches[1].bytes);
+      const reusedBytes = Math.min(batches[0].bytes, reused.bytes);
       assert.notStrictEqual(Buffer.compare(batches[0].snapshot.subarray(0, reusedBytes),
         Buffer.from(new Uint8Array(memory.buffer, batches[0].memoryOffset, reusedBytes))), 0,
       'second submission overwrites the released range without changing its snapshot');
       assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.STATUS), RPC.STATUS_IDLE);
-      assert.strictEqual(result.stats.sync, 2);
-      assert.strictEqual(result.stats.local, 2,
-        'only the two native flush imports cross out of WAT');
-      console.log('PASS real Worker WAT GL offset transport, Atomics barriers, ordering, and reuse');
+      assert.deepStrictEqual(bootstraps, ['process', 'thread']);
+      assert.strictEqual(result.stats.sync, pooled ? 4 : 2);
+      assert.strictEqual(result.stats.local, pooled ? 4 : 2,
+        'only native flush imports cross out of WAT after bootstrap');
+      console.log(`PASS real Worker WAT GL ${pooled ? 'triple-pool' : 'single-buffer'} offset transport, Atomics barriers, ordering, and reuse`);
     } finally {
       await worker.terminate();
+    }
     }
   }
 

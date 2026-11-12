@@ -1,3 +1,40 @@
+## 2026-10-30 — build-scoped lexical scan reuse
+
+Recover the lexical mechanism from stranded chains01/05 (candidate
+8f0813f167687f110829d03d102bd016a1b26164), adapting only the compiler and its
+current build callers. One build invocation shares immutable successful
+top-level ranges and heads across tail, compatibility and optional named
+compiles. Exact source strings key the cache, including transformed VFS text;
+failures are rescanned with the current filename. No AST, source location,
+include resolution, macro, declaration or allocator state is retained.
+Dropping the caller-owned scope releases the cache. WINE_WAT_FRONTEND_REUSE=0
+provides the uncached control. No historical staging/admission wrappers return.
+
+`test/watx-compiler-frontend-reuse.test.js` compares emitted CLI artifacts and
+failure stderr, option permutations, changed/deleted includes, aliases, macros,
+syntax/type errors, fresh AST locations and mutation isolation. A filename-only
+cache control must diverge. Scanner counts demonstrate avoided lexical work;
+fixture timing does not establish whole-build speedup.
+
+Manifest-sha256: e084e33e2a672085f3981e61aab943dc6fa09a5da4f549eb82d7077b7061fad4
+
+## 2026-10-20 — bounded source-location capacity for the 129-source closure
+
+The callback ownership census on ScreenSaver reconciliation f37815f4 failed at
+main.watx, source 129. Increase filename bits from seven to eight, retaining the
+30-bit Smi representation and explicit overflow detection: 256 source names,
+4 MiB offset range (JavaScript code units). This trades unused per-file offset
+headroom for file IDs; the candidate maximum source size is checked before build.
+Validate source length before inserting its filename so rejected input does not
+consume capacity or replace retained source text. No census gate or source is omitted.
+
+Production regression fails on the prior parser at source 129; 150 includes
+compile in streaming and full-tree modes and all 150 exports execute. Isolated
+registry checks cover last file/offset, source identity and line/column, duplicate
+name reuse, file overflow, offset overflow and rejection accounting.
+
+Manifest-sha256: 1d79a0b2e58c5ff8e9268e32deb7063d0ae6e1eb8c194e89ac6f992a356bbbf6
+
 # WATX compiler — Wine-Assembly changelog
 
 Divergence of this repository's vendored WATX compiler from its import point.
@@ -2024,3 +2061,11 @@ Manifest digest: `665ecfd1111c360f5e04ec1ef94ee29a43035c630f4e0204c0f15abf722790
   before and after.
 
 Manifest digest: `09108db0fc69963719325092ecd4c2bb05d78ff2f29c09cb3472dde611beaa5b`
+
+## 2026-11-11 — Merge of two lines of the compiler
+
+- The fork's `compiler-codegen.js` (stride/bitmap extent laws, above) and
+  upstream's later `compiler.js` meet unchanged: neither side edited the
+  other's file, so the merged tree carries both as they were.
+
+Manifest digest: `9d63d8d29ab736a07fd87fa711df3a26e043e9d85c1ad505b2763fecca6546fc`

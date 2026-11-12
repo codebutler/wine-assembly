@@ -127,3 +127,190 @@ statement is superseded. These notes were absent from main and are recovered
 here without claiming a fresh runtime test. The recorded module and dates
 remain the scope of the gameplay evidence. Audio, FPS, physical-device and
 additional action-control checks remain open.
+
+## Full-disc automated recovery, 2026-10-14
+
+The complete662108160-byte GS0999.iso was freshly downloaded from https://archive.org/download/gsscda1999/1999-09/GS0999.iso and SHA1 74d2f13d0ccb0e0a4091606b0771bb07ddf7bc44 verified locally. This supersedes the historical limitation that only metadata/ranges were verified. Recipe extraction uses7-Zip23.01 Joliet names. Copy Demos/Outcast/exe then pak into game/; their filenames do not collide. Add unchanged Oc2.exe as uppercase OC2.EXE for the existing registration. No configuration synthesis.
+
+Run `node tools/fetch-candidate-corpus.js --id=outcast-demo`, then `node test/test-outcast-demo-recovery.js`. All135 output files are pinned in test/candidate-corpus/outcast-demo-files.json and compared byte-for-byte with the independently downloaded/extracted disc tree. Previously recorded executable SHA256 matches. Restored-fixture differences: none. Private-fixture restrictions remain; full-disc download needs roughly1.5GB temporary/free space and contains unrelated disc material. No new game launch/audio/FPS/deployment qualification.
+
+## Ordinary weapon draw, aim and firing, 2026-11-01
+
+Run `scratch/runs/20261101-outcast-original-weapon-control/` closes the
+native ordinary weapon-action gap with one original execution. Historical
+movement evidence above did not cover these actions. MDK2 worker01a1967a's
+fresh final/result and explicit09:43:15 runtime/source/build RELEASE preceded
+the09:44:06 ownership gate. Actual main was
+`b7ba31ca53bc575f31521bd15592e8d68d73d907`, superseding dispatch baseline
+`c0c991a95`. No game or emulator change was made.
+
+Registered `outcast_demo` used stock direct `OC2.EXE game`, with its original
+flat local tree and no captured configuration. All135 recovery-manifest files
+matched; the full135-file tree plus three manifest files were hashed before
+and after without changes. OC2 SHA256 remains
+`d5513a94c2aff8ed54598c60fbf28bdf5845848a5eef74ff326037ec1a54f8a1`.
+The complete4392 accepted build-input pins and141 prior runtime-read pins
+matched, allowing build reuse. Actual runtime WebAssembly compile bytes were
+`dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`;
+the region mirror matched. All4444 current source/module pins and141 observed
+runtime reads also matched after execution. This identifies the runtime module;
+it does not claim fresh build/compiler-source read coverage.
+
+Reviewed `before.png` at4000 shows the original dock. Ordinary WM plus DI
+key1 down/held/up first showed an incomplete draw pose. Right/left mouse
+down/held/up while facing the NPC instead opened `GRÜSSEN`; those early
+`fire-*` captures are interaction evidence, **excluded from firing success**.
+Escape dismissed that menu; ordinary Right-arrow turned toward clear terrain.
+A fresh key1 down6400/up6500 and1000 further batches completed the draw:
+`weapon-selected.png` at7500 shows the pistol in Cutter's hand. Right mouse
+down7500, held through7800, gives the raised pistol, targeting brackets and
+ammo80 in `clear-aim.png`. Left mouse down7800, held through7900, changes
+ammo to79 in `clear-fire100.png`; it remains79 at8200 in
+`clear-fire400.png`. This ammo expenditure establishes a shot beyond pose
+animation. No projectile trajectory, impact, damage, kill or combat outcome
+is claimed. The lower1198-to1191 counter is the demo timer, not ammo.
+
+Both buttons were released at8200; `clear-released.png`8500 and
+`clear-settled.png`9000 show the lowered weapon. Key0 down9000/up9100,
+settled10100, removes the weapon/targeting brackets in `holstered.png`.
+`input-consumption.json` retains actual WM dequeue/route/DispatchMessage and
+DI FIFO consumption: head/tail6/6 at aim,7/7 after firing,10/10 after release,
+zero pending, host button masks2,3,0 respectively. Known WM queues drained.
+This does not instrument individual key-state polls; guest postqueue and SDL
+consumption remain unknown. Read-only eval inspected emulator DI state only.
+NPC animation and environmental lighting changes are not action evidence.
+
+Local Node24.18.1, cooperative backend,100000-block batches, frozen small
+control steps;640x480 capture contains the400x300 game. Orderly quit exited0
+after170.150seconds. Startup free space2247335936bytes, minimum2240036864,
+always above2GB. Actual synchronous and asynchronous observer execution passed
+whole512MB memory equality, clock identity and emitted late-event10001 retention.
+An initial offline observer output-directory mismatch failed before guest
+launch, was corrected, and is retained in `observer-validation.log`.
+Observer coverage is synchronous file reads and complete, closed, bounded
+descriptors up to24MiB; async/stream/incomplete/open/oversize descriptor reads
+are not covered. Exit-only flush is not a finalflush completeness guarantee.
+
+`node test/test-outcast-demo-recovery.js` passed135 originals; identity,
+input, cleanup and evidence checks are retained. Own runtime3468605,
+driver3468595, watcher3469442, runtime group and new temporary paths are absent.
+Native local box ID/state/expiry: N/A. Evidence remains ignored and preserved.
+No browser, physical-device, GPU, audio, FPS or broad playability qualification.
+
+## Bounded visible-combat recovery, 2026-11-01
+
+`scratch/runs/20261101-outcast-visible-combat-recovery/` records a completed
+replacement for interrupted worker01a196e2. **No hostile encounter, opponent
+impact, damage or combat outcome was demonstrated.** Accepted `039f7f5a2`
+above remains draw/aim/ammo80→79/holster evidence only. Friendly `GRÜSSEN`,
+muzzle flash and ammo expenditure do not establish an opponent hit.
+
+The interrupted first original's retained
+`scratch/runs/20261101-outcast-visible-combat/` was inspected before choosing
+the one remaining original. Its `node-exit.json` records runtime3605184 exit0;
+launcher143 has unknown cause and missing launcher final/result, not a proven
+game failure. Its gzip is incomplete; the recovered readable prefix ends
+with Up consumed at8003 after a3000-batch step request at8000, without a
+completed step reply or after capture. Dock/map/turn-land before, held,
+released and no-input PNGs, plus inland/north look captures, remain intact.
+The map overlays and westward view of inland terraces supplied a concrete
+changed route: leave the dock backward, then test the visible inland passages.
+Recovery hashes match all4444 retained source pins,138 original/manifest pins
+and141 retained runtime reads; the missing interrupted worker after receipt
+and incomplete log remain explicit coverage gaps.
+
+Ownership began on actual main `e07cca055022b14e91993bfb26422b84aae3b7c4`
+after3605184/3605183/3587453/3608213 were confirmed absent and coordinator
+released ownership. Actual prelaunch source pin/main was
+`9988719815acce10fbd0aa163a12063a1c984c71`, superseding the dispatch baseline;
+that intervening coordinator documentation commit did not change build pins.
+Stock registered `outcast_demo`, direct `OC2.EXE game`, reused the accepted
+module `dd43e4a6624d2449d7133b731d687c32530f7fcf0041a69ba71a09f78c09aaf4`
+after4392 accepted source and141 read pins matched. Fresh actual compilation
+observed that same module. OC2 SHA256 remains
+`d5513a94c2aff8ed54598c60fbf28bdf5845848a5eef74ff326037ec1a54f8a1`.
+All135 original tree files, including configurations, plus three recovery
+manifests were unchanged before/after; all4444 current source/module pins
+and141 actual runtime reads also matched. No tracked code/configuration change.
+
+The second and final original used exactly eight named arrow holds:
+Down6000 (`landward`), Up6000 (`terrace01`), Up4000 (`gap02`), Up6000
+(`edge03`), Right4000 (`bypass04`), Up6000 (`passage05`), Left4000
+(`final-bypass06`), Up6000 (`final-passage07`). Each has full640x480 PNGs
+containing the400x300 game and HUD for before/held/released/noinput; releases
+settle100 batches followed by300 with no new input. These are within-run
+stationary comparisons, not another independent no-input original. Relative
+mouse turns and Tab map captures are preserved separately. No target was
+identified, so there is no new aim/fire/impact pair and no new shot claim.
+
+Down moved from the dock onto a narrow rocky ridge beside water. Inland
+forward travel met a mountain face; subsequent forward holds remained at it.
+The Right-arrow bypass visibly displaced Cutter into a passage, but the next
+forward hold met another mountain base. Left bypass opened onto grassland;
+the final forward hold ended in water directly below a steep bank, still
+without a visible opponent. **The first unresolved navigation obstacle is a
+route around the mountain faces and water banks to an identifiable hostile.**
+Map dots supplied no verified opponent identity or reproducible hostile
+bearing. This bounded result does not establish that enemies are unavailable
+in the demo, or identify a game/emulator defect. No further original was run.
+
+`input-consumption.json` preserves48 snapshots: final54100 counters record
+33 WM dequeues/routes/dispatches, known queues empty;150/150 DI mouse FIFO
+entries drained, zero pending. This establishes control delivery, not
+individual guest keyboard polls or successful navigation for every hold;
+guest postqueue/SDL consumption remain unknown. Read-only eval inspected
+emulator input state only, never synthesized game state.
+
+Fresh actual synchronous/asynchronous observer validation passed whole512MB
+memory equality, host/native clock identity and emitted late-event10001
+retention. Read coverage is synchronous file reads and complete closed bounded
+descriptors up to24MiB; asynchronous/promise/stream, incomplete/open/oversize
+descriptor reads are excluded. Exit flush does not guarantee finalflush
+completeness. Runtime compilation identity is not compiler-source-read proof.
+`node test/test-outcast-demo-recovery.js` passed135 originals; identity and
+bounded gzip checks passed. Fresh runtime3610577 exited0 after610.188seconds,
+within the15-minute gate limit; minimum runtime free space2268737536bytes,
+above2GB. Native local box ID/state/expiry: N/A; shutdown was delegated.
+No browser/GPU/audio/FPS/full-playthrough qualification is claimed. Recovery
+final/result, cleanup and publication records are retained in the run directory.
+
+## Current browser movement and NPC conversation, 2026-11-11
+
+`scratch/runs/20261111-outcast-current-browser-player-interaction-1110/`
+reaches player control and initiates a native conversation with the friendly
+NPC beside the starting dock. This is current-browser evidence, using the
+registered `outcast_demo`, original `OC2.EXE game` and complete installed
+companions. Source Git was `dd73f62e5469d96fddaf2c34b0af856b47512215`;
+loaded module SHA256 was
+`75ecda5701c15f6fe2c269455ead4e15457b90653733df15d35674b08e8849d5`.
+Matching locked build evidence was reused; all526 staged source/module/media
+pins matched afterward. No production code or installed game file changed.
+
+The normal briefing names Shamazaar and Talan Zeb. Dock idle frames6/7/14,
+Down3000 frame16 and released idle17 establish movement onto grass: dock
+posts and the nearby NPC recede. Up2100 and Up1000 return Cutter beside the
+NPC (frames19/21). Short holds that changed only pose are not movement proof.
+Tab shows the shipped map after the canvas has browser focus.
+
+The interaction control is **hold left mouse Use, select `GRÜSSEN` with Up,
+then release Use**. The held card is visible in frame67 and brightly selected
+in69. Releasing the button switches to the over-the-shoulder conversation
+camera in71, then the NPC close-up in72 and subsequent talking gestures in
+73–75. Escape returns to the normal player HUD in77; subsequent inventory,
+menu and turning controls remain responsive. No subtitle, spoken transcript,
+NPC name, quest update or combat damage is inferred from these images.
+The original configuration has subtitles disabled. Short Use clicks closed
+an unselected greeting card; Target/punch diagnostics did not prove damage.
+
+Native trusted events were qualified with balanced releases before original
+input, including a separately bounded held-Use controller. Every native
+action followed review of its full current1440x1000 image. Observers preserved
+the viewport with `defaultViewport:null`; the game used the browser software
+renderer and guest worker, not a D3D render-worker endpoint. The backpack was
+empty and no save item was visible; no save/load round trip is claimed.
+
+The ordinary Escape menu → BEENDEN → Ja sequence and closing-screen Escape
+returned to the desktop with `ExitProcess(0)` (frame104). Browser, controller
+and owner were then closed with actual process waits and EOF evidence.
+See the run's `REPORT.md` and `RECOVERY.md` for raw hashes, diagnostic failures,
+full recovery coverage and the independently confirmed delegated box stop.

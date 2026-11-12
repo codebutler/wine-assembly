@@ -102,7 +102,7 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
-  ;; Retire or promote the process-wide main window before its table record is
+  ;; Retire or promote this thread's main window before its table record is
   ;; removed. Kept separate so lifecycle tests can exercise this decision
   ;; without invoking the host-facing recursive destruction path.
   ;;
@@ -126,7 +126,10 @@
     (if (i32.eq (local.get $hwnd) (global.get $main_hwnd))
       (then
         (if (i32.and
-              (i32.ne (call $wnd_table_get (i32.add (global.get $main_hwnd) (i32.const 1))) (i32.const 0))
+              (i32.and
+                (i32.ne (call $wnd_table_get (i32.add (global.get $main_hwnd) (i32.const 1))) (i32.const 0))
+                (i32.eq (call $wnd_get_thread (i32.add (global.get $main_hwnd) (i32.const 1)))
+                        (global.get $current_thread_id)))
               (i32.ne (call $wnd_get_parent (i32.add (global.get $main_hwnd) (i32.const 1)))
                       (global.get $main_hwnd)))
           (then (local.set $repl (i32.add (global.get $main_hwnd) (i32.const 1))))
@@ -164,11 +167,16 @@
               (i32.ne (load.field.memarg WndRecord wndproc (local.get $ptr))
                       (global.get $WNDPROC_CTRL_NATIVE))))
         (then
+          ;; main_hwnd and its focus callback context are per thread. Never
+          ;; promote a foreign window when a helper UI thread tears down its
+          ;; last top-level: its wndproc requires the owner's stack and TLS.
           (if (i32.and
+                (i32.eq (call $wnd_get_thread (local.get $h)) (global.get $current_thread_id))
                 (i32.and
-                  (i32.ne (call $wnd_get_owner (local.get $h)) (local.get $dying))
-                  (i32.gt_u (local.get $h) (local.get $best)))
-                (call $wnd_is_effectively_visible (local.get $h)))
+                  (i32.and
+                    (i32.ne (call $wnd_get_owner (local.get $h)) (local.get $dying))
+                    (i32.gt_u (local.get $h) (local.get $best)))
+                  (call $wnd_is_effectively_visible (local.get $h))))
             (then (local.set $best (local.get $h))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -1257,12 +1265,36 @@
       (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
+  ;; Per-input-thread cursor state lives in shared memory so the browser's
+  ;; host-shadow instance can read the owning Worker's visibility decision.
+  ;; +0 handle-initialized, +4 handle (NULL is valid), +8 signed display count.
+  (func $cursor_thread_addr (param $tid i32) (result i32)
+    ;; Guest thread IDs are 1..16; slot zero is the unowned/desktop fallback.
+    (if (i32.gt_u (local.get $tid) (global.get $REGFILE_THREADS))
+      (then (unreachable)))
+    (i32.add (global.get $CURSOR_THREAD_STATE) (i32.shl (local.get $tid) (i32.const 4))))
+  (func $cursor_thread_handle (param $tid i32) (result i32)
+    (local $p i32)
+    (local.set $p (call $cursor_thread_addr (local.get $tid)))
+    (if (result i32) (i32.atomic.load (local.get $p))
+      (then (i32.atomic.load offset=4 (local.get $p)))
+      (else (i32.const 0x67F00))))
+  (func $cursor_thread_count (param $tid i32) (result i32)
+    (i32.atomic.load offset=8 (call $cursor_thread_addr (local.get $tid))))
+  (func $cursor_thread_reset (param $tid i32)
+    (local $p i32)
+    (local.set $p (call $cursor_thread_addr (local.get $tid)))
+    (i32.atomic.store (local.get $p) (i32.const 0))
+    (i32.atomic.store offset=8 (local.get $p) (i32.const 0)))
+
   ;; Helper: apply a new cursor and return the previous handle. Shared by
   ;; $handle_SetCursor and DefWindowProc's WM_SETCURSOR path.
   (func $set_cursor_internal (param $hcur i32) (result i32)
-    (local $prev i32)
-    (local.set $prev (global.get $current_cursor))
-    (global.set $current_cursor (local.get $hcur))
+    (local $prev i32) (local $p i32)
+    (local.set $p (call $cursor_thread_addr (global.get $current_thread_id)))
+    (local.set $prev (call $cursor_thread_handle (global.get $current_thread_id)))
+    (i32.atomic.store offset=4 (local.get $p) (local.get $hcur))
+    (i32.atomic.store (local.get $p) (i32.const 1))
     ;; A cursor the guest built from bitmaps carries its own pixels; anything
     ;; else is an IDC_* or a PE resource the host resolves from the handle.
     (if (i32.eqz (call $cursor_push (local.get $hcur)))
@@ -1278,7 +1310,7 @@
   ;; GetCursor() — return the cursor most recently installed by SetCursor.
   ;; SDL queries this while bringing its DirectDraw window to the foreground.
   (func $handle_GetCursor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (global.get $current_cursor))
+    (i32.store offset=0 (global.get $reg_base) (call $cursor_thread_handle (global.get $current_thread_id)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
@@ -1507,6 +1539,8 @@
             (i32.ne (local.get $arg0) (global.get $dlg_ending_hwnd))))
       (then
         (global.set $dlg_ending_hwnd (local.get $arg0))
+        ;; Match DestroyWindow's exposure before the owner/geometry is gone.
+        (call $wnd_uncover_parent (local.get $arg0))
         (call $wnd_destroy_recursive (local.get $arg0))
         (global.set $dlg_ending_hwnd (i32.const 0))))
     ;; Don't set quit_flag — that kills the main message loop.
@@ -1763,20 +1797,13 @@
     (i32.const 1))
 
   (func $move_window_finish (param $arg0 i32) (param $flags i32)
-    (local $dlg_rec i32) (local $repaint i32) (local $cs i32)
+    (local $repaint i32) (local $cs i32)
     (if (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)) (then (return)))
     (local.set $repaint (i32.eqz (i32.and (local.get $flags) (i32.const 8))))
     (local.set $cs (call $host_get_window_client_size (local.get $arg0)))
-    (local.set $dlg_rec (call $dlg_record_for_hwnd (local.get $arg0)))
     (call $windowpos_queue_ncpaint (local.get $arg0) (local.get $flags))
-    (if (i32.and
-          (i32.and
-            (i32.ne (local.get $dlg_rec) (i32.const 0))
-            (i32.ne (i32.load offset=4 (local.get $dlg_rec)) (i32.const 0)))
-          (i32.lt_s (call $wnd_get_class_slot (local.get $arg0)) (i32.const 0)))
-      (then
-        (if (local.get $repaint)
-          (then (drop (call $dialog_send_erase (local.get $arg0)))))))
+    ;; UpdateWindow below dispatches the owner's paint/erase handling. Do not
+    ;; overwrite an application-painted #32770 dialog with BTNFACE first.
     ;; If the main window is moved/resized before its first ShowWindow, refresh
     ;; the pending WM_SIZE that was seeded during CreateWindowExA. EmPipe does
     ;; exactly this; using the stale 0x0 create size moves its controls offscreen.
@@ -1845,20 +1872,59 @@
 
   ;; 125: CharNextA
   ;; CharNext{A,W}(lpsz) — advance one character, stopping on the terminator.
-  ;; One character is one byte in ANSI and one UTF-16 code unit wide.
+  ;; One character is one UTF-16 code unit wide; in ANSI it is one byte, or
+  ;; two in a DBCS process code page ($char_next_a_cp).
   (func $char_next (param $p i32) (param $wide i32) (result i32)
+    (if (i32.eqz (local.get $wide))
+      (then (return (call $char_next_a_cp (local.get $p) (i32.const 0)))))
     (select
       (local.get $p)
       (i32.add (local.get $p) (select (i32.const 2) (i32.const 1) (local.get $wide)))
       (i32.eqz (call $gl_char (local.get $p) (local.get $wide)))))
 
   ;; CharPrev{A,W}(lpszStart, lpszCurrent) — step back one character, never
-  ;; before the start of the string.
+  ;; before the start of the string. ANSI goes through $char_prev_a_cp in
+  ;; the process code page.
   (func $char_prev (param $start i32) (param $cur i32) (param $wide i32) (result i32)
+    (if (i32.eqz (local.get $wide))
+      (then (return (call $char_prev_a_cp (local.get $start) (local.get $cur) (i32.const 0)))))
     (select
       (local.get $start)
       (i32.sub (local.get $cur) (select (i32.const 2) (i32.const 1) (local.get $wide)))
       (i32.le_u (local.get $cur) (local.get $start))))
+
+  ;; CharNextA / CharNextExA in code page $cp (0 = CP_ACP): a lead byte
+  ;; ($is_dbcs_lead_byte_for_cp, the one lead-byte truth) followed by a
+  ;; non-NUL byte is one two-byte character; the terminator stands still.
+  ;; In an SBCS page this is exactly $char_next's one byte.
+  (func $char_next_a_cp (param $p i32) (param $cp i32) (result i32)
+    (local $ch i32)
+    (local.set $ch (call $gl8 (local.get $p)))
+    (if (i32.eqz (local.get $ch)) (then (return (local.get $p))))
+    (if (i32.and (call $is_dbcs_lead_byte_for_cp (local.get $cp) (local.get $ch))
+          (i32.ne (call $gl8 (i32.add (local.get $p) (i32.const 1))) (i32.const 0)))
+      (then (return (i32.add (local.get $p) (i32.const 2)))))
+    (i32.add (local.get $p) (i32.const 1)))
+
+  ;; CharPrevA / CharPrevExA in code page $cp. A DBCS string cannot be
+  ;; walked backwards (a trail byte can look like a lead), so in a DBCS
+  ;; page walk forward from $start to the last character boundary before
+  ;; $cur, as Windows does; an SBCS page steps one byte back.
+  (func $char_prev_a_cp (param $start i32) (param $cur i32) (param $cp i32) (result i32)
+    (local $next i32)
+    (if (i32.eqz (call $is_dbcs_code_page (local.get $cp)))
+      (then (return (select
+        (local.get $start)
+        (i32.sub (local.get $cur) (i32.const 1))
+        (i32.le_u (local.get $cur) (local.get $start))))))
+    (block $done (loop $walk
+      (br_if $done (i32.ge_u (local.get $start) (local.get $cur)))
+      (br_if $done (i32.eqz (call $gl8 (local.get $start))))
+      (local.set $next (call $char_next_a_cp (local.get $start) (local.get $cp)))
+      (br_if $done (i32.ge_u (local.get $next) (local.get $cur)))
+      (local.set $start (local.get $next))
+      (br $walk)))
+    (local.get $start))
 
   (func $handle_CharNextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $char_next (local.get $arg0) (i32.const 0)))
@@ -1869,6 +1935,21 @@
   (func $handle_CharPrevA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store offset=0 (global.get $reg_base) (call $char_prev (local.get $arg0) (local.get $arg1) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
+  )
+
+  ;; CharNextExA(CodePage, lpCurrentChar, dwFlags): CharNextA in an explicit
+  ;; page (0 = CP_ACP); dwFlags is reserved.
+  (func $handle_CharNextExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base)
+      (call $char_next_a_cp (local.get $arg1) (i32.and (local.get $arg0) (i32.const 0xFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
+  )
+
+  ;; CharPrevExA(CodePage, lpStart, lpCurrentChar, dwFlags).
+  (func $handle_CharPrevExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base)
+      (call $char_prev_a_cp (local.get $arg1) (local.get $arg2) (i32.and (local.get $arg0) (i32.const 0xFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 127: IsDialogMessageA(hDlg, lpMsg)
@@ -2042,14 +2123,35 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
+  ;; Both public spellings share pending return and stdcall completion.
+  (func $dispatch_winhelp_finish (param $accepted i32) (param $command i32)
+    (if (i32.eq (local.get $accepted) (i32.const -2))
+      (then
+        ;; A document read retains this API frame, without installing a
+        ;; callback. Retry the same thunk after JS fills its exact VFS read.
+        (call $io_block (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $accepted) (i32.const -1))
+      (then
+        ;; The callback CPU/stack is still installed. JS services its real
+        ;; yield; its typed continuation completes this stdcall exactly once.
+        (global.set $handler_set_eip (i32.const 1))
+        (return)))
+    (call $help_present_dispatch (local.get $accepted) (local.get $command))
+    (i32.store (global.get $reg_base) (local.get $accepted))
+    (i32.store offset=16 (global.get $reg_base)
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+
 ;; 132: WinHelpA(hwnd, lpszHelp, uCommand, dwData) — unified WAT dispatcher
   (func $handle_WinHelpA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $accepted i32)
+    (local $old_public i32)
+    (local.set $old_public (global.get $help_macro_public_entry))
+    (global.set $help_macro_public_entry (i32.const 1))
     (local.set $accepted (call $help_dispatch_api_a
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (call $help_present_dispatch (local.get $accepted) (local.get $arg2))
-    (i32.store offset=0 (global.get $reg_base) (local.get $accepted))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (global.set $help_macro_public_entry (local.get $old_public))
+    (call $dispatch_winhelp_finish (local.get $accepted) (local.get $arg2))
   )
 
   ;; 133: IsChild
@@ -2594,6 +2696,42 @@
           (then (return (i32.const 0))))))
     (i32.const 1))
 
+  ;; Only the calling host may pass its translated query pointers here. No
+  ;; foreign memory address crosses this interface. Class/title encoding bits
+  ;; are independent because an atom's registration can differ from the query.
+  (func $find_window_local_match (export "find_window_local_match")
+      (param $hwnd i32) (param $class_wa i32) (param $title_wa i32)
+      (param $encoding i32) (result i32)
+    (local $key i32) (local $slot i32) (local $title i32)
+    (if (i32.eqz (call $wnd_lookup_live (local.get $hwnd)))
+      (then (return (i32.const 0))))
+    (if (local.get $class_wa)
+      (then
+        (local.set $key (local.get $class_wa))
+        (if (i32.and (i32.ge_u (local.get $key) (i32.const 0x10000))
+                     (i32.ne (i32.and (local.get $encoding) (i32.const 2)) (i32.const 0)))
+          (then (local.set $key (call $class_wide_name_key (call $w2g (local.get $key))))))
+        (local.set $slot (call $wnd_get_class_slot (local.get $hwnd)))
+        (if (i32.ge_s (local.get $slot) (i32.const 0))
+          (then
+            (if (i32.ne (call $class_find_slot (local.get $key)) (local.get $slot))
+              (then (return (i32.const 0)))))
+          (else
+            (if (i32.or (i32.eqz (call $builtin_ctrl_class_id_key (local.get $key)))
+                  (i32.ne (call $builtin_ctrl_class_id_key (local.get $key))
+                    (call $ctrl_table_get_class (local.get $hwnd))))
+              (then (return (i32.const 0))))))))
+    (if (local.get $title_wa)
+      (then
+        (local.set $title (call $title_table_get_ptr (local.get $hwnd)))
+        (if (i32.eqz (local.get $title)) (then (return (i32.const 0))))
+        (if (i32.eqz
+          (if (result i32) (i32.and (local.get $encoding) (i32.const 1))
+            (then (call $wide_ascii_eq (local.get $title_wa) (local.get $title)))
+            (else (call $guest_ansi_eq_wasm_ci (call $w2g (local.get $title_wa)) (local.get $title)))))
+          (then (return (i32.const 0))))))
+    (i32.const 1))
+
   ;; Highest sibling in USER's WAT-owned Z order. parent=0 selects top-level
   ;; records, the WAT equivalent of treating the desktop as their parent.
   (func $find_window_z_first (param $parent i32) (result i32)
@@ -2699,11 +2837,50 @@
   (func $find_window_core (param $parent i32) (param $after i32)
                           (param $class_g i32) (param $title_g i32)
                           (param $wide i32) (result i32)
-    (local $cur i32)
+    (local $cur i32) (local $class_wa i32) (local $encoding i32)
+    (local $slot i32) (local $name i32)
+    (if (i32.eq (local.get $parent) (i32.const 0x10000))
+      (then (local.set $parent (i32.const 0))))
+    ;; Host lookup reconciles renderer publication with live caller WND rows.
+    ;; Keep atom values out of g2w. Registered application atoms resolve
+    ;; through the caller's WNDCLASS name; built-in USER atoms are stable.
+    (local.set $encoding (i32.mul (local.get $wide) (i32.const 3)))
+    (local.set $class_wa (local.get $class_g))
+    (if (i32.ge_u (local.get $class_g) (i32.const 0x10000))
+      (then (local.set $class_wa (call $g2w (local.get $class_g))))
+      (else (if (i32.and (i32.ne (local.get $class_g) (i32.const 0))
+                   (i32.or (i32.lt_u (local.get $class_g) (i32.const 0x80))
+                           (i32.gt_u (local.get $class_g) (i32.const 0x85))))
+        (then
+          (local.set $class_wa (i32.const -1))
+          (local.set $slot (call $class_find_slot (local.get $class_g)))
+          (if (i32.ge_s (local.get $slot) (i32.const 0))
+            (then
+              (local.set $name (i32.load offset=44 (call $class_record_addr (local.get $slot))))
+              (if (i32.ge_u (local.get $name) (i32.const 0x10000))
+                (then
+                  (local.set $class_wa (call $g2w (local.get $name)))
+                  (local.set $encoding (i32.or (local.get $wide)
+                    (i32.shl (call $class_name_is_wide (local.get $slot)) (i32.const 1))))))))))))
+    (if (i32.ne (local.get $class_wa) (i32.const -1))
+      (then
+        (local.set $cur (call $host_find_window
+          (local.get $parent) (local.get $after)
+          (local.get $class_wa)
+          (if (result i32) (local.get $title_g)
+            (then (call $g2w (local.get $title_g))) (else (i32.const 0)))
+          (local.get $encoding)))
+        ;; A reconciled desktop is authoritative, including no match (0).
+        ;; Only the unavailable-desktop sentinel permits a local scan.
+        (if (i32.ne (local.get $cur) (i32.const -1))
+          (then (return (local.get $cur))))))
+    (if (i32.and (i32.ne (local.get $parent) (i32.const 0))
+                 (i32.eqz (call $wnd_lookup_live (local.get $parent))))
+      (then (return (i32.const 0))))
     (if (local.get $after)
       (then
         (if (i32.or
-              (i32.eq (call $wnd_table_find (local.get $after)) (i32.const -1))
+              (i32.eqz (call $wnd_lookup_live (local.get $after)))
               (i32.ne (call $wnd_get_parent (local.get $after)) (local.get $parent)))
           (then (return (i32.const 0))))
         (local.set $cur
@@ -2712,9 +2889,9 @@
         (local.set $cur (call $find_window_z_first (local.get $parent)))))
     (block $done (loop $scan
       (br_if $done (i32.eqz (local.get $cur)))
-      (if (call $find_window_matches
+      (if (i32.and (call $wnd_lookup_live (local.get $cur)) (call $find_window_matches
             (local.get $cur) (local.get $class_g) (local.get $title_g)
-            (local.get $wide))
+            (local.get $wide)))
         (then (return (local.get $cur))))
       (local.set $cur
         (call $find_window_z_next (local.get $parent) (local.get $cur)))
@@ -2760,15 +2937,10 @@
   ;; 191: GetPrivateProfileIntA(lpAppName, lpKeyName, nDefault, lpFileName)
   ;; No INI file support — return nDefault (arg2)
   (func $handle_GetPrivateProfileIntA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; GetPrivateProfileIntA(appName, keyName, nDefault, fileName) — 4 args stdcall
-    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_int
-      (call $g2w (local.get $arg0))
-      (call $g2w (local.get $arg1))
-      (local.get $arg2)
-      (call $g2w (local.get $arg3))
-      (i32.const 0)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-  )
+    (if (call $ini_read_result (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0) (i32.const 0)
+          (call $g2w (local.get $arg3)) (i32.const 0))
+      (then (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 192: WritePrivateProfileStringA(appName, keyName, string, fileName) — 4 args stdcall
   (func $handle_WritePrivateProfileStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

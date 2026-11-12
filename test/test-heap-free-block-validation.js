@@ -90,6 +90,36 @@ function putBlock(wat, at, size, next) {
   }
 
   console.log('PASS  heap_alloc refuses free blocks whose header escapes the arena');
+
+  // A valid recycled block can cross non-adjacent sparse backing pages.
+  // .kkrieger's clone copied its edges correctly, then an unrelated recycled
+  // 80 KB vertex allocation cleared a live edge through a linear WASM fill.
+  const sparse = 0x60000000, guard = 0x61000000, need = 0x14008;
+  assert(wat.test_virtual_map_commit(sparse, 4096));
+  assert(wat.test_virtual_map_commit(guard, 4096));
+  assert(wat.test_virtual_map_commit(sparse + 4096, 0x14000));
+  assert.notStrictEqual(wat.guest_to_wasm(sparse + 4096),
+    wat.guest_to_wasm(sparse) + 4096, 'fixture backing is noncontiguous');
+  assert.strictEqual(wat.guest_to_wasm(guard), wat.guest_to_wasm(sparse) + 4096,
+    'unrelated guard occupies the next physical page');
+  wat.test_set_heap_arena(sparse, sparse + 0x15000);
+  for (let offset = 0; offset < need; offset += 4)
+    wat.guest_write32(sparse + offset, 0x5a5a5a5a);
+  for (let offset = 0; offset < 4096; offset += 4)
+    wat.guest_write32(guard + offset, 0x11223344);
+  putBlock(wat, sparse, need, 0);
+  wat.set_free_list(sparse);
+  assert.strictEqual(wat.guest_alloc(81920) >>> 0, sparse + 4,
+    'the valid free block is reused');
+  for (let offset = 0; offset < 4096; offset += 4)
+    assert.strictEqual(wat.guest_read32(guard + offset) >>> 0, 0x11223344,
+      `recycling preserves unrelated backing at guard+${offset}`);
+  for (let offset = 4; offset < need; offset += 4)
+    assert.strictEqual(wat.guest_read32(sparse + offset) >>> 0, 0,
+      `the entire recycled payload is cleared at offset ${offset}`);
+  assert.strictEqual(wat.guest_read32(sparse) >>> 0, need,
+    'clearing preserves the allocation header');
+  console.log('PASS  recycled sparse heap clearing preserves unrelated backing and clears every page');
 })().catch(err => {
   console.error(err);
   process.exit(1);

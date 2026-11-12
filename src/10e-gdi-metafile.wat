@@ -9,7 +9,7 @@
   ;; desktop before any window is created; DirectDraw still owns its surfaces.
   (global $GDI_DISPLAY_STATE i32 (region.addr $GDI_DISPLAY_STATE 0))
   (global $GDI_DISPLAY_STATE_SIZE i32 (region.size $GDI_DISPLAY_STATE))
-  (func (export "set_desktop_color_depth") (param $bpp i32)
+  (func (export "set_desktop_color_depth") (param $bpp i32) (call $page_watch_write (global.get $GDI_DISPLAY_STATE) (i32.const 8))
     (i32.store (global.get $GDI_DISPLAY_STATE)
       (select (i32.const 8) (i32.const 32) (i32.eq (local.get $bpp) (i32.const 8)))))
   (func $gdi_desktop_bpp (result i32)
@@ -564,6 +564,13 @@
     (i32.const 1))
 
   (func $gdi_object_delete (param $handle i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $GDI_ALLOC_LOCK))
+    (local.set $result (call $gdi_object_delete_locked (local.get $handle)))
+    (call $lock_release (global.get $GDI_ALLOC_LOCK))
+    (local.get $result))
+
+  (func $gdi_object_delete_locked (param $handle i32) (result i32)
     (local $p i32)
     (if (call $gdi_object_type (local.get $handle))
       (then
@@ -2753,6 +2760,9 @@
     (local.set $type (load.field.memarg GdiObject type (local.get $p)))
     (if (i32.eq (local.get $type) (i32.const 3))
       (then
+        ;; The GL descriptor borrows these DIB bytes. Retire its attachments
+        ;; and fence queued readers before returning the bitmap storage.
+        (call $gl_sw_delete_drawable (i32.or (local.get $handle) (i32.const 0x80000000)))
         (local.set $bits (load.field.memarg GdiBitmap bits (local.get $p)))
         (local.set $flags (load.field.memarg GdiBitmap flags (local.get $p)))
         (local.set $surface (load.field.memarg GdiBitmap self_handle (local.get $p)))

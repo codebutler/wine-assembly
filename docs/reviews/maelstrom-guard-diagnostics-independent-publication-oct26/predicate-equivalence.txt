@@ -1,0 +1,1 @@
+{"schema":"ordered-predicate-equivalence/v1","result":[{"uop":false,"exactNormalizedAST":true},{"uop":true,"exactNormalizedAST":true}],"normalizedGuards":244,"transformByteIdentical":true,"pinAndAcceptedCodeMapsIdentical":true,"qualification":"source AST normalization only; no compiler/native/runtime proof"}

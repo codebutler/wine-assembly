@@ -2,7 +2,51 @@
 
 Source: https://archive.org/details/win3_JezzBall ; win3_JezzBall.zip SHA1 2f041c41949b39917754ef1e49667b7f8f4b578b. JEZZBALL.EXE SHA256 0450d0559fa5957d813bdd7be1f71122bf23047869b610802386320f109cb705 matches test/binaries/wep16/WEP4/JEZZBALL.EXE. Use registered wep16_jezzball so WEP4UTIL.DLL and WAV/HLP companions are available.
 
+## 2026-10-13 worker dialog frame clipping
+
+Native v86 Windows 98 comparison after the frame fix is retained in
+`scratch/runs/20261013-jezz-v86-dialog-compare/`. High Scores has approximately
+the same outer geometry (native 341x361; release crop 345x364), but the release
+still renders the two panel headings with smaller bold text and white fills;
+native uses larger text on the dialog's gray face. Caption/button font and
+classic chrome details also differ. Fixing the clipping was not pixel parity.
+
+The low-FPS investigation is in `scratch/runs/20261013-jezz-fps-measurement/`.
+Original startup calls USER.10 SetTimer with uElapse=0x32 (50 ms), return address
+0x101f08. A 15-second visible Chromium 155 worker sample on the release reports
+301 GDI presents (20.06/s), p95 interval 53.51 ms, page rAF 60.2/s, and no long
+tasks. The host was busy (load average around 12), with the performance HUD and
+CPU profiler enabled; these are observations, not a quiet-host benchmark.
+Message transport dominates much of the sampled worker/page CPU cost, but the
+sample still meets the game's requested update rate. Safari and v86's actual
+presentation cadence have not been measured.
+
+The release desktop reproduced the clipped High Scores popup in Chromium
+worker mode: its frame was 263x306 while the controls retained Win16 template
+spacing. `renderer.createDialog` recalculated frame size using `is_win16()`
+from the idle host WASM instance, whose process-local global is zero. The live
+worker had already laid out the window and controls at Win16's 8x16 base units.
+The renderer now mirrors `ctrl_get_xy/wh` for top-level dialogs as it already
+did for child dialogs, preserving native dimensions and non-client extents.
+No template, font, or game-specific size override is needed. The High Scores
+popup now renders both score panels and the complete bottom button row.
+The renderer regression explicitly supplies a Win32 host global with Win16
+shared geometry. Caption-drag, modal-input and button-queue checks also pass.
+
 ## 2026-10-13 first-level transition
+
+Release follow-up: ordinary screenshot-guided pointer gameplay reached 76%
+cleared, score 3889, and one fully readable completion popup. Its origin was
+incorrectly desktop-relative while the owner was at (309,207). Win16's dialog
+creation omitted `$dlg_place_owner_relative`, already called by Win32. Call it
+after host dialog creation and before WM_INITDIALOG so template coordinates
+respect the owner client area and existing absolute/centering/clamping rules.
+The Win16 lifecycle regression checks placement with an offset owner; it and
+the renderer dialog checks pass, as does the canonical build. One Next Level
+click on the pre-placement-fix runtime produced three balls, three lives and
+0% cleared. Post-placement-fix completion capture and native v86 completion
+comparison remain unverified; subsequent gameplay attempts ended at game over.
+Evidence and trajectory helper: `scratch/runs/20261013-jezz-next-level/`.
 
 On 6aaf65235, ordinary pointer gameplay through the real ops emulator handler
 reproduced two "Well done!" dialogs. Clicking each Next Level skipped straight

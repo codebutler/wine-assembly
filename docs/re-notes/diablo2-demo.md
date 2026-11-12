@@ -1460,3 +1460,424 @@ Together with `20261013T2055Z-diablo2-pointlist-candidate`, this supplies
 ordinary browser town/control evidence for both software and WebGL on the
 recorded versions. It is not a matched performance comparison: RNG/time differ.
 No audio, combat, mobile, logical/display FPS or long-session claim is made.
+
+
+## Original WebGL combat attempt, 2026-10-31 (goal incomplete)
+
+Run `20261031T0258Z-diablo2-combat` verified all 26 existing original asset
+hashes before and after; no reinstall or original-asset copies were needed.
+The initial frozen module `8333a35b1efa694462033e87f62ce4a3f5497941d1423540b39a590c9d31134a`
+(compiled source unknown) hit the original D2Direct3D font assertion at
+`d3dDebugFont.cpp:192`. Disassembly of its texture helper identified the
+DDSCAPS2_OPAQUE texture request rejected by CreateSurface validation.
+
+The repair accepts OPAQUE texture hints in CreateSurface and attached-surface
+validation, retaining the required texture-only and incompatible dynamic/static
+hint checks. OPAQUE permits driver optimization; ordinary storage remains valid.
+The public x86 COM regression covers DD4 and DD7 creation, reported caps and
+surface descriptions, Texture2 queries, and invalid combinations.
+`node test/test-directdraw-surface47-abi-candidate.js` and
+`flock /tmp/wine-build.lock bash tools/build.sh` both passed.
+
+The fresh original `diablo2_demo` retest used explicit WebGL, default guest
+workers and paired trusted browser mouse input. Its frozen module is
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`;
+source manifest/archive, patch and every frozen host/module response are retained.
+Read-only worker/backend inspection confirms WebGL execution with guest GPU enabled.
+Long held presses were needed for reliable game polling; reconnecting browser
+helpers must use `defaultViewport:null` to preserve pointer geometry.
+
+Reviewed captures show successful startup, Barbarian name COMBAT, and movement
+through town. The final `retest/25-final-road.png` still says Rogue Encampment:
+the hero is beside the town wall and Gheed/Warriv map labels. The real exit and
+first monster were not reached within the bounded attempt. There is no combat
+before/after proof and no complete-playability, audio or FPS claim. This stops at
+a route/navigation boundary; it does not establish a runtime failure at the exit.
+
+`recovery.txt` and `replay-server.cjs` in the run restore the exact tested host
+and module over the existing verified original assets. No save checkpoint was
+exported: recovery starts from the original launch/character route. Both owned
+browsers/controllers were closed; no remote test box was used. Next work is to
+locate the real exit in this randomized town and capture the first native fight.
+
+## Blood Moor exit and first fight, 2026-10-31
+
+Run `20261031T0319Z-diablo2-first-fight` reached the real exit and captured
+the first fight through native browser mouse/keyboard input. It replays the
+**retained repaired** host/module from the preceding run, Wasm
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`;
+it is not a current-main build retest. The source manifest/archive and OPAQUE
+repair patch are retained with the run. Explicit WebGL and default guestWorker
+were active, with a stable 1024x768 viewport and reconnects using
+`defaultViewport:null`. Backend snapshots show WebGL activity and zero errors.
+
+The 25 available original runtime files match the fixture manifest before and
+after. The separate unused `DiabloIIDemo.exe` installer archive is now absent;
+the readiness tool reports that ENOENT, so this run does not claim all 26
+manifest entries are present. No original assets, saves or guest state were
+edited. No execution trace or production repair was needed.
+
+In this randomized layout, the north palisade was a dead end. Returning across
+open town ground and walking west past the Gheed side reached the palisade
+opening: inspected `21-gheed-side.png` shows **Entering The Blood Moor** and
+the Blood Moor area label. This direction is a route observation for this seed,
+not a universal exit location. `28-rat-before.png` identifies a live Quill Rat.
+After further movement, `38-stand-ground.png` shows approaching zombies;
+`39-stand-attack.png` shows the hero swinging with a zombie alongside him.
+Native left-button attack at the adjacent zombie produces its collapsed body
+in `40-zombie-hit.png`, still present in inspected `41-after-first-fight.png`.
+These are before/after fight evidence, not merely a startup or town claim.
+Audio, performance and extended play remain unqualified.
+
+Runtime investigation ran 03:18:23–03:37:39 UTC (19m16s). The browser exited
+zero, its controller and loopback servers closed, and its profile was removed;
+cleanup was checked separately. No Boat/test box was used (ID/state/expiry
+not applicable). `recovery.txt` records fresh-launch replay and native route;
+there is no exported save checkpoint. Next gameplay work can continue past
+this first fight toward the Den of Evil.
+
+## Den search and bridge encounter, 2026-10-31 (entry unverified)
+
+Run `20261031T0342Z-diablo2-den` reuses the retained repaired module
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`
+and frozen host from the first-fight run. Compiled source remains unknown;
+this is not a current-main build retest. All 144 frozen entries and 148 served
+host/module responses match; the 25 original runtime files match before and
+after, with only the unused installer archive absent as previously recorded.
+Explicit WebGL/default guestWorker, trusted native controls and a stable
+1024x768 viewport were retained. Backend errors and page exceptions are zero.
+No cheats, guest-state patches, asset modifications or production repair occurred.
+
+No prior save checkpoint exists, so recovery starts with fresh Barbarian DEN.
+Inspected `14-blood-moor.png` verifies the Gheed-side palisade exit into Blood
+Moor. The north/east stone boundary search did not identify the cave. A dark
+ground/gold-map-marker candidate was not confirmed as an entrance. Moving
+west reached a riverbank (`25-interior-west.png`) and stone bridge, where
+`26-west-search.png` shows two armed red enemies. Native Shift plus held left
+attack produces a visible swing beside an enemy in `27-riverbank-south.png`.
+After releasing Shift, a targeted held left attack runs onward to the stone
+wall in `28-bridge-attack.png`; no hit or kill is verified. The final capture
+`29-final-bridge.png` also shows that wall, despite its planned filename.
+
+Den entry and combat inside remain unverified. The concrete limit is locating
+and navigating to the entrance within the bounded run, compounded by delayed
+controller responses; no emulator failure at the cave is established. One
+redundant mouse release reported an input-helper error, and capture24 exceeded
+the controller's 55-second timeout but eventually saved a readable screenshot.
+All 29 capture geometry records are stable. Audio/FPS remain unqualified.
+
+Runtime was 03:40:31–03:59:03 UTC (18m32s). Browser1468391 exited zero; its
+controller is absent, all three loopback ports are closed and its profile was
+removed. The controller shell session returned143 after explicit quit and the
+successful browser finalizer; the cause is unknown, and independent cleanup
+checks confirm closure. No Boat/test box was used (ID/state/expiry N/A).
+`recovery.txt`, native action logs and `replay-server.cjs` preserve the exact
+fresh-launch route; there is no exported save. Next work should use the
+river/bridge landmark to search unexplored Blood Moor interior for the cave.
+
+## Native automap search, 2026-10-31 (Den still unverified)
+
+Run `20261031T0402Z-diablo2-automap` ran 04:02:11.771–04:20:57.597 UTC
+(18m46s) with retained repaired Wasm
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`.
+Compiled source remains **unknown**; this is not a current-main build retest.
+All 144 frozen entries and 148 served frozen responses match their pins.
+The 25 original runtime files verify before and after; only the previously
+absent unused installer is missing. No assets, saves or guest state were edited.
+Explicit WebGL/default guestWorker and trusted native input were used; all 83
+captures retain the same canvas geometry in a 1024x768 viewport. Puppeteer
+launch uses `defaultViewport:null` before one explicit viewport setup; reconnects
+must also use `defaultViewport:null`. Final backend/page/action errors are zero.
+
+Fresh Barbarian MAP had a different exit arrangement: the Gheed-side and north
+palisades were enclosed. Native Tab automap inspection identified a river
+crossing; long held presses repeatedly overshot its approach. Short 500–900ms
+presses aligned with the visible stone bridge in inspected captures51/52;
+`53-on-bridge.png` shows the hero on it, and `55-field-entry.png` explicitly
+shows **Entering The Blood Moor**. These coordinates are seed observations,
+not a reusable blind route.
+
+Automap-guided field search inspected the north stone boundary58/59, interior
+shrines63–65, Flavie's map label65/68, southeast forest boundary66/67, and a
+lower sweep72–78 including the mana shrine75. Dark treeline candidates71/80/81
+produced no entrance label or transition. Final82/83 show Blood Moor and an
+armed red enemy nearby; no attack, hit or kill is verified in this run.
+Den entry and combat inside remain unverified. The concrete blocker is finding
+and navigating the entrance within the time bound, including held-input
+overshoot and repeated stone/forest barriers. No emulator failure at the cave
+was established, and no source fix or build claim is made.
+
+Explicit quit returned successfully, then the controller shell exited143 before
+its finalizer wrote cleanup or a browser-exit event. The cause and browser exit
+code are unknown. Independent checks confirm browser1493231/controller1493210
+absent, HTTP44607/control33081/CDP37477 closed, and profile removal after those
+checks. The owned messageboard watcher is closed. No Boat/test box was used
+(ID/state/expiry N/A); delegated shutdown is complete. `recovery.txt`, replay
+server, native action logs and validated captures are retained; no checkpoint
+was exported. Next work should preserve a useful native save if available and
+continue from inspected automap landmarks, using short local presses at narrow
+approaches. Audio, FPS and cave playability remain unqualified.
+
+## Native whole-file checkpoint and fresh-page restore, 2026-10-31
+
+Run `20261031T1523Z-diablo2-den-checkpoint` preserves a native save and verifies
+its consumption through a fresh-page native character load and inspected
+movement. **Den entry remains unverified, and this run does not qualify combat
+under the requested default guestWorker configuration.** The first execution
+dependency was a launch-harness mistake: its frozen-response handler omitted
+COOP/COEP headers. Captures01–69 record `crossOriginIsolated=false` and
+`guestWorker=false`, despite the enabled Threads preference. This was missed
+at launch and detected in the final evidence audit; execution should have
+stopped at that first failed configuration check. The later fresh page records
+isolation and default guest workers active. No emulator defect is established.
+
+The exact 144 frozen inputs come from the 0402Z replay manifest, including
+repaired Wasm
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`.
+Compiled source remains **unknown**; this is not a current-main retest. All
+144 pins verify before and after; all 248 frozen responses among 387 total
+served responses match their pins. The 25 existing original runtime files
+verify before and after; only the previously absent unused installer is
+missing. No production code changed; no external edits were made to original assets,
+INI, clocks, save bytes or guest memory. Explicit WebGL was selected. All 52 captures
+are 1024x768 with unchanged presentation/game-canvas geometry; the separate
+cursor overlay moves normally. Launch uses `defaultViewport:null`, one
+viewport setup, and no browser reconnect.
+
+Fresh Barbarian DENMAP followed the inspected southeast river approach with
+500–900ms local mouse holds, using automap and terrain checks at the bridge.
+Capture49 shows **Entering The Blood Moor**. Open-ground exploration reached
+three approaching zombies in64. Native targeted left attack identifies
+**Zombie** and a visible swing in65;66 shows the adjacent zombie collapsed.
+These are native combat observations on the initial page **without guest
+workers**, not acceptance for the requested configuration or combat in the
+Den. Low life prompted native Escape, **Save and Exit Game**, and the title
+menu in69.
+
+The frozen app has no `persistFiles` setting, so automatic browser persistence
+is unavailable. After native Save and Exit, read-only VFS extraction preserved
+all four complete original files in `native-checkpoint/`, with original paths,
+sizes and SHA-256 in its manifest:
+
+| Native path | Bytes | Retained whole file |
+| --- | ---: | --- |
+| `c:\save\denmap.d2s` | 813 | `0.bin` |
+| `c:\save\denmap.key` | 902 | `1.bin` |
+| `c:\save\denmap.map` | 24 | `2.bin` |
+| `c:\save\denmap.ma0` | 5,190 | `3.bin` |
+
+A new document mounted only those unchanged whole files through the normal
+app-file loader, at their original paths. Served hashes match the manifest.
+Native Single Player displays **DENMAP, Level 1 Barbarian** in77; selecting
+that existing character and native OK in79 loads town in81. Ordinary ground
+input visibly moves the hero and scrolls town in83. Saved low life is visible;
+a normal belt potion restores it in85–87. This verifies native consumption and
+playable restoration, beyond export or trusted DOM events alone. Native
+restoration returns to town, not the saved field position. The retained export
+remains immutable; no later save overwrote it. Fresh-page captures72–95 record
+isolation and default guestWorker active; final backend census is ready,
+`requestedBackend=webgl`, with zero errors and software-completed draws zero.
+
+The sole browser ran 15:24:31.308–15:32:47.055 UTC. The new Deus Ex
+`sole151455` FULLRELEASE at15:22:33 and an independent whole-Chrome/global
+crashpad PID/start gate preceded launch. A durable Python supervisor waited for
+the wrapper, controller and monitor; all three inherited FD9 for the full
+browser lock. At15:32:46, free disk reached 2,097,459,200 bytes, below the
+2.1GB early-stop threshold but above 2GB. The monitor cooperatively quit;
+Chrome/controller/wrapper/monitor exited zero without signals. A concurrent
+movement request96 arrived after quit and timed out unexecuted; it is not in
+the controller action log. The last inspected worker-backed frame95 remains
+in town approaching the palisade. No further browser was launched.
+
+Focused checks preserve the failed initial-configuration finding, whole-save
+and served hashes, balanced 112 trusted input events, stable game geometry,
+519 active full-FD9 samples and raw exits. PID/start cleanup confirms owned
+processes absent, both ports closed, profile removed, held inputs empty and
+full flock available. Boat/test-box ID, state and expiry are N/A. No build,
+public deployment, audio/FPS or complete-playability claim is made.
+`recovery.txt` describes the retained native restore route. Next execution
+must first prove isolation/default guestWorker on the initial page, then load
+this unchanged checkpoint normally and navigate from inspected landmarks to
+the Den; the initial-page combat cannot substitute for that check.
+
+## Isolated native restore and field combat, 2026-10-31 (Den incomplete)
+
+Run `20261031T1543Z-diablo2-isolated-den` repairs the isolation omission in a
+**new scratch harness** and verifies native DENMAP restoration before movement.
+The custom responder sets `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` before every response branch.
+Actual HTTP checks cover frozen HTML/Wasm, static native-save files and both
+404 paths; every recorded runtime response has both headers. The initial
+page positively records `crossOriginIsolated=true`, default `guestWorker=true`
+and explicit WebGL before any game input. All 59 captures retain that
+configuration, a 1024x768 viewport and stable game-canvas geometry. Launch uses
+`defaultViewport:null`, one viewport setup and no reconnect.
+
+This replays the exact 144 frozen inputs from the 0402Z manifest, including
+repaired Wasm
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`.
+Compiled source remains **unknown**; this is not a current-main retest.
+All inputs verify before and after, and all 148 frozen responses among 217
+served responses match their pins. The 25 existing original runtime files
+verify before and after; the previously absent unused installer remains absent.
+No production code, original assets, INI, clocks, save bytes or guest memory
+were edited. No guest tracing or input bypass was used.
+
+The four immutable whole files from the 1523Z `native-checkpoint/manifest.json`
+were mounted unchanged at their original guest paths through the normal app
+file loader. Native Single Player shows **DENMAP, Level 1 Barbarian** in05;
+selection06 and native OK07 load inspected town08 **before movement**.
+Ground movement12 verifies playable consumption. A normal belt potion restores
+the saved low life. Short local presses, with automap and terrain inspections,
+clear the palisade approach and stone bridge;42 explicitly shows
+**Entering The Blood Moor**. No prior seed or blind route was assumed.
+
+Two zombies approach in70/72. Native targeted attack identifies **Zombie**
+and shows the hero's raised weapon in74;76 shows one zombie collapsed beside
+the remaining standing enemy. Further targeted melee79 and native belt potions
+lead to two fallen bodies in82, with life restored. These are inspected native
+combat observations under isolation/default guestWorker/WebGL, in **Blood
+Moor**, not inside the Den. Final115 remains Blood Moor beside a barrel and
+stone boundary; neither a Den label nor a cave transition was observed.
+Backend snapshots report ready WebGL, zero errors and zero completed software
+draws. Audio, FPS and extended play remain unqualified.
+
+The first unmet continuation prerequisite was **free disk**, not an established
+emulator defect. At16:01:44 UTC the monitor observed 2,090,258,432 bytes free,
+below the required 2.1GB early-stop threshold but above 2GB, and cooperatively
+quit. This interrupted the search before the planned native Save and Exit,
+new whole-file export and second fresh-page restore. No newer checkpoint was
+exported or verified; the original four-file checkpoint remains unchanged.
+Request116 arrived after quit, timed out unexecuted and is absent from the
+controller command log. There was no retry or second browser.
+
+The sole browser ran15:51:57.845–16:01:44.706 UTC, following UT2003's **new**
+15:50:01 FULLRELEASE and an independent prelaunch whole-Chrome/global-crashpad
+PID/start gate with 2.414GB free. An earlier inline precheck falsely matched
+its own shell text; that result is retained, and the subsequent lifetime gate
+was clear before Chrome launched. The durable Python supervisor waited for
+wrapper/controller/monitor; all raw exits, including Chrome, are zero and no
+signals were sent. Focused checks verify 124 balanced trusted events, unchanged
+save/fixture/served hashes, geometry/backend/isolation and 651 active FD9
+samples with all three lock holders. PID/start cleanup confirms all owned
+processes and watcher absent, both ports closed, profile removed, held inputs
+empty and full flock available; FULLRELEASE was posted16:03:08.
+Boat/test-box ID/state/expiry are N/A. No build or deployment occurred.
+`recovery.txt` retains the normal restore recipe. Next work needs sufficient
+sustained disk headroom, then a fresh native restore and inspected local route
+to an actual Den entrance, reserving time to validate any newer native save.
+
+## New native checkpoint restored after field combat, 2026-10-31
+
+Run `20261031T1612Z-diablo2-den-route-reserve` verifies a newer native save
+through fresh-page character selection and inspected gameplay. **The Den
+remains unlocated.** The original four-file checkpoint remains unchanged.
+The exact 144 frozen inputs and repaired Wasm
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`
+were retained; compiled source remains unknown, with no current-main retest.
+All 296 frozen responses among 434 served responses match their pins, and the
+25 existing original runtime files verify before and after. No production,
+asset, INI, clock, save-byte or guest-memory edits occurred.
+
+After UT's new 16:17:30 FULLRELEASE, independent actual Chrome/global-crashpad,
+profile PID/start and exclusive-lock checks passed with 2,946,596,864 bytes
+free. The lifetime gate repeated these checks under FD9. Actual HTTP headers,
+`crossOriginIsolated=true`, default `guestWorker=true` and explicit WebGL
+passed before guest input. All 62 captures retain isolation/default workers
+and the 1024x768 viewport. Launch uses `defaultViewport:null`, one viewport
+setup and no reconnect. Fresh-page startup99 temporarily uses the desktop
+canvas; all other captures retain the same 640x480 game buffer and 684x536
+presentation geometry. Backend errors and completed software draws are zero.
+
+Native Single Player04 shows DENMAP in05; selection06 and OK07 load inspected
+town09 before movement. Potion10 heals the saved low life. Short 500–900ms
+presses follow inspected terrain around the palisade stakes and bridge
+parapet, then across the deck to Blood Moor52. The northeast ground reaches
+a stone wall/corner58–64; east/south interior exploration finds a live enemy
+in80. Targeted native melee shows a swing84 and the enemy collapsed in86.
+This is Blood Moor combat, not Den combat. The final route90/91 ends at dense
+trees against stone walls, with no entrance label or transition. Locating the
+entrance remains the concrete navigation dependency; no emulator defect was
+established. These revealed walls and trees should not be blindly swept again.
+
+Native Escape92 opens the menu and Save and Exit93 eventually returns to the
+title in96. The three-second capture94 still shows the menu; a read-only
+seven-second wait confirms completion without repeating the input. An early
+export95 is retained separately. Whole-file export97 after the title yields
+the same four hashes and preserves `native-checkpoint/manifest.json`:
+`denmap.d2s`798 bytes, `denmap.key`902, `denmap.map`24 and `denmap.ma0`5,420.
+All bytes are complete native files, unedited. The app has no automatic
+`persistFiles` configuration.
+
+Fresh document98 mounts those four files unchanged through the normal app
+loader. Native Single Player103 displays DENMAP, Level 1 Barbarian in105;
+selection106/107 and OK108 load town111. Ordinary ground input112 visibly
+moves the hero and scrolls town113. Saved healthy life and the empty first
+potion slot remain visible. Native character panel115 shows experience 66.
+This verifies actual consumption and playable restoration of the newer
+checkpoint, beyond export or trusted DOM events. Restoration returns to town;
+there is no saved Den position or claim that the field position is restored.
+The original checkpoint and newer export both remain immutable.
+
+The sole browser ran 16:17:54–16:30:23 UTC and closed on explicit quit116.
+Chrome/controller/wrapper/monitor raw exits are zero, without signals. Checks
+verify 114 balanced trusted events, 706 active samples with all three FD9
+holders, and minimum free disk 2,716,598,272 bytes. Cleanup confirms owned
+processes, supervisor and watcher parent/child absent, both ports closed,
+profile removed, inputs released and full flock available. FULLRELEASE was
+posted 16:31:03. Boat/test-box ID/state/expiry are N/A. No build, deployment,
+audio/FPS or full-playability qualification occurred. `recovery.txt` records
+the frozen replay, newer native restore recipe and exhausted local landmarks.
+
+## Bounded unexplored frontier attempt, 2026-10-31
+
+Run `20261031T1640Z-diablo2-unexplored-den` starts from the **verified newer
+1612Z checkpoint**, with native whole-file sizes 798/902/24/5,420 bytes.
+Both that checkpoint and the older 1523Z checkpoint remain unchanged.
+Native Single Player 05 shows DENMAP, Level 1 Barbarian in 06; selection 07 and
+OK 08 load inspected town 10 before movement 12. Blood Moor 50 shows the native
+area-entry label. No new combat or Den entrance was observed in this attempt.
+
+Prior captures 90/91 were inspected before launch: dense east trees and the
+stone corner were marked exhausted in `route-plan.json`. The new field map 50
+instead selects the visibly unrevealed south/southwest ground below the bridge.
+Short 500–900ms terrain-guided presses reveal open grass, a dirt trail, a chest
+and finally a stone hut at the left edge of 88. No boundary loop, external map
+or seed assumption was used. The final inspected 88 remains Blood Moor, with
+no Den label or cave transition.
+
+The first unmet execution dependency is the **scratch command-file handoff**.
+At 16:47:00 the controller's `JSON.parse` of `command.json` raised
+`SyntaxError: Unexpected end of JSON input` (`driver.cjs` line 25). The request
+writer uses an ordinary direct file write; the observed partial-read failure
+is consistent with polling during that write. Command 89, east of the newly
+revealed hut, never entered `commands.jsonl`; its requester timed out with
+exit 1. There was no retry or second browser, and no emulator defect was
+established. The controller's normal cleanup closed Chrome before the planned
+Save and Exit/export/fresh-page verification reserve. No newer save was
+exported or claimed verified. Continue from the unchanged verified 1612Z save;
+a future attempt needs a complete command-file handoff before further native
+navigation, then inspection around the new hut/frontier rather than the
+exhausted east corner.
+
+The exact frozen 0402Z closure remains 144 entries with Wasm
+`7f9da4e9da5183e9f7f061d2356cd34626fe74bdbaf7da0345f6693dd81152be`,
+compiled source unknown. All 148 frozen responses among 217 served responses
+match their pins; 25 original runtime files and both checkpoint bundles verify
+before and after. No production, asset, INI, clock, save-byte or memory edits
+occurred. Actual HTTP responses have COOP same-origin/COEP require-corp.
+Initial isolation/default guestWorker passed before input; all 46 captures retain
+isolation, WebGL and stable 1024x768 geometry. Backend errors and completed
+software draws are zero; 94 trusted native events are balanced.
+
+The sole browser ran 16:40:02–16:47:00 UTC after UT's 16:36:32 FULLRELEASE and
+independent whole-Chrome/global-crashpad/profile PID/start gates, repeated under
+lifetime FD9, with 2,850,725,888 bytes free before launch. Runtime target/hard/
+cleanup deadlines were 16:57:02/16:58:02/16:59:02. Minimum free disk was
+2,653,806,592 bytes; 387 active samples retain all three FD9 holders. Chrome,
+wrapper and monitor raw exits are 0; controller exit 1 records the handoff
+failure. No signals were sent. Cleanup verifies all owned runtime processes,
+supervisor, watcher and requester absent, ports closed, profile removed, held
+inputs empty and full flock available. FULLRELEASE was announced 16:48:03.
+Boat/test-box ID/state/expiry are N/A. Recovery and focused checks remain in
+the run directory. This was a docs-only change, with no full build or deployment.

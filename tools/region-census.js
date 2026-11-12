@@ -18,6 +18,8 @@
 //   node tools/region-census.js --js-copies     # refuse a hand-copied ALLOCATED base in JS
 //   node tools/region-census.js --embedded-wat  # refuse a hand-written address in a
 //                                               # WAT fragment a JS test splices into src
+//   node tools/region-census.js --build-gates   # the four post-mirror build gates,
+//                                               # in build order, fail on the first error
 //
 // THE RATCHET. --gate compares against tools/region-census.baseline.json and
 // fails when any file's count goes UP, or when a region marked `converted` in
@@ -126,6 +128,19 @@ const arg = (name, dflt) => {
 };
 const flag = (name) => process.argv.includes(`--${name}`);
 
+// Only the explicit read-only build invocation can share declaration parsing.
+// Keep it private: exported scanners and legacy CLI
+// modes retain independent inputs, including options.sources. Text is always
+// read at the scanner's original point. Reuse requires fresh declaration text
+// and a freshly validated layout; target discovery and baselines stay live.
+const BUILD_SETUP = Symbol('read-only build setup');
+function declarations(options) {
+  return options[BUILD_SETUP]?.declarations() || collectDeclarations();
+}
+function watFiles(options) {
+  return options?.[BUILD_SETUP]?.files || WAT_FILES;
+}
+
 const hex = (n) => `0x${(n >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
 
 // Files to scan. The WAT parts are the map's home; the JS files hold the copies
@@ -210,9 +225,9 @@ function stripComment(line, isWat) {
 // this records per-file counts in the baseline under `handRolledByFile` and
 // fails when any file goes UP or a file absent from the baseline has any at
 // all. New code cannot introduce the form; the existing ones are a list.
-function regionBaseGlobals() {
+function regionBaseGlobals(options) {
   const names = new Set();
-  for (const f of WAT_FILES) {
+  for (const f of watFiles(options)) {
     const txt = fs.readFileSync(path.join(ROOT, 'src', f), 'utf8');
     const re = /\(global\s+(\$[A-Za-z0-9_]+)\s+i32\s+\(region\.addr\s+(\$[A-Za-z0-9_]+)\s+0\)\)/g;
     let m;
@@ -221,12 +236,12 @@ function regionBaseGlobals() {
   return names;
 }
 
-function handRolled() {
-  const bases = regionBaseGlobals();
+function handRolled(options = {}) {
+  const bases = regionBaseGlobals(options);
   const placed = require('./region-layout.js').layout();
   const hits = [];
   const byFile = new Map();
-  for (const f of WAT_FILES.filter(x => x !== '00-regions.wat')) {
+  for (const f of watFiles(options).filter(x => x !== '00-regions.wat')) {
     const rel = `src/${f}`;
     const lines = fs.readFileSync(path.join(ROOT, 'src', f), 'utf8').split(/\r?\n/);
     lines.forEach((raw, i) => {
@@ -269,10 +284,10 @@ function handRolled() {
 // It is a ratchet like its siblings, keyed on "$REGION\tpayload", because the
 // two that exist are in a file another lane holds open at the moment. New ones
 // are refused; the recorded pair drains when they are merged.
-function dupPayloads() {
+function dupPayloads(options = {}) {
   const byKey = new Map();
   const DATA = /\(data\s+\(region\.addr\s+(\$[A-Za-z0-9_]+)\s+(0x[0-9A-Fa-f]+|\d+)\)\s+("(?:[^"\\]|\\.)*")\)/g;
-  for (const f of WAT_FILES) {
+  for (const f of watFiles(options)) {
     const rel = `src/${f}`;
     const lines = fs.readFileSync(path.join(ROOT, 'src', f), 'utf8').split(/\r?\n/);
     lines.forEach((raw, i) => {
@@ -395,7 +410,7 @@ function jsCopyTargets() {
 // prove the gate catches it, rather than proving only that today's tree is
 // clean — a gate nobody has ever seen fire is a gate nobody knows works.
 function jsCopies(options = {}) {
-  const decls = collectDeclarations().filter(d => d.base !== null && d.size !== null);
+  const decls = declarations(options).filter(d => d.base !== null && d.size !== null);
 
   // A PINNED or DERIVED region's BASE is legitimately written down —
   // src/00-regions.wat states it outright and tools/region-alloc.js holds the
@@ -615,7 +630,7 @@ function templateLiterals(text) {
 }
 
 function embeddedWat(options = {}) {
-  const decls = collectDeclarations()
+  const decls = declarations(options)
     .filter(d => d.base !== null && d.size !== null && d.kind === 'alloc')
     .sort((a, b) => a.base - b.base);
 
@@ -670,9 +685,31 @@ function embeddedWat(options = {}) {
   return { hits, fragments, checkedRegions: decls.length };
 }
 
-function main() {
-  if (flag('hand-rolled')) {
-    const r = handRolled();
+function main(mode, options = {}) {
+  if (!mode && flag('build-gates')) {
+    // This mode must never acquire record/report/legacy branch precedence.
+    // In particular multiple old flags still mean exactly what they meant.
+    if (process.argv.length !== 3) {
+      console.error('region-census: --build-gates must be used alone (read-only build gates)');
+      process.exit(1);
+    }
+    const cache = {};
+    const shared = { [BUILD_SETUP]: {
+      declarations: () => collectDeclarations(undefined, undefined, cache),
+      files: WAT_FILES,
+    } };
+    for (const gate of ['js-copies', 'embedded-wat', 'dup-payloads', 'hand-rolled']) {
+      // Each old process loaded/validated the manifest before entering its
+      // scanner, even when that scanner only consumed JS targets. Keep that
+      // boundary and one stable file list within the consuming gate.
+      if (gate !== 'js-copies') shared[BUILD_SETUP].files = require('../lib/wat-manifest').readManifest();
+      main(gate, shared);
+    }
+    return;
+  }
+  const selected = name => mode ? mode === name : flag(name);
+  if (selected('hand-rolled')) {
+    const r = handRolled(options);
     const bugs = r.hits.filter(h => h.outOfRegion);
     for (const h of bugs) {
       console.error(`region-census: ${h.file}:${h.line} addresses ${h.global} + ${h.raw}, ` +
@@ -717,8 +754,8 @@ function main() {
     return;
   }
 
-  if (flag('dup-payloads')) {
-    const r = dupPayloads();
+  if (selected('dup-payloads')) {
+    const r = dupPayloads(options);
     const baseline = readBaseline() || {};
     const recorded = new Set(baseline.dupPayloads || []);
     if (flag('record')) {
@@ -765,8 +802,8 @@ function main() {
     return;
   }
 
-  if (flag('embedded-wat')) {
-    const r = embeddedWat();
+  if (selected('embedded-wat')) {
+    const r = embeddedWat(options);
     for (const h of r.hits) {
       const name = h.region.replace(/^\$/, '');
       console.error(`region-census: ${h.file}:${h.line} addresses ${hex(h.value)} directly, ` +
@@ -786,8 +823,8 @@ function main() {
     return;
   }
 
-  if (flag('js-copies')) {
-    const r = jsCopies();
+  if (selected('js-copies')) {
+    const r = jsCopies(options);
     for (const h of r.hits) {
       console.error(`region-census: ${h.file}:${h.line} holds ${h.literal}, ` +
         `which is $${h.region.replace(/^\$/, '')}'s ALLOCATED ${h.what}`);

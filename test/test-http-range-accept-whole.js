@@ -1,60 +1,94 @@
 #!/usr/bin/env node
 'use strict';
-
-// HttpRangeProvider acceptWhole: a sized streamed file mounts with no HEAD
-// (lib/app-files.js puts the size on every streamed entry; host.js builds the
-// provider directly for anything up to one release part). A host that honours
-// Range answers 206 and only the range moves; a host that ignores it answers
-// 200 with the whole file, which acceptWhole keeps and serves every later
-// read from -- the bytes an eager load would have fetched, once. Without the
-// option a 200 stays an error, and a 200 of the wrong length is one too.
-
 const assert = require('assert');
-const { HttpRangeProvider } = require('../lib/byte-provider');
-
-const body = Uint8Array.from({ length: 1000 }, (_, i) => i & 0xff);
-function stubFetch({ honourRange, length = body.length }) {
+const { HttpRangeProvider, HttpByteRangeProvider, ChunkCache } = require('../lib/byte-provider');
+const body = Uint8Array.from({ length: 1000 }, (_, i) => i & 255);
+const response = (status, bytes) => ({ status, arrayBuffer: async () => bytes.buffer });
+(async () => {
   const calls = [];
   const fetch = async (url, init = {}) => {
-    calls.push(init.method || 'GET');
-    const range = init.headers && init.headers.Range;
-    if (honourRange && range) {
-      const [, a, b] = /bytes=(\d+)-(\d+)/.exec(range);
-      const part = body.slice(Number(a), Number(b) + 1);
-      return { status: 206, ok: true, headers: { get: () => null }, arrayBuffer: async () => part.buffer };
-    }
-    const whole = body.slice(0, length);
-    return { status: 200, ok: true, headers: { get: () => null }, arrayBuffer: async () => whole.buffer };
+    assert(!init.method || init.method === 'GET');
+    assert(!new Headers(init.headers).has('Range'), 'never send HTTP Range');
+    calls.push(url);
+    await new Promise(r => setTimeout(r, 5));
+    return response(200, body);
   };
-  return { fetch, calls };
-}
-
-(async () => {
-  // Range honoured: one ranged GET per read, never a HEAD.
-  let s = stubFetch({ honourRange: true });
-  let p = new HttpRangeProvider('u', body.length, { fetch: s.fetch, acceptWhole: true });
-  assert.deepStrictEqual([...await p.readRange(10, 4)], [10, 11, 12, 13]);
-  assert.deepStrictEqual(s.calls, ['GET'], 'no HEAD for a sized provider');
-  assert.strictEqual(p.readRangeSync(10, 4), null, 'nothing resident after a ranged read');
-
-  // Range ignored: the first read takes the whole body, later reads (async
-  // and sync) come from it with no further request.
-  s = stubFetch({ honourRange: false });
-  p = new HttpRangeProvider('u', body.length, { fetch: s.fetch, acceptWhole: true });
-  assert.deepStrictEqual([...await p.readRange(500, 3)], [500 & 0xff, 501 & 0xff, 502 & 0xff]);
-  assert.deepStrictEqual([...await p.readRange(0, 2)], [0, 1]);
-  assert.deepStrictEqual([...p.readRangeSync(998, 5)], [998 & 0xff, 999 & 0xff], 'sync reads clamp to the size');
-  assert.deepStrictEqual(s.calls, ['GET'], 'the whole file is fetched once');
-
-  // A 200 whose body is not the whole file is an error, not a mis-slice.
-  s = stubFetch({ honourRange: false, length: 999 });
-  p = new HttpRangeProvider('u', body.length, { fetch: s.fetch, acceptWhole: true });
-  await assert.rejects(p.readRange(0, 4), /answered 200 with 999 bytes/);
-
-  // Without acceptWhole a 200 stays the loud error it always was.
-  s = stubFetch({ honourRange: false });
-  p = new HttpRangeProvider('u', body.length, { fetch: s.fetch });
-  await assert.rejects(p.readRange(0, 4), /answered 200, expected 206/);
-
-  console.log('PASS HttpRangeProvider acceptWhole: no HEAD, 206 ranges, a Range-less 200 kept once, wrong length rejected');
-})().catch(error => { console.error(error && error.stack || error); process.exitCode = 1; });
+  const p = new HttpRangeProvider('file', body.length, { fetch });
+  assert.strictEqual(p.readRangeSync(0, 1), null);
+  const results = await Promise.all([p.readRange(5, 3), p.readRange(998, 8)]);
+  assert.deepStrictEqual([...results[0]], [5, 6, 7]);
+  assert.deepStrictEqual([...results[1]], [230, 231]);
+  assert.strictEqual(calls.length, 1, 'concurrent readers share one whole download');
+  const cache = new ChunkCache(p, { chunkSize: 100, maxChunks: 1, readAhead: 0, prefetch: 0 });
+  await cache.fill(0, 1); await cache.fill(800, 1); await cache.fill(0, 1);
+  assert.strictEqual(calls.length, 1, 'chunk eviction does not refetch source bytes');
+  results[0][0] = 99;
+  assert.strictEqual(p.readRangeSync(5, 1)[0], 5);
+  const opened = await HttpRangeProvider.open('unknown', { fetch });
+  assert.strictEqual(opened.size, 1000, 'discover decoded size from body, not HEAD');
+  await opened.readRange(9, 2);
+  assert.strictEqual(calls.length, 2);
+  const parts = [], routes = new Map([['f.part0', body.slice(0, 400)], ['f.part1', body.slice(400, 800)], ['f.part2', body.slice(800)]]);
+  let fail = true;
+  const split = new HttpRangeProvider('f', 1000, { partSize: 400, partUrl: (u, i) => u + '.part' + i,
+    fetch: async (url, init) => {
+      assert(!new Headers(init.headers).has('Range')); parts.push(url);
+      if (url === 'f') return response(404, new Uint8Array());
+      if (url === 'f.part1' && fail) { fail = false; return response(503, new Uint8Array()); }
+      return response(200, routes.get(url));
+    } });
+  await assert.rejects(split.readRange(399, 3), /503/);
+  assert.deepStrictEqual([...await split.readRange(399, 3)], [...body.slice(399, 402)]);
+  assert(!parts.includes('f.part2'), 'untouched parts stay unloaded');
+  await split.readRange(990, 20); await split.readRange(0, 1000);
+  assert.strictEqual(parts.filter(x => x === 'f').length, 1);
+  assert.strictEqual(parts.filter(x => x === 'f.part0').length, 1);
+  assert.strictEqual(parts.filter(x => x === 'f.part1').length, 2, 'failed part is retryable');
+  assert.strictEqual(parts.filter(x => x === 'f.part2').length, 1);
+  const short = new HttpRangeProvider('short', 1000, { fetch: async () => response(200, body.slice(0, 999)) });
+  await assert.rejects(short.readRange(0, 1), /999 decoded bytes, expected 1000/);
+  const partial = new HttpRangeProvider('partial', 1000, { fetch: async () => response(206, body) });
+  await assert.rejects(partial.readRange(0, 1), /206/);
+  let release;
+  const closing = new HttpRangeProvider('closing', 1000, { fetch: () => new Promise(r => { release = r; }) });
+  const pending = closing.readRange(0, 1); closing.close(); release(response(200, body));
+  await assert.rejects(pending, /closed/);
+  assert.strictEqual(closing._whole, null, 'late response cannot resurrect closed cache');
+  split.close(); assert.strictEqual(split._parts.size, 0);
+  const ranges = [];
+  const ranged = new HttpByteRangeProvider('archive', body.length, { fetch: async (url, init) => {
+    const range = new Headers(init.headers).get('Range'); ranges.push(range);
+    const [, a, b] = /^bytes=(\d+)-(\d+)$/.exec(range);
+    const bytes = body.slice(Number(a), Number(b) + 1);
+    return { ...response(206, bytes), headers: new Headers({ 'Content-Range': `bytes ${a}-${b}/${body.length}` }) };
+  }});
+  const rangedCache = new ChunkCache(ranged, {chunkSize:100,maxChunks:1,readAhead:0,prefetch:0});
+  await rangedCache.fill(805, 3);
+  assert.deepStrictEqual(ranges, ['bytes=800-899'], 'only requested archive section downloaded');
+  assert.strictEqual(ranged._whole, null, 'partial reads never retain whole archives');
+  await rangedCache.fill(5, 2);
+  assert.deepStrictEqual(ranges, ['bytes=800-899','bytes=0-99']);
+  const fallbackCalls = [];
+  const fallback = new HttpByteRangeProvider('ignores-range',body.length,{fetch:async (u,i)=>{
+    fallbackCalls.push(i); await new Promise(r=>setTimeout(r,5)); return response(200,body);
+  }});
+  const fallbackReads=await Promise.all([fallback.readRange(2,3),fallback.readRange(900,2)]);
+  assert.strictEqual(fallbackCalls.length,1,'concurrent probe shares complete-body fallback');
+  assert.deepStrictEqual([...fallbackReads[1]],[...body.slice(900,902)]);
+  for (const [header, bytes, encoding] of [
+    ['bytes 1-3/1000',body.slice(0,3),null], ['bytes 0-2/999',body.slice(0,3),null],
+    ['bytes 0-2/1000',body.slice(0,2),null], ['bytes 0-2/1000',body.slice(0,3),'gzip'],
+  ]) {
+    const bad=new HttpByteRangeProvider('bad',1000,{fetch:async()=>({...response(206,bytes),headers:new Headers({
+      'Content-Range':header,...(encoding?{'Content-Encoding':encoding}:{})})})});
+    await assert.rejects(bad.readRange(0,3),/invalid partial|expected/);
+  }
+  const aborted = new AbortController(); let finishRange;
+  const cancelRange = new HttpByteRangeProvider('cancel',1000,{signal:aborted.signal,fetch:()=>new Promise(r=>{finishRange=r;})});
+  const cancelled=cancelRange.readRange(0,3);aborted.abort();
+  await assert.rejects(cancelled,/abort/i);finishRange(response(200,body));
+  await new Promise(r=>setTimeout(r,0));assert.strictEqual(cancelRange._whole,null);
+  ranged.close();assert.strictEqual(ranged._firstRange,null);
+  console.log('PASS bounded HTTP sections: partial bytes, whole fallback, concurrent discovery, malformed responses and cancellation');
+  console.log('PASS whole HTTP files/parts: deduplication, eviction, cross-part reads, retries, decoded sizes, close');
+})().catch(e => { console.error(e); process.exitCode = 1; });

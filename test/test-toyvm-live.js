@@ -94,6 +94,11 @@ function installFrameClock() {
 }
 
 async function main() {
+  if (process.argv.includes('--input-only')) {
+    const { checkMouseInput } = require('./test-toyvm-mouse-input');
+    checkMouseInput(); checkMouseInput(false);
+    return;
+  }
   checkVariantProbe();
   const clock = installFrameClock();
 

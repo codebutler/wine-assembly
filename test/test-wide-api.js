@@ -166,35 +166,36 @@ async function main() {
     (e.test_call_GetModuleHandleA(extensionlessQueryA) >>> 0) === (loadAddr >>> 0));
   const ole32A = writeAscii('oLe32.DlL');
   const notOle32A = writeAscii('OLE32X');
-  // A module we dispatch statically has no image, so it answers with a
-  // pseudo-handle: $STATIC_SYS_DLL_HANDLE_BASE plus its position in the name
-  // list, ole32 being first. It has to be distinct from the EXE's own handle,
-  // or GetModuleFileName can't tell the two apart. See
-  // $guest_name_is_static_system_dll in src/09a-handlers.wat.
-  const STATIC_SYS_DLL_HANDLE_BASE = 0x5D110000;
+  // Host-backed modules have distinct readable PE identities too.
+  const nativeHandles = ['ole32', 'user32', 'comctl32', 'gdi32', 'dsound'].map(
+    name => e.test_call_GetModuleHandleA(writeAscii(name)) >>> 0);
+  check('native module identities are distinct readable PE images',
+    new Set(nativeHandles).size === nativeHandles.length && nativeHandles.every(
+      handle => handle !== 0 && handle !== (e.get_image_base() >>> 0) &&
+        (e.guest_read32(handle) & 0xffff) === 0x5a4d));
   check('GetModuleHandleA recognizes statically dispatched OLE32',
-    (e.test_call_GetModuleHandleA(ole32A) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE);
+    (e.test_call_GetModuleHandleA(ole32A) >>> 0) === nativeHandles[0]);
   check('GetModuleHandleA recognizes statically dispatched USER32',
-    (e.test_call_GetModuleHandleA(writeAscii('USER32.DLL')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 1);
+    (e.test_call_GetModuleHandleA(writeAscii('USER32.DLL')) >>> 0) === nativeHandles[1]);
   check('GetModuleHandleA recognizes statically dispatched COMCTL32',
-    (e.test_call_GetModuleHandleA(writeAscii('comctl32.dll')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 2);
+    (e.test_call_GetModuleHandleA(writeAscii('comctl32.dll')) >>> 0) === nativeHandles[2]);
   // Win9x maps GDI32 into every process. InstallShield 3 registers GDI32,
   // KERNEL32 and USER32 by extensionless GetModuleHandle and gives up on the
   // rest at the first NULL (War Wind II's setup then spins in SdAskOptions).
   check('GetModuleHandleA recognizes extensionless GDI32',
-    (e.test_call_GetModuleHandleA(writeAscii('GDI32')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 3);
+    (e.test_call_GetModuleHandleA(writeAscii('GDI32')) >>> 0) === nativeHandles[3]);
   check('GetModuleHandleA recognizes extensionless USER32',
-    (e.test_call_GetModuleHandleA(writeAscii('USER32')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 1);
+    (e.test_call_GetModuleHandleA(writeAscii('USER32')) >>> 0) === nativeHandles[1]);
   const dsound = writeAscii('C:\\WINDOWS\\SYSTEM\\DSOUND.DLL');
   const dsoundHandle = e.test_call_LoadLibraryA(dsound) >>> 0;
   check('LoadLibraryA preserves statically dispatched DSOUND identity',
-    dsoundHandle === STATIC_SYS_DLL_HANDLE_BASE + 6,
+    dsoundHandle === nativeHandles[4],
     `handle=0x${dsoundHandle.toString(16)}`);
   const directSoundCreate = e.test_call_GetProcAddress(dsoundHandle, 1) >>> 0;
   const directSoundCreateWa = wa(directSoundCreate);
   const directSoundCreateId = require('../src/api_table.json')
     .find(entry => entry.name === 'DirectSoundCreate').id;
-  check('GetProcAddress resolves DSOUND ordinal 1 from its pseudo-handle',
+  check('GetProcAddress resolves DSOUND ordinal 1 from its native image',
     directSoundCreate !== 0 &&
       dv.getUint32(directSoundCreateWa, true) === 0x80000001 &&
       dv.getUint32(directSoundCreateWa + 4, true) === directSoundCreateId,

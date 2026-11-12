@@ -17,7 +17,9 @@ function writeBgra(bytes, base, stride, x, y, r, g, b) {
 const memory = new ArrayBuffer(64 * 1024);
 const bytes = new Uint8Array(memory);
 let repaintRequests = 0;
+let writeSequence = 0;
 const renderer = {
+  nextSurfaceWriteSeq() { return ++writeSequence; },
   windows: { 0x77: {} },
   scheduleRepaint() { repaintRequests++; },
   attachWindowSurface(hwnd, canvas) {
@@ -59,7 +61,12 @@ assert.strictEqual(host.gdi_surface_attach(id, 0x77), 1);
 assert.strictEqual(repaintRequests, 1);
 assert.strictEqual(presentation.flushCount, 0,
   'attaching must retain deferred canonical pixels');
+const uploadedSequence = presentation.writeSeq;
+const newerPrimarySequence = renderer.nextSurfaceWriteSeq();
 assert.strictEqual(presentation.canvas._waFlushCanonicalSurface(), 1);
+assert.strictEqual(renderer.windows[0x77]._gdiWriteSeq, uploadedSequence,
+  'reading a cached window after a primary present must not revive its old pixels');
+assert(renderer.windows[0x77]._gdiWriteSeq < newerPrimarySequence);
 assert.strictEqual(conversionCalls, 1);
 assert.strictEqual(presentation.flushCount, 1);
 assert.strictEqual(presentation.flushedPixels, 20,

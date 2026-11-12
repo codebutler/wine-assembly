@@ -18,6 +18,91 @@ const { hasPageScript } = require('./browser-runtime-scripts');
 const root = path.join(__dirname, '..');
 const debugIds = new Set(DEBUG_ONLY_APPS.map(([id]) => id));
 const localCandidateIds = new Set(LOCAL_CANDIDATE_APPS.map(([id]) => id));
+const lmarbles = APPS.lmarbles_108;
+assert(localCandidateIds.has('lmarbles_108'));
+assert(!DESKTOP_APPS.some(([id]) => id === 'lmarbles_108'));
+assert.notStrictEqual(lmarbles, APPS.marbles);
+assert.notStrictEqual(lmarbles.exe, APPS.marbles.exe);
+assert.strictEqual(lmarbles.exeGuestPath, 'C:\\LMARBLES\\lmarbles.exe');
+assert.strictEqual(lmarbles.workingDirectory, 'C:\\LMARBLES');
+assert.strictEqual(lmarbles.args, '');
+assert.strictEqual(lmarbles.requiredFiles, true);
+const lmarblesCandidate = require('./candidate-corpus/manifest.json').candidates
+  .find(candidate => candidate.id === 'lmarbles-108');
+assert(lmarblesCandidate.localOnly);
+assert.strictEqual(lmarblesCandidate.browser.fileRoot, 'game');
+assert.deepStrictEqual(lmarblesCandidate.executables, [lmarblesCandidate.browser.exe]);
+assert.strictEqual(lmarbles.exe,
+  'test/binaries/candidates/lmarbles-108/' + lmarblesCandidate.browser.exe);
+assert.strictEqual(lmarbles.localFileManifest,
+  'test/binaries/candidates/lmarbles-108/.wine-assembly-browser.json');
+assert.deepStrictEqual(lmarbles.dlls.map(appFileUrl), [
+  ...['SDL.dll', 'SDL_mixer.dll', 'iconv.dll', 'libFLAC-8.dll', 'libgcc_s_sjlj-1.dll',
+    'libintl-8.dll', 'libmikmod-3.dll', 'libogg-0.dll', 'libvorbis-0.dll',
+    'libvorbisfile-3.dll', 'libwinpthread-1.dll']
+    .map(name => 'test/binaries/candidates/lmarbles-108/game/LMARBLES/' + name),
+  'binaries/dlls/msvcrt.dll',
+]);
+const lbreakout = APPS.lbreakout2_251;
+assert(localCandidateIds.has('lbreakout2_251'));
+assert(!DESKTOP_APPS.some(([id]) => id === 'lbreakout2_251'));
+assert.strictEqual(lbreakout.exeGuestPath, 'C:\\LBREAKOUT\\lbreakout2.exe');
+assert.strictEqual(lbreakout.workingDirectory, 'C:\\LBREAKOUT');
+assert.strictEqual(lbreakout.args, '');
+assert.strictEqual(lbreakout.requiredFiles, true);
+const lbreakoutCandidate = require('./candidate-corpus/manifest.json').candidates
+  .find(candidate => candidate.id === 'lbreakout2-251');
+assert(lbreakoutCandidate.localOnly);
+assert.strictEqual(lbreakoutCandidate.browser.fileRoot, 'game');
+assert.deepStrictEqual(lbreakoutCandidate.executables, [lbreakoutCandidate.browser.exe]);
+assert.strictEqual(lbreakout.exe,
+  'test/binaries/candidates/lbreakout2-251/' + lbreakoutCandidate.browser.exe);
+assert.strictEqual(lbreakout.localFileManifest,
+  'test/binaries/candidates/lbreakout2-251/.wine-assembly-browser.json');
+assert.deepStrictEqual(lbreakout.dlls.map(appFileUrl), [
+  ...['SDL.dll', 'SDL_mixer.dll', 'SDL_net.dll', 'libpng.dll', 'zlib.dll']
+    .map(name => 'test/binaries/candidates/lbreakout2-251/game/LBREAKOUT/' + name),
+  'binaries/dlls/msvcrt.dll',
+]);
+const outlaws = APPS.outlaws_demo;
+assert(localCandidateIds.has('outlaws_demo'));
+assert(!DESKTOP_APPS.some(([id]) => id === 'outlaws_demo'));
+assert.strictEqual(outlaws.exeGuestPath, 'C:\\OUTDEMO\\oldemo.exe');
+assert.strictEqual(outlaws.workingDirectory, 'C:\\OUTDEMO');
+assert.strictEqual(outlaws.args, '');
+assert.strictEqual(outlaws.requiredFiles, true);
+assert.strictEqual(outlaws.dlls, undefined, 'preserve original automatic DLL discovery');
+assert.strictEqual(outlaws.localFileManifest,
+  'test/binaries/candidates/outlaws-demo/.wine-assembly-browser.json');
+const outlawsCandidate = require('./candidate-corpus/manifest.json').candidates
+  .find(candidate => candidate.id === 'outlaws-demo');
+assert(outlawsCandidate.localOnly);
+assert.strictEqual(outlaws.exe,
+  'test/binaries/candidates/outlaws-demo/' + outlawsCandidate.browser.exe);
+assert.deepStrictEqual(outlawsCandidate.executables, [outlawsCandidate.browser.exe]);
+const supertux = APPS.supertux_013;
+assert(localCandidateIds.has('supertux_013'));
+assert(!DESKTOP_APPS.some(([id]) => id === 'supertux_013'));
+assert.strictEqual(supertux.exeGuestPath, 'c:\\supertux.exe');
+assert.strictEqual(supertux.workingDirectory, 'c:\\');
+assert.strictEqual(supertux.args, '--sdl --datadir data');
+assert.strictEqual(supertux.requiredFiles, true);
+assert.strictEqual(supertux.localFileManifest,
+  'test/binaries/candidates/supertux-013/.wine-assembly-browser.json');
+const supertuxCandidate = require('./candidate-corpus/manifest.json').candidates
+  .find(candidate => candidate.id === 'supertux-013');
+assert(supertuxCandidate.localOnly);
+assert.strictEqual(supertuxCandidate.cli.args, supertux.args);
+assert.deepStrictEqual(supertuxCandidate.cli.vfsInclude, ['**/*']);
+assert.deepStrictEqual(supertux.dlls.map(appFileUrl), [
+  ...supertuxCandidate.cli.dlls.map(file => 'test/binaries/candidates/supertux-013/' + file),
+  'binaries/dlls/msvcrt.dll',
+]);
+assert.deepStrictEqual(supertuxCandidate.cli.dlls.map(file => path.basename(file)),
+  ['SDL.dll', 'SDL_image.dll', 'SDL_mixer.dll', 'jpeg.dll', 'libpng1.dll', 'zlib.dll']);
+assert.strictEqual(supertux.exe,
+  'test/binaries/candidates/supertux-013/' + supertuxCandidate.browser.exe);
+assert.strictEqual(supertuxCandidate.browser.fileRoot, 'game');
 const expectedLocalCandidates = new Map([
   ['cdplayer', 'binaries/win98-apps/cdplayer.exe'],
   ['elasto_mania', 'test/binaries/candidates/elasto-mania/Elma/Elma.exe'],

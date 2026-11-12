@@ -98,7 +98,7 @@ function createBot({state,save,telegram,local,download,inbox,inboxStatus,now=Dat
     if(text==='/queue'){
       const s=inboxStatus?await inboxStatus():null;
       if(!s)return send('Messages are saved to the inbox as they arrive; nothing waits in the bridge.');
-      return send(`Inbox last #${s.last}.\n`+(s.consumers.map(c=>`${c.agent}: read to #${c.cursor}, ${Math.max(0,s.last-c.cursor)} unread`).join('\n')||'No consumers configured.'));
+      return send(`Inbox last #${s.last}.\n`+(s.consumers.map(c=>`${c.agent}: read to #${c.cursor}, ${c.pending!==undefined?`${c.pending} pending delivery`:`${Math.max(0,s.last-c.cursor)} unread`}`).join('\n')||'No consumers configured.'));
     }
     if(text==='/cancel')return send('Nothing to cancel: messages are saved to the inbox as soon as they arrive. Send a correction instead.');
     if(text==='/screen'){const s=await local('/api/orchestrator-screen');for(const part of formatting.chunks([{text:s.text,type:'pre'}]))await send(part.text,{entities:part.entities});return;}

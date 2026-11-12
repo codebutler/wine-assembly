@@ -14,8 +14,8 @@ const extraWat = String.raw`
       (param $w i32) (param $h i32) (result i64)
     (call $menu_track_popup_place (local.get $flags) (local.get $x) (local.get $y)
       (local.get $w) (local.get $h))
-    (i64.or (i64.extend_i32_u (global.get $menu_open_x))
-      (i64.shl (i64.extend_i32_u (global.get $menu_open_y)) (i64.const 32))))
+    (i64.or (i64.extend_i32_u (call $menu_open_x_get))
+      (i64.shl (i64.extend_i32_u (call $menu_open_y_get)) (i64.const 32))))
   (func (export "test_screen_w") (result i32) (call $screen_metric_w))
   (func (export "test_screen_h") (result i32) (call $screen_metric_h))
 `;

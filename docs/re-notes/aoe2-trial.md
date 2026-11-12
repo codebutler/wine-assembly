@@ -214,3 +214,18 @@ the centring. Fix: neither spin detector parks while `$sync_msg_depth > 0`.
 Ruled out on the way: the lazily mounted `music1.mid` (eager mount, same
 (0,0)), GetWindowRect, ClipCursor, uop tier, x87 fold, a second thread.
 Evidence `scratch/runs/20261010T0450Z-aoe2-page-camera-jump`.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## Frozen lazy-sync coverage attempt (2026-09-30)
+
+`tools/bench-lazy-games.js --app=aoe2 --shipped-default` on box8 with
+`build/lazy-fence-after.wasm` stops after the EULA at "requires DirectX 6.1a
+or higher". The URL opt-out produces the same error. This frozen runtime
+therefore does not validate the GDI EDIT/gameplay route described below;
+it is not evidence of a lazy-sync regression. Investigate the static-DLL
+version chain covered by `test/test-static-dx-version.js` before retrying.
+The new browser helper's post-EULA route is unverified. Artifacts and limits:
+[lazy-sync-game-results.md](../lazy-sync-game-results.md).

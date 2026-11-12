@@ -60,4 +60,23 @@ renderer.showWindow(100, 5);
 assert.strictEqual(renderer.windows[100].visible, true, 'SW_SHOW should restore the task window');
 assert.strictEqual(renderer.windows[100]._minimized, false, 'SW_SHOW should clear minimized state');
 
-console.log('PASS  renderer announces dialog-only apps and preserves ShowWindow task state');
+// A Worker owns Win16 template conversion, but the host-side instance's
+// is_win16 global is still zero. Shared geometry must size the entire popup.
+Object.assign(wasm.exports, {
+  is_win16() { return 0; },
+  ctrl_get_xy() { return ((-12 & 0xffff) | (34 << 16)) >>> 0; },
+  ctrl_get_wh() { return (345 | (364 << 16)) >>> 0; },
+});
+renderer.createDialog(101, 50, wasm, memory);
+assert.deepStrictEqual(
+  ['x', 'y', 'w', 'h', '_templateW', '_templateH'].map(k => renderer.windows[101][k]),
+  [-12, 34, 345, 364, 345, 364],
+  'top-level dialogs mirror live guest geometry instead of host-global units');
+
+wasm.exports.dlg_get_x = () => -32768;
+wasm.exports.ctrl_get_xy = () => 16384;
+renderer.createDialog(102, 0, wasm, memory);
+assert.strictEqual(renderer.windows[102].x, 40,
+  'CW_USEDEFAULT stays on screen when shared geometry contains the scaled sentinel');
+
+console.log('PASS  renderer dialog geometry, shell notifications and ShowWindow state');

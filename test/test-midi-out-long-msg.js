@@ -1,44 +1,27 @@
 #!/usr/bin/env node
 'use strict';
 
-const assert = require('assert');
-const { bootRenderHarness } = require('./render-helper');
-
-const extraWat = String.raw`
-  (func (export "test_midi_out_long_msg")
-      (param $handle i32) (param $hdr i32) (param $cb i32) (result i64)
-    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
-    (call $handle_midiOutLongMsg
-      (local.get $handle) (local.get $hdr) (local.get $cb)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i64.or (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
-      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
-`;
-
-(async () => {
-  const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none' });
-  const hdr = e.guest_alloc(64) >>> 0;
-
-  let result = e.test_midi_out_long_msg(0xc0001, 0, 64);
-  assert.strictEqual(Number(result & 0xffffffffn), 11,
-    'NULL MIDIHDR is rejected');
-
-  e.guest_write32(hdr + 16, 0);
-  result = e.test_midi_out_long_msg(0xc0001, hdr, 64);
-  assert.strictEqual(Number(result & 0xffffffffn), 64,
-    'an unprepared MIDIHDR returns MIDIERR_UNPREPARED');
-
-  e.guest_write32(hdr + 16, 2 | 0x10); // PREPARED | INQUEUE
-  result = e.test_midi_out_long_msg(0xc0001, hdr, 64);
-  assert.strictEqual(Number(result & 0xffffffffn), 0,
-    'a prepared long message completes successfully');
-  assert.strictEqual(Number(result >> 32n), 0x00300010,
-    'three-argument stdcall pops its return address and arguments');
-  assert.strictEqual(e.guest_read32(hdr + 16) >>> 0, 3,
-    'completion retains PREPARED, clears INQUEUE, and sets DONE');
-
-  console.log('PASS midiOutLongMsg completes prepared SysEx headers coherently');
-})().catch(error => {
-  console.error(error && error.stack || error);
-  process.exit(1);
+// The old test invented a handle and required silent SysEx completion.
+// The companion lifecycle test executes the production WAT wrapper/stdcall.
+const assert = require('assert/strict');
+const { createAudioHost } = require('../lib/host-audio');
+const memory = new ArrayBuffer(65536), dv = new DataView(memory);
+const ctx = { getMemory: () => memory };
+const { imports: host } = createAudioHost(ctx, {
+  getHost: () => ({}), profileNow: () => 0, profileEvent: () => {},
 });
+const h = host.midi_out_open(0, 0, 0, 0);
+assert(h);
+assert.equal(host.midi_header(123, 1024, 1024, 2048, 64, 3), 5);
+assert.equal(host.midi_header(h, 0, 0, 0, 64, 3), 11);
+assert.equal(host.midi_header(h, 1024, 1024, 2048, 64, 3), 64);
+dv.setUint32(1024, 2048, true);
+dv.setUint32(1028, 4, true);
+new Uint8Array(memory, 2048, 4).set([0xf0, 0x7e, 0x7f, 0xf7]);
+assert.equal(host.midi_header(h, 1024, 1024, 2048, 64, 0), 0);
+assert.throws(() => host.midi_header(h, 1024, 1024, 2048, 64, 3),
+  /SysEx transport unsupported/);
+assert.equal(dv.getUint32(1040, true), 2, 'rejected buffer stays prepared, never falsely DONE');
+assert.equal(ctx._midiOut.pending.size, 0);
+assert.equal(host.midi_out_close(h), 0);
+console.log('PASS real MIDI handle/header ownership and explicit unsupported SysEx transport');

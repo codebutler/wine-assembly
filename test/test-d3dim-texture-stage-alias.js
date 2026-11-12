@@ -54,6 +54,24 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
 
+  ;; Real format metadata, shared native combiner, and GPU descriptor path.
+  (func (export "legacy_texture") (param $device i32) (param $fmt i32)
+    (local $obj i32) (local $entry i32)
+    (local.set $obj (call $dx_create_com_obj (i32.const 2) (i32.const 0x52000000)))
+    (local.set $entry (call $dx_from_this (local.get $obj)))
+    (i32.store offset=12 (local.get $entry) (i32.const 0x00010001))
+    (i32.store offset=16 (local.get $entry) (i32.const 0x00040020))
+    (i32.store offset=20 (local.get $entry) (call $g2w (call $heap_alloc (i32.const 4))))
+    (call $dx_surf_fmt_set (local.get $entry) (local.get $fmt))
+    (call $d3dim_set_texture (local.get $device) (i32.const 0) (local.get $obj)))
+  (func (export "legacy_rs") (param $device i32) (param $mode i32)
+    (call $d3dim_set_render_state (local.get $device) (i32.const 21) (local.get $mode)))
+  (func (export "legacy_effective") (param $device i32) (param $type i32) (result i32)
+    (call $d3dim_tss_load (call $d3ddev_state (local.get $device)) (i32.const 0) (local.get $type)))
+  (func (export "legacy_combine") (param $device i32) (param $tex i32) (param $diffuse i32) (result i32)
+    (call $d3dim_texture_stage_combine (local.get $tex) (local.get $diffuse)
+      (call $d3dim_stage_operation (call $d3ddev_state (local.get $device)) (i32.const 1))
+      (call $d3dim_stage_operation (call $d3ddev_state (local.get $device)) (i32.const 4))))
   (func (export "d3dim_tss_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 `;
 
@@ -112,7 +130,7 @@ const extraWat = String.raw`
   assert(!device7Source.includes('(func $handle_IDirect3DDevice7_ValidateDevice'),
     'the duplicate Device7 validation wrapper is absent');
 
-  const { exports: wat } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const { exports: wat, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
   const device = wat.d3dim_tss_create_device() >>> 0;
   assert(device, 'created a state-backed legacy Direct3D device');
   const out = 0x00310000;
@@ -149,6 +167,40 @@ const extraWat = String.raw`
     assert.strictEqual(wat.d3dim_tss_esp() >>> 0, 0x0030000c,
       `${api.name} preserves the three-word stdcall cleanup`);
   }
+
+  // Reject the observed Darkstone failure: RGB565 was decoded to RGBA255,
+  // hiding geometry despite the original vertices carrying diffuse alpha64.
+  wat.d3dim_tss_seed(device, 0, 4, 2);
+  wat.legacy_rs(device, 2); // D3DTBLEND_MODULATE
+  for (const fmt of [1, 2, 6]) { // RGB565, RGB555, XRGB8888
+    wat.legacy_texture(device, fmt);
+    assert.strictEqual(wat.legacy_effective(device, 4), 3, 'no-alpha format selects diffuse alpha');
+    const descriptor = wat.d3dim_gpu_describe(device);
+    assert(descriptor, 'owning GPU descriptor available');
+    assert.strictEqual(new DataView(memory.buffer).getUint32(descriptor + 92, true), 3,
+      'GPU descriptor carries the same effective diffuse alpha selection');
+    assert.strictEqual(wat.legacy_combine(device, 0xffffffff, 0x40ffffff) >>> 24, 64);
+  }
+  for (const fmt of [3, 4, 5, 7]) { // alpha-bearing formats retain texture alpha
+    wat.legacy_texture(device, fmt);
+    assert.strictEqual(wat.legacy_effective(device, 4), 2);
+    assert.strictEqual(wat.legacy_combine(device, 0x20ffffff, 0x40ffffff) >>> 24, 32);
+  }
+  wat.legacy_rs(device, 4); // D3DTBLEND_MODULATEALPHA
+  assert.strictEqual(wat.legacy_effective(device, 4), 4);
+  assert.strictEqual(wat.legacy_combine(device, 0x20ffffff, 0x40ffffff) >>> 24, 8);
+  for (const api of [d3, d7]) {
+    wat.d3dim_tss_get(api.id, device, 0, 4, out);
+    assert.strictEqual(wat.guest_read32(out), 2, 'legacy lowering preserves raw public TSS query');
+  }
+  wat.d3dim_tss_seed(device, 1, 4, 2);
+  wat.d3dim_tss_seed(device, 0, 12, 1);
+  assert.strictEqual(wat.legacy_effective(device, 4), 4, 'other stage/filter does not cancel legacy mode');
+  wat.d3dim_tss_set(d7set.id, device, 0, 4, 2);
+  assert.strictEqual(wat.legacy_effective(device, 4), 2, 'explicit stage-zero combiner overrides legacy mode');
+  wat.legacy_texture(device, 1);
+  wat.legacy_rs(device, 2);
+  assert.strictEqual(wat.legacy_effective(device, 4), 3, 'later legacy setter reactivates lowering');
 
   console.log('PASS  Direct3D 3/7 state access and validation share canonical handlers');
 })().catch(error => {

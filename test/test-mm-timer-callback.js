@@ -8,6 +8,8 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func $test_clear_slots
     (local $i i32)
+    ;; This standalone harness does not load a PE; production loaders own roots.
+    (call $invocation_ensure)
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MM_TIMER_MAX)))
       (i32.store (call $mm_timer_slot (local.get $i)) (i32.const 0))
@@ -79,6 +81,8 @@ const extraWat = String.raw`
     (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00401234))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0x11223344))
+    (call $mm_callback_begin
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 40)) (i32.const 0))
     (call $save_caller_regs)
     (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA000A))
     (i32.store offset=4 (global.get $THUNK_BASE) (i32.const 0))

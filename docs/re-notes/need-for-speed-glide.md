@@ -3,6 +3,30 @@
 Status: original-renderer race/input acceptance verified in Chrome with both
 WebGL and native WAT software rendering.
 
+## Shared packet pool validation (2026-10-20)
+
+The Worker bridge now reserves one of three 1 MiB shared snapshot slots before
+copying guest input. The consumer reads that snapshot directly; slots retire
+only after replay/readback completes. Oversized LFB packets wait with all pool
+credits reserved. The real browser GL/D3D9/Glide regression checks exhaustion,
+wrap, poisoned guest input, readback and peer-safe close on both backends.
+
+Original NFS III race captures with WASM `cd3b43cf…` are preserved in
+`20261020-nfs3-pool-webgl-driving` and
+`20261020-nfs3-pool-software-verified`. Reviewed cockpit/HUD and road movement
+show 59 MPH at 0:06.48 in WebGL and 78 MPH at 0:09.34 in native software.
+Both retain the original `voodooa.dll` mapping, advance geometry/presentation,
+and report zero backend errors. These are functional tests, not FPS comparisons.
+The final backend-asserting WebGL rerun, `20261020-nfs3-pool-webgl-verified`,
+also passes and shows 64 MPH at 0:07.06 on ANGLE Metal/Apple M1.
+
+The old browser harness needed three repairs: `?candidates` exposes the local
+app selector entry; mapped module state replaces historical LoadLibrary console
+strings; and `d3d-renderer` must agree with `glide-renderer`, because the shared
+GPU selector takes precedence. The test now asserts the actual backend and
+extends held input beyond the countdown. The earlier requested-software run
+`20261020-nfs3-pool-software` was actually WebGL and is marked a harness error.
+
 Comparative measurements and reproducible runners are documented in
 [the renderer benchmark report](../nfs-renderer-benchmark.md).
 

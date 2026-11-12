@@ -1,0 +1,147 @@
+'use strict';
+// Admission for the optional, single-original MW3 browser experiment. Validate
+// the exact staged graph and completed private controls before starting it.
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+
+function verifyInputs(root, pins, requiredPaths) {
+  assert(Array.isArray(requiredPaths) && requiredPaths.length, 'explicit runtime graph required');
+  const files = new Map(pins.files.map(p => [p.path, p]));
+  const uploads = new Map(pins.uploadFiles.map(p => [p.path, p]));
+  for (const name of requiredPaths) {
+    assert(!path.isAbsolute(name) && !name.split('/').includes('..'), 'relative input path');
+    const pin = files.get(name), upload = uploads.get(name);
+    assert(pin && upload, 'runtime input omitted from staged graph: ' + name);
+    const bytes = fs.readFileSync(path.join(root, name));
+    for (const record of [pin, upload]) {
+      assert.equal(record.size, bytes.length, 'runtime input size: ' + name);
+      assert.equal(record.sha256, sha(bytes), 'runtime input hash: ' + name);
+    }
+  }
+  return true;
+}
+
+function verifyScopedControls(production) {
+  const modes = ['unwrapped', 'inactive', 'active', 'noise-delayed',
+    'selected-overflow', 'excluded-exception', 'decoder-failure'];
+  assert.deepEqual(production.controls.map(c => c.mode), modes, 'scoped production controls missing');
+  for (const c of production.controls) {
+    assert.equal(c.isolated, true);
+    if (c.mode === 'unwrapped') continue;
+    assert(c.installed && c.capture.beforeInstantiation, 'production recorder binding missing');
+    assert(Number.isFinite(c.capture.capturedAt) &&
+      c.capture.capturedAt <= c.capture.instantiateStartedAt &&
+      c.capture.instantiateStartedAt <= c.capture.instantiatedAt, 'actual pre-instantiation capture required');
+    assert(c.capture.imports.some(i => i.module === 'host' && i.kind === 'function' &&
+      i.name === 'get_mouse_buttons_live'), 'actual module import capture missing');
+    assert.deepEqual(c.trace.importNames, ['get_mouse_buttons_live'], 'scoped rows required');
+    assert(c.trace.imports.every(i => i.name === 'get_mouse_buttons_live'), 'excluded row stored');
+  }
+  const byMode = Object.fromEntries(production.controls.map(c => [c.mode,c]));
+  const noise = byMode['noise-delayed'];
+  assert(noise.beforeDelayed.active && !noise.beforeDelayed.reads.length &&
+    !noise.beforeDelayed.imports.length && noise.beforeDelayed.excludedImports >= 80000,
+    'compiled excluded noise did not precede delayed read');
+  assert(noise.delayedMs >= 450, 'delayed read control missing');
+  const overflow = byMode['selected-overflow'];
+  assert.equal(overflow.selectedRows, 65536, 'selected capacity changed');
+  assert.equal(overflow.trace.drops, 1);
+  assert.equal(overflow.trace.active, false);
+  assert.deepEqual(overflow.trace.errors, ['import capacity']);
+  assert.equal(overflow.trace.reads.length, 0);
+  const exception = byMode['excluded-exception'];
+  assert.match(exception.caught, /fixture excluded original exception/);
+  assert.equal(exception.trace.active, false);
+  assert.deepEqual(exception.trace.errors, ['original import threw: log']);
+  assert.equal(exception.trace.reads.length, 0);
+  const decoder = byMode['decoder-failure'];
+  assert.equal(decoder.trace.active, false);
+  assert(decoder.trace.errors.some(e => e.includes('standard mouse format')));
+  assert.equal(decoder.trace.reads.length, 0);
+  return true;
+}
+
+function admitOriginal({root, pins, requiredPaths, candidatePath, candidate,
+    parent, production, chrome, expectedModule}) {
+  verifyInputs(root, pins, requiredPaths);
+  assert(requiredPaths.includes(candidatePath), 'candidate must belong to staged graph');
+  assert.equal(candidate.passed, true, 'exact-candidate controls failed');
+  assert.equal(candidate.exactCandidateSHA256, sha(fs.readFileSync(path.join(root, candidatePath))),
+    'candidate controls belong to different source');
+  assert.equal(parent.passed, true, 'private control parent failed');
+  assert.equal(parent.originalLaunches, 0, 'control launched an original');
+  assert(parent.rows.length, 'private control parent wait missing');
+  for (const row of parent.rows) {
+    assert.equal(row.code, 0, 'private control failed');
+    assert.equal(row.actualParentWait, true, 'private control parent did not wait');
+    assert.equal(row.readersJoined, true, 'private control readers not joined');
+    assert.equal(row.separateEOF.stdout, true, 'control stdout EOF missing');
+    assert.equal(row.separateEOF.stderr, true, 'control stderr EOF missing');
+  }
+  assert.equal(chrome.code, 0, 'control Chrome failed');
+  assert.equal(chrome.signal, null, 'control Chrome was signalled');
+  assert.equal(chrome.actualWait, true, 'control Chrome wait missing');
+  assert.equal(chrome.separateEOF.stdout, true, 'Chrome stdout EOF missing');
+  assert.equal(chrome.separateEOF.stderr, true, 'Chrome stderr EOF missing');
+  assert.equal(production.passed, true, 'production Worker control failed');
+  assert.equal(production.fixtureOnly, true);
+  assert.match(expectedModule, /^[a-f0-9]{64}$/);
+  assert.equal(production.moduleSHA256, expectedModule, 'production module changed');
+  for (const [name, field] of [['worker-prefix.js','prefixSHA256'], ['worker-fixture.js','fixtureSHA256']]) {
+    const input = path.posix.join(path.posix.dirname(candidatePath), name);
+    assert(requiredPaths.includes(input), 'control input missing: ' + input);
+    assert.equal(production[field], sha(fs.readFileSync(path.join(root,input))), 'control input changed: ' + name);
+  }
+  verifyScopedControls(production);
+  for (const c of production.controls.filter(c => ['unwrapped','inactive','active','noise-delayed'].includes(c.mode))) {
+    assert.equal(c.isolated, true, 'production Worker isolation missing');
+    assert.equal(c.state[12], 128, 'compiled pressed state missing');
+    if (c.mode === 'unwrapped') continue;
+    assert(c.installed && c.capture.beforeInstantiation, 'production recorder binding missing');
+    assert.equal(c.trace.drops, 0); assert.deepEqual(c.trace.errors, []);
+    assert.equal(c.trace.reads.length, 1);
+    assert.equal(c.trace.reads[0].eax, 0);
+    assert.equal(c.trace.reads[0].state[12], 128);
+    const read = c.trace.reads[0];
+    assert.equal(read.size, 16, 'standard mouse request missing');
+    assert.equal(read.state.length, read.size, 'completed mouse buffer missing');
+    assert(Number.isInteger(read.buffer) && read.buffer > 0, 'request buffer missing');
+    assert(Number.isInteger(read.esp) && read.esp > 0, 'request stack missing');
+    assert.equal(read.completionEsp, read.esp + 16, 'completion does not match request stack');
+    assert(read.at >= read.requestAt && read.requestAt > 0, 'completion request timing missing');
+    assert(read.completionMono >= read.requestMono && read.requestMono > 0,
+      'completion monotonic request timing missing');
+    assert(c.capture.imports.some(i => i.module === 'host' && i.kind === 'function' &&
+      i.name === 'get_mouse_buttons_live'), 'actual module import capture missing');
+    assert(c.trace.imports.some(i => i.name === 'get_mouse_buttons_live'));
+  }
+  return {passed: true, candidateSHA256: candidate.exactCandidateSHA256, moduleSHA256: expectedModule};
+}
+
+module.exports = {verifyInputs, verifyScopedControls, admitOriginal};
+
+if (require.main === module) {
+  // A nonzero exit must stop the caller before its sandbox commands API call.
+  const run = path.resolve(process.argv[2]);
+  const root = path.resolve(run, '../../..');
+  const read = name => JSON.parse(fs.readFileSync(path.join(run, name)));
+  const prefix = path.relative(root, run) + '/';
+  const routePaths = ['browser.cjs', 'isolation-control.cjs', 'isolation-page.html',
+    'worker-prefix.js', 'worker-fixture.js', 'control-launch.py', 'launch.py'].map(n => prefix + n);
+  const pins = read('runtime-pins.json');
+  // Include every pinned source/media dependency, with the immutable build
+  // modules staged by their separately pinned recovery paths.
+  const requiredPaths = [...new Set([...routePaths,
+    ...pins.files.filter(p => !p.path.startsWith('build/')).map(p => p.path)])];
+  verifyInputs(root, pins, requiredPaths);
+  const results = read('private-control-results.json');
+  const proof = admitOriginal({root, pins, requiredPaths, candidatePath:prefix+'browser.cjs',
+    candidate:read('candidate-controls.json'), parent:results['control-parent-complete.json'],
+    production:results['production-worker-repaired-production.json'],
+    chrome:results['production-worker-repaired-actual-wait.json'],
+    expectedModule:pins.files.find(p => p.path === 'build/wine-assembly.wasm').sha256});
+  process.stdout.write(JSON.stringify(proof) + '\n');
+}

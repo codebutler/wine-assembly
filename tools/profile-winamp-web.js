@@ -2263,6 +2263,32 @@ async function main() {
       };
     }
     out.state = {
+      aboutCaptionInk: (() => {
+        const about = Object.values(r.windows).find(w => w && w.visible && w.title === 'About Winamp');
+        if (!about) return 0;
+        const pos = r._windowOriginForComposite(about);
+        const pixels = r.canvas.getContext('2d').getImageData(pos.x + 8, pos.y + 5, 100, 14).data;
+        let ink = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i] > 220 && pixels[i + 1] > 220 && pixels[i + 2] > 220) ink++;
+        }
+        return ink;
+      })(),
+      aboutTabInk: (() => {
+        const about = Object.values(r.windows).find(w => w && w.visible && w.title === 'About Winamp');
+        if (!about) return [];
+        const pos = r._windowOriginForComposite(about);
+        return [0, 1, 2, 3].map(index => {
+          // Interior of each owner-draw tab, excluding the vertical dividers.
+          const pixels = r.canvas.getContext('2d').getImageData(
+            pos.x + 15 + index * 114, pos.y + 32, 100, 18).data;
+          let ink = 0;
+          for (let i = 0; i < pixels.length; i += 4) {
+            if (pixels[i] < 80 && pixels[i + 1] < 80 && pixels[i + 2] < 80) ink++;
+          }
+          return ink;
+        });
+      })(),
       apps: runningApps.length,
       windows: Object.keys(r.windows).length,
       inputQueue: r.inputQueue.length,
@@ -2290,8 +2316,28 @@ async function main() {
   })()`, 5000);
 
   if (DUMP_CONSOLE) result.consoleEvents = consoleEventSummary(cdp.events);
-  console.log(JSON.stringify(result, null, 2));
   await saveScreenshot();
+  const closePoint = await evalExpr(`(() => {
+    const r = window.sharedRenderer || runningApps[0].wine.renderer;
+    const w = Object.values(r.windows).find(w => w && w.visible && w.title === 'About Winamp');
+    if (!w) return null;
+    const p = r._windowOriginForComposite(w);
+    return { x: p.x + w.w - 13, y: p.y + 12 };
+  })()`);
+  if (closePoint) await clickCanvasPoint(closePoint.x, closePoint.y);
+  await wait(1200);
+  result.afterClose = await evalExpr(`(() => {
+    const app = runningApps[0];
+    const r = window.sharedRenderer || app.wine.renderer;
+    const e = app.wine.instance.exports;
+    return {
+      aboutVisible: Object.values(r.windows).some(w => w && w.visible && w.title === 'About Winamp'),
+      aboutWorker: e.guest_read32(0x44f8f8) >>> 0,
+      creditsWorker: e.guest_read32(0x44f8f4) >>> 0,
+      quit: e.get_quit_flag(),
+    };
+  })()`);
+  console.log(JSON.stringify(result, null, 2));
   cdp.close();
   cleanup();
 }

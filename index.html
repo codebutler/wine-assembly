@@ -1608,6 +1608,7 @@
           <option value="ricochet_xtreme">Ricochet Xtreme</option>
           <option value="alien_shooter">Alien Shooter</option>
           <option value="collapse_crunch">Collapse! Crunch</option>
+          <option value="hock_a_loogie">Hock-A-Loogie (1995, original)</option>
           <option value="zuma_deluxe">Zuma Deluxe (experimental)</option>
           <option value="crimsonland">Crimsonland (experimental)</option>
           <option value="ultima4_gog">Ultima IV (GOG DOSBox)</option>
@@ -2092,6 +2093,12 @@ Resource-aware Win98 emulator
       "lib/browser-shell.js",
       "lib/pe.js",
       "lib/process-boot.js",
+      "lib/ne-load-error.js",
+      "lib/ne-image.js",
+      "lib/ne-invoke.js",
+      "lib/ne-lifecycle.js",
+      "lib/ne-sources.js",
+      "lib/ne-guest-bridge.js",
       "lib/app-profiles.js",
       "lib/dll-loader.js",
       "lib/storage.js",
@@ -2107,6 +2114,7 @@ Resource-aware Win98 emulator
       "lib/d3d-shader-ir.js",
       "lib/d3d9-fixed.js",
       "lib/d3d9-texture.js",
+      "lib/render-clear.js",
       "lib/d3d9-backend.js",
       "lib/d3dim-gpu.js",
       "lib/d3d-command-stream.js",
@@ -2138,7 +2146,9 @@ Resource-aware Win98 emulator
       // After vlan-rtc.js and vlan-star.js, which it builds the room from.
       "lib/vlan-room.js",
       "lib/guest-rpc.js",
+      "lib/thread-send-waits.js",
       "lib/guest-thread-host.js",
+      "lib/process-send-broker.js",
       "host.js",
       "lib/recorder.js",
       "lib/perf-hud.js"
@@ -2160,9 +2170,11 @@ Resource-aware Win98 emulator
     const DEBUG_ONLY_APPS = window.wineApps.DEBUG_ONLY_APPS;
     const appFileUrl = window.wineApps.appFileUrl;
 
-    // ?prod shows a local server exactly the desktop the deployed site shows,
-    // so a release can be tried on localhost without the local-only candidates.
-    const LOCAL_DESKTOP = !new URLSearchParams(location.search).has('prod') &&
+    // Public apps are the default everywhere, including localhost screenshot
+    // proxies. Opt into unpublished local apps with ?candidates; ?prod still
+    // takes precedence for release previews.
+    const LOCAL_DESKTOP = new URLSearchParams(location.search).has('candidates') &&
+      !new URLSearchParams(location.search).has('prod') &&
       /^(localhost|127\.|0\.0\.0\.0|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
     const DEBUG_MODE = new URLSearchParams(location.search).has('debug');
 
@@ -2966,16 +2978,37 @@ Resource-aware Win98 emulator
       });
     }
 
+    function initAppSelector() {
+      const selectorApps = DEBUG_MODE
+        ? DEFAULT_APPS.concat(DEBUG_ONLY_APPS,
+            LOCAL_DESKTOP ? LOCAL_CANDIDATE_APPS : [])
+        : DEFAULT_APPS.concat(LOCAL_DESKTOP ? LOCAL_CANDIDATE_APPS : []);
+      const selectorAppSet = new Set(selectorApps.map(a => a[0]));
+      const sel = document.getElementById('app-select');
+      for (const opt of [...sel.querySelectorAll('option')]) {
+        if (!selectorAppSet.has(opt.value)) opt.remove();
+      }
+      for (const grp of [...sel.querySelectorAll('optgroup')]) {
+        if (!grp.querySelector('option')) grp.remove();
+      }
+      // Catalog entries need selectable options in normal, direct and debug
+      // modes, even when there is no hand-written option for the program.
+      const existingOptions = new Set([...sel.querySelectorAll('option')].map(o => o.value));
+      for (const [value, label] of selectorApps) {
+        if (existingOptions.has(value)) continue;
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        sel.appendChild(option);
+        existingOptions.add(value);
+      }
+    }
+    initAppSelector();
+
     function initDesktop() {
       const desktopApps = LOCAL_DESKTOP
         ? DEFAULT_APPS.concat(LOCAL_CANDIDATE_APPS)
         : DEFAULT_APPS;
-      const selectorApps = DEBUG_MODE
-        ? DEFAULT_APPS.concat(DEBUG_ONLY_APPS,
-            LOCAL_DESKTOP ? LOCAL_CANDIDATE_APPS : [])
-        : desktopApps;
-      const desktopAppSet = new Set(desktopApps.map(a => a[0]));
-      const selectorAppSet = new Set(selectorApps.map(a => a[0]));
       // Pre-launch click forwarder: canvas sits over the icons even before
       // wireCanvasInput runs, so clicks would be swallowed. Forward any click
       // on the canvas through to the icon underneath until the real input
@@ -3001,12 +3034,6 @@ Resource-aware Win98 emulator
         if (iconEl) iconEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY }));
       }, { passive: false });
       const sel = document.getElementById('app-select');
-      for (const opt of [...sel.querySelectorAll('option')]) {
-        if (!selectorAppSet.has(opt.value)) opt.remove();
-      }
-      for (const grp of [...sel.querySelectorAll('optgroup')]) {
-        if (!grp.querySelector('option')) grp.remove();
-      }
       const grid = document.getElementById('desktop-icons');
       for (const [value, label, glyph] of desktopApps) {
         const el = document.createElement('div');
@@ -3398,8 +3425,8 @@ Resource-aware Win98 emulator
         Math.max(MIN_BACKING_WIDTH, Math.round((displayW || 1) * scale)));
       let h = Math.min(MAX_BACKING,
         Math.max(MIN_BACKING_HEIGHT, Math.round(stageH * scale)));
-      if (SINGLE_APP_MODE && boardRenderer && boardRenderer.singleAppBackingSize) {
-        ({ w, h } = boardRenderer.singleAppBackingSize(w, h));
+      if (boardRenderer && boardRenderer.desktopBackingSize) {
+        ({ w, h } = boardRenderer.desktopBackingSize(w, h));
       }
       if (boardRenderer && boardRenderer.mobileCrop && boardRenderer.mobileCrop.contain) {
         for (const win of Object.values(boardRenderer.windows || {})) {

@@ -250,6 +250,25 @@
   ;; 422: DuplicateHandle
   (func $handle_DuplicateHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $duplicate i32) (local $file_duplicate i32) (local $stack_w i32)
+    ;; A process pseudo handle is contextual, not a transferable identity.
+    ;; Ask the host to allocate a handle in the target process's handle table.
+    (if (i32.or (i32.eq (local.get $arg1) (i32.const -1))
+          (i32.or (i32.ne (call $pipe_child_pid (local.get $arg1)) (i32.const 0))
+            (i32.or
+              (i32.eq (i32.and (local.get $arg1) (i32.const 0xFFFF0000)) (i32.const 0x00E60000))
+              (i32.eq (i32.and (local.get $arg1) (i32.const 0xFFFFF000)) (i32.const 0x000E2000)))))
+      (then
+        (local.set $duplicate (call $host_process_ctl (i32.const 3)
+          (call $g2w (i32.load offset=16 (global.get $reg_base))) (i32.const 0)))
+        (if (i32.gt_s (local.get $duplicate) (i32.const 0))
+          (then
+            (if (i32.and (i32.ne (local.get $arg3) (i32.const 0))
+                  (i32.ne (local.get $arg2) (i32.const 0)))
+              (then (call $gs32 (local.get $arg3) (local.get $duplicate))))
+            (call $pipe_ret (i32.const 1) (i32.const 0) (i32.const 32)))
+          (else (call $pipe_ret (i32.const 0)
+            (i32.sub (i32.const 0) (local.get $duplicate)) (i32.const 32))))
+        (return)))
     ;; An anonymous pipe handle: a new handle on the same end, carrying the
     ;; caller's bInheritHandle ([ESP+24]); DUPLICATE_CLOSE_SOURCE ([ESP+28]
     ;; bit 0) closes the original. This is how a parent keeps a
@@ -298,7 +317,9 @@
                 (local.set $file_duplicate (call $host_fs_duplicate_handle
                   (local.get $arg1) (local.get $arg4)
                   (i32.load offset=24 (local.get $stack_w))
-                  (i32.load offset=28 (local.get $stack_w))))
+                  (i32.load offset=28 (local.get $stack_w))
+                  (i32.and (call $current_process_handle_valid (local.get $arg0))
+                           (call $current_process_handle_valid (local.get $arg2)))))
                 (if (i32.gt_s (local.get $file_duplicate) (i32.const 0))
                   (then (local.set $duplicate (local.get $file_duplicate)))
                   (else (if (i32.eqz (local.get $file_duplicate))
@@ -319,14 +340,24 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))) ;; 7 args + ret
   )
 
-  ;; 423: LockFile — STUB: unimplemented
+  ;; LockFile: exclusive nonblocking byte-range lock, unsigned 64-bit range.
   (func $handle_LockFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $error i32)
+    (local.set $error (call $host_fs_lock_file (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (i32.const 0)))
+    (if (local.get $error) (then (global.set $last_error (local.get $error))))
+    (i32.store (global.get $reg_base) (i32.eqz (local.get $error)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
-  ;; 424: UnlockFile — STUB: unimplemented
+  ;; UnlockFile: exact original region and open-file owner must match.
   (func $handle_UnlockFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $error i32)
+    (local.set $error (call $host_fs_lock_file (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (i32.const 1)))
+    (if (local.get $error) (then (global.set $last_error (local.get $error))))
+    (i32.store (global.get $reg_base) (i32.eqz (local.get $error)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 425: ReadFile — STUB: unimplemented
@@ -340,7 +371,11 @@
   ;; whenever a handler leaves EIP alone — yield or no yield — and splices the
   ;; call out entirely, so the guest would resume past its own ReadFile with
   ;; the arguments still on the stack.
+  ;; Scoped by win32_dispatch, including nested dispatch. Only io_block emits
+  ;; this event; EIP equality or a yield reason alone is not callback ownership.
+  (global $api_io_retry (mut i32) (i32.const 0))
   (func $io_block (param $unpop i32)
+    (global.set $api_io_retry (i32.const 1))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $unpop)))
     (global.set $handler_set_eip (i32.const 1))
     (global.set $eip (global.get $current_thunk_eip))
@@ -1782,21 +1817,176 @@
     (drop (call $wide_to_ansi (local.get $ws) (local.get $buf) (local.get $n)))
     (local.get $buf))
 
-  ;; ShellExecuteExA(lpExecInfo) — 1 arg, return TRUE
+  ;; Return an owned expanded ANSI path, or NULL on allocation failure.
+  ;; Expansion uses the guest environment, never the browser/Node environment.
+  (func $shellexec_expand (param $src i32) (result i32)
+    (local $n i32) (local $buf i32)
+    (local.set $n (call $env_expand_a (local.get $src) (i32.const 0) (i32.const 0)))
+    (if (i32.eqz (local.get $n)) (then (return (i32.const 0))))
+    (local.set $buf (call $heap_alloc (local.get $n)))
+    (if (i32.eqz (local.get $buf)) (then (return (i32.const 0))))
+    (if (i32.ne (call $env_expand_a (local.get $src) (local.get $buf) (local.get $n)) (local.get $n))
+      (then (call $heap_free (local.get $buf)) (return (i32.const 0))))
+    (local.get $buf))
+
+  ;; hInstApp contains a legacy shell status; GetLastError uses Win32 codes.
+  (func $shellexec_error (param $status i32) (result i32)
+    (if (i32.eqz (local.get $status)) (then (return (i32.const 8))))
+    (if (i32.eq (local.get $status) (i32.const 26)) (then (return (i32.const 32))))
+    (if (i32.eq (local.get $status) (i32.const 27)) (then (return (i32.const 1155))))
+    (if (i32.eq (local.get $status) (i32.const 28)) (then (return (i32.const 1156))))
+    (if (i32.eq (local.get $status) (i32.const 29)) (then (return (i32.const 1156))))
+    (if (i32.eq (local.get $status) (i32.const 30)) (then (return (i32.const 1156))))
+    (if (i32.eq (local.get $status) (i32.const 31)) (then (return (i32.const 1155))))
+    (if (i32.eq (local.get $status) (i32.const 32)) (then (return (i32.const 1157))))
+    (local.get $status))
+
+  ;; Win32 SHELLEXECUTEINFO is 60 bytes: nShow +28, hInstApp +32,
+  ;; hProcess +56. A shell status is not a process handle.
+  (func $shell_execute_ex (param $info i32) (param $wide i32) (result i32)
+    (local $verb i32) (local $file i32) (local $params i32) (local $dir i32)
+    (local $v i32) (local $f i32) (local $p i32) (local $d i32)
+    (local $mask i32) (local $status i32) (local $error i32) (local $ok i32)
+    (local $launch i32) (local $n i32) (local $plen i32) (local $pid i32)
+    (local $expanded_file i32) (local $expanded_dir i32)
+    (local.set $error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+    (block $done
+      (br_if $done (call $ptr_range_access_bad (local.get $info) (i32.const 60) (i32.const 1)))
+      (br_if $done (i32.ne (call $gl32 (local.get $info)) (i32.const 60)))
+      (call $gs32 (i32.add (local.get $info) (i32.const 56)) (i32.const 0))
+      (local.set $mask (call $gl32 (i32.add (local.get $info) (i32.const 4))))
+      ;; ID lists/classes need shell namespace support, not an EXE launch.
+      (if (i32.and (local.get $mask) (i32.const 0x0f))
+        (then
+          (call $gs32 (i32.add (local.get $info) (i32.const 32)) (i32.const 31))
+          (local.set $error (i32.const 120)) ;; ERROR_CALL_NOT_IMPLEMENTED
+          (br $done)))
+      (local.set $verb (call $gl32 (i32.add (local.get $info) (i32.const 12))))
+      (local.set $file (call $gl32 (i32.add (local.get $info) (i32.const 16))))
+      (local.set $params (call $gl32 (i32.add (local.get $info) (i32.const 20))))
+      (local.set $dir (call $gl32 (i32.add (local.get $info) (i32.const 24))))
+      (if (i32.eqz (local.get $file))
+        (then
+          (call $gs32 (i32.add (local.get $info) (i32.const 32)) (i32.const 2))
+          (local.set $error (i32.const 2))
+          (br $done)))
+      (local.set $v (local.get $verb)) (local.set $f (local.get $file))
+      (local.set $p (local.get $params)) (local.set $d (local.get $dir))
+      (if (local.get $wide)
+        (then
+          (local.set $v (call $shellexec_narrow_w (local.get $verb)))
+          (local.set $f (call $shellexec_narrow_w (local.get $file)))
+          (local.set $p (call $shellexec_narrow_w (local.get $params)))
+          (local.set $d (call $shellexec_narrow_w (local.get $dir)))
+          (if (i32.or (i32.eqz (local.get $f))
+                (i32.or
+                  (i32.and (i32.ne (local.get $verb) (i32.const 0)) (i32.eqz (local.get $v)))
+                  (i32.or
+                    (i32.and (i32.ne (local.get $params) (i32.const 0)) (i32.eqz (local.get $p)))
+                    (i32.and (i32.ne (local.get $dir) (i32.const 0)) (i32.eqz (local.get $d))))))
+            (then
+              (call $gs32 (i32.add (local.get $info) (i32.const 32)) (i32.const 8))
+              (local.set $error (i32.const 8))
+              (br $done)))))
+      ;; SEE_MASK_DOENVSUBST expands only file/directory, not verb/parameters.
+      ;; Keep original conversion buffers separately owned until cleanup.
+      (if (i32.and (local.get $mask) (i32.const 0x200))
+        (then
+          (local.set $expanded_file (call $shellexec_expand (local.get $f)))
+          (if (i32.and (i32.ne (local.get $expanded_file) (i32.const 0)) (i32.ne (local.get $d) (i32.const 0)))
+            (then (local.set $expanded_dir (call $shellexec_expand (local.get $d)))))
+          (if (i32.or (i32.eqz (local.get $expanded_file))
+                (i32.and (i32.ne (local.get $d) (i32.const 0)) (i32.eqz (local.get $expanded_dir))))
+            (then
+              (call $gs32 (i32.add (local.get $info) (i32.const 32)) (i32.const 8))
+              (local.set $error (i32.const 8))
+              (br $done)))
+          (if (local.get $wide) (then
+            (call $heap_free (local.get $f))
+            (if (local.get $d) (then (call $heap_free (local.get $d))))))
+          (local.set $f (local.get $expanded_file))
+          (local.set $d (local.get $expanded_dir))
+          ;; W cleanup now owns the expanded paths.
+          (if (local.get $wide) (then
+            (local.set $expanded_file (i32.const 0))
+            (local.set $expanded_dir (i32.const 0))))))
+      (if (i32.and (local.get $mask) (i32.const 0x40))
+        (then
+          ;; SEE_MASK_NOCLOSEPROCESS: request a tracked process, irrespective
+          ;; of the legacy CreateProcess per-app opt-in. Do not fall back to
+          ;; a fire-and-forget shell call when the host cannot create one.
+          (if (local.get $v)
+            (then
+              ;; WAT and is eager: establish the string length before the
+              ;; four-byte read, including strings at a mapped-page edge.
+              (if (i32.eqz (if (result i32)
+                    (i32.eq (call $guest_strlen (local.get $v)) (i32.const 4))
+                    (then (i32.eq (i32.or (call $gl32 (local.get $v)) (i32.const 0x20202020)) (i32.const 0x6e65706f)))
+                    (else (i32.const 0))))
+                (then
+                  (call $gs32 (i32.add (local.get $info) (i32.const 32)) (i32.const 31))
+                  (local.set $error (i32.const 120))
+                  (br $done)))))
+          (local.set $n (call $guest_strlen (local.get $f)))
+          (if (local.get $p) (then (local.set $plen (call $guest_strlen (local.get $p)))))
+          (local.set $launch (call $heap_alloc (i32.add (i32.add (local.get $n) (local.get $plen)) (i32.const 4))))
+          (if (i32.eqz (local.get $launch))
+            (then
+              (call $gs32 (i32.add (local.get $info) (i32.const 32)) (i32.const 8))
+              (local.set $error (i32.const 8))
+              (br $done)))
+          (call $gs8 (local.get $launch) (i32.const 34))
+          (call $guest_memmove (i32.add (local.get $launch) (i32.const 1)) (local.get $f) (local.get $n))
+          (call $gs8 (i32.add (local.get $launch) (i32.add (local.get $n) (i32.const 1))) (i32.const 34))
+          (call $gs8 (i32.add (local.get $launch) (i32.add (local.get $n) (i32.const 2))) (i32.const 32))
+          (if (local.get $plen) (then
+            (call $guest_memmove (i32.add (local.get $launch) (i32.add (local.get $n) (i32.const 3)))
+              (local.get $p) (local.get $plen))))
+          (call $gs8 (i32.add (local.get $launch) (i32.add (i32.add (local.get $n) (local.get $plen)) (i32.const 3))) (i32.const 0))
+          (local.set $pid (call $host_process_spawn
+            (call $g2w (local.get $launch))
+            (if (result i32) (local.get $d) (then (call $g2w (local.get $d))) (else (i32.const 0)))
+            (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 1)
+            (call $gl32 (i32.add (local.get $info) (i32.const 28)))))
+          (call $heap_free (local.get $launch))
+          (if (local.get $pid)
+            (then
+              (call $gs32 (i32.add (local.get $info) (i32.const 56)) (call $pipe_child_process_handle (local.get $pid)))
+              (local.set $status (i32.const 33)))
+            (else (local.set $status (i32.const 2)))))
+        (else (local.set $status (call $host_shell_execute
+        (call $gl32 (i32.add (local.get $info) (i32.const 8)))
+        (if (result i32) (local.get $v) (then (call $g2w (local.get $v))) (else (i32.const 0)))
+        (call $g2w (local.get $f))
+        (if (result i32) (local.get $p) (then (call $g2w (local.get $p))) (else (i32.const 0)))
+        (if (result i32) (local.get $d) (then (call $g2w (local.get $d))) (else (i32.const 0)))
+        (call $gl32 (i32.add (local.get $info) (i32.const 28)))))))
+      (call $gs32 (i32.add (local.get $info) (i32.const 32)) (local.get $status))
+      (local.set $ok (i32.gt_u (local.get $status) (i32.const 32)))
+      (local.set $error (if (result i32) (local.get $ok) (then (i32.const 0))
+        (else (call $shellexec_error (local.get $status))))))
+    (if (local.get $expanded_file) (then (call $heap_free (local.get $expanded_file))))
+    (if (local.get $expanded_dir) (then (call $heap_free (local.get $expanded_dir))))
+    (if (local.get $wide)
+      (then
+        (if (local.get $v) (then (call $heap_free (local.get $v))))
+        (if (local.get $f) (then (call $heap_free (local.get $f))))
+        (if (local.get $p) (then (call $heap_free (local.get $p))))
+        (if (local.get $d) (then (call $heap_free (local.get $d))))))
+    (global.set $last_error (local.get $error))
+    (local.get $ok))
+
+  ;; ShellExecuteExA(lpExecInfo) — 1 stdcall argument.
   (func $handle_ShellExecuteExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; SHELLEXECUTEINFO.hInstApp at offset 28 = set to >32
-    (i32.store (call $g2w (i32.add (local.get $arg0) (i32.const 28))) (i32.const 33))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (call $shell_execute_ex (local.get $arg0) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ShellExecuteExW has the same fixed-width SHELLEXECUTEINFO layout. The
-  ;; string fields differ only in what they point at, and this emulation does
-  ;; not dereference them, so preserve the A handler's success contract.
+  ;; string fields point to UTF-16 input and must be narrowed for the host.
   (func $handle_ShellExecuteExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_ShellExecuteExA
-      (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+    (i32.store offset=0 (global.get $reg_base) (call $shell_execute_ex (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; DragQueryFileW — same HDROP, Unicode destination.
   (func $handle_DragQueryFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

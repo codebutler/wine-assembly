@@ -44,7 +44,8 @@ fs.writeFileSync(path.join(output, 'live.log'), '');
       if (/Glide|UNIMPLEMENTED|RuntimeError|FATAL|voodooa\.dll loaded/i.test(line)) console.log(line);
     });
     page.on('pageerror', error => { errors.push(String(error)); console.error(String(error)); });
-    await page.goto(`http://127.0.0.1:${server.address().port}/?threads&glide-renderer=${renderer}`,
+    // Local app selection requires candidates; debug retains failure diagnostics.
+    await page.goto(`http://127.0.0.1:${server.address().port}/?candidates&debug&threads&d3d-renderer=${renderer}&glide-renderer=${renderer}`,
       { waitUntil: 'networkidle2', timeout: 60000 });
     await page.evaluate(async () => {
       await setThreads(true);
@@ -107,6 +108,13 @@ fs.writeFileSync(path.join(output, 'live.log'), '');
       const hash = pixels ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', pixels)))
         .map(byte => byte.toString(16).padStart(2, '0')).join('') : null;
       return { isolated: crossOriginIsolated, running: wine?.running,
+        selectedBackend: wine?.hostCtx?.glideBridge?.options.backend,
+        glRenderer: wine?.hostCtx?.glideBridge?.device?.glRenderer || null,
+        // Worker dllMapped notifications register generation-checked mappings;
+        // successful loads need not print the historical LoadLibrary message.
+        loadedModules: (wine?.moduleMap || []).filter(item => item.base > 0)
+          .map(item => ({ name: String(item.name).replace(/\\/g, '/').split('/').pop().toLowerCase(),
+            base: item.base, generation: item.generation })),
         drawableHash: hash,
         drawableColoredPixels: colored(pixels), displayedColoredPixels: colored(shown),
         transparentPixels,
@@ -135,7 +143,7 @@ fs.writeFileSync(path.join(output, 'live.log'), '');
     await Promise.race([failure, page.waitForFunction(previous => {
       const stats = runningApps.find(app => app.name === 'nfs3_demo')?.wine?.hostCtx?.glideBridge?.device?.stats;
       return stats?.triangles > previous.triangles + 30000 &&
-        stats?.presents > previous.presents + 60 && Date.now() - previous.inputStarted > 6000;
+        stats?.presents > previous.presents + 60 && Date.now() - previous.inputStarted > 12000;
     }, { timeout: 180000, polling: 500 }, { ...before.glide, inputStarted: Date.now() })]);
     await page.keyboard.up('ArrowUp');
     const after = await observe();
@@ -150,8 +158,14 @@ fs.writeFileSync(path.join(output, 'live.log'), '');
     assert.strictEqual(after.transparentPixels, 0, 'RGB565 presentation must stay opaque');
     assert(before.drawableHash && after.drawableHash && before.drawableHash !== after.drawableHash,
       'the Glide drawable itself must advance, independently of desktop clock/cursor changes');
-    assert(logs.some(line => /LoadLibrary.*voodooa\.dll loaded/i.test(line)), 'original Glide renderer must load');
-    assert(!logs.some(line => /LoadLibrary.*(?:softtria|d3da)\.dll loaded/i.test(line)), 'unexpected game renderer');
+    for (const state of [before, after]) {
+      assert.strictEqual(state.selectedBackend, renderer, 'shared GPU selector must select the requested backend');
+      assert.strictEqual(!!state.glRenderer, renderer === 'webgl', 'actual renderer must match requested backend');
+      assert(state.loadedModules.some(item => item.name === 'voodooa.dll'),
+        'original Glide renderer must remain mapped throughout the race');
+      assert(!state.loadedModules.some(item => /^(?:softtria|d3da)\.dll$/.test(item.name)),
+        'unexpected game renderer mapped');
+    }
     assert.deepStrictEqual(errors, []);
     assert(!logs.some(line => /UNIMPLEMENTED API:|RuntimeError|FATAL:|DllMain did not return|eip-zero/i.test(line)), 'guest failure');
     console.log(`PASS NFS III Glide ${renderer} sustained race geometry and swaps; screenshots require visual HUD/input review`);

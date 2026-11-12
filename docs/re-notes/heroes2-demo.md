@@ -4,11 +4,11 @@
 
 Frozen CLI gameplay reproduces the user's momentary "stretched" image when a
 hero walks far enough to auto-pan the camera. The preceding full-frame capture
-at batch 2097 is `/private/tmp/heroes-hero-map.png`; the transient at batch 2118 is
-`/private/tmp/heroes-scroll-2118.png`; and the completed framed image at batch
-2148 is `/private/tmp/heroes-scroll-2148.png`. A second route click reproduced
-the same transition (`/private/tmp/heroes-newpath.png`). An edge-pan capture
-after the frame completed kept the HUD (`/private/tmp/heroes-edge-screen-right.png`),
+at batch 2097 is `heroes-hero-map.png`; the transient at batch 2118 is
+`heroes-scroll-2118.png`; and the completed framed image at batch
+2148 is `heroes-scroll-2148.png`. A second route click reproduced
+the same transition (`heroes-newpath.png`). An edge-pan capture
+after the frame completed kept the HUD (`heroes-edge-screen-right.png`),
 but a fresh frozen run caught the same transient map-only frame during ordinary
 edge panning. The defect is a presentation-timing problem for scrolling in
 general, not a movement-only rendering path.
@@ -18,7 +18,7 @@ DirectDraw primary slot 1, offscreen slot 2, its window frame layer, and the
 canvas are all 640×480; both surfaces are 8 bpp with pitch 640. Sampled primary
 indices through the active palette exactly match the displayed RGB bytes.
 The primary itself contains the map-only frame. Offscreen slot 2 retains the
-map and right sidebar, but lacks the outer border (`/private/tmp/heroes-surface-2.png`).
+map and right sidebar, but lacks the outer border (`heroes-surface-2.png`).
 The game eventually composes the complete HUD into the primary. A filtered
 Win32 API trace over the same frozen route corrected an initial misleading
 host-import trace: the bad image **does** follow a DirectDraw
@@ -32,7 +32,7 @@ source and map-only image occur during edge panning at batch 2160; both paths
 return to full-width `(0,0)-(640,480)` source and the framed HUD a few batches
 later (2148 and 2170 respectively). There is no GDI `StretchBlt` in the trace;
 this is scaling inside `IDirectDrawSurface_Blt`. Fresh captures are
-`/private/tmp/heroes-repro-{2097,2118,2148,2160,2170}.png`.
+`heroes-repro-{2097,2118,2148,2160,2170}.png`.
 Both paths also call `InvalidateRect`
 on the map viewport `(16,16)-(463,463)`; the movement path does not have a
 special Win32 call that declares its HUD complete. In a 21-batch window around
@@ -40,8 +40,8 @@ the bad frame there are four Unlock/Blt/Lock cycles, four invalidations, 30
 PeekMessageA calls and four GetMessageA calls. An 80-batch edge-pan window
 has 14 cycles, 14 invalidations, 92 PeekMessageA calls and 13 GetMessageA
 calls. Sleep, WaitMessage, Flip and timeGetTime occur in neither window.
-The trace is `/private/tmp/heroes-differential.log`; reproduced images are
-`/private/tmp/heroes-diff-bad.png` and `/private/tmp/heroes-diff-edge.png`.
+The trace is `heroes-differential.log`; reproduced images are
+`heroes-diff-bad.png` and `heroes-diff-edge.png`.
 The host's canonical-surface `Flush id=0x200001` and fallback `Upload slot=1`
 can therefore publish the stretched map-only primary after a normal DirectDraw
 cycle. A candidate fix would keep the prior complete frame visible during
@@ -151,8 +151,8 @@ NEW GAME / STANDARD / OKAY, screenshot-confirmed castle/hero adventure map.
 No diagnostic audio/presentation suppression. This replaces headless-only
 evidence for the map and preserves real music/animation work.
 
-Evidence harness `/private/tmp/audit-idle-games.js`; JSON/PNG directories
-`/private/tmp/wa-idle-heroes-menu`, `wa-idle-heroes-clock-sites`, and
+Evidence harness `audit-idle-games.js`; JSON/PNG directories
+`wa-idle-heroes-menu`, `wa-idle-heroes-clock-sites`, and
 `wa-idle-heroes-map`. The clock-site trace records160 samples including ESP,
 outer caller, returned clock and detector count. Post-fix evidence:
 `wa-idle-heroes-headful304`, `wa-idle-heroes-residual304`, `wa-idle-heroes-park8`.
@@ -183,7 +183,7 @@ Command line carries `/R0` (added by the registry entry).
 node test/run.js --app=heroes2_demo --batch-size=20000 --max-batches=2600 \
   --repaint-every=50 --quiet-api \
   --input='400:click:535:225,700:click:528:68,1200:click:283:373' \
-  --png=/tmp/h2.png
+  --png=h2.png
 ```
 
 `NEW GAME` → `STANDARD GAME` → `OKAY` on the scenario picker (Broken Alliance).
@@ -201,8 +201,8 @@ Profiling commands:
 node test/run.js --app=heroes2_demo ... --handler-hist-thread=0 \
   --handler-hist-start=1400 --handler-hist-stop=2600
 # self time (needs --repaint-every=50, see the trap below)
-node --cpu-prof --cpu-prof-dir=/tmp/prof test/run.js --app=heroes2_demo ...
-node tools/cpuprof-top.js /tmp/prof/*.cpuprofile 20
+node --cpu-prof --cpu-prof-dir=scratch/runs/heroes2-profile test/run.js --app=heroes2_demo ...
+node tools/cpuprof-top.js scratch/runs/heroes2-profile/*.cpuprofile 20
 node tools/func-index.js 320        # resolve wasm-function[N]
 ```
 
@@ -438,3 +438,14 @@ Zero live evictions. Heroes II is not decode-bound (unlike Total Annihilation,
 - **The lowering is disabled on main anyway** (`$loop_emit_enabled = 0`,
   commit `bbf4ca05`); `--loop-superops` turns it on for an A/B.
 - **The block cache is not the constraint here** — see above, zero evictions.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+### Mixed integer/x87 follow-up (2026-09-30)
+
+The frozen mixed-island prototype was neutral on the 2400-batch adventure-map
+route: whole-process CPU 5.410 → 5.395 s (−0.28%, baseline spread 2.59%). All
+four final frames match exactly. See [cross-game measurements](../mixed-island-corpus.md)
+for artifacts, commands and limitations; this is not a browser FPS result.

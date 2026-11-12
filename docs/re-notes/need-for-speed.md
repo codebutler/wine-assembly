@@ -70,14 +70,14 @@ existing NFS II performance measurements predate this correctness fix and
 must not be treated as timings of fully rendered geometry.
 
 ```sh
-node tools/profile-web-frames.js --app=nfs2_demo --warmup=2 --seconds=25 '--guest-script=click:130:310@35:0.3,key:13@5:0.3,key:38@15:3' --film=/tmp/nfs2-race:10
+node tools/profile-web-frames.js --app=nfs2_demo --warmup=2 --seconds=25 '--guest-script=click:130:310@35:0.3,key:13@5:0.3,key:38@15:3' --film=nfs2-race:10
 ```
 
 The click targets the main menu's RACE option. If startup is slower, wait for
 that menu before clicking; input during the opening title screen is too early.
 
 ```sh
-node test/run.js --app=nfs2_demo --no-build --quiet-api --quiet-blocks --max-batches=10000 --batch-size=100000 --max-seconds=40 --png=/tmp/nfs2.png
+node test/run.js --app=nfs2_demo --no-build --quiet-api --quiet-blocks --max-batches=10000 --batch-size=100000 --max-seconds=40 --png=nfs2.png
 ```
 
 NFS III is the September 1998 final demo (`nfs3demo.exe`), with Corvette,
@@ -105,7 +105,7 @@ Raise the CLI stuck threshold: a startup polling loop at `0x004e5ad0`
 otherwise triggers the default same-EIP detector after only 11 batches.
 
 ```sh
-node test/run.js --app=nfs3_demo --threads --real-ticks --no-build --quiet-api --quiet-blocks --stuck-after=100000 --max-batches=100000 --max-seconds=40 --batch-size=10000 --png=/tmp/nfs3.png
+node test/run.js --app=nfs3_demo --threads --real-ticks --no-build --quiet-api --quiet-blocks --stuck-after=100000 --max-batches=100000 --max-seconds=40 --batch-size=10000 --png=nfs3.png
 ```
 
 ## Texture cache page tracking
@@ -287,3 +287,28 @@ vertex mappings, so an integer edge owns a GL pixel centre only as a top/left
 edge; 1/128 px was snapped away on SwiftShader). Evidence:
 `scratch/runs/20261006-nfs3-d3d-horizon-line`. Right/left-edge (x) spans
 in the software rasterizer are being audited separately.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## Direct3D selection and cockpit edge history (2026-10-11)
+
+The verified NFS III demo selection is registry
+`HKLM\Software\Electronic Arts\Need For Speed III Demo`,
+`Thrash Driver` REG_SZ `d3d` and `D3D Device` DWORD0, loading original
+`d3da.dll`; `-d3d0` and `-D3D` did not select it in the launch probes.
+Its Watcom `.bss` has VirtualSize0, RawSize32256 and PointerToRawData0;
+copying file headers there produced a false "DLL already in use" message
+through nonzero attach counter at preferred VA `0x60019148`. The corrected
+loader zeroes unbacked sections.
+
+An observed cockpit seam at y256 survived switching from software to GPU.
+Adjacent256-pixel tiles use V from0.5/256 to1+0.5/256 with wrapping, making
+the exact bottom edge sample the opaque roof row. Software excluded the
+triangle's bottom row; the GPU correction used a1/256-pixel upward vertex
+bias to choose screen-top ownership after Y flip, leaving line vertices
+unchanged. Chromium captures showed the seam gone; that particular edge
+correction had not yet been rechecked in Safari. The earlier Safari26.4
+default-WebGL race run recorded234,894 triangles and zero executor errors;
+it is separate from the edge-correction validation.

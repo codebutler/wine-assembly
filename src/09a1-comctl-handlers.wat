@@ -263,11 +263,18 @@
     ;; Two hex digits per byte, two checksum digits, NUL, and one extra byte
     ;; so a truncated longer value cannot masquerade as an exact-length value.
     (local.set $encoded (i32.add (i32.shl (local.get $size) (i32.const 1)) (i32.const 2)))
-    (local.set $buffer (call $heap_alloc (i32.add (local.get $encoded) (i32.const 2))))
+    (local.set $buffer (call $heap_alloc (i32.add (local.get $encoded) (i32.const 6))))
     (if (i32.eqz (local.get $buffer)) (then (return (i32.const 0))))
-    (if (i32.eq (call $ini_get_string (local.get $app) (local.get $key) (i32.const 0)
+    ;; Readiness and consumption share one RPC, including after a namespace
+    ;; replacement. A private result cell leaves EAX and caller output atomic.
+    (if (i32.eq (call $host_ini_read_result (i32.const 0)
+        (call $g2w (local.get $app)) (call $g2w (local.get $key)) (i32.const 0)
         (local.get $buffer) (i32.add (local.get $encoded) (i32.const 2))
-        (local.get $file) (i32.const 0)) (local.get $encoded))
+        (if (result i32) (local.get $file) (then (call $g2w (local.get $file))) (else (i32.const 0)))
+        (i32.const 0) (call $g2w (i32.add (local.get $buffer) (i32.add (local.get $encoded) (i32.const 2))))
+        (global.get $current_thread_id)) (i32.const 997))
+      (then (call $heap_free (local.get $buffer)) (return (i32.const -1))))
+    (if (i32.eq (call $gl32 (i32.add (local.get $buffer) (i32.add (local.get $encoded) (i32.const 2)))) (local.get $encoded))
       (then
         (loop $decode
           (local.set $value (i32.or
@@ -289,8 +296,12 @@
 
   ;; GetPrivateProfileStructA(appName, keyName, lpStruct, nSize, fileName) — 5 args stdcall
   (func $handle_GetPrivateProfileStructA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $ini_get_struct
+    (local $result i32)
+    (local.set $result (call $ini_get_struct
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)))
+    (if (i32.eq (local.get $result) (i32.const -1))
+      (then (call $io_block (i32.const 0)) (return)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
@@ -976,64 +987,16 @@
 
   ;; === VERSION.DLL APIs ===
 
-  ;; GetFileVersionInfoSizeA(lptstrFilename, lpdwHandle) → size or 0
-  ;; Reads RT_VERSION (16) from the PE named by lptstrFilename.
+  ;; Both encodings read the named file's RT_VERSION. A static module name
+  ;; alone supplies no file version, and must not shadow an installed file.
   (func $handle_GetFileVersionInfoSizeA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $size i32)
-    ;; If lpdwHandle is non-null, set *lpdwHandle = 0
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    ;; A DirectX component we dispatch statically has no file on disk, so the
-    ;; EXE's own resource would be answered instead — which is how an app's
-    ;; "do you have DirectX 6.1a?" probe ends up reading its own version.
-    (if (call $name_is_static_dx_dll (local.get $arg0))
-      (then
-        (i32.store offset=0 (global.get $reg_base) (global.get $DX_VERSION_INFO_SIZE))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
-        (return)))
-    ;; Ordinary calls inspect the named file, including freshly extracted DLLs.
     (call $file_version_info_size_named
       (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 1))
-    (drop (local.get $entry))
-    (drop (local.get $size))
-
-
-
-
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
-  ;; GetFileVersionInfoA(lptstrFilename, dwHandle, dwLen, lpData) → BOOL
-  ;; Copies the RT_VERSION resource data into the caller's buffer.
   (func $handle_GetFileVersionInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $rva i32) (local $size i32) (local $len i32)
-    (if (call $name_is_static_dx_dll (local.get $arg0))
-      (then
-        (local.set $len (local.get $arg2))
-        (if (i32.gt_u (local.get $len) (global.get $DX_VERSION_INFO_SIZE))
-          (then (local.set $len (global.get $DX_VERSION_INFO_SIZE))))
-        (memory.copy (call $g2w (local.get $arg3))
-          (global.get $DX_VERSION_INFO) (local.get $len))
-        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-        (return)))
-    ;; The file reader maps RVA through section headers rather than assuming
-    ;; the on-disk image has already been loaded at image_base.
     (call $file_version_info_named
       (local.get $arg0) (local.get $arg2) (local.get $arg3) (i32.const 0))
-    (drop (local.get $entry))
-    (drop (local.get $rva))
-    (drop (local.get $size))
-    (drop (local.get $len))
-
-
-
-
-
-
-
-
-
-
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; The VERSION resource itself is encoding-neutral; only the path width
@@ -1305,11 +1268,13 @@
   )
 
   (func $handle_GetCharWidth32W (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $out i32)
+    (if (local.get $arg3) (then (local.set $out (call $g2w (local.get $arg3)))))
     (i32.store offset=0 (global.get $reg_base) (call $gdi_font_char_widths
-      (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (if (result i32) (local.get $arg3)
-        (then (call $g2w (local.get $arg3))) (else (i32.const 0)))
-      (i32.const 1)))
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $out) (i32.const 1)))
+    (if (i32.load (global.get $reg_base))
+      (then (call $gdi_char_widths_to_logical
+        (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $out))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_GetCharacterPlacementW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2492,6 +2457,116 @@
       (then (call $heap_free (local.get $blob)) (return (i32.const 0))))
     (local.get $blob))
 
+  ;; VERSION reads file resources without loading executable DLL code. Win9x
+  ;; uses application, current, system, Windows, then PATH directories. Stop
+  ;; at the first existing file, even when that file has no version resource.
+  (func $version_open_in_directory (param $dir_wa i32) (param $dir_len i32)
+      (param $filename_g i32) (param $wide i32) (result i32)
+    (local $name_len i32) (local $path_g i32) (local $path_wa i32)
+    (local $i i32) (local $ch i32) (local $handle i32)
+    (local.set $name_len (if (result i32) (local.get $wide)
+      (then (call $strlen_w (call $g2w (local.get $filename_g))))
+      (else (call $strlen_a (call $g2w (local.get $filename_g))))))
+    (local.set $path_g (call $heap_alloc
+      (i32.mul (i32.add (i32.add (local.get $dir_len) (local.get $name_len))
+        (i32.const 2)) (i32.const 2))))
+    (if (i32.eqz (local.get $path_g)) (then (return (i32.const -1))))
+    (local.set $path_wa (call $g2w (local.get $path_g)))
+    (block $copied (loop $copy
+      (br_if $copied (i32.ge_u (local.get $i) (local.get $dir_len)))
+      (i32.store16 (i32.add (local.get $path_wa) (i32.mul (local.get $i) (i32.const 2)))
+        (call $tt_cp1252_to_unicode
+          (i32.load8_u (i32.add (local.get $dir_wa) (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $copy)))
+    (i32.store16 (i32.add (local.get $path_wa) (i32.mul (local.get $i) (i32.const 2))) (i32.const 92))
+    (local.set $i (i32.const 0))
+    (loop $name
+      (local.set $ch (call $fmt_get
+        (i32.add (local.get $filename_g)
+          (i32.mul (local.get $i) (select (i32.const 2) (i32.const 1) (local.get $wide))))
+        (local.get $wide)))
+      (if (i32.eqz (local.get $wide))
+        (then (local.set $ch (call $tt_cp1252_to_unicode (local.get $ch)))))
+      (i32.store16 (i32.add (local.get $path_wa)
+        (i32.mul (i32.add (i32.add (local.get $dir_len) (i32.const 1)) (local.get $i)) (i32.const 2)))
+        (local.get $ch))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $name (i32.ne (local.get $ch) (i32.const 0))))
+    (local.set $handle (call $host_fs_create_file (local.get $path_wa)
+      (i32.const 0x80000000) (i32.const 3) (i32.const 0x80) (i32.const 1)))
+    (call $heap_free (local.get $path_g))
+    (local.get $handle))
+
+  (func $version_open_file (param $filename_g i32) (param $wide i32) (result i32)
+    (local $i i32) (local $ch i32) (local $step i32) (local $length i32)
+    (local $dir_len i32) (local $buffer_g i32) (local $buffer_wa i32)
+    (local $handle i32) (local $env_g i32) (local $start i32)
+    (local.set $step (select (i32.const 2) (i32.const 1) (local.get $wide)))
+    (local.set $handle (i32.const -1))
+    ;; Absolute, rooted and drive-relative paths are explicit. Relative
+    ;; subdirectories are appended to each search directory, as LoadLibrary.
+    (local.set $ch (call $fmt_get (local.get $filename_g) (local.get $wide)))
+    (if (i32.or (i32.eq (local.get $ch) (i32.const 92))
+          (i32.eq (local.get $ch) (i32.const 47)))
+      (then (return (call $host_fs_create_file (call $g2w (local.get $filename_g))
+        (i32.const 0x80000000) (i32.const 3) (i32.const 0x80) (local.get $wide)))))
+    (block $end (loop $scan
+      (local.set $ch (call $fmt_get
+        (i32.add (local.get $filename_g) (i32.mul (local.get $i) (local.get $step))) (local.get $wide)))
+      (br_if $end (i32.eqz (local.get $ch)))
+      (if (i32.eq (local.get $ch) (i32.const 58))
+        (then (return (call $host_fs_create_file (call $g2w (local.get $filename_g))
+          (i32.const 0x80000000) (i32.const 3) (i32.const 0x80) (local.get $wide)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $scan)))
+    (if (i32.eqz (local.get $i)) (then (return (i32.const -1))))
+    ;; GetModuleFileName uses the process image name, independently of CWD.
+    (local.set $length (i32.add (global.get $exe_name_len) (i32.const 8)))
+    (local.set $buffer_g (call $heap_alloc (local.get $length)))
+    (if (i32.eqz (local.get $buffer_g)) (then (return (i32.const -1))))
+    (local.set $buffer_wa (call $g2w (local.get $buffer_g)))
+    (drop (call $module_file_name (local.get $buffer_g) (local.get $length) (i32.const 0)))
+    (local.set $i (i32.const 0))
+    (block $end (loop $scan
+      (local.set $ch (i32.load8_u (i32.add (local.get $buffer_wa) (local.get $i))))
+      (br_if $end (i32.eqz (local.get $ch)))
+      (if (i32.or (i32.eq (local.get $ch) (i32.const 92)) (i32.eq (local.get $ch) (i32.const 47)))
+        (then (local.set $dir_len (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $scan)))
+    (block $done
+      (local.set $handle (call $version_open_in_directory (local.get $buffer_wa)
+        (local.get $dir_len) (local.get $filename_g) (local.get $wide)))
+      (br_if $done (i32.ne (local.get $handle) (i32.const -1)))
+      (local.set $handle (call $host_fs_create_file (call $g2w (local.get $filename_g))
+        (i32.const 0x80000000) (i32.const 3) (i32.const 0x80) (local.get $wide)))
+      (br_if $done (i32.ne (local.get $handle) (i32.const -1)))
+      (local.set $handle (call $version_open_in_directory "C:\\WINDOWS\\SYSTEM"
+        (i32.const 17) (local.get $filename_g) (local.get $wide)))
+      (br_if $done (i32.ne (local.get $handle) (i32.const -1)))
+      (local.set $handle (call $version_open_in_directory "C:\\WINDOWS"
+        (i32.const 10) (local.get $filename_g) (local.get $wide)))
+      (br_if $done (i32.ne (local.get $handle) (i32.const -1)))
+      ;; Reuse the invocation-owned buffer only after its image-path use.
+      (i32.store (local.get $buffer_wa) (i32.const 0x48544150)) ;; PATH
+      (i32.store8 offset=4 (local.get $buffer_wa) (i32.const 0))
+      (local.set $env_g (call $env_find (local.get $buffer_g) (i32.const 0)))
+      (br_if $done (i32.eqz (local.get $env_g)))
+      (local.set $env_g (i32.add (local.get $env_g) (i32.const 5)))
+      (local.set $start (local.get $env_g))
+      (loop $path
+        (local.set $ch (call $gl8 (local.get $env_g)))
+        (if (i32.or (i32.eqz (local.get $ch)) (i32.eq (local.get $ch) (i32.const 59)))
+          (then
+            (if (i32.ne (local.get $start) (local.get $env_g))
+              (then
+                (local.set $handle (call $version_open_in_directory (call $g2w (local.get $start))
+                  (i32.sub (local.get $env_g) (local.get $start)) (local.get $filename_g) (local.get $wide)))
+                (br_if $done (i32.ne (local.get $handle) (i32.const -1)))))
+            (br_if $done (i32.eqz (local.get $ch)))
+            (local.set $start (i32.add (local.get $env_g) (i32.const 1)))))
+        (local.set $env_g (i32.add (local.get $env_g) (i32.const 1))) (br $path)))
+    (call $heap_free (local.get $buffer_g))
+    (local.get $handle))
+
   (func $file_version_resource (param $filename_g i32) (param $wide i32)
       (param $size_out_wa i32) (result i32)
     (local $handle i32) (local $file_size i32) (local $count_g i32)
@@ -2509,10 +2584,7 @@
     (local.set $handle (i32.const -1))
     (block $load
       (br_if $load (i32.eqz (local.get $filename_g)))
-      (local.set $handle (call $host_fs_create_file
-        (call $g2w (local.get $filename_g))
-        (i32.const 0x80000000) (i32.const 3) (i32.const 0x80)
-        (local.get $wide)))
+      (local.set $handle (call $version_open_file (local.get $filename_g) (local.get $wide)))
       (br_if $load (i32.eq (local.get $handle) (i32.const -1)))
       (local.set $file_size (call $host_fs_get_file_size (local.get $handle)))
       (br_if $load (i32.lt_u (local.get $file_size) (i32.const 64)))

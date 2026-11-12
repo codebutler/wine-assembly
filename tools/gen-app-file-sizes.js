@@ -19,8 +19,8 @@
 // entries, so both hosts see the same sized registry and decide identically.
 //
 // A size is only an input to the eager/lazy decision. Streamed entries are
-// httpRange, which learns the real length from the server, so a stale size can
-// misplace a file between the two piles but cannot corrupt a read.
+// httpRange, which validates response lengths against the declared size; a
+// stale size must be corrected or reads fail rather than accept wrong bytes.
 //
 // Only files of at least SMALL_FILE_BYTES are recorded (all files once the
 // policy has no such rule, i.e. the constant is gone): an unsized file stays

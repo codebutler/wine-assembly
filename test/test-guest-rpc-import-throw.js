@@ -50,3 +50,6 @@ assert.deepStrictEqual(gpuCalls, [[0x30017, 0, 23], [0x30017, 0, 0]]);
 assert.throws(() => worker.imports.host.gpu_gl_call(0x30018, 0, 0),
   /unexpected direct OpenGL worker call/, 'unknown calls still fail loudly');
 console.log('PASS D3D9 format capability query reaches the page broker');
+assert.strictEqual(worker.imports.host.gpu_gl_call(0x10002, 0x10001, 0), 0x800);
+assert.deepStrictEqual(gpuCalls.at(-1), [0x10002, 0x10001, 0],
+  'OpenGL pre-GDI readback synchronizes through the page broker');

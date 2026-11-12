@@ -1,5 +1,18 @@
 # Diablo Shareware
 
+## File-access trace (2026-10-15)
+
+Reviewed `scratch/runs/20261015-file-reads-diablo_shareware/`: new Warrior
+reaches Tristram on the stable deployed WASM/local range server. `spawn.mpq`
+is 50,274,091 bytes. Successful ReadFile calls cover 12,657,626 unique bytes;
+HTTP response bodies total 30,351,147 bytes across 29 requests, including
+preloads/prefetch. Those requests span all five 10 MiB parts, so fetching each
+whole touched part once would cost 50,274,091 bytes, about 66% more. ReadFile
+coverage excludes direct/mapped consumers; this is not a timing benchmark.
+This first-town trace is a counterexample to every game needing its whole
+archive at startup. Parent `20261015-game-file-reads/analysis.json` compares
+RCT and Quake III and records the exact tested runtime identity.
+
 `test/binaries/candidates/diablo-shareware/installed/`, registry id
 `diablo_shareware` (`lib/apps.js`). Reaches gameplay — see the
 `project_diablo_gameplay` note for how a character gets into Tristram.
@@ -3172,3 +3185,77 @@ unique frames. This agrees with the fixed 50 ms gameplay iteration in
 in-window interval reaches back to the last frame before the window, during
 the load (660 batches); leave it out. Browser FPS is not measured here.
 Evidence: `scratch/runs/20261010T0400Z-diablo_shareware-control-frames`.
+
+## Worker character initialization, 2026-10-14
+
+Release afbc8ea1c reproduced a gray Single Player Characters screen with
+only stock stat labels. Cooperative mode completed the same route. The
+existing browser regression silently ran cooperatively: its dev server did
+not serve isolation headers. It now starts with --isolate and asserts the
+Worker backend unless explicitly testing ?no-threads.
+
+The Worker API trace installs diabloui's hero DLGPROC (original VA
+0x2000d1c0) and sends WM_INITDIALOG through Storm's DefDlgProc wrapper,
+but initialization does not complete. DefDlgProc previously ran this message
+through the bounded recursive sender, unlike commands and client input.
+WM_INITDIALOG now uses the existing guest continuation so initialization,
+application callbacks and nested dialogs retain the guest stack. The dialog
+result epilog still returns the DLGPROC BOOL for WM_INITDIALOG.
+
+Before: scratch/runs/20261014-diablo-character-worker-before/failure.png
+matches the user's screenshot; API/state captures are in the corresponding
+diablo-character-api2 and diablo-character-state runs. After:
+scratch/runs/20261014-diablo-character-init-after, reviewed class portrait,
+name entry and Tristram; receipt explicitly records threads=true. Full
+browser flow passes. The exact instruction at which the previous recursive
+invocation lost initialization has not been isolated. Safari remains untested.
+
+## Name-dialog repaint investigation, 2026-10-14
+
+The reported class screen retained the entered name and fragments beside
+Cancel. The browser test now has `WA_DIABLO_REPAINT=1`: select Warrior,
+enter GAL, cancel back to class selection, reopen the name page, and enter
+gameplay. It checks the primary for an erased previous Warrior label and
+for an empty margin to the right of Cancel. `WA_DIABLO_GPU=1` enables normal
+browser graphics instead of the test's software-only default.
+
+Two independently tested defects were found:
+
+- Modeless EndDialog destroyed Storm's page without the exposure work done
+  by DestroyWindow. The exposure helper also stopped at a missing child
+  parent, ignoring popup ownership. It now invalidates the covered rectangle
+  in the owner's client coordinates with background erase, and EndDialog
+  invokes it before destruction. The name page no longer retains class text
+  in its DirectDraw primary. Hidden-dialog and visible-owned-dialog contracts
+  are in test-dialog-custom-dispatch.js.
+- A deferred GDI canvas flush advanced the window's drawing sequence even
+  though its pixels were older than a subsequent DirectDraw present. Preserve
+  the actual upload sequence instead; test-gdi-deferred-presentation.js checks
+  that reading the old cache cannot make it newer than the primary.
+
+**Still open; not release-verified:** captures intermittently lose artwork
+  in the final fullscreen presentation. Primary frame and compositor canvas
+  captures can be complete while the post-processing source is incomplete.
+  The full route reaching Tristram is not proof that this visual issue is
+  fixed. Resetting the output context, avoiding the second composition at
+  native size, and using a primary-only presentation fast path did not resolve
+  every capture and were removed. Software-only and GPU-enabled Chrome both
+  exhibited it; Safari has not been tested.
+
+Evidence in scratch/runs/: 20261014-diablo-repaint-layers2 (before, stale
+  Warrior text on Enter Name), 20261014-diablo-repaint-enddialog (primary
+  restoration), 20261014-diablo-repaint-composite (separate output canvases),
+  and 20261014-diablo-repaint-final (cleaned-up candidate). The diagnostic
+  harness is preserved in 20261014-diablo-repaint-gpu. Candidate WASM SHA256
+  ea2cc50f59597e7c2a81e4342f10ebb171eb547ec7ca9322e238854de05b3dd5.
+  Canonical build, dialog continuation/exposure, parent-child paint ordering,
+  GDI cache tests and Winamp About/Credits browser regression pass. No public
+  deploy of this candidate.
+
+### Whole-part HTTP validation (2026-10-15)
+
+`scratch/runs/20261015-whole-part-games/diablo_shareware` reaches Tristram
+with the whole-GET provider. All five simulated 10 MiB spawn.mpq deployment
+parts are requested once each; no HTTP Range requests. Stable deployed WASM,
+cooperative Chrome/SwiftShader. This verifies startup/gameplay loading, not
+an entire playthrough or a bandwidth improvement.

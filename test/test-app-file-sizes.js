@@ -6,7 +6,7 @@
 // ones -- since 8bcc3055 an unsized entry always stays eager, and the
 // hand-written entries had no sizes. Pinned here: a recorded string entry
 // becomes {url, size}, a recorded object gains size and keeps every other
-// field, an entry that already declares how it loads is left as written, an
+// field, an entry with a size is left as written, an
 // unrecorded entry is untouched, and the generated map only holds files at
 // least SMALL_FILE_BYTES (smaller ones change no decision). Caesar III's
 // archives are the worked example: they stream once sized.
@@ -49,7 +49,7 @@ for (const [id, app] of Object.entries(raw)) {
     }
     if (typeof item === 'string') {
       assert.deepStrictEqual(out, { url: item, size }, `${id}: ${item} becomes {url, size}`); stringsStamped++;
-    } else if (Number.isSafeInteger(item.size) || item.loadMode !== undefined || item.httpRange !== undefined) {
+    } else if (Number.isSafeInteger(item.size)) {
       assert.deepStrictEqual(out, item, `${id}: a declared entry is left as written`); declaredKept++;
     } else {
       assert.deepStrictEqual(out, { ...item, size }, `${id}: an object gains size only`); objectsStamped++;
@@ -68,3 +68,41 @@ if (stamped.caesar3_demo && Object.keys(sizes).some(url => url.includes('caesar'
 
 console.log(`PASS  generated sizes stamp inline files[] (${stringsStamped} strings, ${objectsStamped} objects; ` +
   `${declaredKept} declared and ${unrecordedKept} unrecorded entries left as written)`);
+
+// Tracked first-launch controls must survive the actual HTTP/host/VFS path.
+// A stale generated size previously rejected Quake II before guest boot.
+async function quake2LaunchControls() {
+  const fs = require('fs');
+  const vm = require('vm');
+  const { VirtualFS } = require('../lib/filesystem');
+  const { startStaticServer } = require('./static-server');
+  const file = stamped.quake2_demo.files.find(f => f.url === 'lib/quake2-modern-controls.ini');
+  assert(file, 'registered Quake II controls');
+  const original = fs.readFileSync(path.join(ROOT, file.url));
+  assert.strictEqual(file.size, original.length, 'registered size matches original controls bytes');
+  const server = await startStaticServer({ root: ROOT });
+  try {
+    const origin = `http://127.0.0.1:${server.address().port}/`;
+    const context = vm.createContext({
+      console: { log() {}, warn() {}, error() {} }, Uint8Array, ArrayBuffer,
+      AbortController, URL, URLSearchParams, TextEncoder, TextDecoder, setTimeout, clearTimeout,
+      fetch: (url, init) => fetch(new URL(url, origin), init),
+    });
+    vm.runInContext(fs.readFileSync(path.join(ROOT, 'host.js'), 'utf8'), context, { filename: 'host.js' });
+    const Host = vm.runInContext('WineAssembly', context);
+    const host = Object.create(Host.prototype);
+    const vfs = new VirtualFS();
+    host._helpCtx = { vfs };
+    const mountedPath = file.vfsPath.toLowerCase();
+    await assert.rejects(host.loadFiles([{ ...file, size: 568 }], { required: true }), /Asset size mismatch/);
+    assert(!vfs.files.has(mountedPath), 'stale declaration exposes no guest file');
+    await host.loadFiles([file], { required: true });
+    assert.deepStrictEqual(Buffer.from(vfs.files.get(mountedPath).data), original,
+      'corrected declaration mounts unchanged served controls');
+    console.log(`PASS  registered Quake II controls: HTTP + production loadFiles + VirtualFS (${original.length} bytes); stale 568 rejected`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+quake2LaunchControls().catch(error => { console.error(error); process.exitCode = 1; });

@@ -49,6 +49,12 @@ for (const [suffix, relative] of [
 
 const scenes = files.filter(file => /\.scn$/i.test(file.url));
 assert.strictEqual(scenes.length, 2, 'trial media has exactly two selectable scenes');
+assert(scenes.every(file => file.eager === true),
+  'SceneInfo is read synchronously through GetPrivateProfileString');
+const motionConfigs = files.filter(file => /\.mcf$/i.test(file.url));
+assert.strictEqual(motionConfigs.length, 3);
+assert(motionConfigs.every(file => file.eager === true),
+  'bike, rider and winner motion configs also use synchronous profile reads');
 
 const storage = fs.readFileSync(path.join(__dirname, '..', 'lib', 'storage.js'), 'utf8');
 const seed = storage.match(/Motocross Madness Trial\\\\1\.0': \{[\s\S]*?\n    \},/);

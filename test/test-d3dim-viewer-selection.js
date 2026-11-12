@@ -10,10 +10,11 @@ const out = execFileSync('node', [
   path.join(__dirname, 'run.js'),
   '--app=dx_viewer',
   '--no-build',
+  // Keep this small selection fixture distinct from the original SDK scene.
   '--batch-size=10000',
   '--max-batches=140',
   '--quiet-api',
-  '--input=100:click:330:100,110:post-cmd:104,125:dump-windows:color,130:stop',
+  '--input=0:vfs-import:camera.x:test/fixtures/d3drm/tetra.x,0:vfs-import:mslogo.x:test/fixtures/d3drm/cube.x,0:vfs-import:sphere2.x:test/fixtures/d3drm/cube.x,100:click:330:100,110:post-cmd:104,125:dump-windows:color,130:stop',
 ], {
   cwd: ROOT,
   encoding: 'utf8',

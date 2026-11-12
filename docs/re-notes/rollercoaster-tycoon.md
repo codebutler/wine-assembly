@@ -1,5 +1,15 @@
 # RollerCoaster Tycoon (shareware/demo)
 
+## File-access trace (2026-10-15)
+
+`scratch/runs/20261015-game-file-reads/rct/` reaches Forest Frontiers with
+the pre-workaround ranged manifest on the stable deployed WASM/local server.
+The five large streamed DAT files total 29,406,859 bytes; their HTTP response
+bodies total 33,830,433 bytes across 18 requests. CSG1 is fully materialized;
+CSS1 transfers twice. Whole downloads retained once would cost 29,406,859
+bytes. This excludes small bundled files and is not a timing/compression
+benchmark. See the parent `analysis.json` for build identity and limitations.
+
 `test/binaries/shareware/rct/English/RCT.exe` — Chris Sawyer / Hasbro Interactive,
 1999. App id `rct`. Image base `0x00400000`, entry `0x00412d80`; the whole game is
 one EXE with no shipped DLLs, so every address below is both an original and a
@@ -8,16 +18,39 @@ runtime VA and needs no `module+0x` arithmetic.
 The registry entry (`lib/apps.js`, `rctFiles`) mounts the tree from
 `test/binaries/shareware/rct/`: `Data/` (CSG1/CSG1I plus CSS1–CSS17, `GAME.CFG`,
 `TUTORIAL.DAT`, `KANJI.DAT`, `MP.DAT`), `Scenarios/` (`SC.IDX` and ten `*.SC4`),
-`Tracks/`, `Saved Games/`. **The VFS has never been the problem** — an earlier
+`Tracks/`, `Saved Games/`. In the original 2026-09 investigation, an earlier
 note calling RCT "VFS-blocked" was wrong, and `--trace-fs` shows every file it
 asks for resolving on the first try.
+
+## Production graphics download regression (2026-10-15)
+
+The "Unable to access graphic data file" dialog is reproducible from broken
+production byte-range responses, distinct from the historical guest bugs below.
+A full GET of `Data/csg1.dat` returns 15,231,279 bytes matching the installed
+demo exactly. An uncached `Range: bytes=0-31` request instead returns HTTP 206
+with `Content-Range: bytes 0-31/5674233` and an empty body. A 1 MiB range returns
+2,289,250 bytes. Explicit `Accept-Encoding: identity` does not repair it.
+The compressed representation/range serving path needs a server/CDN fix;
+these measurements alone do not isolate which layer corrupts it.
+
+RCT's manifest now explicitly uses whole downloads for its data files, including
+CSG1 and the previously streamed CSS audio files. This costs more startup
+transfer/memory but avoids the malformed range path without changing guest code.
+HTTP evidence and the live-browser probe are in
+`scratch/runs/20261015-rct-live-full-download/`.
+With only those manifest flags changed in the browser, the live runtime
+(`e86bf1640+ 2026-10-15 11:21` stamp) reached the animated title park. Chrome
+headless, no guest workers, 1000x800; screenshot `screen-5.png` reviewed.
+This validates startup, not scenario gameplay or Safari. No production files
+were changed by the probe. RCT has no candidate-corpus entry, so this evidence
+is linked here rather than attached to a different dashboard candidate.
 
 ## Status (2026-09-01): reaches the title screen
 
 ```
 timeout -s KILL 250 node test/run.js --app=rct --quiet-api \
   --batch-size=200000 --max-batches=20000 --max-seconds=90 \
-  --no-close --png=/tmp/rct.png
+  --no-close --png=rct.png
 ```
 
 A healthy capture is the animated demo park: the RollerCoaster Tycoon logo top
@@ -182,7 +215,7 @@ construction UI, rather than only the animated title-screen attract mode.
 
 ```bash
 bash tools/build.sh
-RCT_SCREENSHOT=/private/tmp/rct-construction.png node test/test-rct-gameplay.js
+RCT_SCREENSHOT=rct-construction.png node test/test-rct-gameplay.js
 ```
 
 The test launches one `--control-stdin --frozen` CLI process, advances only by
@@ -209,3 +242,47 @@ session keeps draining credits; poll `snapshot`'s `frozen.credits` until 0
 instead. And `--trace-api ... --trace-from/--trace-to` together with
 `--present-distinct` cut the run's presents from 36,866 to 80 — do not combine
 them when counting.
+
+### Whole-file HTTP validation (2026-10-15)
+
+`scratch/runs/20261015-whole-part-games/rct` reaches Forest Frontiers with
+the global whole-GET provider and zero HTTP Range requests, including the
+older lazy RCT manifest. Tested on stable deployed WASM in cooperative
+Chrome/SwiftShader. Downloaded source bytes stay resident until provider
+close, independently of VFS chunk eviction; this costs additional memory.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## Earlier camera and test-sensitivity findings (2026-09-12)
+
+The mostly black Forest Frontiers view was recentered by toolbar Map
+`(246,15)`, then a map-window click `(120,160)`; zoom out `(118,15)`
+also exposed fully rendered terrain. The initial camera faced near the
+map's north corner. This rules out missing viewport painting for that
+picture; whether the original scenario intentionally saves that origin
+was unverified.
+
+The old gameplay gate checked only a difference of more than10,000 pixels
+between two images, and could pass on the same mostly black park. Its
+clean-build bisect selected `7065931d` removing an empty-PeekMessage
+yield/steps reset. Restoring that reset changed the gate verdict without
+changing the picture, so it was a masking change, not a renderer repair.
+Disabling colorkey8, reverting the GDI object/DC count expansion, and
+reverting peek paint/timer filtering did not fix this test sensitivity.
+
+Also ruled out for the black park view, before the camera was found
+(recovered from branch archive cbfe9895, Oct 2026):
+- not paused — `byte [0x8e31a9] == 0` in-run;
+- not stalled — `--count=0x00436234` 5,097 over the gate's step budget;
+- not progressive paint — later captures differ by <1,100 px, the black never fills;
+- not a truncated `.SC4` load — `--trace-fs` shows `sc0.sc4` read in 0x400
+  chunks to EOF (283,109 bytes, short final read 0x1e5 at 0x45000);
+- not the renderer — the title screen is complete (`--dx-surfaces` slot 29
+  640x480, 128 colours, all nonzero).
+- Arrow keys cannot scroll the view headlessly: RCT reads DirectInput 5, so
+  `--input=keydown` never reaches it. Use the Map window or zoom instead.
+- The empty-PeekMessage yield made RCT retire *less* work: over 1500 batches,
+  980 frames / 784 updates without it vs 777 / 0 with it, so "the clock is
+  starved" is contradicted.

@@ -299,3 +299,9 @@ No aiming input was issued in this registered run; the earlier ordinary Up
 aiming evidence remains a separate run. Guest exit was zero at 22:01:31.120Z;
 supervisor136892, guest136903 and guest group were absent at22:02:49.705Z.
 Registered launch is verified; browser, full match, audio and FPS remain open.
+
+## Fresh recovery verification, 2026-10-14
+
+Current main already supplies the complete pinned wademo.zip -> WaDemo.exe SFX -> data1.cab -> game/ recipe. A fresh invocation of `node tools/fetch-candidate-corpus.js --id=worms-armageddon-demo` succeeded without changing it. This corrects the earlier older-checkout audit's missing-provenance limitation. All667 payload files total20639487 bytes, and original WaDemo.exe matches previously recorded SHA2567d6c456c0bd0f4bb197f0305e63e58aeb4868d325cc0110c74bb9d6e968c9bfd.
+
+The complete output inventory is test/candidate-corpus/worms-armageddon-demo-files.json; verify a pristine recovery with `node test/test-worms-armageddon-demo-recovery.js`. This is new acquisition/output verification only, not new human-turn/gameplay/audio/FPS or release acceptance. Private fixture terms and original runtime limitations remain unchanged.

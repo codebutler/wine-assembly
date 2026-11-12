@@ -18,6 +18,21 @@ test('Claude persistent launch requires explicit identity and explicit permissio
   assert.throws(()=>options(['--session-id','bad']));
 });
 
+test('Claude fresh launch starts a new session id with an optional first prompt, never a resume',()=>{
+  const {options,claudeArgs}=require('./claude-tmux');
+  const ids=['--id','claude-new','--tmux','wine-claude-new'];
+  assert.throws(()=>options(ids),/session-id/,'resume still requires an explicit session');
+  const generated=options(['--new',...ids]);
+  assert.match(generated.sessionId,/^[a-f0-9-]{36}$/);
+  assert.notEqual(options(['--new',...ids]).sessionId,generated.sessionId);
+  const sid='1863d2b5-bc58-4c0b-9c15-00fc951f0256';
+  const o=options(['--new','--session-id',sid,...ids,'--prompt','brief.md','--dangerously-skip-permissions']);
+  assert.equal(o.prompt,'brief.md');
+  assert.deepEqual(claudeArgs(o,"Read the lane's brief"),['claude','--session-id',sid,'--dangerously-skip-permissions',"Read the lane's brief"]);
+  assert.deepEqual(claudeArgs(options(['--session-id',sid,...ids]),null),['claude','--resume',sid]);
+  assert.throws(()=>options(['--session-id',sid,...ids,'--prompt','brief.md']),/requires --new/);
+});
+
 test('Claude Linux registry proves machine, namespace, start ticks and wall start before matching PID',()=>{
   const {registryMatchesProcess,linuxStartTicks}=require('./processes');
   const started=new Date(Date.now()-3600000).toUTCString().replace(/^[^,]+, (\d+) (\w+) (\d+) (\S+) GMT$/,(_m,day,month,year,time)=>`Sat ${month} ${day} ${time} ${year}`),startedAt=Date.parse(started+' UTC')+434;
@@ -594,4 +609,31 @@ test('a goal record older than the 1 MiB tail window is found by the backward sc
   assert.equal(found.met, false);
   assert.equal(await scanGoal(file, size, size - 1024), undefined, 'a range without goal records says nothing');
   await fs.rm(dir, {recursive: true});
+});
+
+test('/api/state is gzipped, answers If-None-Match with 304 and omits big parts the client already holds', async t => {
+  const f = await fixture(); t.after(f.cleanup);
+  await f.write('TODOS.md', Array.from({length: 40}, (_, i) => `- [ ] Task number ${i} with enough words to make this part large\n  id: T-${i}\n`).join(''));
+  const server = createServer({ root: f.root, codexRoot: false, claudeRoot: false });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const get = (query, headers = {}) => new Promise((resolve, reject) => http.get(`http://127.0.0.1:${server.address().port}/api/state${query}`, {headers}, r => {
+    const chunks = []; r.on('data', c => chunks.push(c)); r.on('end', () => resolve({r, body: Buffer.concat(chunks)}));
+  }).on('error', reject));
+  const first = await get('', {'Accept-Encoding': 'gzip'});
+  assert.equal(first.r.statusCode, 200);
+  assert.equal(first.r.headers['content-encoding'], 'gzip');
+  const full = JSON.parse(require('node:zlib').gunzipSync(first.body));
+  assert.equal(full.tasks.length, 40);
+  const etag = first.r.headers.etag, parts = first.r.headers['x-state-parts'];
+  assert.ok(etag);
+  assert.match(parts, /(^|,)tasks\.[\w-]{12}(,|$)/);
+  assert.equal((await get('', {'If-None-Match': etag})).r.statusCode, 304);
+  const delta = JSON.parse((await get('?known=' + encodeURIComponent(parts))).body);
+  assert.ok(delta._unchanged.includes('tasks'));
+  assert.equal(delta.tasks, undefined);
+  assert.ok('terminals' in delta && 'approvals' in delta, 'live parts are always sent');
+  const plain = await get('');
+  assert.equal(plain.r.headers['content-encoding'], undefined, 'no gzip unless the client accepts it');
+  assert.equal(JSON.parse(plain.body).tasks.length, 40);
 });

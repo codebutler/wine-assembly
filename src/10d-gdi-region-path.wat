@@ -4097,6 +4097,15 @@
 
   (func $gdi_object_adopt (param $handle i32) (param $type i32) (param $style i32)
         (param $width i32) (param $color i32) (param $flags i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $GDI_ALLOC_LOCK))
+    (local.set $result (call $gdi_object_adopt_locked (local.get $handle)
+      (local.get $type) (local.get $style) (local.get $width) (local.get $color) (local.get $flags)))
+    (call $lock_release (global.get $GDI_ALLOC_LOCK))
+    (local.get $result))
+
+  (func $gdi_object_adopt_locked (param $handle i32) (param $type i32) (param $style i32)
+        (param $width i32) (param $color i32) (param $flags i32) (result i32)
     (local $i i32) (local $p i32) (local $empty i32)
     (if (i32.or (i32.eqz (local.get $handle))
           (i32.or (i32.lt_u (local.get $type) (i32.const 1))
@@ -4139,6 +4148,15 @@
   (global $GDI_OBJECT_HANDLE_FIRST i32 (i32.const 0x00410001))
   (global $GDI_OBJECT_HANDLE_LIMIT i32 (i32.const 0x00500000))
   (func $gdi_object_alloc (param $type i32) (param $a i32) (param $b i32)
+        (param $c i32) (param $d i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $GDI_ALLOC_LOCK))
+    (local.set $result (call $gdi_object_alloc_locked (local.get $type)
+      (local.get $a) (local.get $b) (local.get $c) (local.get $d)))
+    (call $lock_release (global.get $GDI_ALLOC_LOCK))
+    (local.get $result))
+
+  (func $gdi_object_alloc_locked (param $type i32) (param $a i32) (param $b i32)
         (param $c i32) (param $d i32) (result i32)
     (local $handle i32) (local $attempts i32)
     ;; Worker WASM instances share the process object table but begin with a

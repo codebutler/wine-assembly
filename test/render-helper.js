@@ -16,11 +16,9 @@
 // or the JS draw fallback was silently used).
 const fs = require('fs');
 const path = require('path');
-const { createCanvas } = require('../lib/canvas-compat');
-const { createHostImports } = require('../lib/host-imports');
-const { compileSrcWasm } = require('./compile-src');
-const { Win98Renderer } = require('../lib/renderer');
-const { fontMounts, BUNDLED_BITMAP_FONTS } = require('../lib/font-substitutions');
+const Module = require('module');
+const evaluatedSource = module.renderSource || fs.readFileSync(__filename);
+let replacement;
 const { STOCK_ICON_FILES } = require('../lib/process-boot');
 
 // Mount the fonts a real host mounts. Every guest glyph now comes from a strike
@@ -29,6 +27,7 @@ const { STOCK_ICON_FILES } = require('../lib/process-boot');
 // prove behaviour with a face missing should delete that one mount, not rely on
 // the harness starting out bare.
 function mountBundledFonts(ctx, { scalable = true } = {}) {
+  const { fontMounts, BUNDLED_BITMAP_FONTS } = require('../lib/font-substitutions');
   if (!ctx || !ctx.vfs) return;
   const root = path.join(__dirname, '..');
   ctx.vfs.dirs.add('c:\\windows');
@@ -60,19 +59,47 @@ function mountBundledFonts(ctx, { scalable = true } = {}) {
 // The old form spliced it in front of a trailing `)` that no longer exists,
 // which matched nothing and silently dropped every extraWat export.
 const harnessWasmCache = new Map();
-function compileHarnessWasm(extraWat) {
-  if (harnessWasmCache.has(extraWat)) return harnessWasmCache.get(extraWat);
-  const bytes = compileSrcWasm(!extraWat ? null : (file, source) =>
-    (file === '13-exports.wat' ? `${source}\n${extraWat}\n` : source));
-  harnessWasmCache.set(extraWat, bytes);
+function compileHarnessWasm(extraWat, tailCalls) {
+  const { identity, compileHarness } = require('./render-artifact');
+  const options = { extraWat: extraWat ? String(extraWat) : '', tailCalls: !!tailCalls };
+  const key = JSON.stringify(identity(options, evaluatedSource));
+  if (harnessWasmCache.has(key)) return harnessWasmCache.get(key);
+  const { bytes, identity: compiledIdentity } = compileHarness(options, evaluatedSource);
+  if (JSON.stringify(compiledIdentity) !== key)
+    throw new Error('render artifact inputs changed before compilation');
+  // Retain only the current module; changing inputs must not accumulate Wasm.
+  harnessWasmCache.clear();
+  harnessWasmCache.set(key, bytes);
   return bytes;
 }
 
 async function bootRenderHarness({
   extraHostOverrides = {}, extraWat = '', width = 640, height = 480,
-  fonts = 'all', memory: suppliedMemory = null,
+  fonts = 'all', memory: suppliedMemory = null, tailCalls = true,
+  prebuiltModule = null,
+  beforeInstantiate = null,
 } = {}) {
-  const wasmBytes = compileHarnessWasm(extraWat);
+  // Explicit commands can run the real test entrypoint to capture its unchanged
+  // extraWat. Preparation exits before host dependencies, memory or assertions.
+  const prepare = process.env.WINE_RENDER_ARTIFACT_PREPARE;
+  const artifact = process.env.WINE_RENDER_ARTIFACT;
+  if (prepare !== undefined && artifact !== undefined)
+    throw new Error('render artifact prepare and consume modes are mutually exclusive');
+  if ((prepare !== undefined || artifact !== undefined) && prebuiltModule !== null)
+    throw new Error('render artifact mode cannot be combined with prebuiltModule');
+  if (prebuiltModule !== null && (!(prebuiltModule instanceof WebAssembly.Module) || extraWat))
+    throw new Error('prebuiltModule requires a compiled WebAssembly.Module and no extraWat');
+  if (prepare !== undefined) {
+    require('./render-artifact').prepareArtifact(prepare, { extraWat, tailCalls }, evaluatedSource);
+    process.stderr.write('PREPARATION ONLY: render artifact written; host, native module and test assertions not run\n');
+    process.exit(0);
+  }
+  const wasmBytes = prebuiltModule || (artifact !== undefined
+    ? require('./render-artifact').consumeArtifact(artifact, { extraWat, tailCalls }, evaluatedSource)
+    : compileHarnessWasm(extraWat, tailCalls));
+  const { createCanvas } = require('../lib/canvas-compat');
+  const { createHostImports } = require('../lib/host-imports');
+  const { Win98Renderer } = require('../lib/renderer');
   const memory = suppliedMemory ||
     new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const canvas = createCanvas(width, height);
@@ -112,7 +139,10 @@ async function bootRenderHarness({
   base.host.wait_multiple = () => 0;
   base.host.com_create_instance = () => 0x80004002;
   Object.assign(base.host, extraHostOverrides);
-  const { instance, module } = await WebAssembly.instantiate(wasmBytes, base);
+  if (beforeInstantiate) await beforeInstantiate(ctx, base.host);
+  const result = await WebAssembly.instantiate(wasmBytes, base);
+  const instance = prebuiltModule ? result : result.instance;
+  const module = prebuiltModule || result.module;
   const e = instance.exports;
   ctx.exports = e;
   renderer.wasm = instance;
@@ -217,5 +247,27 @@ async function runRenderTest(name, body, { minColors = 8 } = {}) {
   process.exit(failed > 0 ? 1 : 0);
 }
 
-module.exports = { bootRenderHarness, mountBundledFonts, countUniqueColors,
-  pixelMatches, writePng, runRenderTest, flushPendingPaints };
+// A caller may retain bootRenderHarness while this helper changes on disk.
+// Evaluate its current bytes in a private Module, without evicting anyone's
+// require cache or executing stale helper code under a new receipt.
+function currentImplementation() {
+  const source = fs.readFileSync(__filename);
+  if (source.equals(evaluatedSource)) return null;
+  if (!replacement || !replacement.source.equals(source)) {
+    const fresh = new Module(__filename);
+    fresh.filename = __filename;
+    fresh.paths = module.paths;
+    fresh.renderSource = source;
+    fresh._compile(source.toString('utf8'), __filename);
+    replacement = { source, exports: fresh.exports };
+  }
+  return replacement.exports;
+}
+module.exports = {};
+for (const [name, fn] of Object.entries({ bootRenderHarness, mountBundledFonts, countUniqueColors,
+  pixelMatches, writePng, runRenderTest, flushPendingPaints })) {
+  module.exports[name] = (...args) => {
+    const current = currentImplementation();
+    return current ? current[name](...args) : fn(...args);
+  };
+}

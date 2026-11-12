@@ -1,5 +1,26 @@
 # Hype: The Time Quest demo
 
+## Current measurement acceptance — 2026-10-21
+
+HYPE-BROWSER-FPS-20261013 is complete for one instrumented browser gameplay
+interval: **188 authenticated finish-callback entries / 10,708.68 ms =
+17.5558518884 logical FPS**, 108 real same-worker performance.now samples.
+Independent review accepted capture12e430474 and prior56c92dc2 against exact
+tested source b88c818ba; canonical module728e1de8, all59 originals and66 prior
+observer/validator tests verified/reused. Actual owner is slot1/internal tid1/
+exported ID2, selected by emission; old106 slot0 samples remain invalid, not
+zero FPS. Ten rejection checks pass, but the validator alone does not
+authenticate files or owners. Four actual gameplay/input images reviewed.
+
+Software ANGLE/SwiftShader WebGL only; no displayed FPS, hardware GPU, native
+software Glide, full-game/audio/parity or overhead-corrected-rate claim.
+Current access: coordinator snapshot-stopped bx_2ghgsv9d; final receipt records
+stop_223af722c87d2f18 completed12:36:32.756Z, error null. No runnable slot;
+no lifecycle or runtime action by this reviewer.
+See [independent acceptance](../reviews/hype-fps-independent-integration-20261021.md)
+and scratch/runs/20261021-hype-fps-independent-integrate. Historical blockers
+and RUNNING handoffs below retain their original observation scope.
+
 App: `hype_glide_demo` (experimental). Original executable:
 `test/binaries/candidates/hype-time-quest-demo/launch-game/MaiDFXvr_bleu.exe`.
 The executable directly imports 50 Glide 3 entry points. Static extraction,
@@ -389,7 +410,6 @@ Historical upstream front/back evidence locates world/menu alternation in the sa
 
 Static dispatch resolution now identifies46ef70:46ed90 returns table7c4360; initializer482960 writes offset10c at482c0e to4823e0, hence7c446c→4823e0 for that table setup.4823e0 increments render counters, calls4825a0, drains queued geometry and grGet-based completion checks. It is not justified to call this pointer merely a context/window activation. Both presenter paths subsequently reach common467180→grBufferSwap4f1644 when77728c is zero. Actual table contents/flags at the problematic call still require existing captured evidence or bounded passive authentication; no engine fix follows yet. Next source focus is queued UI geometry/clear and buffer selection, not another wide instruction trace.
 
-
 ### 2026-10-05: bounded attachment comparison supports stale menu color
 
 Immutable `scratch/runs/20261005-hype-attachment-stale-menu` preserves64 hashed artifacts and raw receipt SHA25620a734491ba801f880dfd0927907a8d52ce05f6ddb719eca6778dc179a0cc2c4. The observer now wraps actual Device.execute recursion: the earlier Device.submit wrapper missed commands inside opcode0 batches. An actual-source regression reproduces that failure and verifies the corrected boundary. Attempts15/16 remain unqualified; no missing-receipt inference is carried forward.
@@ -400,13 +420,11 @@ The automatic route completed in48.122seconds and cleanup at13:10:44.368Z closed
 
 Next causal target remains scale initialization of the same UI heap. Original467730 can fail after467600 or466810 before any scale stores, and only iterates sixteen restored surface pointers after both succeed. Its original constants are1/640 and1/480, producing nonzero scales for636x476 dimensions if that exact heap reaches the stores. Initializer entry alone, or a call before UIheap creation, does not establish initialization. A cold mode-entry/return and membership proposal distinguishes these cases without another wide render trace or a swap workaround.
 
-
 ### 2026-10-05: cold mode probe found no post-title invocation
 
 Immutable `scratch/runs/20261005-hype-cold-post-title-nonobservation` preserves attempt18. Raw cold receipt SHA256ce8319e69bcff70e18007d370dcb94ed1930fa6568518efb8bbaf081fcb7b141 records actual owning slots0/1/2 (TIDs1/2/3) starting before the ordinary Enter/Space input. Each observed zero callbacks in the cold499710–499a85 range during this declared post-title interval. Consequently no initializer return or same-heap scale result was captured. This does not establish absent startup initialization or a missing activation message.
 
 The automatic route completed in20.057seconds with two world-template matches; its last image shows the knight/street. There were no movement inputs and no stable gameplay qualification. Explicit host diagnostic close produced all three owning trace-disabled end receipts; browser/server closed13:34:43.641Z, exit0, no cleanup errors. Next bounded observation belongs before title, after mapped-code authentication and immediately before the first actual guest run, not another repetition of this post-title interval. Historical startup receipts place surface creation about1.1–1.3seconds after the first observed guest run; whether the relevant initializer runs in that window remains unobserved.
-
 
 ### 2026-10-05: bounded startup mode non-observation and actual UI constructor
 
@@ -415,7 +433,6 @@ Immutable `scratch/runs/20261005-hype-cold-startup-nonobservation` preserves42 h
 The earlier attempt12 evidence identifies the actual UI constructor more directly: slot1/TID2 enters466de0 with return404cb8, deviceID0, descriptor71cd74 and outputID71cd70. Descriptor scale fields+5c/+60 are already positive-zero bytes before allocation/copy; the paired heap042fef50 retains them after466f65 calculates388x268 dimensions. Original404c80 initializes only percentage rectangle fields0/100/0/100, and complete dimension helper466cc0–466da4 does not write the scales. Later registration functions49c910/589620 only store descriptor pointers. These observations support initially missing scale values, not a demonstrated later overwrite.
 
 Alternate bulk descriptor updater467450 clears/copies104/100bytes and recalculates dimensions; UI wrapper404e8f changes percentage fields but supplies the existing descriptor scale bytes. That can propagate zero values without proving where nonzero values were expected to originate. Source investigation now concerns the normal constructor/backend view contract and alternate writers, not repeated mode probes or forced scale/swap workarounds.
-
 
 ### 2026-10-05: normal scale initialization requires an unsupported message hook
 
@@ -428,7 +445,6 @@ The current USER hook implementation explicitly accepts classes 2 and 5 only; `i
 The source writer audit also covered descriptor aliases: allocation and descriptor replacement copy all 100 bytes, getters/acquisition copy heap→caller, and destruction poisons 104 bytes before freeing. Initial WM_CREATE path `499450→49950d→466810` selects flag-zero device creation and does not initialize surface scales; `467990` only registers associated pointer +50. Explicit offset-store scans are not a proof excluding arbitrary computed-pointer writers.
 
 Next work is generic owning-thread WH_GETMESSAGE support with real guest-call before/after regression: preserve the original MSG pointer and edits, PM_REMOVE versus PM_NOREMOVE, ignored hook return, CallNext/unhook/lifetime semantics, and existing keyboard/CBT behavior. No forced game notification, scale assignment, or swap suppression is justified. Source receipts and reproducible inventory are retained under `scratch/hype-route-prep-20261005/`; no runtime was used for this finding.
-
 
 ## 2026-10-05 — WH_GETMESSAGE candidate reaches ordinary controlled gameplay
 
@@ -491,3 +507,49 @@ recompiles at 32 slots: the game loop needs more pages than that, so a shared
 on-demand pool (and code-partition pooling with it) is the remaining lever.
 Evidence: `scratch/runs/20261011T0850Z-hype-fps-measure-boat`,
 `20261011T1000Z-hype-page-index-boat`, `20261011T1030Z-hype-page-index-ab-boat`.
+
+## 2026-10-21: original browser movement, FPS owner-attribution blocker
+
+Exact integrated main b88c818ba3a071877e889e7cc779975a193591ce was staged
+on authorized bx_2ghgsv9d through documented exec/file APIs.6731 Git blobs
+and59 originals38067871bytes verified before/after; canonical build and
+66 accepted observer/validator tests passed, including restored exact-HEAD
+append-only API-table baseline. Module728e1de80ec20a284fc41b339895ee8ac29f16e4ded83325b27576cfacd4466c.
+
+Two bounded browser attempts: first reached menu then synchronous API30s
+timeout closed it; second used detached exec and ordinary Enter/Space to
+reach the nighttime street. Reviewed ArrowUp600ms/ArrowDown600ms images
+show movement/reversal and stable world. Chrome151.0.7922.108, real Workers,
+Glide WebGL endpoint on ANGLE/SwiftShader software rendering,4vCPU x86_64.
+
+No FPS accepted. The sampler matched get_current_thread_id()==1, initially
+ambiguous across guest/render workers, then filtered guest-worker URL and
+selected slot0. Its106 real performance.now samples were count0 while
+gameplay advanced. src/13-exports.wat sets exported current_thread_id to
+internal tid+1: the startup log's internal tid1/slot1 is not exported ID1.
+Live callback code authentication alone did not establish emitting ownership.
+The unchanged accepted validator rejects the receipt with fps:null; this is
+a harness attribution blocker, not zero FPS or a demonstrated game defect.
+No third capture or source repair.
+
+Evidence/report/recovery: scratch/runs/20261021-hype-browser-fps-authorized;
+tracked review/archive docs/reviews/hype-browser-fps-authorized-20261021*.
+Browser/server closed12:10:30Z; source/build/originals retained on same box,
+left RUNNING idle/healthok, expiry14:01:16.889Z, coordinator lifecycle owner.
+No SSH retry, public deployment, main merge or workers.
+
+## Additional dated branch findings
+
+These historical observations supplement the current facts above; they do not establish a new current-main runtime result.
+
+## Earlier input-loop observation (2026-10-04)
+
+The ordinary menu Enter changed the title to "Chargement de la map" before
+returning to Hype The Time Quest, so a blanket "Enter was not delivered"
+diagnosis is unsupported. Swaps stopped at2057 while thread1 slice counts
+advanced; sampled PCs `0x493243`, `0x49413c` and `0x496635` belong to input
+evaluation. `IPT_fn_vReadInput` starts at `0x4930e0`; caller `0x4208e0`
+has a no-render loop `0x420925..0x42097d` polling literal Action_Key until
+its command state becomes positive. The readme maps Action to Space. Other
+callers exist, so this is a hidden Action-prompt hypothesis, not proof of
+the active stack. Later observations above remain authoritative.

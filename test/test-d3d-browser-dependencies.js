@@ -8,7 +8,10 @@ const path = require('path');
 const vm = require('vm');
 const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-const scripts = [...html.matchAll(/"(lib\/(?:gpu-backend|d3d[^"/]+)\.js)"/g)].map(m => m[1]);
+const scripts = [...html.matchAll(/"(lib\/(?:gpu-backend|render-clear|d3d[^"/]+)\.js)"/g)].map(m => m[1]);
+assert(scripts.includes('lib/render-clear.js'), 'page must load clear validation');
+assert(scripts.indexOf('lib/render-clear.js') < scripts.indexOf('lib/d3d9-backend.js'),
+  'clear validation must exist when GPU factory evaluates');
 assert(scripts.includes('lib/d3d-command-stream.js'), 'page must load neutral queue');
 assert(scripts.includes('lib/d3d-geometry-batches.js'), 'page must load geometry packing');
 assert(scripts.indexOf('lib/d3d-geometry-batches.js') < scripts.indexOf('lib/d3d9-software-backend.js'),

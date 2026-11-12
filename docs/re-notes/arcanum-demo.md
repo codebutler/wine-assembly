@@ -129,3 +129,30 @@ calls onto the primary from return `0x513bed`, and each one is a
 EndScene, so frames = presents / 4. That makes about 224k guest blocks per
 frame, idle. The ratio was only verified idle, so count `EndScene` for any
 other scene. Evidence: `scratch/runs/20261010T0810-arcanum-control-frames`.
+
+## Corrected software browser measurement (2026-10-22)
+
+The remaining software visible-presentation gap is closed on accepted
+**c26252c4a95babe583ade1d1c6e2da0c050be45c**: **691 compositor submissions /
+25.40109 seconds = 27.203557 submissions/s** in the ordinary free-roam crash-site
+scene, after the registered menu/character/movie/dialogue UI route. This is
+not logical game FPS or display refresh; no presents/4 conversion was used.
+
+Reused canonical shipping module `f644bbb26edc077239dac17b8b2cfda482aafd9eb44af4c4776d4fe153d5a1a7`
+after matching accepted build/source identities; no rebuild or engine change.
+The newer task base849e57e73 is **not** the tested engine. Complete original
+36-file installed tree plus manifest was hashed. Chrome151.0.7922.108,
+software D3D/Canvas2D, cooperative, no guest Worker. Before the25-second
+measurement, the corrected Canvas/OffscreenCanvas observer passed a5.124655s
+owner/layer/visible-sink gate with120events. Full27raw samples/691copy events
+have no observer errors; before/after scenes inspected.
+
+The first browser attempt stopped before guest execution because staging
+omitted five mandatory stock fonts. Its exact404evidence is retained. One
+configuration retest added/pinned the complete font closure and succeeded;
+226source/module/driver/asset/font pins and2253runner dependency pins verified
+before and after. No third launch. FPS here means only the explicitly defined
+instrumented compositor rate; audio, Windows parity and fullgame remain
+unqualified. See `scratch/runs/20261022-arcanum-software-frame-measure/REPORT.md`
+and its sealed raw archive/recovery recipe. Same assigned bx_4sszn2zj left
+RUNNING with test processes stopped; coordinator owns snapshot-stop.

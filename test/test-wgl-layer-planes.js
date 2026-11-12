@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
-// WGL layer planes and glVertex4f, from MDK2's demo. Its GL loader resolves
+// WGL layer planes, from MDK2's demo. Its GL loader resolves
 // wglDescribeLayerPlane / wgl{Get,Set}LayerPaletteEntries / wglRealizeLayerPalette
 // through GetProcAddress and abandons OpenGL if one is missing; it never calls
 // them. Our one pixel format has no overlay or underlay planes (bReserved 0),
 // so each answers from that descriptor: FALSE or 0 with ERROR_INVALID_PARAMETER
 // for a plane that does not exist, ERROR_INVALID_HANDLE for a bad DC.
-// glVertex4f with w = 1.0 is glVertex3f; any other w is projective and must
-// fail fast (the packed vertex carries no w), never be divided through.
+// Projective glVertex4f is supported and covered by test-gl-projective-vertex.js
+// and test-gl-projective-web.js, through the current OpenGL command stream.
 
 'use strict';
 
@@ -37,7 +37,6 @@ const extraWat = String.raw`
   ${call('wglDescribeLayerPlane', 'wglDescribeLayerPlane', ['hdc', 'fmt', 'plane', 'bytes', 'out'])}
   ${call('wglGetLayerPaletteEntries', 'wgl_layer_palette_entries', ['hdc', 'plane', 'start', 'count', 'out'])}
   ${call('wglRealizeLayerPalette', 'wglRealizeLayerPalette', ['hdc', 'plane', 'realize'])}
-  ${call('glVertex4f', 'glVertex4f', ['x', 'y', 'z', 'w'])}
 `;
 
 (async () => {
@@ -64,13 +63,7 @@ const extraWat = String.raw`
   assert.strictEqual(e.t_wglDescribeLayerPlane(0x1234, 1, 1, 32, OUT), 0, 'a bad DC is FALSE');
   assert.strictEqual(e.t_last_error(), 6, 'ERROR_INVALID_HANDLE');
 
-  // A projective vertex is not silently divided through.
-  assert.throws(() => e.t_glVertex4f(0x3f800000, 0, 0, 0x40000000), /unreachable|RuntimeError/,
-    'glVertex4f with w = 2 fails fast');
-  assert.throws(() => e.t_glVertex4f(0x3f800000, 0, 0, 0), /unreachable|RuntimeError/,
-    'glVertex4f with w = 0 fails fast');
-
-  console.log('PASS  WGL layer planes answer from the pixel format; projective glVertex4f fails fast');
+  console.log('PASS  WGL layer planes answer from the pixel format');
 })().catch(error => {
   console.error(error);
   process.exit(1);

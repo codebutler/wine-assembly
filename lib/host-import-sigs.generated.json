@@ -1,6 +1,6 @@
 {
   "generated_from": "src/main.watx include closure",
-  "count": 274,
+  "count": 298,
   "sigs": {
     "log": {
       "params": [
@@ -129,6 +129,27 @@
     },
     "wall_clock": {
       "params": [
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "cmos_io": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "pit_io": {
+      "params": [
+        "i32",
+        "i32",
         "i32",
         "i32"
       ],
@@ -581,6 +602,18 @@
         "i32"
       ]
     },
+    "find_window": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "get_window_info": {
       "params": [
         "i32",
@@ -977,6 +1010,72 @@
         "i32"
       ]
     },
+    "beep_process_begin": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "beep_thread_begin": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "beep_retire_thread": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "beep_shutdown": {
+      "params": [],
+      "results": [
+        "i32"
+      ]
+    },
+    "beep_start": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "beep_status": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "beep_cancel": {
+      "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
     "message_beep": {
       "params": [
         "i32"
@@ -1044,6 +1143,56 @@
     },
     "midi_num_devs": {
       "params": [],
+      "results": [
+        "i32"
+      ]
+    },
+    "midi_stream_open": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "midi_stream_control": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "midi_stream_property": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "midi_stream_service": {
+      "params": [
+        "i32"
+      ],
+      "results": []
+    },
+    "midi_header": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
       "results": [
         "i32"
       ]
@@ -1134,6 +1283,33 @@
     },
     "audio_mixer_get_peak": {
       "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "ini_read_result": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "ini_prepare_read": {
+      "params": [
+        "i32",
+        "i32",
         "i32"
       ],
       "results": [
@@ -1439,6 +1615,48 @@
       ]
     },
     "fs_duplicate_handle": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_lock_file": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_crt_open": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_crt_descriptor_query": {
+      "params": [
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "fs_crt_descriptor_adopt": {
       "params": [
         "i32",
         "i32",
@@ -2040,6 +2258,8 @@
         "i32",
         "i32",
         "i32",
+        "i32",
+        "i32",
         "i32"
       ],
       "results": [
@@ -2058,6 +2278,17 @@
     },
     "get_thread_priority": {
       "params": [
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "snapshot_threads": {
+      "params": [
+        "i32",
+        "i32",
         "i32",
         "i32"
       ],
@@ -2213,6 +2444,17 @@
     },
     "release_semaphore": {
       "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "wave_error_text": {
+      "params": [
+        "i32",
         "i32",
         "i32",
         "i32"
@@ -2528,6 +2770,16 @@
     "voice_notify_set": {
       "params": [
         "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
+    },
+    "di_keyboard_buffer": {
+      "params": [
         "i32",
         "i32",
         "i32"

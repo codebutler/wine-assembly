@@ -1,5 +1,41 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),crypto=require('node:crypto'),zlib=require('node:zlib');
+// The current native composition stages only a launcher and exact provider pins.
+// Git + small patches recover source; existing media/module paths are referenced.
+if(process.argv[2]==='--native'){
+ const [manifest,destination]=process.argv.slice(3),root=path.resolve(__dirname,'../..');
+ if(!manifest||!destination||fs.existsSync(destination))throw Error('prior manifest and fresh native run directory required');
+ const original=JSON.parse(fs.readFileSync(manifest)),files=new Map();
+ for(const p of original.files){
+  // Resolve symlinks as well as lexical paths before reading any provider.
+  require('./staging').provider(root,p.path);
+  if(p.path.startsWith('scratch/')&&!p.path.startsWith('scratch/runs/20261108-browser-journal-remote-service/'))continue;
+  const b=fs.readFileSync(path.join(root,p.path)),digest=crypto.createHash('sha256').update(b).digest('hex');
+  if(p.path.startsWith('test/binaries/')&&digest!==p.sha256)throw Error('original media drift '+p.path);
+  files.set(p.path,{path:p.path,size:b.length,sha256:digest});
+ }
+ for(const n of ['startup.js','native-composition.js','renderer-identity.js','staging.js']){
+  const rel='tools/warcraft3-prologue/'+n,b=fs.readFileSync(path.join(root,rel));files.set(rel,{path:rel,size:b.length,sha256:crypto.createHash('sha256').update(b).digest('hex')});
+ }
+ // Keep the published lineage/EXEC providers; pin the reviewed cancellation
+ // scheduling repair separately so existing prepared runtimes stay immutable.
+ const custodyCommit='4341b87723a7d56bc98223215cca4cdc878fcae2';
+ const custodySha256='5ec810c4d4704ff86afc367b38f7335edf1214e3450ebb98a62ce3df6386b5fe';
+ for(const rel of ['tools/native_kernel_custody.py','tools/native_custody_reaper.py','tools/native-startup-barrier.py']){
+  const b=fs.readFileSync(path.join(root,rel)),published=cp.execFileSync('git',['show',custodyCommit+':'+rel],{cwd:root});
+  if(rel==='tools/native_kernel_custody.py'?crypto.createHash('sha256').update(b).digest('hex')!==custodySha256:!b.equals(published))throw Error('published native custody drift '+rel);
+  files.set(rel,{path:rel,size:b.length,sha256:crypto.createHash('sha256').update(b).digest('hex')});
+ }
+ new (require('node:vm').Script)(require('./native-composition').compose({root}));
+ fs.mkdirSync(destination,{recursive:true});
+ fs.writeFileSync(path.join(destination,'compose.cjs'),"require("+JSON.stringify(path.join(root,'tools/warcraft3-prologue/native-composition.js'))+").run(__dirname);\n",{flag:'wx'});
+ const pins={...original,commit:cp.execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),custodyCommit,custodySha256,files:[...files.values()]};
+ pins.httpPins=(original.httpPins||[]).map(p=>{const row=files.get(p.url.slice(1));if(!row)throw Error('missing HTTP provider '+p.url);return {...p,size:row.size,sha256:row.sha256}});
+ require('./staging').validate(root,pins.files);
+ fs.writeFileSync(path.join(destination,'runtime-pins.json'),JSON.stringify(pins,null,2),{flag:'wx'});
+ console.log(JSON.stringify({native:true,providers:files.size,sourceArchive:false,mediaCopied:false,destination}));
+ process.exit(0);
+}
 const [prior,media,out,acceptedSource]=process.argv.slice(2);
 if(!prior||!media||!out||!acceptedSource||fs.existsSync(out))throw Error('prior immutable runtime, original media, fresh output required');
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
@@ -19,9 +55,9 @@ const expected={'War3Demo.exe': '4bfa825510527235c2a14f7682dba1d4b339664f312f852
 const paths=names.map(n=>fixture+n),missing=paths.filter(n=>!fs.existsSync(path.join(media,n)));
 if(missing.length)throw Error('Missing exact registered fixture paths: '+JSON.stringify(missing));
 for(const n of paths){const original=path.join(media,n),data=fs.readFileSync(original),digest=sha(data);if(expected[n.slice(fixture.length)]&&expected[n.slice(fixture.length)]!==digest)throw Error('original media drift '+n);for(const root of [out,overlay]){const dest=path.join(root,'source',n);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.linkSync(original,dest);}pins.files.push({path:n,bytes:data.length,sha256:digest});plan.paths[n]='./source/'+n;plan.sourceHashes[n]=digest;}
-for(const n of ['browser.js','backend.js','controls.js','assets.js','cleanup.js','lifecycle.js','preflight.js','prepare.js']){const data=fs.readFileSync(path.join(__dirname,n));write(out,n,data);write(overlay,n,data);}
+for(const n of ['browser.js','backend.js','controls.js','assets.js','cleanup.js','lifecycle.js','renderer-identity.js','native-clock-process-proof.cjs','preflight.js','prepare.js']){const data=fs.readFileSync(path.join(__dirname,n==='native-clock-process-proof.cjs'?'../'+n:n));write(out,n,data);write(overlay,n,data);}
 for(const [n,obj] of [['browser-pins.json',pins],['serve-plan.json',plan]])for(const root of [out,overlay])write(root,n,Buffer.from(JSON.stringify(obj,null,2)));
-const identity={referenceCommit:pins.referenceCommit,module:pins.module,sourceImmutable:true,harness:Object.fromEntries(['browser.js','backend.js','controls.js','assets.js','cleanup.js','lifecycle.js','preflight.js','prepare.js'].map(n=>[n,sha(fs.readFileSync(path.join(out,n)))])),scope:'Original accepted guest Worker; Warcraft III harness overlay only'};
+const identity={referenceCommit:pins.referenceCommit,module:pins.module,sourceImmutable:true,harness:Object.fromEntries(['browser.js','backend.js','controls.js','assets.js','cleanup.js','lifecycle.js','renderer-identity.js','native-clock-process-proof.cjs','preflight.js','prepare.js'].map(n=>[n,sha(fs.readFileSync(path.join(out,n)))])),scope:'Original accepted guest Worker; Warcraft III harness overlay only'};
 for(const root of [out,overlay])write(root,'runtime-overlay.json',Buffer.from(JSON.stringify(identity,null,2)));
 fs.linkSync(archive,path.join(out,'baseline-runtime.tar.gz'));
 cp.execFileSync(process.execPath,[path.join(out,'preflight.js'),out],{stdio:'inherit'});

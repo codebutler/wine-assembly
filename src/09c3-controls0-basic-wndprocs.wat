@@ -225,12 +225,12 @@
                 (i32.const 0) (i32.const 0)
                 (local.get $w) (local.get $h)
                 (i32.const 0x30011)))))
-    ;; Win98 supplies owner-draw button DCs with the standard 3-D colors.
-    ;; Monochrome BitBlt maps source 1 through TextColor and source 0 through
-    ;; BkColor; ABOUT.DLL relies on this to emboss resource 999 instead of
-    ;; painting a literal black-and-white logo.
+    ;; Win32 owner-draw text starts in COLOR_BTNTEXT. The legacy Win16
+    ;; branding path uses BTNFACE for monochrome bitmap expansion; applying
+    ;; that to Win32 makes Winamp's transparent tab labels gray on gray.
     (drop (call $gdi_native_set_text_color (local.get $hdc)
-      (call $win98_sys_color (i32.const 15))))
+      (call $win98_sys_color
+        (select (i32.const 15) (i32.const 18) (global.get $is_win16)))))
     (drop (call $gdi_native_set_bk_color (local.get $hdc)
       (call $win98_sys_color (i32.const 20))))
     (global.set $btn_about_logo_hdc
@@ -1164,7 +1164,8 @@
                         (local.get $w) (local.get $h)
                         (i32.const 0x30011)))))
             (drop (call $gdi_native_set_text_color (local.get $hdc)
-              (call $win98_sys_color (i32.const 15))))
+              (call $win98_sys_color
+                (select (i32.const 15) (i32.const 18) (global.get $is_win16)))))
             (drop (call $gdi_native_set_bk_color (local.get $hdc)
               (call $win98_sys_color (i32.const 20))))
             ;; Keep the live owner-draw destination visible to the Win16

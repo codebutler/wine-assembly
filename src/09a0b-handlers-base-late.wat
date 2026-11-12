@@ -33,6 +33,7 @@
   (func $exit_thread_after_dll_unload (export "exit_thread_after_dll_unload") (param $code i32)
     (call $enum_rsrc_thread_cleanup)
     (call $apc_drop_shared_current)
+    (call $beep_retire_thread (global.get $current_thread_id))
     (call $host_exit_thread (local.get $code))
     (global.set $yield_reason (i32.const 2))
     (global.set $yield_flag (i32.const 1))
@@ -328,9 +329,151 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
-  ;; 482: Beep — STUB: unimplemented
+  ;; Alertable Beep continuation; process/thread retirement fences host tokens.
+  ;; Fixed per-thread records survive forced retirement without heap leakage.
+  ;; Record: prev, ESP, return EIP, output token, saved last-error, reserved,
+  ;; invocation token(i64). Each nested call owns a distinct bounded record/token.
+  (global $BEEP_CONTEXTS i32 (region.addr $BEEP_CONTEXTS 0))
+  (global $BEEP_CONTEXTS_SIZE i32 (region.size $BEEP_CONTEXTS))
+  (global $beep_frames (mut i32) (i32.const 0))
+  (global $beep_depth (mut i32) (i32.const 0))
+  (global $beep_owner (mut i64) (i64.const 0))
+  (func $beep_frame_at (param $depth i32) (result i32)
+    (if (i32.or (i32.ge_u (local.get $depth) (i32.const 64))
+        (i32.ge_u (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 16))) (then (unreachable)))
+    (i32.add (region.addr $BEEP_CONTEXTS 0)
+      (i32.add (i32.mul (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 2048))
+        (i32.mul (local.get $depth) (i32.const 32)))))
+  ;; The scheduler calls this on the main instance after marking a thread
+  ;; exited. No dead Worker's private globals or invocation stack are touched.
+  (func $beep_retire_thread (export "beep_retire_thread") (param $tid i32)
+    (local $root i64)
+    (if (i32.ge_u (i32.sub (local.get $tid) (i32.const 1)) (i32.const 16)) (then (return)))
+    (local.set $root (i64.atomic.load (i32.add (region.addr $CALLBACK_OWNERSHIP 16)
+      (i32.mul (i32.sub (local.get $tid) (i32.const 1)) (i32.const 528)))))
+    (drop (call $host_beep_retire_thread (local.get $tid) (i32.wrap_i64 (local.get $root))
+      (i32.wrap_i64 (i64.shr_u (local.get $root) (i64.const 32))))))
+  (global $beep_cont_thunk (mut i32) (i32.const 0))
+  (func $beep_ensure_thunk
+    (local $wa i32)
+    (if (global.get $beep_cont_thunk) (then (return)))
+    (global.set $num_thunks (call $thunk_reserve))
+    (local.set $wa (i32.add (global.get $THUNK_BASE)
+      (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $wa) (i32.const 0xcaca0040))
+    (i32.store offset=4 (local.get $wa) (i32.const 0))
+    (global.set $beep_cont_thunk (i32.add (global.get $image_base)
+      (i32.sub (local.get $wa) (global.get $GUEST_BASE))))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end))
+
+  (func $beep_finish (param $status i32)
+    (local $p i32) (local $wa i32)
+    (local.set $p (global.get $beep_frames))
+    (local.set $wa (local.get $p))
+    (call $invocation_leave (i64.load offset=24 (local.get $wa)))
+    (global.set $last_error (select (i32.load offset=16 (local.get $wa))
+      (i32.sub (i32.const 0) (local.get $status)) (i32.gt_s (local.get $status) (i32.const 0))))
+    (i32.store (global.get $reg_base) (i32.gt_s (local.get $status) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=4 (local.get $wa)) (i32.const 12)))
+    (global.set $eip (i32.load offset=8 (local.get $wa)))
+    (global.set $beep_frames (i32.load (local.get $wa)))
+    (global.set $beep_depth (i32.sub (global.get $beep_depth) (i32.const 1)))
+    (global.set $apc_alert_sleep (i32.const 0))
+    (global.set $sleep_yielded (i32.const 0))
+    (global.set $sleep_timeout (i32.const 0))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $steps (i32.const 0)))
+
+  (func $beep_continue
+    (local $wa i32) (local $status i32)
+    ;; No stale continuation may consume another callback's output or frame.
+    (if (i32.eqz (global.get $beep_frames)) (then (unreachable)))
+    (local.set $wa (global.get $beep_frames))
+    (if (i64.ne (i64.load offset=24 (local.get $wa)) (call $invocation_current)) (then (unreachable)))
+    (if (i32.ne (i32.load offset=4 (local.get $wa)) (i32.load offset=16 (global.get $reg_base))) (then (unreachable)))
+    (if (i32.ne (i32.load offset=8 (local.get $wa))
+          (call $gl32 (i32.load offset=4 (local.get $wa)))) (then (unreachable)))
+    ;; APC completion returns to this private thunk with the original Beep
+    ;; frame still intact. WAIT_IO_COMPLETION/EAX from its drain is private;
+    ;; only beep_finish publishes the final BOOL to the original caller.
+    (if (call $apc_pending) (then
+      (call $io_apc_ensure_thunk)
+      (call $io_apc_push (global.get $beep_cont_thunk))
+      (call $io_apc_continue)
+      (return)))
+    (local.set $status (call $host_beep_status (i32.load offset=12 (local.get $wa)) (i32.const 1)))
+    (if (local.get $status) (then (call $beep_finish (local.get $status)) (return)))
+    ;; Actual output completion governs success. A short sleep merely yields
+    ;; to the host/audio event loop and limits polling; it cannot complete tone.
+    (global.set $eip (global.get $beep_cont_thunk))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $steps (i32.const 0))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $sleep_yielded (i32.const 1))
+    (global.set $sleep_timeout (i32.const 1))
+    (global.set $apc_alert_sleep (i32.const 1))
+    (global.set $apc_alert_ret (global.get $beep_cont_thunk))
+    (global.set $apc_alert_esp (i32.load offset=4 (local.get $wa))))
+
+  (func $beep_begin (param $frequency i32) (param $duration i32)
+    (local $p i32) (local $wa i32) (local $token i32) (local $owner i64)
+    ;; A synchronous host callback cannot service parked slices. Reject before
+    ;; creating sound or retained state; do not silently finish a partial wait.
+    (if (global.get $sync_msg_depth) (then
+      (global.set $last_error (i32.const 50))
+      (i32.store (global.get $reg_base) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base)
+        (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+      (return)))
+    (call $invocation_validate)
+    (if (i64.ne (global.get $beep_owner) (global.get $invocation_root)) (then
+      (global.set $beep_frames (i32.const 0))
+      (global.set $beep_depth (i32.const 0))
+      (global.set $beep_owner (global.get $invocation_root))
+      (global.set $beep_cont_thunk (i32.const 0))))
+    (local.set $p (call $beep_frame_at (global.get $beep_depth)))
+    (local.set $owner (call $invocation_enter))
+    (global.set $beep_depth (i32.add (global.get $beep_depth) (i32.const 1)))
+    (call $beep_ensure_thunk)
+    (local.set $wa (local.get $p))
+    (i32.store (local.get $wa) (global.get $beep_frames))
+    (i32.store offset=4 (local.get $wa) (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=8 (local.get $wa) (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (local.get $wa) (global.get $last_error))
+    (i64.store offset=24 (local.get $wa) (local.get $owner))
+    (global.set $beep_frames (local.get $p))
+    (local.set $token (call $host_beep_start (local.get $frequency) (local.get $duration) (global.get $current_thread_id)
+      (i32.wrap_i64 (global.get $invocation_root))
+      (i32.wrap_i64 (i64.shr_u (global.get $invocation_root) (i64.const 32)))))
+    (i32.store offset=12 (local.get $wa) (local.get $token))
+    (if (i32.le_s (local.get $token) (i32.const 0)) (then (call $beep_finish (local.get $token)) (return)))
+    (call $beep_continue))
+
+  ;; Explicit owning-thread teardown. Foreign/retired invocation state fails
+  ;; closed. External forced retirement cancels host output without invoking
+  ;; this private stack; its fixed partition is reset by the next root owner.
+  (func $beep_cleanup (export "beep_cleanup")
+    (local $p i32) (local $wa i32) (local $token i32)
+    (block $done (loop $next
+      (br_if $done (i32.eqz (global.get $beep_frames)))
+      (local.set $p (global.get $beep_frames))
+      (local.set $wa (local.get $p))
+      (call $invocation_leave (i64.load offset=24 (local.get $wa)))
+      (local.set $token (i32.load offset=12 (local.get $wa)))
+      (drop (call $host_beep_cancel (local.get $token)))
+      (drop (call $host_beep_status (local.get $token) (i32.const 1)))
+      (global.set $beep_frames (i32.load (local.get $wa)))
+      (global.set $beep_depth (i32.sub (global.get $beep_depth) (i32.const 1)))
+      (br $next)))
+    (global.set $apc_alert_sleep (i32.const 0))
+    (global.set $sleep_yielded (i32.const 0))
+    (global.set $sleep_timeout (i32.const 0)))
+
+  ;; Beep: bounded host tone with alertable completion and stdcall cleanup.
   (func $handle_Beep (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $beep_begin (local.get $arg0) (local.get $arg1))
   )
 
   ;; 483: GetDiskFreeSpace{A,W}(lpRoot, lpSectorsPerCluster, lpBytesPerSector,
@@ -794,19 +937,18 @@
 
   ;; 498: GetExitCodeProcess — STUB: unimplemented
   (func $handle_GetExitCodeProcess (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; A child CreateProcess started (09d7-pipes.wat): the host knows.
-    (if (call $pipe_child_pid (local.get $arg0))
+    (if (i32.or
+          (i32.eq (i32.and (local.get $arg0) (i32.const 0xFFFF0000)) (i32.const 0x00E60000))
+          (i32.eq (i32.and (local.get $arg0) (i32.const 0xFFFF0000)) (i32.const 0x00E40000)))
       (then
-        (local.set $arg2 (call $host_process_ctl (i32.const 0)
-          (call $pipe_child_pid (local.get $arg0)) (i32.const 0)))
-        (if (i32.eq (local.get $arg2) (i32.const -1))
+        (if (i32.eqz (local.get $arg1))
+          (then (call $pipe_ret (i32.const 0) (i32.const 87) (i32.const 12)) (return)))
+        (local.set $arg2 (call $host_process_ctl (i32.const 6) (local.get $arg0) (i32.const 0x400)))
+        (if (i32.eq (local.get $arg2) (i32.const 1))
           (then
-            (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-            (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
-          (else
-            (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (local.get $arg2))))
-            (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
-        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+            (call $gs32 (local.get $arg1) (call $host_process_ctl (i32.const 4) (local.get $arg0) (i32.const 0)))
+            (call $pipe_ret (i32.const 1) (i32.const 0) (i32.const 12)))
+          (else (call $pipe_ret (i32.const 0) (i32.sub (i32.const 0) (local.get $arg2)) (i32.const 12))))
         (return)))
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1)
@@ -925,16 +1067,64 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44))) ;; stdcall, 10 args
   )
 
+  ;; Private WinExec host context. Keep the caller image and actual PATH
+  ;; separate from the command line and from the child's inherited cwd.
+  (func $winexec_application_path (result i32)
+    (local $p i32)
+    (local.set $p (region.addr $TEXT_SCRATCH 16))
+    (i32.store8 (local.get $p) (global.get $exe_drive))
+    (i32.store16 offset=1 (local.get $p) (i32.const 0x5C3A))
+    (memory.copy (i32.add (local.get $p) (i32.const 3))
+      (global.get $exe_name_wa) (global.get $exe_name_len))
+    (i32.store8 (i32.add (local.get $p) (i32.add (global.get $exe_name_len) (i32.const 3))) (i32.const 0))
+    (local.get $p))
+
+  (func $winexec_search_path (result i32)
+    (local $p i32) (local $entry i32)
+    (local.set $p (region.addr $TEXT_SCRATCH 288))
+    (i32.store (local.get $p) (i32.const 0x48544150)) ;; PATH
+    (i32.store8 offset=4 (local.get $p) (i32.const 0))
+    (local.set $entry (call $env_find (call $w2g (local.get $p)) (i32.const 0)))
+    (if (result i32) (local.get $entry)
+      (then (call $g2w (i32.add (local.get $entry) (i32.const 5))))
+      (else (i32.const 0))))
+
   ;; WinExec(lpCmdLine, uCmdShow) — legacy launcher. Pinball's Options →
   ;; Select Table and Win9x installers expect a real child-launch attempt.
   ;; Mark this call so the browser host applies WinExec parsing/error rules.
+  ;; Host-private continuation: 9 polls the calling stack frame, 10 binds
+  ;; its accepted launch ticket. Unsupported hosts keep their direct result.
+  ;; No command comparison, guest argument rewrite, or second fork on retry.
   (func $handle_WinExec (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_shell_execute
-      (i32.const 0) (local.get $name_ptr)
-      (if (result i32) (local.get $arg0) (then (call $g2w (local.get $arg0))) (else (i32.const 0)))
-      (i32.const 0) (i32.const 0) (local.get $arg1)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
-  )
+    (local $sp i32) (local $result i32) (local $status i32) (local $park i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $result (call $host_process_ctl (i32.const 9) (local.get $sp) (global.get $current_thread_id)))
+    (local.set $park (i32.eqz (local.get $result)))
+    (if (i32.lt_s (local.get $result) (i32.const 0))
+      (then
+        (local.set $result (call $host_shell_execute
+          (i32.const 0) (local.get $name_ptr)
+          (if (result i32) (local.get $arg0) (then (call $g2w (local.get $arg0))) (else (i32.const 0)))
+          (call $winexec_search_path) (call $winexec_application_path) (local.get $arg1)))
+        (if (i32.gt_u (local.get $result) (i32.const 31))
+          (then
+            (local.set $status (call $host_process_ctl (i32.const 10) (local.get $sp) (local.get $result)))
+            (if (i32.ge_s (local.get $status) (i32.const 0))
+              (then
+                (local.set $result (local.get $status))
+                (local.set $park (i32.eqz (local.get $status)))))))))
+    (if (local.get $park)
+      (then
+        (global.set $eip (global.get $current_thunk_eip))
+        (global.set $handler_set_eip (i32.const 1))
+        (global.set $yield_reason (i32.const 9))
+        (global.set $yield_flag (i32.const 1))
+        (global.set $steps (i32.const 0))
+        (return)))
+    (drop (call $host_process_ctl (i32.const 12) (local.get $sp) (i32.const 0)))
+    (global.set $handler_set_eip (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; LoadModule(lpModuleName, lpParameterBlock) -> an instance handle above 31,
   ;; or a DOS error code below it. WinExec's older twin, kept in KERNEL32 for
@@ -1013,7 +1203,14 @@
   ;; authoritative arena base and follow each extent until the requested
   ;; header is reached. Return its aligned size (including the header), or zero
   ;; for an interior, unmapped, malformed, or stale pointer.
+  ;; Per-instance work counter used only by pressure compaction. The
+  ;; validator makes no callbacks and cannot reenter the allocator.
+  (global $heap_compact_work (mut i32) (i32.const 0))
   (func $heap_validate_exact_block (param $guest_ptr i32) (result i32)
+    (call $heap_validate_exact_block_work (local.get $guest_ptr) (i32.const 0)))
+
+  (func $heap_validate_exact_block_work (param $guest_ptr i32)
+      (param $limited i32) (result i32)
     (local $block i32) (local $rec i32) (local $cur i32)
     (local $allocated_end i32) (local $reserved_end i32)
     (local $wa i32) (local $raw i32) (local $size i32) (local $next i32)
@@ -1028,8 +1225,20 @@
     (local.set $reserved_end (i32.load offset=4 (local.get $rec)))
     (local.set $allocated_end (i32.atomic.load offset=8 (local.get $rec)))
     (block $invalid (loop $walk
+      (if (local.get $limited)
+        (then
+          (if (i32.eqz (global.get $heap_compact_work))
+            (then (return (i32.const 0))))
+          (global.set $heap_compact_work
+            (i32.sub (global.get $heap_compact_work) (i32.const 1)))))
       (br_if $invalid (i32.ge_u (local.get $cur) (local.get $allocated_end)))
       (br_if $invalid (i32.gt_u (local.get $cur) (local.get $block)))
+      ;; Pressure recovery must never invoke a guest pager (and thereby
+      ;; recursively allocate) while validating allocator metadata.
+      (if (local.get $limited)
+        (then
+          (if (i32.eqz (call $guest_addr_mapped (local.get $cur)))
+            (then (return (i32.const 0))))))
       (local.set $wa (call $g2w (local.get $cur)))
       (local.set $raw (i32.atomic.load (local.get $wa)))
       ;; Bit zero is GlobalAlloc's live tag; bits 1..2 are always malformed.
@@ -1232,14 +1441,59 @@
   ;; bits. This is O(29*n), bounded, allocation-free, and makes adjacent arena
   ;; extents neighbors without an O(n^2) pair search. A final linear pass joins
   ;; consecutive extents only when both belong to the same allocator arena.
+  ;; Validate bin links and exact tail identity before pressure flushing can
+  ;; write through those guest-writable links. No list mutation on refusal.
+  (func $heap_compact_bins_valid (result i32)
+    (local $i i32) (local $cur i32) (local $tail i32) (local $last i32)
+    (local $size i32) (local $count i32) (local $v i64)
+    (loop $bins
+      (local.set $v (call $heap_bin_get (local.get $i)))
+      (local.set $cur (i32.wrap_i64 (local.get $v)))
+      (local.set $tail (i32.wrap_i64 (i64.shr_u (local.get $v) (i64.const 32))))
+      (local.set $last (i32.const 0))
+      (local.set $size (i32.shl (i32.add (local.get $i) (i32.const 2)) (i32.const 3)))
+      (block $checked (loop $links
+        (br_if $checked (i32.eqz (local.get $cur)))
+        (local.set $count (i32.add (local.get $count) (i32.const 1)))
+        (if (i32.gt_u (local.get $count) (i32.const 65536))
+          (then (return (i32.const 0))))
+        (if (i32.ne
+              (call $heap_validate_exact_block_work
+                (i32.add (local.get $cur) (i32.const 4)) (i32.const 1))
+              (local.get $size))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.atomic.load (call $g2w (local.get $cur))) (local.get $size))
+          (then (return (i32.const 0))))
+        (local.set $last (local.get $cur))
+        (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+        (br $links)))
+      (if (i32.ne (local.get $last) (local.get $tail))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $bins (i32.lt_u (local.get $i) (global.get $HEAP_BIN_COUNT))))
+    (i32.const 1))
+
   (func $heap_compact_free_list (result i32)
+    (call $heap_compact_free_list_bounded (i32.const 0)))
+
+  ;; Zero retains the public API's validation policy. Pressure callers supply
+  ;; a shared header-visit budget: long arena walks cannot multiply unchecked
+  ;; by the number of free nodes. No heap allocation or host call is made.
+  (func $heap_compact_free_list_bounded (param $budget i32) (result i32)
     (local $cur i32) (local $next i32) (local $size i32)
     (local $count i32) (local $bit i32) (local $mask i32)
     (local $head0 i32) (local $tail0 i32)
     (local $head1 i32) (local $tail1 i32)
-    (local $largest i32)
+    (local $largest i32) (local $rec i32)
     ;; Validate exact block boundaries, untagged free extents, and a finite
     ;; list before any link is rewritten. The count cap also rejects cycles.
+    (global.set $heap_compact_work (local.get $budget))
+    ;; The existing flush writes each bin tail. In pressure mode validate all
+    ;; bin chains/tails before that write, sharing the same bounded work pool.
+    (if (local.get $budget)
+      (then
+        (if (i32.eqz (call $heap_compact_bins_valid))
+          (then (return (i32.const -1))))))
     (call $heap_bins_flush)
     (local.set $cur (global.get $free_list))
     (block $valid (loop $check
@@ -1247,14 +1501,15 @@
       (local.set $count (i32.add (local.get $count) (i32.const 1)))
       (if (i32.gt_u (local.get $count) (i32.const 65536))
         (then (return (i32.const -1))))
-      (local.set $size (call $heap_validate_exact_block
-        (i32.add (local.get $cur) (i32.const 4))))
-      (if (i32.or
-            (i32.eqz (local.get $size))
-            (i32.ne
-              (i32.and (i32.atomic.load (call $g2w (local.get $cur)))
-                (i32.const 7))
-              (i32.const 0)))
+      (local.set $size (call $heap_validate_exact_block_work
+        (i32.add (local.get $cur) (i32.const 4))
+        (i32.ne (local.get $budget) (i32.const 0))))
+      (if (i32.eqz (local.get $size))
+        (then (return (i32.const -1))))
+      (if (i32.ne
+            (i32.and (i32.atomic.load (call $g2w (local.get $cur)))
+              (i32.const 7))
+            (i32.const 0))
         (then (return (i32.const -1))))
       (local.set $cur
         (i32.load offset=4 (call $g2w (local.get $cur))))
@@ -1309,7 +1564,7 @@
       (local.set $size (i32.atomic.load (call $g2w (local.get $cur))))
       (local.set $next
         (i32.load offset=4 (call $g2w (local.get $cur))))
-      (if (i32.and
+      (block $keep (if (i32.and
             (i32.ne (local.get $next) (i32.const 0))
             (i32.and
               (i32.eq (call $heap_arena_find (local.get $cur))
@@ -1317,12 +1572,29 @@
               (i32.eq (i32.add (local.get $cur) (local.get $size))
                       (local.get $next))))
         (then
+          ;; A peer's arena releaser recognizes dedicated large arenas by a
+          ;; whole-range free header. Do not manufacture that shape from an
+          ;; ordinary carved sparse arena: its private list cannot be purged
+          ;; by the peer. Keeping the final two extents separate preserves the
+          ;; arena's identity while still recovering partial free runs.
+          (if (local.get $budget)
+            (then
+              (local.set $rec (call $heap_arena_find (local.get $cur)))
+              (if (i32.and
+                    (i32.ge_u (local.get $cur) (call $virtual_alloc_min))
+                    (i32.and
+                      (i32.eq (local.get $cur) (i32.atomic.load (local.get $rec)))
+                      (i32.eq
+                        (i32.add (local.get $next)
+                          (i32.atomic.load (call $g2w (local.get $next))))
+                        (i32.load offset=4 (local.get $rec)))))
+                (then (br $keep)))))
           (i32.store (call $g2w (local.get $cur))
             (i32.add (local.get $size)
               (i32.atomic.load (call $g2w (local.get $next)))))
           (i32.store offset=4 (call $g2w (local.get $cur))
             (i32.load offset=4 (call $g2w (local.get $next))))
-          (br $merge)))
+          (br $merge))))
       ;; The 4-byte header is not caller-usable space.
       (if (i32.gt_u (i32.sub (local.get $size) (i32.const 4))
                     (local.get $largest))
@@ -1481,9 +1753,17 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
-  ;; 515: SetLocalTime — STUB: unimplemented
+  ;; API 627: SetLocalTime — process virtual calendar, local SYSTEMTIME input.
   (func $handle_SetLocalTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $wa i32) (local $ok i32)
+    (local.set $wa (call $guest_span_in (local.get $arg0) (i32.const 16)))
+    (if (local.get $wa) (then
+      (local.set $ok (call $host_wall_clock (local.get $wa) (i32.const 4)))
+      (call $guest_span_release (local.get $wa) (i32.const 16))))
+    (if (i32.eqz (local.get $ok))
+      (then (global.set $last_error (i32.const 87)))) ;; ERROR_INVALID_PARAMETER
+    (i32.store offset=0 (global.get $reg_base) (local.get $ok))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 516: GetSystemTime(lpSystemTime) — host wall clock in UTC.
@@ -1860,27 +2140,17 @@
 
   ;; 531: GetProfileIntW(appName, keyName, nDefault) — Unicode win.ini read
   (func $handle_GetProfileIntW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_int
-      (if (result i32) (local.get $arg0) (then (call $g2w (local.get $arg0))) (else (i32.const 0)))
-      (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
-      (local.get $arg2)
-      (global.get $win_ini_name_ptr)
-      (i32.const 1)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
-  )
+    (if (call $ini_read_result (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0) (i32.const 0)
+          (global.get $win_ini_name_ptr) (i32.const 1))
+      (then (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetProfileStringW(appName, keyName, default, retBuf, nSize) — Unicode win.ini read
   (func $handle_GetProfileStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_string
-      (if (result i32) (local.get $arg0) (then (call $g2w (local.get $arg0))) (else (i32.const 0)))
-      (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
-      (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
-      (local.get $arg3)
-      (local.get $arg4)
-      (global.get $win_ini_name_ptr)
-      (i32.const 1)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
-  )
+    (if (call $ini_read_result (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+          (global.get $win_ini_name_ptr) (i32.const 1))
+      (then (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; Find the mapped PE image which owns an address. The executable headers are
   ;; copied by $load_pe, and $load_dll now does the same for DLLs, so the cold
@@ -2691,24 +2961,17 @@
 
   ;; 541: GetPrivateProfileIntW — STUB: unimplemented
   (func $handle_GetPrivateProfileIntW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; GetPrivateProfileIntW(appName, keyName, nDefault, fileName) — 4 args stdcall
-    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_int
-      (call $g2w (local.get $arg0))
-      (call $g2w (local.get $arg1))
-      (local.get $arg2)
-      (call $g2w (local.get $arg3))
-      (i32.const 1)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
-  )
+    (if (call $ini_read_result (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0) (i32.const 0)
+          (call $g2w (local.get $arg3)) (i32.const 1))
+      (then (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 542: GetPrivateProfileStringW — STUB: unimplemented
   (func $handle_GetPrivateProfileStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $ini_get_string
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
-      (i32.const 1)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
-  )
+    (if (call $ini_read_result (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+          (call $g2w (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))) (i32.const 1))
+      (then (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; 543: WritePrivateProfileStringW(appName, keyName, string, fileName) — 4 args stdcall
   (func $handle_WritePrivateProfileStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

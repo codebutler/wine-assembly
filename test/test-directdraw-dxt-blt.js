@@ -147,6 +147,7 @@ const pack565 = ([a, r, g, b]) => ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 
     // Lock and GetSurfaceDesc describe a compressed surface.
     for (let i = 0; i < 124; i++) e.guest_write8(scratch + i, 0xcc);
+    e.guest_write32(scratch, 108); // legacy surface requires DDSURFACEDESC.dwSize
     assert.strictEqual(e.test_dxt_lock(src, scratch), 0, 'Lock succeeds');
     const lockFlags = e.guest_read32(scratch + 4) >>> 0;
     assert.ok(lockFlags & 0x80000, 'Lock reports DDSD_LINEARSIZE');

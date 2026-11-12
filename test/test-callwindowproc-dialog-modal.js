@@ -38,6 +38,11 @@ const extraWat = String.raw`
     (call $dialog_extra_set (i32.const 0x10024) (i32.const 0) (i32.const 77))
     (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $gs32 (local.get $stack) (i32.const 0x401234))
+    (call $gs32 (i32.add (local.get $stack) (i32.const 4)) (global.get $WNDPROC_DIALOG))
+    (call $gs32 (i32.add (local.get $stack) (i32.const 8)) (i32.const 0x10024))
+    (call $gs32 (i32.add (local.get $stack) (i32.const 12)) (local.get $msg))
+    (call $gs32 (i32.add (local.get $stack) (i32.const 16)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $stack) (i32.const 20)) (i32.const 0))
     (call $handle_CallWindowProcA (global.get $WNDPROC_DIALOG)
       (i32.const 0x10024) (local.get $msg) (i32.const 0) (i32.const 0) (i32.const 0)))
 `;
@@ -137,8 +142,15 @@ const u32 = n => [n, n >>> 8, n >>> 16, n >>> 24].map(x => x & 255);
   bytes.set([0xb8,1,0,0,0,0xc2,16,0],addr(handled));
   for(const [msg,result] of [[0x110,1],[0x14,77]]) {
     e.test_default(handled,stack,msg);
+    if (msg === 0x110) {
+      // Initialization keeps the guest frame live, just like commands.
+      e.set_bp(0x401234);
+      e.clear_yield();
+      e.run(100000);
+      e.clear_bp();
+    }
     assert.strictEqual(e.get_eax(),result,'default processing retains BOOL / DWL_MSGRESULT semantics');
-    assert.strictEqual(e.get_esp()>>>0,stack+24,'synchronous default consumes the original five-argument frame');
+    assert.strictEqual(e.get_esp()>>>0,stack+24,'default consumes the original five-argument frame');
   }
   e.test_default(0,stack,0);
   assert.strictEqual(e.get_eax(),0,'dialog without a DLGPROC retains default WM_NULL result');

@@ -12,7 +12,14 @@
   ;; screen-sized STATIC child of its 360x400 main window and points the
   ;; device at the child, so the board pixels live at surface (0,0) while the
   ;; place they belong on screen is the main window's client origin.
-  (global $d3d9_windowed_hwnd (mut i32) (i32.const 0))
+  ;; DX_PROCESS_STATE +32 is process-owned, like its cooperative HWND at +16.
+  ;; CreateDevice and committed Reset publish it; page/render Worker instances
+  ;; read the same atomic word over shared guest memory. A mutable WASM global
+  ;; here left the page's presentation owner at 0 even after guest creation.
+  (func $d3d9_windowed_hwnd_get (result i32)
+    (i32.atomic.load offset=32 (global.get $DX_PROCESS_STATE)))
+  (func $d3d9_windowed_hwnd_set (param $hwnd i32)
+    (i32.atomic.store offset=32 (global.get $DX_PROCESS_STATE) (local.get $hwnd)))
 
   ;; True while a windowed D3D9 device is the thing presenting to this window,
   ;; i.e. the surface handed to $dx_present holds CLIENT-relative pixels.
@@ -24,8 +31,8 @@
   ;; the picture: Pawn draws its board at back-buffer (0,0) and was presented
   ;; from (354,142), which is black, so its client area stayed empty.
   (func $d3d9_present_client_relative (param $target_hwnd i32) (result i32)
-    (if (i32.eqz (global.get $d3d9_windowed_hwnd)) (then (return (i32.const 0))))
-    (i32.eq (local.get $target_hwnd) (global.get $d3d9_windowed_hwnd)))
+    (if (i32.eqz (call $d3d9_windowed_hwnd_get)) (then (return (i32.const 0))))
+    (i32.eq (local.get $target_hwnd) (call $d3d9_windowed_hwnd_get)))
 
   ;; D3D9-only programmable state, owned by DxObject.misc1 on a device.
   ;; Do not extend/reinterpret the shared D3DIM state at entry+16.
@@ -75,9 +82,10 @@
     ;; +25600 actual backbuffer storage format, separate from display mode.
     ;; +25604 D3D8 pixel-shader handle list; +25608 monotonic handle counter.
     ;; +25612 D3D8 vertex-program/declaration handle list.
-    (local.set $state (call $heap_alloc (i32.const 25616)))
+    ;; +25616 copied MultiplyTransform input, owned by this device.
+    (local.set $state (call $heap_alloc (i32.const 25680)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $state)) (i32.const 25616))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 25680))
     (call $gs32 (i32.add (local.get $state) (i32.const 21780)) (global.get $current_thread_id))
     (loop $texture_stages
       (local.set $sampler (i32.add (call $g2w (local.get $state))
@@ -660,7 +668,9 @@
   ;; works on D3D9 surfaces unchanged. Entry fields match
   ;; $handle_IDirectDraw_CreateSurface: +12 w, +14 h, +16 bpp, +18 pitch,
   ;; +20 DIB (WASM addr), +24 vidmem bytes, +28 flags (1=primary, 4=offscreen).
-  ;; Returns the COM object, or 0 when the DIB arena or object table is full.
+  ;; Flag 0x400 selects heap-owned backing (GL CPU texture images); ordinary
+  ;; D3D render targets retain DIB backing. Release uses the same ownership bit.
+  ;; Returns the COM object, or 0 when backing or the object table is full.
   (func $d3d9_create_surface (param $w i32) (param $h i32) (param $bpp i32) (param $flags i32) (result i32)
     (local $pitch i32) (local $size i32) (local $dib_guest i32) (local $dib_wa i32)
     (local $obj i32) (local $entry i32)
@@ -668,14 +678,14 @@
       (i32.add (i32.mul (local.get $w) (i32.div_u (local.get $bpp) (i32.const 8))) (i32.const 3))
       (i32.const 0xFFFFFFFC)))
     (local.set $size (i32.mul (local.get $pitch) (local.get $h)))
-    ;; Match DirectDraw's canonical DIB ownership, including Release/GetDC.
-    (local.set $dib_guest (call $dib_alloc (local.get $size)))
+    ;; Match DirectDraw's canonical storage ownership, including Release/GetDC.
+    (local.set $dib_guest (call $dx_surface_storage_alloc (local.get $size) (local.get $flags)))
     ;; g2w(0) is the base of the guest image; never zero a surface from there.
     (if (i32.eqz (local.get $dib_guest)) (then (return (i32.const 0))))
     (local.set $dib_wa (call $g2w (local.get $dib_guest))) (call $zero_memory (local.get $dib_wa) (local.get $size))
     (local.set $obj (call $dx_create_com_obj (i32.const 2) (global.get $DX_VTBL_DDSURF2)))
     (if (i32.eqz (local.get $obj)) (then
-      (call $dib_free_wasm (local.get $dib_wa)) (return (i32.const 0))))
+      (call $dx_surface_storage_free (local.get $dib_wa) (local.get $flags)) (return (i32.const 0))))
     (local.set $entry (call $dx_from_this (local.get $obj)))
     (store.field DxObject width (local.get $entry) (local.get $w))
     (store.field DxObject height (local.get $entry) (local.get $h))
@@ -906,7 +916,10 @@
       (f32.store offset=176 (local.get $wa) (f32.const 1)) ;; point size
       (i32.store offset=180 (local.get $wa) (i32.const 0x100000))
       (i32.store offset=184 (local.get $wa) (i32.const 0x00ffffff))
-      (i32.store offset=188 (local.get $wa) (i32.const 1))
+      ;; Match the sixteen stream bindings supported by declarations and draw
+      ;; gathering. A stale single-stream cap rejects valid packing layouts
+      ;; before CreateVertexDeclaration is ever called.
+      (i32.store offset=188 (local.get $wa) (i32.const 16)) ;; MaxStreams
       (i32.store offset=192 (local.get $wa) (i32.const 255))
       (i32.store offset=196 (local.get $wa) (i32.const 0xfffe0101))
       (i32.store offset=200 (local.get $wa) (i32.const 96))
@@ -971,8 +984,6 @@
         (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c)) (return)))))
     (if (i32.eqz (local.get $hwnd)) (then (local.set $hwnd (local.get $arg3))))
     (if (local.get $hwnd) (then (call $dx_coop_hwnd_set (local.get $hwnd))))
-    (global.set $d3d9_windowed_hwnd
-      (select (local.get $hwnd) (i32.const 0) (local.get $windowed)))
     ;; A windowed device may leave the back-buffer size at 0 — that means "the
     ;; client area of the device window", which is also the only size Present
     ;; can land on without scaling. Fullscreen devices fall back to the
@@ -1020,8 +1031,14 @@
     (if (i32.load offset=0 (global.get $reg_base))
       (then (call $heap_free (local.get $program)) (call $heap_free (local.get $depth_surface)))
       (else
+        (call $d3d9_windowed_hwnd_set
+          (select (local.get $hwnd) (i32.const 0) (local.get $windowed)))
         (store.field DxObject misc1
           (call $dx_from_this (call $gl32 (local.get $ppDev))) (local.get $program))
+        (call $d3d9_trace_world (call $gl32 (local.get $ppDev)) (i32.const 12)
+          (i32.add (call $g2w (local.get $program)) (i32.const 2708))
+          (i32.add (call $g2w (local.get $program)) (i32.const 2708)) (local.get $program)
+          (i32.add (local.get $program) (i32.const 2708)))
         (if (local.get $pp) (then
           (if (call $gl32 (i32.add (local.get $pp) (i32.const 36))) (then
             (call $gs32 (i32.add (local.get $depth_surface) (i32.const 8)) (call $gl32 (local.get $ppDev)))
@@ -1308,6 +1325,9 @@
       (local.set $result (call $d3d_render_poll)) (br $issue)))
     (local.set $desc (call $d3d9_gpu_descriptor (local.get $arg0)))
     (if (local.get $desc) (then
+      ;; Present-only packet word: the broker's instance is not the guest
+      ;; owner and cannot read this invocation's synchronous-send depth.
+      (i32.store offset=60 (local.get $desc) (global.get $sync_msg_depth))
       (local.set $result (call $host_gpu_gl_call (i32.const 0x30002) (local.get $desc) (i32.const 0))))))
     (if (call $d3d_render_park (local.get $result) (i32.const 24)) (then (return)))
     ;; Past the park, this call completes whichever way it presents.
@@ -1321,11 +1341,16 @@
 
   ;; IDirect3DDevice9_GetBackBuffer(this, iSwapChain, iBackBuffer, Type,
   ;;                                ppBackBuffer) — 5 args.
-  ;; We render straight into the device's render target, so the back buffer is
-  ;; that surface seen through the IDirect3DSurface9 vtable.
+  ;; The supported chain has one implicit back buffer, independent of RT0
+  ;; bindings, exposed through the IDirect3DSurface9 vtable.
   (func $handle_IDirect3DDevice9_GetBackBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $rt i32) (local $slot i32) (local $surface i32)
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    ;; Only the implicit chain/buffer and D3DBACKBUFFER_TYPE_MONO exist.
+    ;; Reject selectors before acquiring a surface or retaining its device.
+    (if (i32.or (i32.or (local.get $arg1) (local.get $arg2)) (local.get $arg3)) (then
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086C))
+      (return)))
     (if (i32.eqz (local.get $arg4)) (then
       (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086C)) ;; D3DERR_INVALIDCALL
       (return)))
@@ -1633,8 +1658,7 @@
 
   ;; IDirect3DDevice9_MultiplyTransform — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_MultiplyTransform (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_recording_guard (local.get $arg0) (local.get $name_ptr))
-    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (call $d3d9_multiply_transform (local.get $arg0) (local.get $arg1) (local.get $arg2))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3DDevice9_SetViewport — 2 args (incl. this)
@@ -2713,6 +2737,7 @@
       (local.set $result (if (result i32) (global.get $d3d_render_token)
         (then (call $d3d_render_poll))
         (else (local.set $desc (call $d3d9_gpu_descriptor (local.get $device)))
+          (i32.store offset=60 (local.get $desc) (global.get $sync_msg_depth))
           (call $host_gpu_gl_call (i32.const 0x30002) (local.get $desc) (i32.const 0)))))
       (if (call $d3d_render_park (local.get $result) (i32.const 28)) (then (return)))
       (call $present_frame_end)
@@ -2734,6 +2759,11 @@
   (func $handle_IDirect3DSwapChain9_GetBackBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $rt i32) (local $slot i32) (local $surface i32)
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    ;; Only the implicit chain/buffer and D3DBACKBUFFER_TYPE_MONO exist.
+    ;; Reject selectors before acquiring a surface or retaining its device.
+    (if (local.get $arg2) (then
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086C))
+      (return)))
     (if (i32.or (local.get $arg1) (i32.eqz (local.get $arg3)))
       (then
         (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
@@ -2796,7 +2826,7 @@
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086C)) (return)))
     (local.set $w (i32.load16_u offset=12 (local.get $rt)))
     (local.set $h (i32.load16_u offset=14 (local.get $rt)))
-    (local.set $windowed (i32.ne (global.get $d3d9_windowed_hwnd) (i32.const 0)))
+    (local.set $windowed (i32.ne (call $d3d9_windowed_hwnd_get) (i32.const 0)))
     (call $zero_memory (call $g2w (local.get $arg1)) (i32.const 56))
     (call $gs32 (local.get $arg1) (local.get $w))
     (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (local.get $h))
@@ -2804,7 +2834,7 @@
     (call $gs32 (i32.add (local.get $arg1) (i32.const 12)) (i32.const 1))
     (call $gs32 (i32.add (local.get $arg1) (i32.const 24)) (i32.const 1))
     (call $gs32 (i32.add (local.get $arg1) (i32.const 28))
-      (global.get $d3d9_windowed_hwnd))
+      (call $d3d9_windowed_hwnd_get))
     (call $gs32 (i32.add (local.get $arg1) (i32.const 32)) (local.get $windowed))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
   ;; A suspended render API owns one opaque broker token on this WAT instance.

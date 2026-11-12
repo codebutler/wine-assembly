@@ -358,3 +358,14 @@ looping DirectSound voices (stereo 16-bit 44.1 kHz, snapshot mode, playing).
 Audibility and quality were not assessed: there was no listener on the boat.
 
 Evidence: scratch/runs/20261011T1800Z-disciples2-input-fps-audio-claude1863.
+
+
+## 2026-10-19: native module identity regression
+
+The Safari launch report on build `02b41f09` showed `DllMain did not complete: module=0x8f5000 reason=0`. A local reproduction with the unchanged original EXE and five DLLs confirmed that this was a secondary rollback failure. SHW32 SmartHeap first returned FALSE from PROCESS_ATTACH: its PE-header validation rejected USER32's unmapped synthetic handle `0x5d110001`. KERNEL32 already exposed readable PE headers and passed the same check.
+
+Static native modules now receive distinct, process-shared readable PE identity headers. Creation and publication use the DLL load lock; identity survives reference release and is reset for a new process. Real DLL precedence, native name/ordinal dispatch and explicit references are retained. Header-only native images have no guest entrypoint or imports. The existing KERNEL32 export image uses the shared header emitter. Startup rollback also preserves both the primary and cleanup errors instead of masking the original failure.
+
+With this change, the same original DLL closure reports TRUE from all five DllMain calls and starts executing the EXE. This is a startup regression check, not a new gameplay or Safari verification: only the EXE/DLL closure was available locally; the headless run had no renderer. Evidence runs: `20261019-disciples2-dll-control`, `20261019-disciples2-dll-native-images` under root scratch/runs.
+
+Validation: full candidate build gates pass; native image direct/sparse fixtures, cross-instance identity/reference release, allocation-failure retry, DLL rollback/completion and DirectX version chain (11/11) pass. The wide API suite retains four failures reproduced on baseline (older KERNEL32 identity expectations and manually inserted lifecycle-less DLL rows); the changed module identity and DSOUND ordinal cases pass. No deployment or full game rerun.

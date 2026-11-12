@@ -24,6 +24,11 @@
   ;; 284: GetModuleFileNameW — write L"C:\<exe_name>\0" as wide string
   (func $handle_GetModuleFileNameW_locked (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $path_g i32)
+    (if (call $kernel32_is_module (local.get $arg0))
+      (then
+        (i32.store (global.get $reg_base) (call $kernel32_file_name (local.get $arg1) (local.get $arg2) (i32.const 1)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (return)))
     (local.set $idx (call $static_sys_dll_from_handle (local.get $arg0)))
     (if (local.get $idx)
       (then
@@ -121,8 +126,8 @@
     (local $tmp i32) (local $class_name_wa i32) (local $slot i32) (local $dst i32)
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
     (local.set $class_name_wa (call $class_wide_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 36)))))
-    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_data
-      (local.get $class_name_wa) (call $g2w (local.get $arg0))))
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_encoded
+      (local.get $class_name_wa) (call $g2w (local.get $arg0)) (i32.const 1)))
     (if (i32.and (i32.eqz (global.get $wndproc_addr))
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
                (i32.lt_u (local.get $tmp) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))))
@@ -146,8 +151,8 @@
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 8))))
     (local.set $class_name_wa (call $class_wide_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 40)))))
     (local.set $src (call $g2w (i32.add (local.get $arg0) (i32.const 4))))
-    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_data
-      (local.get $class_name_wa) (local.get $src)))
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_encoded
+      (local.get $class_name_wa) (local.get $src) (i32.const 1)))
     (if (i32.and (i32.eqz (global.get $wndproc_addr))
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
                (i32.lt_u (local.get $tmp) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))))

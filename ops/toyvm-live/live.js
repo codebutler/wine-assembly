@@ -180,7 +180,7 @@
       + `${t.cautions.length ? `<details><summary>Other limits (${t.cautions.length})</summary><ul class="reasons">${rows(t.cautions)}</ul></details>` : ''}`;
   }
 
-  let keyboardBound = false;
+  let detachInput = null;
   async function init() {
     $('back').href = '/#dos';
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) { $('title').textContent = 'No title selected'; setStatus('Open a title from the dashboard\'s DOS / ToyVM view.'); return; }
@@ -200,7 +200,7 @@
     $('details').innerHTML = blockedView(t);
     if (!t.launchable) { setStatus(t.reason || 'No session is offered for this title.'); return; }
     const total = t.files.reduce((n, f) => n + f.size, 0);
-    $('size').textContent = `${t.files.length} files, ${formatBytes(total)}, all downloaded before boot (ToyVM cannot fetch files on demand). Keyboard only.`;
+    $('size').textContent = `${t.files.length} files, ${formatBytes(total)}, all downloaded before boot (ToyVM cannot fetch files on demand). Keyboard and absolute mouse input; no pointer lock or wheel.`;
     show($('start'), true);
     const canvas = $('screen');
     launcher = createLauncher(t, {
@@ -210,8 +210,7 @@
       start: async (files) => {
         const ToyVM = root.ToyVM; ToyVM.unmountAll();
         for (const [name, bytes] of Object.entries(files)) ToyVM.mount(name, bytes);
-        const { LiveRun, bindKeyboard } = ToyVM.require('tools/toyvm/live.js');
-        if (!keyboardBound) { bindKeyboard(canvas, () => run); keyboardBound = true; }
+        const { LiveRun } = ToyVM.require('tools/toyvm/live.js');
         const env = Object.entries(t.entry.env || {}).map(([k, v]) => `${k}=${v}`);
         const exe = Object.keys(files).find(name => name.toLowerCase() === t.entry.program.toLowerCase());
         const r = new LiveRun({ canvas, exe, args: t.entry.args || '', files, env, card: 'full',
@@ -228,7 +227,12 @@
         phase: renderPhase,
         error(e) { show($('error'), true); $('error-text').textContent = e.message; show($('start'), false); setStatus('The launch failed.'); $('retry').focus(); },
         cancelled() { show($('start'), true); setStatus('Cancelled. Nothing is running.'); $('start').focus(); },
-        running(r) { run = r; show($('stage'), true); show($('stop'), true); show($('start'), false); canvas.focus(); },
+        running(r) {
+          if (detachInput) detachInput();
+          run = r;
+          detachInput = root.ToyVM.require('tools/toyvm/live.js').bindInput(canvas, () => run);
+          show($('stage'), true); show($('stop'), true); show($('start'), false); canvas.focus();
+        },
       },
     });
     setStatus('Ready. Starting downloads the files above.');
@@ -239,7 +243,7 @@
   $('cancel').addEventListener('click', () => launcher && launcher.cancel());
   // A non-modal dialog fires no 'cancel' event, so Escape is handled here.
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && launcher && launcher.state === 'loading') { e.preventDefault(); launcher.cancel(); } });
-  $('stop').addEventListener('click', () => { if (run) { run.stop(); run = null; } show($('stop'), false); show($('start'), true); setStatus('Stopped.'); });
+  $('stop').addEventListener('click', () => { if (detachInput) { detachInput(); detachInput = null; } if (run) { run.stop(); run = null; } show($('stop'), false); show($('start'), true); setStatus('Stopped.'); });
   $('screen').addEventListener('pointerdown', () => $('screen').focus());
   init();
 })(typeof self !== 'undefined' ? self : globalThis);

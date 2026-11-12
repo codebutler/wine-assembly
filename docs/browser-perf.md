@@ -72,4 +72,18 @@ node tools/ios-eval.js 'innerHeight'                       # a REPL into whateve
 toolbars as they move, so a `dvh`-sized spacer grows mid-gesture and the scroll target runs away
 from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. Size overflow in
 `svh`; test "are the bars down?" as `innerHeight >= 100lvh - 8`.
+# Asset cache diagnostics
+
+With `?debug`, asset fetches log `[asset-cache]` response metadata: path (without
+query parameters), method, requested range, HTTP status, Cache-Control, ETag,
+Content-Range, Content-Length, CDN cache status, and Age. This covers whole-file,
+split-part, and range-provider requests without consuming response bodies or
+changing fetch cache policy.
+
+`browserCache: unknown: service worker hides cache attribution` means the page
+cannot determine whether the worker's underlying fetch used the browser cache.
+It does not mean caching is disabled. `cdnCache: HIT` describes the CDN response,
+not a browser cache hit; headers themselves can also come from cached responses.
+The logged Content-Length is response size, not proof of network bytes transferred.
+Normal mode emits no asset-cache diagnostics.
 

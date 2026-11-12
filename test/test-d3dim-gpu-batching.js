@@ -15,7 +15,7 @@ function fixture(batchDraws = true) {
   dv.setUint32(desc + 27 * 4, 1, true);
   dv.setUint32(desc + 28 * 4, 2, true);
   [0x5000, 4, 3, vertices, 3].forEach((v, i) => dv.setUint32(call + i * 4, v, true));
-  const events = [], draws = [];
+  const events = [], draws = [], extents = [];
   let fail = false;
   const target = { rt, width: 4, height: 4, bpp: 32, pitch: 16, format: 1,
     dib, check: false, textureKeys: new Set(), device: {
@@ -23,11 +23,12 @@ function fixture(batchDraws = true) {
         if (fail) throw new Error('injected failure');
         events.push('draw'); draws.push({...draw, vertices:draw.vertices.slice()});
       }, clear() { events.push('clear'); }, releaseTextures() {},
-      gpu: { bindImplicitTarget() {}, gl: { RGBA: 1, UNSIGNED_BYTE: 2,
+      gpu: { bindImplicitTarget() {}, updateColorResource() {}, gl: { RGBA: 1, UNSIGNED_BYTE: 2,
         readPixels(...args) { events.push('read'); args[6].fill(0); } } },
     } };
   const gpu = new D3DIMGpu({ getMemory: () => memory,
-    getExports: () => ({ d3dim_gpu_describe: () => desc, guest_to_wasm: a => a }),
+    getExports: () => ({ d3dim_gpu_describe: () => desc, guest_to_wasm: a => a,
+      d3dim_gpu_extent: (...args) => extents.push(args) }),
     createCanvas: () => null, batchDraws, onError: () => {} });
   gpu._target = () => target;
   gpu.targets.set(rt, target);
@@ -40,8 +41,48 @@ function fixture(batchDraws = true) {
     }
     return gpu.call(OPCODES.DRAW, call);
   };
-  return { gpu, target, dv, desc, call, draw, draws, events, fail: () => { fail = true; } };
+  return { gpu, target, dv, desc, call, draw, draws, events, extents, fail: () => { fail = true; } };
 }
+
+// Coverage is published at acceptance, including deferred batches and targets
+// already fully dirty. It must not depend on the readback optimization.
+const coverage = fixture();
+coverage.gpu.boundedReadback = false;
+assert.equal(coverage.draw(0), 1);
+assert.deepEqual(coverage.extents, [[0x4000, 0, 0, 4, 4]]);
+assert.equal(coverage.draw(1), 1);
+assert(coverage.gpu.pendingDraw, 'second accepted draw is still deferred');
+assert.equal(coverage.extents.length, 2, 'Execute gets coverage before flush');
+coverage.gpu.fence();
+assert.equal(coverage.extents.length, 2, 'flush must not touch a later Execute scope');
+coverage.dv.setUint32(coverage.desc + 34 * 4, 1, true);
+[1, 1, 3, 3].forEach((v, i) => coverage.dv.setUint32(coverage.desc + (35 + i) * 4, v, true));
+coverage.draw(0);
+assert.deepEqual(coverage.extents.at(-1), [0x4000, 1, 1, 3, 3]);
+const accepted = coverage.extents.length;
+coverage.draw(100);
+assert.equal(coverage.extents.length, accepted, 'fully clipped geometry adds no extent');
+coverage.dv.setUint32(coverage.call + 8, 99, true);
+assert.equal(coverage.draw(0), 0);
+assert.equal(coverage.extents.length, accepted, 'declined shape adds no extent');
+const rejected = fixture(false); rejected.fail();
+assert.equal(rejected.draw(0), 0);
+assert.deepEqual(rejected.extents, [], 'failed submission adds no extent');
+const uncertain = fixture(false);
+uncertain.draw(0);
+uncertain.dv.setFloat32(0x2000 + 12, -1, true);
+assert.equal(uncertain.gpu.call(OPCODES.DRAW, uncertain.call), 1);
+assert.deepEqual(uncertain.extents.at(-1), [0x4000, 0, 0, 4, 4], 'mixed W uses conservative clip');
+
+const points = fixture();
+points.dv.setUint32(points.call + 4, 1, true);
+assert.equal(points.draw(0, 0xffffffff), 1);
+assert.deepEqual(points.extents, [[0x4000, 0, 0, 2, 2], [0x4000, 1, 1, 3, 3], [0x4000, 2, 2, 4, 4]],
+  'points publish their exact clipped rectangles');
+const lines = fixture();
+lines.dv.setUint32(lines.call + 4, 2, true);
+assert.equal(lines.draw(0), 1);
+assert.deepEqual(lines.extents, [[0x4000, 0, 0, 3, 3]], 'line list excludes the unused trailing vertex');
 
 const f = fixture();
 assert.equal(f.draw(0), 1); // first shape is validated synchronously

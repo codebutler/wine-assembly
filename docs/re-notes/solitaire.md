@@ -131,3 +131,25 @@ single-app mode and touch controls tests. Generic WM_GETMINMAXINFO negotiation
 remains a separate native window-manager gap; this change does not invent
 tracking constraints or hardcode a Solitaire minimum. Games whose initial
 request is itself too small still need investigation/configuration.
+
+## CARDS initializer interrupted by resource retirement (2026-10-14)
+
+The release candidate at `0e7ebe1e1` rendered Solitaire in a tiny window and
+FreeCell, Cruel and Golf without cards. CARDS!cdtInit stopped immediately after
+LoadBitmapA: EAX was a bitmap handle (`0x410001`), its output dimensions were
+0x0, and the interpreter reported halt=3/yield=5. Releasing the resource
+reader's DLL pin requests a retirement pass. `callDllExport` ran only one
+interpreter slice, so it abandoned the initializer's stack at that pause.
+
+The export runner now isolates the caller's yield state, services DLL unload
+requests, and resumes ordinary scheduling pauses with a bounded retry count.
+The real initializer completes with return value 1 and dimensions 71x96.
+No card image, guest binary or app-specific geometry was changed.
+
+`test/test-solitaire-deal.js` passes all 12 checks (including initializer
+dimensions and redeal pixels); `test/test-freecell-move.js` passes all seven.
+DllMain completion and all six DLL retirement-reader scenarios also pass.
+Chrome desktop Worker captures of all four games were visually reviewed in
+`scratch/runs/20261014-cards-after`; the cooperative FreeCell baseline is in
+`scratch/runs/20261014-cards-before`. These built-in apps have no candidate
+manifest IDs. Safari and full-game completion were not tested.

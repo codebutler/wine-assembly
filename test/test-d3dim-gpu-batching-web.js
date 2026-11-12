@@ -9,7 +9,7 @@ const puppeteer=require('puppeteer');
     args:['--no-first-run','--no-default-browser-check']});
   try{
     const page=await browser.newPage();
-    for(const name of ['gpu-backend','d3d9-shader','d3d9-fixed','d3d9-backend','d3dim-gpu'])
+    for(const name of ['gpu-backend','d3d9-shader','d3d9-fixed','render-clear','d3d9-backend','d3dim-gpu'])
       await page.addScriptTag({path:path.join(__dirname,'../lib',name+'.js')});
     const results=await page.evaluate(()=>{
       function run(batchDraws){
@@ -56,6 +56,7 @@ const puppeteer=require('puppeteer');
         // queued triangles. Two halves make both generations observable.
         set(19,0);set(7,tex);set(8,1);set(9,1);set(10,32);set(11,4);set(12,texels);
         set(22,2);set(23,2);set(24,3);set(25,3);
+        set(41,2);set(43,2); // SELECTARG1 reads TEXTURE, not default DIFFUSE.
         const half=(left,right)=>{
           draw(0xffffffff,[[left,-.5],[right,-.5],[left,7.5]]);
           draw(0xffffffff,[[right,-.5],[right,7.5],[left,7.5]]);

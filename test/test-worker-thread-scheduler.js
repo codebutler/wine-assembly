@@ -11,6 +11,9 @@
 // from data in shared memory. Driving real x86 through real Workers would test
 // the same logic behind two layers of chance; test-worker-guest.js covers the
 // real path end to end in a browser.
+// Fixtures await spawnPending explicitly before slicing ready Workers. The
+// asynchronous creator/bootstrap dependency has its own focused regression in
+// test-worker-bootstrap-progress.js; scheduler assertions below stay unchanged.
 //
 // Each fake link records what it was asked to do, so the assertions are about
 // the protocol: "this thread was given a slice", "that one was told to complete
@@ -18,6 +21,9 @@
 
 const assert = require('assert');
 const { ThreadManager } = require('../lib/thread-manager');
+const fs = require('fs');
+const vm = require('vm');
+const { WorkerLink } = require('../lib/guest-thread-host');
 
 let passed = 0, failed = 0;
 function check(ok, label, detail) {
@@ -32,6 +38,7 @@ class FakeLink {
     this.slot = slot;
     this.script = script.slice();
     this.calls = [];
+    this.retryFlags = [];
     this.completed = [];
     this.completedSends = [];
     this.exports = [];
@@ -39,8 +46,9 @@ class FakeLink {
     this.concurrentPeak = 0;
   }
 
-  async slice(steps) {
+  async slice(steps, sync, localSleep, retryYield9) {
     this.calls.push(steps);
+    this.retryFlags.push(retryYield9 === true);
     FakeLink.inFlight++;
     FakeLink.peak = Math.max(FakeLink.peak, FakeLink.inFlight);
     // Yield to the event loop so a scheduler that awaited each thread in turn
@@ -64,6 +72,62 @@ class FakeLink {
 FakeLink.inFlight = 0;
 FakeLink.peak = 0;
 
+// Exercise the shipped slice sender and browser Worker handler together.
+// Guest exports are deterministic fakes so races change the live yield at
+// admission without depending on OS scheduling or compiling another module.
+async function retrySliceProtocol(){
+  let yieldReason=9,clears=0,runs=0,sleepReads=0;
+  const replies=[],messages=[];
+  const sandbox={URL,importScripts(){},location:{href:'https://example.invalid/guest-worker.js'},
+    performance,setTimeout,clearTimeout,ThreadSendWaits:require('../lib/thread-send-waits'),
+    RenderWorker: require('../lib/render-worker'),
+    GuestRpc:{readInputPending:()=>false},
+    postMessage:message=>replies.push(message),
+    fixture:{exports:{get_yield_reason:()=>yieldReason,get_eip:()=>0x401000,
+      clear_yield(){clears++;yieldReason=0;},run(){runs++;},get_last_run_blocks:()=>1,
+      get_sleep_yielded(){sleepReads++;return 0;}}}};
+  sandbox.self=sandbox;
+  const context=vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(require.resolve('../lib/guest-worker'),'utf8'),context);
+  vm.runInContext('instance=fixture;',context);
+  const link=Object.create(WorkerLink.prototype);
+  link.sliceStats={slices:0,guestMs:0,ends:{}};
+  link._ask=async message=>{
+    messages.push(message);const seq=messages.length;
+    await sandbox.onmessage({data:{...message,seq}});
+    const reply=replies.find(r=>r.seq===seq);
+    assert(reply, 'slice handler responds');assert.notStrictEqual(reply.t,'error',reply.error);
+    return reply;
+  };
+  await link.slice(100,null,null,true);
+  assert.strictEqual(clears,1);assert.strictEqual(runs,1);
+  assert.strictEqual(messages[0].retryYield9,true,'retry flag shares the slice message');
+  yieldReason=0;
+  await link.slice(100,null,null,true);
+  assert.strictEqual(runs,2,'already cleared live yield still executes the admitted slice');
+  for(const reason of [1,2,3,7,10,15,16,17]){
+    yieldReason=reason;
+    const before=runs,beforeSleep=sleepReads;
+    const r=await link.slice(100,{vblank:true},{preWaitMs:10},true);
+    assert.strictEqual(clears,1,`retry must not clear changed live yield ${reason}`);
+    assert.strictEqual(r.yield,reason);
+    assert.strictEqual(runs,before,`retry must not execute changed live wait ${reason}`);
+    assert.strictEqual(sleepReads,beforeSleep,'changed wait must not consume the sleep flag');
+    assert.strictEqual(r.blocks,0);
+  }
+  yieldReason=9;await link.slice(100);
+  assert.strictEqual(clears,1,'unflagged slices do not clear yield9');
+  assert(!('retryYield9' in messages[messages.length-1]),'ordinary slice protocol remains unchanged');
+  for(const guard of ['threadSendFrames.push({})','threadSendWaits.rootSend={}']){
+    vm.runInContext(guard,context);
+    const before=runs,r=await link.slice(100,null,null,true);
+    assert(r.threadSendPending,'incoming callback/root-send skips retry slice');
+    assert.strictEqual(clears,1);assert.strictEqual(runs,before);
+    vm.runInContext('threadSendFrames.length=0;threadSendWaits.rootSend=null;',context);
+  }
+  await link.slice(100,null,null,true);assert.strictEqual(clears,2);
+}
+
 // Enough of GuestThreadHost for the scheduler: PE metadata comes from slot 0,
 // and every spawn hands back a link.
 function makeBackend(scripts) {
@@ -79,6 +143,7 @@ function makeBackend(scripts) {
         get_image_base: 0x400000, get_code_start: 0x401000, get_code_end: 0x420000,
         get_thunk_base: 0x7500000, get_thunk_end: 0x7502818, get_num_thunks: 1283,
         get_dll_count: 3, get_vlan_local_ip: 0x0A4D0001, get_tls_next_index: 2,
+        get_ansi_code_page: 950,
       };
     },
     async spawnThread(spec) {
@@ -115,6 +180,121 @@ function makeManager(backend, extraOpts) {
 
 (async () => {
   console.log('ThreadManager worker backend\n');
+  await retrySliceProtocol();
+  check(true,'retry clear rides slice, checks live yield, and follows incoming-send guards');
+
+  // A contended CS must not produce an unbounded free-run RPC chain. Polling
+  // ownership is only a hint; a racing acquisition must park the waiter again.
+  {
+    const backend = makeBackend([[]]);
+    const tm = makeManager(backend);
+    tm.createThread(0x401500, 0, 0, 0);
+    await tm._spawnPendingWorkers();
+    const [handle, thread] = [...tm.threads.entries()][0];
+    const addr = 0x400;
+    const owner = new Int32Array(tm.memory.buffer, addr + 12, 1);
+    Atomics.store(owner, 0, 7);
+    const blocked = { yield: 9, csWaitAddr: addr, csWaitOwner: 7, csParkEip: 0x401000, blocks: 2 };
+    thread.link.script = [blocked];
+    await tm.runWorkerSlices(1000);
+    for (let i = 0; i < 100; i++) await tm.runWorkerSlices(1000);
+    await tm._runWorkerThread(handle, thread, 1000); // nested send pump path
+    assert.strictEqual(thread.link.calls.length, 1, 'unchanged owner gets no retry slices');
+    assert.deepStrictEqual(thread.link.exports, [], 'parking sends no clear_yield RPC');
+    tm.workerFreeRun = true;
+    assert.strictEqual(tm.freeRunParkBound(50), 50, 'held CS permits host parking');
+    tm._freeRunSliceSize = 1000;
+    tm._freeRunStepAt = tm._waitNow();
+    assert.strictEqual(tm.offerSatisfiedWaiters(), 0, 'held CS is not offered');
+    Atomics.store(owner, 0, 0);
+    assert.strictEqual(tm.freeRunParkBound(50), 0, 'released CS wakes the scheduler');
+    const offered = [];
+    tm._freeRunDispatch = (...args) => offered.push(args);
+    assert.strictEqual(tm.offerSatisfiedWaiters(), 1, 'release offers a prompt retry');
+    assert.strictEqual(offered[0][0], handle);
+    tm.workerFreeRun = false;
+    // Another owner won before the slice; WAT reports contention again.
+    thread.link.script = [{ ...blocked, csWaitOwner: 8 }];
+    Atomics.store(owner, 0, 8);
+    await tm.runWorkerSlices(1000);
+    assert.strictEqual(thread.link.calls.length, 2, 'changed owner permits an acquire recheck');
+    assert.deepStrictEqual(thread.link.exports, [], 'eligible CS retry needs no export rendezvous');
+    assert.strictEqual(thread.link.retryFlags[thread.link.retryFlags.length-1], true);
+    await tm.runWorkerSlices(1000);
+    assert.strictEqual(thread.link.calls.length, 2, 'new contention remains parked');
+    Atomics.store(owner, 0, 0);
+    thread.link.script = [{ yield: 0, blocks: 100 }];
+    await tm.runWorkerSlices(1000);
+    assert.strictEqual(thread.parkedCriticalSection, null, 'successful retry clears parking');
+    assert.strictEqual(thread.link.calls.length, 3);
+    assert.strictEqual(tm.lastWorkerSliceBlocks, 100);
+    // Missing, packed, sentinel and out-of-bounds diagnostic addresses must
+    // fall back to actual guest execution, not read arbitrary memory or hang.
+    for (const bad of [0, 0xF0, addr + 1, tm.memory.buffer.byteLength - 12, 0xFFFFFFFC]) {
+      thread.parkedCriticalSection = { addr: bad, owner: 7 };
+      assert.strictEqual(tm._criticalSectionBlocked(thread), false);
+      await tm._runWorkerThread(handle, thread, 1000);
+      assert.strictEqual(thread.parkedCriticalSection, null);
+    }
+    Atomics.store(owner, 0, 7);
+    let retryNow = 1000;
+    tm._waitNow = () => 0; // frozen guest time must not strand a host retry
+    tm._now = () => retryNow;
+    for (const csParkEip of [0, 0x402000]) {
+      thread.link.script = [{ ...blocked, csParkEip }];
+      const before = thread.link.calls.length;
+      await tm.runWorkerSlices(1000);
+      for (let i = 0; i < 100; i++) await tm.runWorkerSlices(1000);
+      assert.strictEqual(thread.link.calls.length, before + 1,
+        'generic yield 9 cannot immediately chain empty slices');
+      tm.workerFreeRun = true;
+      assert.strictEqual(tm.freeRunParkBound(50), 1, 'generic import retry has a bounded deadline');
+      tm.workerFreeRun = false;
+      retryNow++;
+      await tm.runWorkerSlices(1000);
+      assert.strictEqual(thread.link.calls.length, before + 2,
+        'non-CS yield 9 ignores stale lock diagnostics');
+      assert(!thread.parkedCriticalSection);
+      retryNow++;
+    }
+    // A nested callback pump arriving during the retry slice cannot dispatch
+    // that parked frame twice. A Worker-side send guard keeps the retry due.
+    let releaseSlice;
+    const clears = thread.link.exports.length;
+    const beforeSlices=thread.link.calls.length;
+    thread.link.slice = async (steps,sync,localSleep,retry) => {
+      thread.link.calls.push(steps);assert.strictEqual(retry,true);
+      return new Promise(resolve=>{releaseSlice=resolve;});
+    };
+    const retryAt=thread.importRetryAt;
+    const resuming = tm._runWorkerThread(handle, thread, 1000);
+    await tm._runWorkerThread(handle, thread, 1000);
+    assert.strictEqual(thread.link.exports.length, clears);
+    assert.strictEqual(thread.link.calls.length,beforeSlices+1);
+    assert.strictEqual(tm._workerSkipReason(thread, retryNow, true), 'inflight');
+    releaseSlice({threadSendPending:true,blocks:0});
+    await resuming;
+    assert.strictEqual(thread.importRetryPreparing, false);
+    assert.strictEqual(thread.importRetryAt,retryAt,'skipped retry keeps original due deadline');
+    const retry=tm._runWorkerThread(handle,thread,1000);
+    releaseSlice({yield:0,eip:0x401000,blocks:10});await retry;
+    assert.strictEqual(thread.importRetryAt,0,'admitted retry consumes old parking metadata');
+    const parked={addr,owner:7};thread.parkedCriticalSection=parked;
+    Atomics.store(owner,0,0);
+    const csSkipped=tm._runWorkerThread(handle,thread,1000);
+    releaseSlice({threadSendPending:true,blocks:0});await csSkipped;
+    assert.strictEqual(thread.parkedCriticalSection,parked,'incoming send preserves qualified CS retry metadata');
+    const csRetry=tm._runWorkerThread(handle,thread,1000);
+    releaseSlice({yield:0,eip:0x401000,blocks:10});await csRetry;
+    assert.strictEqual(thread.parkedCriticalSection,null);
+    thread.importRetryAt=retryNow;
+    thread.link.slice=async()=>{throw new Error('retry transport lost');};
+    await tm._runWorkerThread(handle,thread,1000);
+    assert.strictEqual(thread.importRetryPreparing,false,'failed retry releases preparation guard');
+    assert.strictEqual(thread.inFlight,false,'failed retry releases in-flight guard');
+    assert(backend.dropped.includes(thread.link.slot),'transport failure retires thread instead of retrying stale state');
+    check(true, 'CS waiters park without RPC churn, wake on release, and recheck acquisition races');
+  }
 
   // A parked helper must not force the host's idle GetMessage worker to spin.
   // Exercise real wait bookkeeping, including consuming an auto-reset event
@@ -235,6 +415,7 @@ function makeManager(backend, extraOpts) {
     if (workerMode) {
       tm.createThread(0x401500, 0, 0, 0);
       tm.createThread(0x401600, 0, 0, 0);
+      await tm.spawnPending();
       await tm.runWorkerSlices(50000);
       assert(backend.links.every(link => link.exports.includes('clear_yield')));
     } else {
@@ -280,6 +461,7 @@ function makeManager(backend, extraOpts) {
       'a pending real Worker owns a nested STA apartment');
     const h1Duplicate = tm.duplicateCurrentThread(2);
     check(!!h1Duplicate, 'a pending real Worker can materialize a durable duplicate');
+    await tm.spawnPending();
     await tm.runWorkerSlices(50000);
     check(backend.specs.length === 3, 'each CreateThread became a Worker', `${backend.specs.length}`);
     const s = backend.specs[0];
@@ -295,7 +477,7 @@ function makeManager(backend, extraOpts) {
     check(s.stackSize === 0x100000 && backend.specs[1].stackSize === 0x100000,
       'thread stacks get the Windows reserve, whether or not a commit size is given',
       `${s.stackSize}, ${backend.specs[1].stackSize}`);
-    check(s.dllCount === 3 && s.vlanIp === 0x0A4D0001 && s.tlsNextIndex === 2,
+    check(s.dllCount === 3 && s.vlanIp === 0x0A4D0001 && s.tlsNextIndex === 2 && s.ansiCodePage === 950,
       'process-wide state a new instance cannot infer is passed in');
     check(tm.threads.get(h1).state === 'active' && tm.threads.get(h2).state === 'active',
       'both threads are live in the same handle map the waits read');
@@ -320,6 +502,7 @@ function makeManager(backend, extraOpts) {
     const tm = makeManager(backend);
     for (let i = 0; i < 3; i++) tm.createThread(0x401500 + i, 0, 0, 0);
     FakeLink.peak = 0; FakeLink.inFlight = 0;
+    await tm.spawnPending();
     await tm.runWorkerSlices(50000);
     check(FakeLink.peak === 3, 'all three threads are in a slice at the same time',
       `peak in flight = ${FakeLink.peak}`);
@@ -337,7 +520,8 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{}]]);
     const tm = makeManager(backend);
     tm.createThread(0x401500, 0, 0, 0);
-    await tm.runWorkerSlices(1000);           // spawn + first slice
+    await tm.spawnPending();
+    await tm.runWorkerSlices(1000);           // ready Worker + first slice
     const ev = tm.createEvent(false, false);  // auto-reset, unsignaled
     backend.links[0].script = [{ yield: 1, waitHandle: ev, waitStackBytes: 12, waitTimeout: 0xFFFFFFFF }];
     await tm.runWorkerSlices(1000);
@@ -362,6 +546,7 @@ function makeManager(backend, extraOpts) {
     tm.createThread(0x401500, 0, 0, 0);
     tm.createEvent(false, false);            // idx 0 → handle 0xE0000
     tm.createEvent(false, false);            // idx 1 → handle 0xE0001, unsignaled
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     check(backend.links[0].completed.length === 0, 'inside the timeout it keeps waiting');
     clock += 50;
@@ -379,6 +564,7 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{ yield: 7 }]]);
     const tm = makeManager(backend);
     const h = tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     await tm.runWorkerSlices(1000);
     check(!backend.links[0].exports.includes('clear_yield'),
@@ -423,6 +609,7 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{ yield: 2 }]]);
     const tm = makeManager(backend);
     const h = tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     check(tm.threads.get(h).state === 'exited', 'yield 2 marks the thread exited');
     check(backend.dropped.length === 1, 'and its Worker is dropped', `${backend.dropped}`);
@@ -439,6 +626,7 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{ eip: 0 }]]);
     const tm = makeManager(backend);
     const h = tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     check(tm.threads.get(h).state === 'exited', 'returning from the threadproc (EIP=0) also exits');
   }
@@ -448,6 +636,7 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{ trapped: 'unreachable', eip: 0x401234 }]]);
     const tm = makeManager(backend);
     const h = tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     check(tm.threads.get(h).state === 'exited', 'a trapped thread is exited, not left active');
     check(backend.dropped.length === 1, 'and its Worker is dropped too');
@@ -460,6 +649,7 @@ function makeManager(backend, extraOpts) {
     let clock = 5000;
     tm._now = () => clock;
     tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     const after = backend.links[0].calls.length;
     await tm.runWorkerSlices(1000);
@@ -473,6 +663,7 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{}]]);
     const tm = makeManager(backend);
     const h = tm.createThread(0x401500, 0, 0, 0x4);   // CREATE_SUSPENDED
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     check(backend.links.length === 1, 'a CREATE_SUSPENDED thread still gets its Worker');
     check(backend.links[0].calls.length === 0, 'but is given no slice while suspended');
@@ -489,10 +680,16 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{}]]);
     const tm = makeManager(backend);
     const h = tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     backend.onRpcSlot(backend.links[0].slot);
     tm.exitThread(7);
     backend.onRpcSlotEnd();
+    check(tm.threads.get(h)._exitRequested && tm.threads.get(h).state !== 'exited',
+      'ExitThread records intent until the owning Worker finishes detach');
+    check(tm.getExitCodeThread(h) === 259, 'thread handle remains pending during detach');
+    backend.links[0].script = [{ yield: 2, exitCode: 7 }];
+    await tm.runWorkerSlices(1000);
     check(tm.threads.get(h).state === 'exited', 'ExitThread on a worker slot exits that thread');
     check(tm.getExitCodeThread(h) === 7, 'with its exit code', `${tm.getExitCodeThread(h)}`);
   }
@@ -502,6 +699,7 @@ function makeManager(backend, extraOpts) {
     const backend = makeBackend([[{ yield: 8 }]]);
     const tm = makeManager(backend);
     tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     check(backend.links[0].exports.includes('clear_yield')
       && backend.links[0].exports.includes('vlan_pump'),
@@ -519,6 +717,7 @@ function makeManager(backend, extraOpts) {
     }]]);
     const tm = makeManager(backend);
     tm.createThread(0x401500, 0, 0, 0);
+    await tm.spawnPending();
     await tm.runWorkerSlices(1000);
     check(backend.resolvedSends.length === 1
       && backend.resolvedSends[0].targetTid === 1
@@ -533,12 +732,20 @@ function makeManager(backend, extraOpts) {
       hasMessage: () => true,
       resolveThreadSendExternalYield: async (_link, r) => {
         external.push(r.yield);
-        return true;
+        return { bytes: null };
       },
     });
     const calls = [];
     const link = {
-      completeWait: async (result, bytes) => calls.push(['wait', result, bytes]),
+      scopedThreadSendLoader: async (_token, request) => ({ ready: true, completed: !!request,
+        loaderState: { dllCount: 0, thunkEnd: 0, numThunks: 0 } }),
+      scopedThreadSendYield: async (token, finish) => {
+        calls.push(['scoped', token, finish]);
+        return { ready: true, completed: !!finish };
+      },
+      reserveThreadSendWait: async () => ({ reserved: true }),
+      cancelThreadSendWait: async () => ({ cancelled: true }),
+      completeWait: async (result, bytes) => { calls.push(['wait', result, bytes]); return { delivered: true }; },
       resumeThreadSendMessageWait: async hostInput => {
         calls.push(['message', hostInput]);
         return { resumed: true };
@@ -546,18 +753,19 @@ function makeManager(backend, extraOpts) {
       callExport: async name => { calls.push(['export', name]); return 0; },
     };
     const state = { waitPolls: 0, waitStartedAt: 0 };
+    tm.workerBackend.link = link;
     const ev = tm.createEvent(false, true);
     const actions = [];
     actions.push(await tm.resolveThreadSendYield(link, {
-      yield: 1, waitHandle: ev, waitTimeout: 0xFFFFFFFF, waitStackBytes: 12,
+      yield: 1, frameToken: 1, waitEpoch: 1, waitHandle: ev, waitTimeout: 0xFFFFFFFF, waitStackBytes: 12,
     }, state, new Set([link])));
     for (const yieldReason of [7, 8, 9, 6, 3, 5]) {
-      actions.push(await tm.resolveThreadSendYield(link, { yield: yieldReason }, state, new Set([link])));
+      actions.push(await tm.resolveThreadSendYield(link, { yield: yieldReason, frameToken: 1, waitEpoch: yieldReason }, state, new Set([link])));
     }
     check(actions.every(action => action === 'resume')
       && calls.some(c => c[0] === 'wait' && c[1] === 0 && c[2] === 12)
       && calls.some(c => c[0] === 'message' && c[1] === true)
-      && calls.some(c => c[0] === 'export' && c[1] === 'vlan_pump')
+      && calls.some(c => c[0] === 'scoped' && c[1].waitEpoch === 8 && c[2] === true)
       && external.join(',') === '3,5',
     'a target WndProc keeps its SendMessage frame across event/message/net/modal/DLL yields',
     `actions=${actions.join(',')} external=${external.join(',')}`);

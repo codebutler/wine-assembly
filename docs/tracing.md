@@ -2,6 +2,41 @@
 
 Ad-hoc `console.log` / `DBG_*` env vars rot. Use the built-in flags first; extend them when they fall short.
 
+For the main CLI host, `--trace-api` records the return at `log_api_exit`,
+reading EAX before the caller resumes. When an entry has no `ret` metadata
+(including an unknown API name), the line is `=> 0x887600ff (raw EAX; ApiName)`.
+This is an unsigned register bit pattern, not an inferred HRESULT meaning.
+The preceding `[API #N]` header retains the existing call identity. Integer
+diagnostics during an untyped call remain `[i32]` lines and do not consume
+the exit correlation. Typed return formatting and entry-snapshotted out-parameter
+decoding remain on the same exit callback. No new tracing is enabled by default.
+
+`node test/test-api-exit-observer.js` exercises the production callback wiring
+with stubbed guest exports, without starting a guest or compiling a module.
+
+`--trace-callback-lifecycle` enables the CLI cooperative waveOut lifecycle ring
+(128 records, at most 32 retained owner instances). At process exit it emits one
+`[callback-lifecycle]` JSON snapshot, including overwritten count and pending
+identities. It is off by default and does not honor the API trace window.
+Admissions carry owner/thread, immutable registration, header, submission,
+instance-local WAT token, queue lengths, and available saved/current EIP, ESP
+and wait context. `returned` requires the matching WAT marker written by
+`wave_callback_restore_wait`, called after register restoration in the validated
+`mm_callback_finish` continuation. A successful JS fire call proves admission
+only. Missing exports/tokens or unmatched markers remain explicitly incomplete;
+pending callbacks at exit do not prove deadlock. Rebuild the module for the WAT
+marker; an older module can report admission but cannot report guest completion.
+
+The same ring records actual ThreadManager semaphore releases (including failures),
+parked grants, grant consumption and ordinary count acquisition. Release IDs link
+grants to their release; ordinary count acquisition has no inferred release ID.
+Cooperative release context includes the active callback token when available;
+real-worker broker callers have unknown owner/context. Multiple-object waits and
+browser owner-offer delivery are outside this diagnostic's lifecycle coverage.
+The ring is finite, so absent records after overwriting do not prove noncompletion.
+`node test/test-callback-lifecycle-trace.js` tests production components and extracted
+WAT functions with synthetic continuation helpers, without running a guest.
+
 | Flag | What it prints |
 |---|---|
 | `--trace-api` (`=Name1,Name2`) | Every Win32 API call with args + return; with `=NAMES` filter, only those APIs. Args/returns are typed via `args:[{name,type[,out:true]}]` / `ret` fields in `src/api_table.json` (LPCSTR, HWND, LPMSG, flags:WS, etc.) — untyped entries fall back to an `nargs`-sized hex dump (or 6 dwords if `nargs` is unknown). Args flagged `out:true` are decoded **after** the handler runs (e.g. `LoadStringA buf=`, `GetMessageA msg=`) on a separate `out:` line. |
@@ -25,6 +60,7 @@ Ad-hoc `console.log` / `DBG_*` env vars rot. Use the built-in flags first; exten
 | `--trace` | Every decoded block's EIP |
 | `--trace-eip-stream` | With `--trace-eip-range`, writes matching EIP lines immediately instead of buffering until the current batch returns. Pair with `--trace-eip-detail` to include register state, synchronous-message depth and remaining block budget when diagnosing a long nested guest call. |
 | `--trace-sched[=N]` | One compact line each time the *set of thread states* changes, plus a heartbeat every N batches (default 5000). Shows main + every worker as `M:run@0xEIP  T1:sleep  T2:wait(0xHANDLE)`. Reach for this first on any "it hangs" or "it's slow" report with threads involved: a stalled system prints the same line repeatedly, a healthy one churns. Doubles as a cheap sampling profiler — `--trace-sched=50` then histogram the `M:...@0x...` addresses. |
+| `--trace-main-scheduler` | CLI only, off by default. At the actual ordinary/worker-interleaved/cooperative-interleaved main admission gate, emits `[main-scheduler]` JSON containing the decision ID, batch, path, suspended result/reason, existing yield-reason return, existing live-thread predicate and exact sleep comparison operands. `sleepChecks` preserves both checks around an existing fast-forward; `now:null` means the no-deadline short circuit did not read time, and other nulls mean that branch did not evaluate the value. Main `run` entry and `host_check_input` entry carry the matching decision ID only while that admitted slice executes. Worker imports and host polls outside these slices are labeled separately with no main decision ID. Honors the existing `--trace-from`/`--trace-to` window without spending its budget outside that window. Invocation-owned, capped at 256 records plus one suppression notice; no clock/getter probes, wake, input consumption or scheduling changes. Independent of `--trace-input-dispatch`; entries prove host polling, not SDL consumption or gameplay readiness. |
 | `--time-scale=N` | Run the guest clock N× the wall clock. Separates "the app is waiting for time to pass" from "the app is doing work": if a slow boot doesn't get faster at `--time-scale=10`, it is not timing-bound. |
 | `--max-seconds=N` | Stop the batch loop after N seconds of wall clock (the timer starts at loop entry, so app load is not counted), whatever `--max-batches` says — pass a huge `--max-batches` with it. The exit line then reads `N batches in Ns (M batches/s)`, and that batch count is the throughput number. **This is the axis to benchmark on**, because cost per batch is not constant within a run: Caesar is ~0.1ms/batch through its boot and several times that once a city simulates, so a batch count picked to land near a target duration is per-app guesswork that goes stale as soon as the app gets further in the same budget. Fix the duration, compare how far each build got. |
 | `--batch-stats[=FROM_BATCH]` | How many blocks each batch actually retired (p50/p90/p99, share that spent the whole budget) and a histogram of **why** each batch stopped: budget spent, EIP zero, `yield_flag`, blocking wait, debug facility. Reach for this before concluding that a region of a run is "slow per batch" — that phrasing hides two opposite causes. A low p50 with `budget spent` rare means batches keep bailing early and the host pays its per-batch cost for blocks the guest never ran; a p50 at the budget means the batches are full and the blocks themselves are expensive. On Diablo both regions came back full (mean 991 intro, 853 menu), which is what proved the 6x "slowdown" was a unit artifact and not a cliff. Pair with `--handler-hist-thread=0` to divide ops by blocks. |

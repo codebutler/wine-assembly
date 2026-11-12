@@ -8,6 +8,24 @@ const ProcessBoot = (typeof window !== 'undefined' && window.processBoot) || nul
 const HostMemUtils = (typeof window !== 'undefined' && window.memUtils) ||
   (typeof require !== 'undefined' ? require('./lib/mem-utils') : null);
 
+// Private provenance, populated only at the actual compile boundary. A public
+// Module or a caller-provided buffer cannot authenticate one another.
+const drakanCompiledBytes = new WeakMap();
+const drakanBrowserOwners = new WeakMap();
+// Exact offline-qualified modules; the private compile record remains authoritative.
+const DRAKAN_BROWSER_MODULES = Object.freeze({
+  '4b45bda53a90b665896cf3b85d9a157b7c3703563c88b6666e4ee2e4b346bcc3': 2184500,
+  'a320d4c85156644fd12b6134d66b11784f3100b9b135756206c087cdacd43295': 2185596,
+});
+
+function drakanCompileSnapshot(bytes) {
+  if (typeof window === 'undefined' || window.WINE_DRAKAN_OBSERVER !== true) return null;
+  const buffer = ArrayBuffer.isView(bytes) ? bytes.buffer : bytes;
+  if (!(buffer instanceof ArrayBuffer)) throw new Error('Drakan compile bytes must be unshared');
+  return new Uint8Array(ArrayBuffer.isView(bytes)
+    ? new Uint8Array(buffer, bytes.byteOffset, bytes.byteLength) : buffer).slice();
+}
+
 // iOS decides whether a page may be heard at all, and WebAudio alone does not
 // get a say. A page that only ever makes sound through an AudioContext lands
 // in the ambient-style session the ringer switch mutes: the context is
@@ -29,10 +47,10 @@ function claimAudioSession(type = 'playback') {
 if (typeof window !== 'undefined') window.claimAudioSession = claimAudioSession;
 
 // ShellExecute receives lpFile and lpParameters separately, while WinExec's
-// one string starts with the executable token. Keep the latter's whitespace
-// rules scoped to WinExec so an unquoted ShellExecute path containing spaces
-// retains the compatibility behavior existing applications depend on.
-function parseShellLaunchCommand(rawFile, explicitParams, operation) {
+// one string contains an image name followed by arguments. WinExec delegates
+// to CreateProcess: unquoted whitespace boundaries are tried in order until an
+// image exists. ShellExecute's separately supplied lpFile keeps its own rules.
+function parseShellLaunchCommand(rawFile, explicitParams, operation, vfs, search = {}) {
   const source = String(rawFile || '');
   const isWinExec = /^winexec$/i.test(String(operation || ''));
   const s = source.trim();
@@ -52,6 +70,23 @@ function parseShellLaunchCommand(rawFile, explicitParams, operation) {
       const token = /^(\S+)(?:\s+([\s\S]*))?$/.exec(s);
       file = token ? token[1] : '';
       parsedParams = token && token[2] || '';
+      if (vfs && vfs.files && typeof vfs._resolvePath === 'function') {
+        // Period MSDN CreateProcess contract (also used by WinExec):
+        // C:\Program Files\Sub Dir\Tool tries Program.exe before the longer
+        // image names. An absent first candidate does not end the search.
+        // Probe only file identities, without reading/starting any candidate;
+        // the normal loader owns invalid-image and other execution failures.
+        for (const boundary of s.matchAll(/\s+|$/g)) {
+          const candidate = s.slice(0, boundary.index);
+          if (!candidate) continue;
+          const resolved = resolveShellLaunchPath(candidate, vfs, true, search);
+          const entry = vfs.files.get(vfs._resolvePath(resolved));
+          if (!entry || (entry.attrs & 0x10)) continue;
+          file = candidate;
+          parsedParams = s.slice(boundary.index).trimStart();
+          break;
+        }
+      }
     }
   } else {
     const quoted = /^"([^"]+)"(?:\s+(.*))?$/.exec(s);
@@ -86,14 +121,80 @@ function parseShellLaunchCommand(rawFile, explicitParams, operation) {
   };
 }
 
-function resolveShellLaunchPath(file, vfs, isWinExec) {
+// Host-private tickets never escape WinExec's suspended stdcall frame.
+function createWinExecReadiness({ now = () => performance.now(), timeoutMs = 10000, onEvent = () => {} } = {}) {
+  const tickets = new Map(), frames = new Map(), callers = new Map();
+  let serial = 0;
+  function poll(frame) {
+    const wait = frames.get(frame >>> 0);
+    if (!wait) return -1;
+    if (!wait.process.ready && !wait.process.exited && now() - wait.started < timeoutMs) return 0;
+    frames.delete(frame >>> 0);
+    onEvent({ event: 'complete', frame: frame >>> 0, reason: wait.process.ready ? 'GetMessage' : wait.process.exited ? 'exit' : 'timeout', elapsedMs: now() - wait.started });
+    return 33;
+  }
+  return {
+    issue(process) {
+      // Reuse only after a ticket has been consumed, never a live identity.
+      let ticket, attempts = 0;
+      do {
+        if (++attempts > 65536) throw new Error('WinExec startup tickets exhausted');
+        ticket = 0x57450000 + (++serial & 0xffff);
+      } while (tickets.has(ticket));
+      tickets.set(ticket, { process, started: now() });
+      onEvent({ event: 'accepted', ticket, timeoutMs });
+      return ticket;
+    },
+    control(op, frame, ticket) {
+      if (op === 9) {
+        const wait = frames.get(frame >>> 0);
+        if (wait && wait.threadId !== (ticket >>> 0)) frames.delete(frame >>> 0);
+        if (!frames.has(frame >>> 0)) callers.set(frame >>> 0, ticket >>> 0);
+        return poll(frame);
+      }
+      if (op === 12) { callers.delete(frame >>> 0); return 1; }
+      if (op !== 10) return -1;
+      const threadId = callers.get(frame >>> 0);
+      callers.delete(frame >>> 0);
+      const wait = tickets.get(ticket >>> 0);
+      if (!wait) return ticket; // legacy/custom host success code
+      tickets.delete(ticket >>> 0);
+      wait.threadId = threadId ?? 0;
+      frames.set(frame >>> 0, wait);
+      onEvent({ event: 'waiting', frame: frame >>> 0, ticket: ticket >>> 0 });
+      return poll(frame);
+    },
+    retire(threadId) {
+      for (const [frame, wait] of frames) if (wait.threadId === (threadId >>> 0)) frames.delete(frame);
+      for (const [frame, owner] of callers) if (owner === (threadId >>> 0)) callers.delete(frame);
+    },
+  };
+}
+
+
+function resolveShellLaunchPath(file, vfs, isWinExec, search = {}) {
   if (!isWinExec || !file) return file;
-  // WinExec accepts an executable stem; only the final path component
-  // determines whether an extension was supplied (including a trailing dot).
+  // A supplied directory (including drive-relative paths) is used literally.
+  // Only a bare image name participates in WinExec's executable search.
   const leaf = file.split(/[\\/]/).pop();
   if (leaf && !leaf.includes('.')) file += '.exe';
-  if (/^[a-z]:[\\/]/i.test(file) || !vfs ||
-      typeof vfs._resolvePath !== 'function') return file;
+  if (!vfs || typeof vfs._resolvePath !== 'function') return file;
+  if (/[\\/:]/.test(file)) {
+    return /^[a-z]:[\\/]/i.test(file) ? file : vfs._resolvePath(file);
+  }
+  const applicationDir = String(search.applicationPath || '').replace(/[^\\/]*$/, '');
+  const directories = [...(applicationDir ? [applicationDir] : []), '', 'C:\\WINDOWS\\SYSTEM', 'C:\\WINDOWS',
+    ...String(search.path || '').split(';').map(p => p.trim().replace(/^"(.*)"$/, '$1'))];
+  const seen = new Set();
+  for (const directory of directories) {
+    const candidate = vfs._resolvePath(directory ? directory.replace(/[\\/]$/, '') + '\\' + file : file);
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    const entry = vfs.files && vfs.files.get(candidate);
+    if (entry && !(entry.attrs & 0x10)) return candidate;
+  }
+  // Retain a concrete missing path so production consumers report FNF and
+  // never replace a requested WinExec image with a registered-app basename.
   return vfs._resolvePath(file);
 }
 
@@ -619,13 +720,13 @@ class WineAssembly {
   static FROZEN_STALL_MS = 5000;
   static _nextProcessId = 1000;
 
-  // An HTTP-range provider for `url`, or for the deployer's parts of it
+  // A whole-GET provider for `url`, or for the deployer's parts of it
   // (url.part000, url.part001, ...) when the release host stores it split, as
   // fetchAssetBytes already handles for whole-file loads. A part shorter than
   // ASSET_PART_SIZE is the last one. Rejects with the original error when
   // neither form exists, so loadFiles keeps its whole-file fallback.
   static async _openRangeProvider(url, options, providers = window.byteProvider) {
-    const notFound = error => /HEAD .* → 404/.test(String(error && error.message));
+    const notFound = error => /GET .* → 404/.test(String(error && error.message));
     try {
       return await providers.HttpRangeProvider.open(url, options);
     } catch (error) {
@@ -803,13 +904,27 @@ class WineAssembly {
     const headerLength = new DataView(bytes.buffer, bytes.byteOffset, 8).getUint32(4, true);
     if (8 + headerLength > bytes.length) return null;
     let header;
-    try { header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + headerLength))); } catch (_) { return null; }
+    try { header = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(8, 8 + headerLength))); } catch (_) { return null; }
     if (!Array.isArray(header)) return null;
     const out = new Map();
+    const names = new Set();
     let at = 8 + headerLength;
     for (const entry of header) {
-      if (!entry || typeof entry.f !== 'string' || !Number.isSafeInteger(entry.size)) continue;
-      if (entry.size < 0 || at + entry.size > bytes.length) return null;
+      // Every descriptor is exactly one of {f, size} or {f, status}.
+      // Errors reserve their names too: no descriptor may shadow another.
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+          !Object.prototype.hasOwnProperty.call(entry, 'f') ||
+          typeof entry.f !== 'string' || names.has(entry.f)) return null;
+      names.add(entry.f);
+      const keys = Object.keys(entry);
+      if (keys.length !== 2) return null;
+      if (Object.prototype.hasOwnProperty.call(entry, 'status')) {
+        if (entry.status !== 404 && entry.status !== 413) return null;
+        continue;
+      }
+      if (!Object.prototype.hasOwnProperty.call(entry, 'size') ||
+          !Number.isSafeInteger(entry.size) || entry.size < 0 ||
+          entry.size > bytes.length - at) return null;
       // A view, not a copy: every file of an eager list stays mounted, so the
       // one response buffer lives as long as its files anyway.
       out.set(entry.f, bytes.subarray(at, at + entry.size));
@@ -957,9 +1072,31 @@ class WineAssembly {
     }
   }
 
-  // The Resource Timing entry for a fetch is queued after its body completes,
-  // not before the last read resolves; give it two short turns to land. No
-  // entry means "not known", never "network".
+  // Debug response metadata is not proof of a browser cache hit. In particular,
+  // CF-Cache-Status describes the CDN, not the browser's own cache.
+  static async _fetchAssetResponse(url, init) {
+    const response = await fetch(url, init);
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('debug')) {
+      const controlled = typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
+      console.debug('[asset-cache]', {
+        path: new URL(url, location.href).pathname,
+        method: init?.method || 'GET',
+        range: new Headers(init?.headers).get('Range'),
+        status: response.status,
+        cacheControl: response.headers.get('Cache-Control'),
+        etag: response.headers.get('ETag'),
+        contentRange: response.headers.get('Content-Range'),
+        contentLength: response.headers.get('Content-Length'),
+        cdnCache: response.headers.get('CF-Cache-Status'),
+        age: response.headers.get('Age'),
+        browserCache: controlled ? 'unknown: service worker hides cache attribution' : 'unknown: response body not yet consumed',
+      });
+    }
+    return response;
+  }
+
+  // Resource Timing entries can arrive just after the body completes.
+  // No entry means "not known", never "network".
   static async _cacheSourceSettled(url) {
     for (const wait of [0, 0, 25]) {
       const source = WineAssembly._cacheSource(url);
@@ -1006,7 +1143,7 @@ class WineAssembly {
   static async _fetchAssetCandidate(url, options = {}, transfer = null) {
     const init = options.signal ? { signal: options.signal } : undefined;
     const listening = !!(options && options.onTransfer);
-    const direct = await fetch(url, init);
+    const direct = await WineAssembly._fetchAssetResponse(url, init);
     if (direct.ok) {
       const bytes = listening
         ? await WineAssembly._readBody(direct, transfer, false)
@@ -1024,7 +1161,7 @@ class WineAssembly {
     let total = 0;
     for (let index = 0; ; index++) {
       const partUrl = WineAssembly._assetPartUrl(url, index);
-      const response = await fetch(partUrl, init);
+      const response = await WineAssembly._fetchAssetResponse(partUrl, init);
       if (response.status === 404) {
         if (index === 0) throw new Error(`Unable to load ${url}: HTTP 404`);
         throw new Error(`Unable to load ${url}: missing ${partUrl}`);
@@ -1069,6 +1206,10 @@ class WineAssembly {
   }
 
   constructor() {
+    // Conservative page-wide scope: even pending/replaced instances taint
+    // completeness until reload. A per-manager list cannot describe siblings.
+    if (WineAssembly._threadSnapshotProcessSeen) WineAssembly._threadSnapshotSystemIncomplete = true;
+    WineAssembly._threadSnapshotProcessSeen = true;
     // A debug tab is a live-worktree harness. Stop/Launch creates a new
     // process and must see a newly rebuilt module even when the page itself
     // was not reloaded; production keeps sharing one compiled module.
@@ -1080,10 +1221,14 @@ class WineAssembly {
     // created by ThreadManager are threads of this process and share its PID
     // through the process's SharedArrayBuffer-backed memory.
     this.processId = WineAssembly._nextProcessId++;
+    this._processObject = { wine: this, exited: false, exitCode: 259 };
+    this._processAliases = new Map();
+    this._nextProcessAlias = 1;
     this.instance = null;
     this.memory = null;
     this.running = false;
     this.renderer = null;
+    this._lastInputEvent = null;
     this.resourceJson = null;
     this.threadManager = null;
     // Slot 0's focus global lives in the guest Worker. Browser input cannot
@@ -1228,7 +1373,8 @@ class WineAssembly {
         const sc = this._startupClock;
         if (!sc || !sc.active || name !== sc.config.endOn) return;
         const st = this._guestTickState(ctx.sharedAudio);
-        const raw = st.wallStartMs > 0 ? this._audioSchedulerNow() - st.wallStartMs : 0;
+        const raw = this._frozen ? sc.unmap(st.batchMs) :
+          (Number.isFinite(st.wallStartMs) ? this._audioSchedulerNow() - st.wallStartMs : 0);
         sc.end(raw, name);
         console.log(`[startup-clock] ended by ${name} at raw ${Math.round(raw)} ms = ` +
           `guest ${Math.round(sc.map(raw))} ms`);
@@ -1386,18 +1532,24 @@ class WineAssembly {
   async _offerWaveCallback(item) {
     const registration=item.registration, owner=registration && registration.owner;
     if(!this.running || !owner || (registration.retired && !owner.link?._waveOffer)) return {status:'retired'};
+    if(item.midiMessage !== undefined && owner.host &&
+      (owner.host!==this || owner.processId!==this.processId ||
+       owner.document!==(typeof document==='undefined'?null:document))) return {status:'retired'};
     const tm=this.threadManager;
     if(owner.kind==='worker') {
+      const midi = item.midiMessage !== undefined;
       const backend=owner.backend;
       if(this.guestWorker!==backend) return {status:'retired'};
       const live=owner.slot===0 ? backend.link : backend.threadLinks.get(owner.slot);
       if(!owner.link) owner.link=live || null;
       if(!owner.link) return {status:'busy'};
       if(live!==owner.link || !live.worker) return {status:'retired'};
-      const stream=live.waveRegistrations.get(registration.handle);
+      if(midi && (live.worker!==owner.worker || live.endpointIdentity!==owner.endpointIdentity)) return {status:'retired'};
+      const stream=(midi ? live.midiRegistrations : live.waveRegistrations).get(registration.handle);
       if(!stream && !live._waveOffer) return owner.stream ? {status:'retired'} : {status:'busy'};
       if(!owner.stream) {
-        if(stream.callback!==registration.callback || stream.instance!==registration.instance) return {status:'retired'};
+        if(stream.callback!==registration.callback || stream.instance!==registration.instance ||
+          (midi && stream.type!==registration.type)) return {status:'retired'};
         owner.stream=stream;
       }
       if(stream!==owner.stream && !live._waveOffer) return {status:'retired'};
@@ -1409,7 +1561,11 @@ class WineAssembly {
       if(thread && (thread.inFlight || thread.freeRunPending || thread.parkedWaitDone)) return {status:'busy'};
       const state=thread || (tm ? (tm._mainWaitState || (tm._mainWaitState={})) : {});
       const saved={waitStartedAt:state.waitStartedAt||0,waitPolls:state.waitPolls||0,lastPollAt:state.lastPollAt||0};
-      const result=await live.offerWaveCallback(owner.stream,item.waveHdrGA,1000,registration.retired);
+      const result=await live.offerWaveCallback(owner.stream,item.waveHdrGA,1000,registration.retired,item.midiMessage);
+      if(midi && registration.type===1) {
+        if(result.status==='accepted') this._wakeStep();
+        return result;
+      }
       if(result.status==='accepted') {
         if(!this.running || !live.worker || (thread && thread.state!=='active')) return {status:'retired'};
         // Only the accepted callback changes run eligibility; original WAT wait
@@ -1428,9 +1584,19 @@ class WineAssembly {
     if(!owner.tid && tm?.isMainThreadSuspended?.()) return {status:'busy'};
     if(thread?.suspendCount>0) return {status:'busy'};
     if(!ex.get_eip() || ex.get_yield_reason()===2) return {status:'retired'};
+    if(item.midiMessage !== undefined && owner.root !== undefined) {
+      try { if(ex.null_diag_root()!==owner.root || !ex.null_diag_token()) return {status:'retired'}; }
+      catch (_) { return {status:'retired'}; }
+    }
+    if(item.midiMessage !== undefined && registration.type===1) {
+      return {status:ex.post_message_q(registration.callback,item.midiMessage,registration.handle,item.waveHdrGA) ? 'accepted' : 'busy'};
+    }
     const saved=thread ? {waitStartedAt:thread.waitStartedAt||0,waitPolls:thread.waitPolls||0}
       : {waitStartedAt:tm?._mainWaitStartedAt||0,waitPolls:tm?._mainWaitPolls||0};
-    if(!ex.fire_wave_out_callback_bound(registration.handle,item.waveHdrGA,registration.callback,registration.instance)) return {status:'busy'};
+    const admitted = item.midiMessage === undefined
+      ? ex.fire_wave_out_callback_bound(registration.handle,item.waveHdrGA,registration.callback,registration.instance)
+      : ex.fire_midi_out_callback_bound(registration.handle,item.waveHdrGA,registration.callback,registration.instance,item.midiMessage);
+    if(!admitted) return {status:'busy'};
     if(thread) {thread.waveWaitSaved=saved;thread.waitStartedAt=thread.waitPolls=0;}
     else if(tm) {this._waveMainWaitSaved=saved;tm._mainWaitStartedAt=tm._mainWaitPolls=0;}
     return {status:'accepted'};
@@ -1494,7 +1660,7 @@ class WineAssembly {
   _guestTickState(sharedAudio) {
     const shared = sharedAudio || this._sharedAudio || (this._sharedAudio = {});
     if (!shared.guestTickState) {
-      shared.guestTickState = { wallStartMs: 0, batchMs: 0, callsInBatch: 0, lastReturnedMs: 0 };
+      shared.guestTickState = { wallStartMs: null, batchMs: 0, callsInBatch: 0, lastReturnedMs: 0 };
     }
     return shared.guestTickState;
   }
@@ -1505,7 +1671,7 @@ class WineAssembly {
     // wall — see the frozen-mode block above `class WineAssembly`.
     if (this._frozen) { st.callsInBatch = 0; return; }
     const now = this._audioSchedulerNow();
-    if (!Number.isFinite(st.wallStartMs) || st.wallStartMs <= 0) st.wallStartMs = now;
+    if (!Number.isFinite(st.wallStartMs)) st.wallStartMs = now;
     const elapsed = Math.max(0, Math.floor(this._startupElapsed(now - st.wallStartMs)));
     st.batchMs = Math.max(Number.isFinite(st.batchMs) ? st.batchMs : 0, elapsed) & 0x7FFFFFFF;
     st.callsInBatch = 0;
@@ -1532,7 +1698,7 @@ class WineAssembly {
     let elapsed = Number.isFinite(st.batchMs) ? st.batchMs : 0;
     if ((calls % stride) === 0) {
       const now = this._audioSchedulerNow();
-      if (!Number.isFinite(st.wallStartMs) || st.wallStartMs <= 0) st.wallStartMs = now;
+      if (!Number.isFinite(st.wallStartMs)) st.wallStartMs = now;
       elapsed = Math.max(0, Math.floor(this._startupElapsed(now - st.wallStartMs)));
     }
     const batchMs = Math.max(Number.isFinite(st.batchMs) ? st.batchMs : 0, elapsed);
@@ -1570,7 +1736,7 @@ class WineAssembly {
     const st = this._guestTickState(sharedAudio);
     const base = Math.max(Number.isFinite(st.batchMs) ? st.batchMs : 0,
       Number.isFinite(st.lastReturnedMs) ? st.lastReturnedMs : 0);
-    if (!Number.isFinite(st.wallStartMs) || st.wallStartMs <= 0) return base;
+    if (this._frozen || !Number.isFinite(st.wallStartMs)) return base;
     return Math.max(base, this._startupElapsed(this._audioSchedulerNow() - st.wallStartMs));
   }
 
@@ -1665,6 +1831,7 @@ class WineAssembly {
   // Per-app thread-exit fixups (Winamp's visualizer bookkeeping) live in
   // lib/app-profiles.js, so the CLI harness runs the same ones.
   _onThreadExit(info) {
+    if (this._winexecReadiness) this._winexecReadiness.retire((info.tid | 0) + 1);
     const profiles = (typeof window !== 'undefined' && window.appProfiles) || null;
     if (!profiles || !this.instance || !this.memory) return;
     profiles.onThreadExit(
@@ -1764,7 +1931,12 @@ class WineAssembly {
     self._guestTickState(sharedAudio);
     const ctx = {
       getMemory: () => self.memory.buffer,
+      cmosRtc: opts.cmosRtc,
+      pitTimer: opts.pitTimer,
+      pitNowMs: opts.pitNowMs,
+      calendarClock: opts.calendarClock,
       d3d9Bridge: opts.d3d9Bridge,
+      d3dCommands: opts.d3dCommands,
       glideBridge: opts.glideBridge,
       // The ?debug toolbar's shared GPU select; unset falls through to the
       // ?d3d9-renderer query and then WebGL inside host-imports.js.
@@ -1787,6 +1959,8 @@ class WineAssembly {
       createRenderEndpoint: options => self._createRenderWorkerEndpoint(options),
       createRenderWorker: options => self._createRenderWorkerConsumer(options),
       get sharedRenderWorkerEnabled() { return !!self.guestWorker; },
+      get writerObservation() { return self._d3dimWriterObservation || null; },
+      get d3dimPublicationJoin() { return self._d3dimPublicationJoin || null; },
       apiTable: self.apiTable,
       get renderer() { return self.renderer; },
       get resourceJson() { return self.resourceJson; },
@@ -1842,6 +2016,8 @@ class WineAssembly {
       sharedGdi: opts.sharedGdi || null,
       sharedAudio,
       sharedMixer,
+      callbackHost: self,
+      get callbackDocument() { return typeof document==='undefined' ? null : document; },
       get waveCallbackOwner() {
         const backend=self.guestWorker;
         if(backend) {
@@ -1851,6 +2027,11 @@ class WineAssembly {
         return this.exports ? {kind:'cooperative',exports:this.exports,tid:opts.threadId|0} : null;
       },
       offerWaveCallback:item=>self._offerWaveCallback(item),
+      offerMidiCallback:item=>self._offerWaveCallback({
+        registration: { handle:item.handle, callback:item.registration.callback,
+          instance:item.registration.instance, type:item.registration.type, owner:item.registration.routingOwner },
+        waveHdrGA:item.header, midiMessage:item.message,
+      }),
       wakeWaveCallback:()=>self._wakeStep(),
       audioClockMs: () => self._guestAudioClockMs(sharedAudio),
       // How far the global deadline clock trails real time (0 when off).
@@ -2096,7 +2277,13 @@ class WineAssembly {
         self._dxLockHeld = 0;
       }
       self._dxDirty = false;
-      return gdi.presentBestDxOffscreen(true) ? 1 : 0;
+      return gdi.presentBestDxOffscreen(true, {
+        source: 'WineAssembly._presentDxIfDirty',
+        localLocks: dxLockDepth.size,
+        sharedLocks: dxShared ? dxShared.locks : null,
+        heldChecks: self._dxLockHeld || 0,
+        frozenSteps: Number.isSafeInteger(self._frozenSteps) ? self._frozenSteps : null,
+      }) ? 1 : 0;
     };
 
     const traceApiNames = (typeof window !== 'undefined' && window.__waTraceApiNames)
@@ -2175,7 +2362,54 @@ class WineAssembly {
         self.logToUI('[wine-asm] ' + text);
       }
     };
+    let pendingFarFault = null;
+    const captureWin16FarFault = val => {
+      // CA165E23 is a failure-only WAT record, not verbose API output. Finish
+      // reading its live ownership tables before the import returns to the CS
+      // trap. Each getImports context owns its collector, including auxiliaries.
+      if ((val >>> 0) === 0xCA165E23 && !pendingFarFault) {
+        pendingFarFault = [];
+        return true;
+      }
+      if (pendingFarFault) {
+        pendingFarFault.push(val >>> 0);
+        if (pendingFarFault.length === 21) {
+          const fields = ['operandAddress', 'targetOffset', 'targetSelector', 'returnAddress',
+            'blockEip', 'cs', 'csBase', 'ss', 'ssBase', 'esp', 'ds', 'dsBase', 'es', 'esBase',
+            'segmentTable', 'segmentCount', 'moduleTable', 'moduleCount',
+            'taskNeOffset', 'taskSegments', 'taskImage'];
+          const fault = { version: 1, processId: self.processId, threadId: opts.threadId || 0 };
+          fields.forEach((name, i) => { fault[name] = pendingFarFault[i]; });
+          pendingFarFault = null;
+          try {
+            const view = new DataView(self.memory.buffer);
+            const words = p => [0, 4, 8, 12].map(off => view.getUint32(p + off, true));
+            fault.segments = [];
+            for (let index = 1; index < fault.segmentCount; index++) {
+              const [base, limit, flags, neSegment] = words(fault.segmentTable + index * 16);
+              if (base) fault.segments.push({ index, base, limit, flags, neSegment });
+            }
+            fault.modules = [];
+            for (let index = 0; index < fault.moduleCount; index++) {
+              const [neOffset, segmentBase, image, segmentCount] = words(fault.moduleTable + index * 16);
+              if (segmentCount) fault.modules.push({ id: index + 1, neOffset, segmentBase, image, segmentCount });
+            }
+            fault.registers = {};
+            const ex = ctx.exports;
+            for (const name of ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp'])
+              if (ex && ex['get_' + name]) fault.registers[name] = ex['get_' + name]() >>> 0;
+          } catch (error) { fault.captureError = String(error); }
+          ctx.lastWin16FarFault = self.lastWin16FarFault = fault;
+          // A broken diagnostic sink must not replace the emulator's CS trap.
+          try { console.error('[Win16 far fault] ' + JSON.stringify(fault)); }
+          catch (error) { fault.logError = String(error); }
+        }
+        return true;
+      }
+      return false;
+    };
     h.log_i32 = (val) => {
+      if (captureWin16FarFault(val)) return;
       if (((val >>> 0) >>> 16) === 0xC0DE) {
         pendingTraceComApiId = (val >>> 0) & 0xFFFF;
         lastTraceApi = false;
@@ -2272,7 +2506,9 @@ class WineAssembly {
     // attached before its first slice. Synchronous: the launch is
     // fire-and-forget, and frames sent before the child runs wait in its
     // wire's inbox. 0 = "cannot", and the guest falls back to its old path.
-    h.process_spawn = (cmdWa, dirWa, childIp, specWa, count) => {
+    h.process_spawn = (cmdWa, dirWa, childIp, specWa, count, forceSpawn, showCmd) => {
+      // Set before launch/fallback or any asynchronous child initialization.
+      WineAssembly._threadSnapshotSystemIncomplete = true;
       // An ordinary CreateProcess (no redirected std handles) is a child too
       // when the app runs children for every CreateProcess (`spawnProcesses`
       // in lib/apps.js, as test/run.js --spawn-processes): a visible instance
@@ -2281,7 +2517,7 @@ class WineAssembly {
       // launch through shell_execute. The registry needs no merge: every
       // instance on the page shares one store.
       const pipes = count > 0;
-      if (!pipes && !self.spawnProcesses) return 0;
+      if (!pipes && !forceSpawn && !self.spawnProcesses) return 0;
       const shell = window.wineShell;
       const Vlan = window.VlanWire;
       if (!shell || !shell.launchVfsExe) return 0;
@@ -2304,11 +2540,7 @@ class WineAssembly {
         spec.push({ which: view.getInt32(at, true), end: view.getInt32(at + 4, true),
           lport: view.getInt32(at + 8, true), rport: view.getInt32(at + 12, true) });
       }
-      if (!self._children) {
-        self._children = new Map();
-        // A parent that ends takes its children with it.
-        self._stopChildren = () => { for (const c of self._children.values()) if (c.wine && c.exitCode === 259) c.wine.stop(); };
-      }
+      if (!self._children) self._children = new Map();
       if (pipes && !self._childSegment) {
         self._childSegment = new Vlan.LoopbackSegment();
         self.vlanWire = self._childSegment.attach();
@@ -2320,27 +2552,52 @@ class WineAssembly {
       if (self.threadManager) self.threadManager.processCtl = (op, p, arg) => h.process_ctl(op, p, arg);
       const ip = childIp >>> 0;
       const ipText = [ip >>> 24, (ip >>> 16) & 255, (ip >>> 8) & 255, ip & 255].join('.');
-      const pid = (0x4000 + (self._children.size + 1) * 4) & 0xFFFF;
-      const rec = { wine: null, exitCode: 259, ip };
+      const pid = self._nextChildPid || 0x4004;
+      if (pid > 0xFFFF) return 0;
+      self._nextChildPid = pid + 4;
+      // Publish the process object with hProcess, before asynchronous boot.
+      // Aliases must keep this same identity through attachment and failure.
+      const rec = { object: { wine: null, pending: true, exited: false, exitCode: 259 },
+        exited: false, exitCode: 259, ip };
       self._children.set(pid, rec);
       const beforeRun = async (child) => {
-        rec.wine = child;
+        child._processObject = rec.object;
+        rec.object.pending = false;
+        if (rec.object.exited) {
+          // Termination of a published but not yet attached process cancels
+          // its boot. The shell's failure cleanup still owns launch resources.
+          child._exitCode = rec.object.exitCode;
+          child.stop();
+          throw new Error('process_spawn: process terminated before attachment');
+        }
+        rec.object.wine = child;
         if (!pipes) return;
-        await child.callGuest('set_vlan_local_ip', ip | 0);
-        await child.callGuest('pipe_detach_console');
+        const call = async (...args) => {
+          if (rec.object.exited) throw new Error('process_spawn: process terminated during attachment');
+          const result = await child.callGuest(...args);
+          if (rec.object.exited) throw new Error('process_spawn: process terminated during attachment');
+          return result;
+        };
+        await call('set_vlan_local_ip', ip | 0);
+        await call('pipe_detach_console');
         const byPort = new Map();
         for (const e of spec) {
           const known = byPort.get(e.lport);
-          if (known) { await child.callGuest('pipe_set_std', e.which | 0, known | 0); continue; }
-          const hnd = (await child.callGuest('pipe_attach_std', e.which | 0, e.end | 0,
+          if (known) { await call('pipe_set_std', e.which | 0, known | 0); continue; }
+          const hnd = (await call('pipe_attach_std', e.which | 0, e.end | 0,
             e.lport | 0, parentIp | 0, e.rport | 0)) >>> 0;
           if (!hnd) throw new Error(`process_spawn: could not attach std ${e.which}`);
           byPort.set(e.lport, hnd);
         }
         console.log(`[process_spawn] ${file} at ${ipText}: std handles attached`);
       };
-      const onExit = (child) => {
-        if (rec.exitCode !== 259) return;
+      // The launch owns this endpoint even before a child host exists.
+      const childWire = pipes ? self._childSegment.attach() : null;
+      const onExit = (child, outcome) => {
+        if (rec.exited) return;
+        rec.exited = true;
+        if (childWire) childWire.close();
+        delete rec.object.complete;
         const childVfs = child && child._helpCtx && child._helpCtx.vfs;
         if (before && childVfs) {
           try {
@@ -2350,42 +2607,111 @@ class WineAssembly {
             console.log(`[process_spawn] merging ${file}'s files back failed: ${e.message}`);
           }
         }
-        rec.exitCode = (child && child._exitCode != null) ? (child._exitCode >>> 0) : (child ? 0 : 1);
+        const object = rec.object;
+        if (!object.exited) {
+          object.exitCode = (child && child._exitCode != null) ? (child._exitCode >>> 0)
+            : (child || outcome === 'already-satisfied' ? 0 : 1);
+          object.exited = true;
+          object.wine = null;
+        }
+        object.pending = false;
+        rec.exitCode = object.exitCode;
         // EOF for the parent's ends of the child's pipes.
         if (pipes && self.vlanWire && self.vlanWire.peerGone) self.vlanWire.peerGone(ip);
       };
-      const ok = shell.launchVfsExe(file, self, dir, parsed.params.trim(), {
-        ...(pipes ? { lanLink: { wire: self._childSegment.attach(), address: ipText, local: true } } : {}),
-        bypassSingleApp: true, hidden: pipes, beforeRun, onExit,
-      });
-      if (!ok) { self._children.delete(pid); return 0; }
+      rec.object.complete = onExit;
+      let ok;
+      try {
+        ok = shell.launchVfsExe(file, self, dir, parsed.params.trim(), {
+          ...(pipes ? { lanLink: { wire: childWire, address: ipText, local: true } } : {}),
+          bypassSingleApp: true, hidden: pipes || showCmd === 0, showCmd, beforeRun, onExit,
+        });
+      } catch (error) {
+        onExit(null);
+        self._children.delete(pid);
+        throw error;
+      }
+      if (!ok) { onExit(null); self._children.delete(pid); return 0; }
       console.log(`[process_spawn] CreateProcess "${cmd}" -> ${file} at ${ipText}, pid ${pid}`);
       return pid;
     };
-    // op 0: a child's exit code (259 while it runs); op 1: terminate it.
+    // E4: ops 0/1/2 query/terminate/validity. E4 and E6: 4..8
+    // query/terminate/access/close/wait. Status never encodes validity or exit.
+    const winexecReadiness = self._winexecReadiness = createWinExecReadiness();
     h.process_ctl = (op, pid, arg) => {
-      const rec = self._children && self._children.get(pid & 0xFFFF);
-      if (!rec) return -1;
-      if (op === 0) return rec.exitCode >>> 0;
-      if (op === 1) {
-        if (rec.exitCode === 259) {
-          const child = rec.wine;
-          rec.exitCode = arg >>> 0;
-          if (self.vlanWire && self.vlanWire.peerGone) self.vlanWire.peerGone(rec.ip);
-          if (child) child.stop();
-        }
+      if (op === 9 || op === 10 || op === 12) return winexecReadiness.control(op, pid, arg);
+      if (op === 11) {
+        self._winexecInputReady = true;
+        if (self._winexecStartup) self._winexecStartup.ready = true;
         return 1;
       }
+      if (op === 3) return self._duplicateProcessHandle(pid);
+      if (op >= 4 && op <= 8) {
+        const entry = self._processHandleEntry(pid);
+        const kind = (pid >>> 0) & 0xFFFF0000;
+        const record = kind === 0x00E40000 && self._children?.get(pid & 0xFFFF);
+        if ((!entry && !record) || (kind !== 0x00E40000 && kind !== 0x00E60000))
+          return op === 8 ? -1 : -6;
+        if (op === 7) {
+          if (record) self._children.delete(pid & 0xFFFF);
+          else self._processAliases.delete(pid >>> 0);
+          return 1;
+        }
+        const object = entry?.object || record;
+        const access = entry ? entry.access : 0x1FFFFF;
+        if (op === 6) return (access & arg) === arg ? 1 : -5;
+        if (op === 4) return object.exitCode >>> 0;
+        if (op === 8) return !(access & 0x100000) ? -1 : object.exited ? 0 : 0x102;
+        if (!(access & 1) || object.exited) return -5;
+        if (object.pending) {
+          object.exitCode = arg >>> 0;
+          object.exited = true;
+          // The launch closure owns merge/EOF, even if E4 was already closed.
+          object.complete(null);
+          return 1;
+        }
+        if (!object.wine) return -6;
+        object.wine._exitCode = arg >>> 0;
+        object.wine.stop();
+        return 1;
+      }
+      const rec = self._children && self._children.get(pid & 0xFFFF);
+      if (!rec) return -1;
+      if (op === 2) return 1;
+      if (op === 0) return (rec.object || rec).exitCode >>> 0;
+      if (op === 1) return h.process_ctl(5, 0x00E40000 | (pid & 0xFFFF), arg) === 1 ? 1 : -1;
       return -1;
     };
+    self._processCtl = h.process_ctl;
     h.shell_execute = (hwnd, opWa, fileWa, paramsWa, dirWa, nShow) => {
+      // ShellExecute/WinExec can also queue an asynchronous second process.
+      WineAssembly._threadSnapshotSystemIncomplete = true;
       const rawFile = fileWa ? self.readString(fileWa) : '';
       const op = opWa ? self.readString(opWa) : 'open';
+      const vfs = self._helpCtx && self._helpCtx.vfs;
+      // WinExec's private host handoff uses lpDirectory for the calling
+      // image path and lpParameters for its PATH, never guest arguments.
+      const isWinExec = /^winexec$/i.test(op);
+      const dir = dirWa ? self.readString(dirWa) : '';
+      const explicitParams = paramsWa ? self.readString(paramsWa) : '';
+      const search = { applicationPath: dir, path: isWinExec ? explicitParams : '' };
       const parsedCommand = parseShellLaunchCommand(
-        rawFile, paramsWa ? self.readString(paramsWa) : '', op);
+        rawFile, isWinExec ? '' : explicitParams, op, vfs, search);
       const file = parsedCommand.file;
       const params = parsedCommand.params;
-      const dir = dirWa ? self.readString(dirWa) : '';
+      // Preserve the show request through queueing. hidden suppresses launch
+      // progress UI; guest startup/window-state handling remains separate.
+      const startup = { ready: false, exited: false };
+      const launchOpts = { hidden: nShow === 0, showCmd: nShow,
+        ...(parsedCommand.isWinExec ? {
+          beforeRun: child => {
+            child._winexecStartup = startup;
+            startup.ready = !!child._winexecInputReady;
+          },
+          onExit: () => { startup.exited = true; },
+        } : {}),
+      };
+      const accepted = () => parsedCommand.isWinExec ? winexecReadiness.issue(startup) : 33;
       console.log(`[ShellExecute] hwnd=0x${hwnd.toString(16)} op="${op}" file="${file}" params="${params}"`);
       const shell = window.wineShell;
       if (shell && file) {
@@ -2393,27 +2719,26 @@ class WineAssembly {
         // filesystem (a CD launcher handing off to the game its installer
         // just wrote); that beats the registered-app basename heuristic,
         // which could resolve "diablo.exe" to a different registered build.
-        const vfs = self._helpCtx && self._helpCtx.vfs;
-        const launchFile = resolveShellLaunchPath(file, vfs, parsedCommand.isWinExec);
+        const launchFile = resolveShellLaunchPath(file, vfs, parsedCommand.isWinExec, search);
         const absolute = /^[a-z]:\\/i.test(launchFile);
         const launchDir = parsedCommand.isWinExec && vfs &&
           typeof vfs.getCurrentDirectory === 'function' ? vfs.getCurrentDirectory() : dir;
-        if (absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params)) {
+        if (absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params, launchOpts)) {
           self.logToUI(`[ShellExecute] launching ${launchFile} from the caller's filesystem`);
-          return 33;
+          return accepted();
         }
         // A relative name the caller's own filesystem has is that file too:
         // Win98's CreateProcess looks in the current directory before any
         // search path. NFS II's AUTORUN.EXE changes into SETUP\ENGLISH and
         // starts a bare "setup.exe", which the basename heuristic below
         // resolved to an unrelated registered app (Moorhuhn 3 Puzzle).
-        if (!absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params)) {
+        if (!absolute && shell.launchVfsExe && shell.launchVfsExe(launchFile, self, launchDir, params, launchOpts)) {
           self.logToUI(`[ShellExecute] launching ${launchFile} from the caller's current directory`);
-          return 33;
+          return accepted();
         }
-        if (/\.exe$/i.test(file) && shell.launchExe(file)) {
+        if (!parsedCommand.isWinExec && /\.(exe|scr)$/i.test(file) && shell.launchExe(file, launchOpts)) {
           self.logToUI(`[ShellExecute] launching ${file}`);
-          return 33;
+          return accepted();
         }
         // A path that resolved nowhere is a failure the guest can react to
         // (SE_ERR_FNF). Bare names keep the lenient success return — several
@@ -2599,6 +2924,8 @@ class WineAssembly {
     h.thread_alert = (tid) => { if (self.threadManager) self.threadManager.alertThread(tid); };
     h.get_thread_priority = (handle, tid) => self.threadManager
       ? self.threadManager.getThreadPriority(handle, tid) : 0x7FFFFFFF;
+    h.snapshot_threads = (out, capacity, pid, priorityClass) => self.threadManager
+      ? self.threadManager.snapshotThreads(out, capacity, pid, priorityClass) : -120;
     h.set_thread_priority = (handle, priority, tid) => self.threadManager
       ? self.threadManager.setThreadPriority(handle, priority, tid) : 0;
     h.get_thread_locale = (tid) => self.threadManager
@@ -2689,7 +3016,27 @@ class WineAssembly {
     // Memory is set later in init()
     h.memory = null;
 
-    return { host: h, gdi: base.gdi };
+    for (const [name, fn] of Object.entries(h)) if (typeof fn === 'function') {
+      h[name] = function(...args) {
+        self._d3dimHostWritesInFlight = (self._d3dimHostWritesInFlight || 0) + 1;
+        const epoch = self._d3dimWriterObservation;
+        const hostWrite = ((!['gpu_gl_call', 'dx_trace', 'gdi_surface_create', 'gdi_surface_upload',
+          'gdi_surface_attach', 'get_ticks'].includes(name) && !name.startsWith('math_')) ||
+          (name === 'gdi_surface_create' && args[0] >= 0x00610001 && args[0] <= 0x00610100));
+        try {
+          const result = epoch ? (hostWrite ? RenderWorker.observeHostWrite : RenderWorker.observeCall)(epoch, fn, this, args) : fn.apply(this, args);
+          if (result && typeof result.then === 'function') result.then(
+            () => { self._d3dimHostWritesInFlight--; },
+            () => { self._d3dimHostWritesInFlight--; });
+          else self._d3dimHostWritesInFlight--;
+          return result;
+        } catch (error) {
+          self._d3dimHostWritesInFlight--;
+          throw error;
+        }
+      };
+    }
+    return { host: h, gdi: base.gdi, __captureWin16FarFault: captureWin16FarFault };
   }
 
   // Every non-mousemove input event, every CreateWindow/SetWindowText and the
@@ -2815,6 +3162,14 @@ class WineAssembly {
   }
 
   async init(canvas) {
+    // An explicitly armed Redline launch cannot drop its admission request
+    // across an await or silently continue through cooperative fallback.
+    const redlineStartup = typeof window !== 'undefined' && window.WINE_REDLINE_STARTUP;
+    this._d3dimPublicationJoin?.retire('process-reinitialized');
+    if (this._processObject.exited) {
+      this._processObject = { wine: this, exited: false, exitCode: 259 };
+      delete this._exitCode;
+    }
     const compileEl = typeof document !== 'undefined' && document.getElementById('compile-status');
     let showTimeout = null;
     const cacheWarm = !!WineAssembly._wasmModulePromise;
@@ -2840,6 +3195,7 @@ class WineAssembly {
       }
     })() : Promise.resolve();
     const [, wasmModule] = await Promise.all([fontsReady, wasmReady, apiTableReady]);
+    if (this._watAppRequested && this._stopped) throw new Error('Applet startup canceled');
     if (showTimeout) clearTimeout(showTimeout);
     if (compileEl) compileEl.style.display = 'none';
     // Load api_table.json so resolve_ordinal can map ordinal imports (e.g.
@@ -2884,6 +3240,7 @@ class WineAssembly {
     // falls back to Canvas - which still draws text, in whatever the host
     // machine happens to have, at whatever metrics it happens to use.
     await this.loadSubstituteFonts();
+    if (this._watAppRequested && this._stopped) throw new Error('Applet startup canceled');
 
     // Create shared memory externally. 8192 pages (512MB) is what every device
     // gets; an app that has been measured to exhaust the 316MB sparse backing
@@ -2954,16 +3311,24 @@ class WineAssembly {
     }
 
     this.instance = await WebAssembly.instantiate(wasmModule, imports);
+    this.instance = RenderWorker.observeInstance(this.instance, () => this._d3dimWriterObservation);
+    if (this._watAppRequested && this._stopped) {
+      this.stop();
+      throw new Error('Applet startup canceled');
+    }
     if (this.instance.exports.set_process_id) {
       this.instance.exports.set_process_id(this.processId);
     }
-    // `workerHeavyCodeCache: true` in lib/apps.js: the app's game loop runs on
-    // a worker thread, so trade main-thread page-index slots for worker ones
-    // (main 256 / workers 32). Process-wide in shared memory, so it must be set
+    // App-specific page-index layouts: workerHeavyCodeCache trades main slots
+    // for worker slots (256/32); expandedWorkerCodeCache preserves main512
+    // and reserves worker code tails for extra indexes (512/32,624KiB code).
+    // Expanded takes precedence if both are requested. Shared process-wide,
+    // so it must be set
     // here, before the first decode and before any guest thread (or a
     // Worker-hosted main) runs init_thread.
-    if (this.workerHeavyCodeCache && this.instance.exports.set_page_index_layout) {
-      this.instance.exports.set_page_index_layout(1);
+    if ((this.expandedWorkerCodeCache || this.workerHeavyCodeCache) &&
+        this.instance.exports.set_page_index_layout) {
+      this.instance.exports.set_page_index_layout(this.expandedWorkerCodeCache ? 2 : 1);
     }
     // Decode-time superop switches, applied before the first decode. These are
     // per-instance mut globals, so a worker thread has to be told separately
@@ -3035,12 +3400,33 @@ class WineAssembly {
     if (this.instance.exports.set_desktop_color_depth) {
       this.instance.exports.set_desktop_color_depth(this.desktopColorDepth === 8 ? 8 : 32);
     }
+    // A registry entry may pin the process ANSI code page (`ansiCodePage`
+    // in lib/apps.js): every A-surface conversion — MultiByteToWideChar,
+    // the GDI text funnels — keys off this one global, and a DBCS app's
+    // text is one-byte-per-character mojibake under the CP1252 default.
+    // The WAT setter validates against the supported set, so an unknown
+    // page is ignored rather than fatal. init() precedes loadExe, so the
+    // PE and everything the loader converts see the pinned page.
+    const ansiCodePage = Number.isFinite(this.ansiCodePage) ? this.ansiCodePage | 0 : 0;
+    if (ansiCodePage && this.instance.exports.set_ansi_code_page) {
+      this.instance.exports.set_ansi_code_page(ansiCodePage);
+    }
     this._wasmModule = wasmModule;
     // Kept so an experimental guest worker can be handed the SAME host import
     // table this instance uses — the point of the broker is that there is one
     // implementation of every host call, not two.
     this._mainImports = imports;
     await this._maybeStartGuestWorker(wasmModule);
+    if (redlineStartup) {
+      try {
+        await redlineStartup.park(this);
+      } catch (error) {
+        const retirement = await this._stopGuestRuntime();
+        redlineStartup.retired(retirement);
+        if (retirement && !retirement.ok) error.cleanupError = retirement.error;
+        throw error;
+      }
+    }
     // D3DIM (DX2-7) triangles on WebGL instead of the WAT software rasterizer.
     // The executor belongs to whichever thread owns the guest instance, so the
     // Worker builds its own (lib/guest-worker.js) and this is the cooperative
@@ -3081,6 +3467,9 @@ class WineAssembly {
       if (this.instance.exports.set_present_pace_mode) {
         await this.guestWorker.callExport('set_present_pace_mode', presentPaceMode);
       }
+      if (ansiCodePage && this.instance.exports.set_ansi_code_page) {
+        await this.guestWorker.callExport('set_ansi_code_page', ansiCodePage);
+      }
     }
     if (this.renderer) {
       this.renderer.wasm = this.instance;
@@ -3104,12 +3493,20 @@ class WineAssembly {
       // nature: this worker's own instance, and its id.
       const wi = self.getImports(Object.assign(processSharedCtx(mainCtx), {
         d3d9Bridge: mainCtx.d3d9Bridge,
+        // Cooperative threads share the in-page WebGL D3DIM owner, calling it
+        // with their own instance's exports (describe/decode scratch).
+        d3dCommands: self.d3dimGpu ? {
+          call: (...args) => self.d3dimGpu.callForExports(workerInstance?.exports, ...args),
+        } : null,
         detached: true,
         instance: () => workerInstance || self.instance,
         exports: () => workerInstance ? workerInstance.exports : self.instance.exports,
         threadId: tid,
       }));
       wi.__setInstance = (instance) => { workerInstance = instance; };
+      wi.__initializeCooperative = () => {
+        if (self.d3dimGpu) self.d3dimGpu.attachCooperative(workerInstance.exports);
+      };
       wi.host.memory = self.memory;
       const markAudioThread = () => {
         if (self.threadManager && self.threadManager.markAudioThread) {
@@ -3140,7 +3537,10 @@ class WineAssembly {
         emit: (line) => console.log(line),
       });
       wi.host.log = workerApiLog.log;
-      wi.host.log_i32 = workerApiLog.log_i32;
+      const captureWin16FarFault = wi.__captureWin16FarFault;
+      wi.host.log_i32 = value => {
+        if (!captureWin16FarFault(value)) workerApiLog.log_i32(value);
+      };
       wi.host.log_eip = (eip) => {
         if (typeof window !== 'undefined' && typeof window.__waProfileEipHit === 'function') {
           window.__waProfileEipHit(eip >>> 0, tid | 0);
@@ -3150,6 +3550,7 @@ class WineAssembly {
       return wi;
     };
     this.threadManager = new ThreadManager(this._wasmModule, this.memory, this.instance, makeWorkerImports, {
+      threadSnapshotSystemComplete: () => !WineAssembly._threadSnapshotSystemIncomplete,
       // Opt-in from the debug toolbar. Passing the guest-worker host is what
       // actually switches schedulers: with it, each CreateThread becomes a real
       // Worker; without it (no isolation, CLI, Safari private) ThreadManager runs
@@ -3175,7 +3576,28 @@ class WineAssembly {
       hasMessage: () => !!(self.renderer && self.renderer.inputQueue && self.renderer.inputQueue.length),
       now: () => self.renderer && self.renderer._profileNow ? self.renderer._profileNow() : Date.now(),
       waitNow: () => self._guestAudioClockRawMs(self.hostCtx && self.hostCtx.sharedAudio),
-      resolveThreadSendExternalYield: async (link, r) => {
+      resolveThreadSendExternalYield: async (link, r, captured, inspectNames) => {
+        if (captured) {
+          const findDll = r.yield === 3 ? async (fileName, dllName) => {
+            for (const p of [`binaries/dlls/${fileName}`, `binaries/plugins/${fileName}`]) {
+              try {
+                const response = await fetch(p);
+                if (response.ok) return new Uint8Array(await response.arrayBuffer());
+              } catch (_) {}
+            }
+            const vfs = self._helpCtx && self._helpCtx.vfs;
+            for (const p of [dllName.toLowerCase(), 'c:\\' + fileName, 'c:\\plugins\\' + fileName]) {
+              const entry = vfs && vfs.files.get(p);
+              if (entry && entry.data) return entry.data;
+            }
+            return null;
+          } : async (_name, fullName) => (await self._resolveDllBytes(fullName)).dllBytes;
+          const prepared = await ProcessBoot.prepareScopedLibrary(captured, findDll, self._exeBytes || null, inspectNames);
+          prepared.publish = result => {
+            ProcessBoot.publishScopedDlls(self, self.instance.exports, self.memory.buffer, result, console.log);
+          };
+          return prepared;
+        }
         if (r.yield === 3) await self._handleComDllLoadThreaded(link);
         else if (r.yield === 5) await self._handleLoadLibraryThreaded(link);
         else return false;
@@ -3199,6 +3621,7 @@ class WineAssembly {
     // Arm `g` (default on): one shared clock that stands at the earliest
     // overdue timed-sleep deadline (see ThreadManager). Not in frozen mode,
     // whose clock only moves when the agent steps it.
+    this.threadManager.processCtl = this._processCtl;
     this.threadManager.deadlineClock = !this._frozen && this._schedArm('g');
     // Its real time is continuous, not the stepped batch clock: the audible
     // cursor it is compared against moves continuously too, and a stepped
@@ -3231,10 +3654,12 @@ class WineAssembly {
     // program runs rather than when a connection is attempted.
     if (this.vlanLocalIp && this.instance.exports.set_vlan_local_ip) {
       this.instance.exports.set_vlan_local_ip(this.vlanLocalIp | 0);
+      if (this.guestWorker) await this.guestWorker.callExport('set_vlan_local_ip', this.vlanLocalIp | 0);
     }
     // Per-app pacing of small virtual-LAN TCP sends (lib/apps.js vlanNagleMs).
     if ((this.vlanNagleMs | 0) > 0 && this.instance.exports.set_vlan_nagle_ms) {
       this.instance.exports.set_vlan_nagle_ms(this.vlanNagleMs | 0);
+      if (this.guestWorker) await this.guestWorker.callExport('set_vlan_nagle_ms', this.vlanNagleMs | 0);
     }
 
     if (canvas && !this.renderer) {
@@ -3258,6 +3683,13 @@ class WineAssembly {
     // to be written into each instance.
     if (this.instance && this.instance.exports.set_vlan_local_ip) {
       this.instance.exports.set_vlan_local_ip(this.vlanLocalIp | 0);
+    }
+    // The guest main worker is not one of ThreadManager's child threads.
+    // Keep the browser mirror for future threads, and queue this update on
+    // the executing instance before its next slice/network call resumes.
+    if (this.guestWorker) {
+      this.guestWorker.callExport('set_vlan_local_ip', this.vlanLocalIp | 0)
+        .catch(error => this.logToUI('[lan] could not update guest address: ' + error.message));
     }
     if (this.threadManager && this.threadManager.setWasmGlobalAll) {
       this.threadManager.setWasmGlobalAll('set_vlan_local_ip', this.vlanLocalIp | 0);
@@ -3314,10 +3746,15 @@ class WineAssembly {
             const response = await fetch(WineAssembly.versionedUrl(artifact), fetchOptions);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const bytes = await response.arrayBuffer();
-            const module = await WebAssembly.compile(bytes);
+            const observerBytes = drakanCompileSnapshot(bytes);
+            const module = typeof window !== 'undefined' && window.WINE_REDLINE_STARTUP
+              ? await window.WINE_REDLINE_STARTUP.compile(bytes)
+              : await WebAssembly.compile(observerBytes || bytes);
+            if (observerBytes) drakanCompiledBytes.set(module, observerBytes);
             await recordWasmIdentity(artifact, bytes);
             return module;
           } catch (error) {
+            if (typeof window !== 'undefined' && window.WINE_REDLINE_STARTUP) throw error;
             console.warn(`[host] unable to load ${artifact}; compiling WAT sources`, error);
           }
         }
@@ -3352,7 +3789,11 @@ class WineAssembly {
               new URLSearchParams(location.search).has('watx-main-thread'),
           });
           WineAssembly._assertSourceBuildLayout(built.layout);
-          const module = await WebAssembly.compile(built.bytes);
+          const observerBytes = drakanCompileSnapshot(built.bytes);
+          const module = typeof window !== 'undefined' && window.WINE_REDLINE_STARTUP
+            ? await window.WINE_REDLINE_STARTUP.compile(built.bytes)
+            : await WebAssembly.compile(observerBytes || built.bytes);
+          if (observerBytes) drakanCompiledBytes.set(module, observerBytes);
           await recordWasmIdentity('src/main.watx', built.bytes);
           return module;
         }
@@ -3494,7 +3935,7 @@ class WineAssembly {
   _startD3DIMGpu() {
     if (this.d3dimGpu) return this.d3dimGpu;
     const gpu = typeof window !== 'undefined' && window.D3DIMGpu;
-    if (!gpu || !this.instance.exports.d3dim_gpu_enable) {
+    if (!gpu || !this.instance.exports.d3dim_gpu_cooperative_enable) {
       this.logToUI('[d3dim-gpu] lib/d3dim-gpu.js not loaded — software D3DIM');
       return null;
     }
@@ -3514,7 +3955,9 @@ class WineAssembly {
         },
         onError: message => { console.error(message); self.logToUI(message); },
       });
-      if (this.hostCtx) this.hostCtx.d3dCommands = this.d3dimGpu;
+      if (this.hostCtx) this.hostCtx.d3dCommands = {
+        call: (...args) => this.d3dimGpu.callForExports(this.instance.exports, ...args),
+      };
       this.instance.exports.d3dim_gpu_enable(1);
       this.logToUI('[d3dim-gpu] D3DIM draws on WebGL');
       return this.d3dimGpu;
@@ -3529,29 +3972,57 @@ class WineAssembly {
   //
   // Only when the page asked for it AND the document is cross-origin isolated,
   // because a shared WebAssembly.Memory cannot reach a Worker otherwise. Any
-  // failure here falls back to the normal single-threaded path rather than
+  // failure here normally falls back to the single-threaded path rather than
   // taking the launch down with it — single-threaded is a supported mode, not a
-  // degraded one (docs/design-real-threads.md §3.6).
+  // degraded one (docs/design-real-threads.md §3.6). An explicit owning Quake II
+  // observation request requires that owner and must fail closed instead.
   async _maybeStartGuestWorker(wasmModule) {
     if (typeof window === 'undefined') return;
-    if (!window.WINE_THREADS) return;
+    // Capture the request before any await; changing a page flag during init
+    // cannot turn failed required observation into an unobserved launch.
+    const quake2ObservationRequired = window.WINE_QUAKE2_LOAD_OBSERVATION === true;
+    if (this._watAppRequested) {
+      if (quake2ObservationRequired) throw new Error('Quake II owning observation requires an x86 guest');
+      return;
+    }
+    if (!window.WINE_THREADS) {
+      if (quake2ObservationRequired) throw new Error('Quake II owning observation requires guest Workers');
+      return;
+    }
     if (this.threads === false) {
+      if (quake2ObservationRequired) throw new Error('Quake II owning observation conflicts with threads: false');
       this.logToUI('[threads] this app opts out (threads: false) — running single-threaded');
       return;
     }
     if (!(typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated)) {
+      if (quake2ObservationRequired) throw new Error('Quake II owning observation requires cross-origin isolation');
       this.logToUI('[threads] not cross-origin isolated — running single-threaded');
       return;
     }
     if (typeof GuestThreadHost !== 'function') {
+      if (quake2ObservationRequired) throw new Error('Quake II owning observation requires GuestThreadHost');
       this.logToUI('[threads] lib/guest-thread-host.js not loaded — running single-threaded');
       return;
     }
     try {
+      let drakanModuleBytes = null;
+      const observerMemory = this.memory, observerInstance = this.instance;
+      if (window.WINE_DRAKAN_OBSERVER === true) {
+        const bytes = drakanCompiledBytes.get(wasmModule);
+        if (!bytes || this._wasmModule !== wasmModule)
+          throw new Error('Drakan selected compile bytes unavailable; opt in before compilation');
+        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        const hash = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+        if (DRAKAN_BROWSER_MODULES[hash] !== bytes.byteLength) throw new Error('Drakan selected module SHA-256 mismatch');
+        // Give this owner a separate copy; never expose the private compile record.
+        drakanModuleBytes = bytes.slice();
+      }
       const res = await fetch(WineAssembly.versionedUrl('lib/host-import-sigs.generated.json'));
       if (!res.ok) throw new Error(`sigs HTTP ${res.status}`);
       const sigs = (await res.json()).sigs;
       if (this._stopped) return;
+      if (drakanModuleBytes && (this.memory !== observerMemory || this.instance !== observerInstance ||
+          this._wasmModule !== wasmModule)) throw new Error('Drakan owner changed during startup');
       const self = this;
       // Guest threads are about to run at the same time, so a LOCK-prefixed
       // instruction has to be atomic across Workers (07-decoder.wat
@@ -3570,6 +4041,9 @@ class WineAssembly {
         },
         memory: this.memory,
         module: wasmModule,
+        drakanModuleBytes,
+        quake2LoadObservation: quake2ObservationRequired,
+        quake2NativeWriteObservation: window.WINE_QUAKE2_NATIVE_WRITE_OBSERVATION === true,
         sigs,
         hostImports: this._mainImports.host,
         workerUrl: WineAssembly.versionedUrl('lib/guest-worker.js'),
@@ -3597,13 +4071,21 @@ class WineAssembly {
       });
       this._guestWorkerStarting = worker;
       await worker.start();
+      if (drakanModuleBytes && (this._stopped || this.memory !== observerMemory ||
+          this.instance !== observerInstance || this._wasmModule !== wasmModule))
+        throw new Error('Drakan owner retired during startup');
       if (this._stopped) { this._guestWorkerStarting = null; return; }
       // The toolbar can change while the main worker is instantiating too.
       while (worker.d3dimLazySync !== (window.WINE_D3DIM_LAZY_SYNC !== false)) {
         await worker.setLazySync(window.WINE_D3DIM_LAZY_SYNC !== false);
         if (this._stopped) { worker.stop(); this._guestWorkerStarting = null; return; }
       }
+      this._installProcessSendBroker(worker);
       this.guestWorker = worker;
+      if (drakanModuleBytes) drakanBrowserOwners.set(this, {
+        worker, link: worker.link, module: wasmModule, memory: this.memory,
+        instance: this.instance, used: false,
+      });
       this._guestWorkerStarting = null;
       // Renderer windows still retain the browser-side WebAssembly.Instance
       // as their ownership token. Mark that token so keyboard handling queues
@@ -3632,16 +4114,126 @@ class WineAssembly {
       if (this.instance && this.instance.exports && this.instance.exports.set_lock_atomic_mode) {
         this.instance.exports.set_lock_atomic_mode(0);
       }
+      // Owner retirement above remains mandatory on attachment failure. Keep
+      // the actual init error as the cause, and never admit cooperative boot.
+      if (quake2ObservationRequired) {
+        throw new Error(`Quake II owning observation startup failed: ${err.message}`, { cause: err });
+      }
       this.logToUI(`[threads] worker start failed (${err.message}) — running single-threaded`);
     }
+  }
+
+  async observeDrakanActor(options) {
+    // The ordinary caller has already issued its action. Prearm release before
+    // checking availability; every failure, including opt-out, joins real I/O.
+    const { releaseT, actionStartedAt, maxMs = 1900 } = options;
+    let releaseResult, releasePromise, releaseError, controller, stopResolve;
+    const stopped = new Promise(resolve => { stopResolve = resolve; });
+    const release = () => {
+      if (!releasePromise) {
+        try { releaseResult = Promise.resolve(releaseT()); }
+        catch (error) { releaseResult = Promise.reject(error); }
+        releasePromise = releaseResult.catch(error => { releaseError = String(error); });
+      }
+      return releaseResult;
+    };
+    const now = performance.timeOrigin + performance.now();
+    const deadline = actionStartedAt + maxMs;
+    const timer = setTimeout(() => {
+      if (controller) controller.stop('browser action deadline');
+      else release();
+    }, Number.isFinite(deadline) ? Math.max(0, Math.min(2000, deadline - now)) : 0);
+    try {
+      const owner = drakanBrowserOwners.get(this);
+      const ownsWorker = () => owner && window.WINE_DRAKAN_OBSERVER === true && !this._stopped &&
+          this.guestWorker === owner.worker && owner.worker.link === owner.link &&
+          this.memory === owner.memory && this.instance === owner.instance &&
+          this._wasmModule === owner.module && owner.worker.module === owner.module &&
+          owner.worker.memory === owner.memory && !owner.link._stopping && !owner.link._stopped;
+      if (!owner || owner.used || !ownsWorker())
+        throw new Error('Drakan browser observer unavailable, stale owner or already used');
+      owner.used = true;
+      if (!Number.isInteger(maxMs) || maxMs < 1 || maxMs > 2000 ||
+          !Number.isFinite(actionStartedAt) || actionStartedAt > now || deadline <= now ||
+          typeof releaseT !== 'function') throw new Error('fresh original action and independent release required');
+      // WorkerLink synchronously prearms its setup timer on entry, using this
+      // same original deadline, then hands it to Controller before observation.
+      clearTimeout(timer);
+      const armed = await owner.worker.observeDrakanActor({ ...options, releaseT: release,
+        onStop: info => {
+          stopResolve();
+          if (options.onStop) options.onStop(info);
+        },
+      });
+      controller = armed.controller;
+      if (!ownsWorker()) throw new Error('Drakan browser owner changed during observation');
+      if (releasePromise) controller.stop('browser action released during setup');
+      if (!controller.stopped) await stopped;
+      await controller.releasePromise;
+      release(); await releasePromise;
+      if (!ownsWorker()) throw new Error('Drakan browser owner retired during observation');
+      if (controller.releaseError || releaseError) throw new Error('Drakan physical release failed: ' +
+        (controller.releaseError || releaseError));
+      return { result: controller.completed || { status: 'UNKNOWN' }, released: true };
+    } catch (error) {
+      if (controller) await controller.stop('browser observation failed');
+      if (error.releasePromise) await error.releasePromise;
+      release(); await releasePromise;
+      const failure = new Error(error.message || String(error), { cause: error });
+      Object.defineProperties(failure, {
+        releasePromise: { value: releasePromise },
+        releaseError: { get: () => controller?.releaseError || error.releaseError || releaseError || null },
+      });
+      throw failure;
+    } finally { clearTimeout(timer); }
   }
 
   // `opts.win16Modules` names NE DLLs the task loads by name at runtime rather
   // than importing — see the win16StageModule host import.
   // `opts.launchPrefs` is the app entry's own screen-size → byte-pokes function
   // (lib/apps.js), applied right after load_pe.
+  // init() prepares the current host's UI, stock and substitute fonts before
+  // returning. Applets use that same cold path, but never start a guest Worker.
+  async loadWatApp(name) {
+    if (this._stopped || this._watApp || this._watAppLoading || this._exeBytes) {
+      throw new Error('Applet requires a fresh process');
+    }
+    this._watAppRequested = true;
+    this._watAppLoading = true;
+    try {
+      if (!this.instance) await this.init();
+      if (this._stopped) throw new Error('Applet startup canceled');
+      if (this.guestWorker) throw new Error('Applet requires a local instance');
+      const open = this.instance.exports[`${name}_open`];
+      if (typeof open !== 'function' || typeof this.instance.exports.wat_app_pump !== 'function') {
+        throw new Error(`[watApp] this build has no applet named "${name}"`);
+      }
+      const hwnd = open() >>> 0;
+      if (this._stopped) throw new Error('Applet startup canceled');
+      if (!hwnd) throw new Error(`[watApp] ${name} did not open a window`);
+      this._watApp = name;
+      if (this.renderer) {
+        this.renderer.wasm = this.instance;
+        this.renderer.wasmMemory = this.memory;
+        this.renderer.mainWasm = this.instance;
+        this.renderer.mainWasmMemory = this.memory;
+        this.renderer.repaint();
+      }
+      return true;
+    } catch (error) {
+      this.stop();
+      throw error;
+    } finally {
+      this._watAppLoading = false;
+    }
+  }
+
   async loadExe(url, opts = {}) {
+    if (this._watAppRequested) throw new Error('Applet process cannot load a guest executable');
     if (!this.instance) await this.init();
+    // The idle host and guest Worker share memory. Publish before loadPe can
+    // enter any guest initialization, in both local and Worker boot modes.
+    ProcessBoot.applyStartupShow(this.instance.exports, opts.showCmd);
     this._win16ExtraModules = opts.win16Modules || [];
 
     // `opts.bytes` is the imported-media path (docs/design-byo-media.md): the
@@ -3728,8 +4320,13 @@ class WineAssembly {
     // into one.
     await this._loadWin16Dlls(url, exeBytes);
 
-    // Initialize DirectX COM vtable thunks (must be after load_pe sets image_base).
-    if (this.instance.exports.init_dx_com_thunks) {
+    // Worker boot already initializes COM tables on the owning instance in
+    // GuestThreadHost.loadPe. init_thread above imports those identities into
+    // this idle shadow. Reinitializing here would replace the shared registry
+    // while the owner still holds its original tables, so later threads would
+    // misidentify the owner's DirectDraw4/7 objects and create Surface2 views.
+    // Local boot initializes after load_pe sets image_base.
+    if (!this.guestWorker && this.instance.exports.init_dx_com_thunks) {
       this.instance.exports.init_dx_com_thunks();
     }
 
@@ -3883,6 +4480,34 @@ class WineAssembly {
       url: 'fonts/' + mount.file,
       vfsPath: mount.vfsPath,
     })), { required: false });
+    await this.loadOptionalCodePageFonts(manifest);
+  }
+
+  // Faces tools/fetch-fonts.js builds at deploy time (the CP950 Ming face):
+  // never committed, possibly not deployed. Only an app registered with a
+  // matching `ansiCodePage` asks, and a missing listing means "not deployed",
+  // which is silent - the default faces still draw every character they can.
+  async loadOptionalCodePageFonts(manifest) {
+    const subs = typeof window !== 'undefined' && window.fontSubstitutions;
+    const codePage = Number.isFinite(this.ansiCodePage) ? this.ansiCodePage | 0 : 0;
+    if (!subs || !subs.optionalFontMounts || !codePage) return;
+    if (!(manifest.optional || []).some(group => group.ansiCodePage === codePage)) return;
+    let listing;
+    try {
+      const response = await fetch(
+        WineAssembly.versionedUrl('fonts/' + subs.FETCHED_MANIFEST));
+      if (!response.ok) return;
+      listing = await response.json();
+    } catch (_) {
+      return;
+    }
+    const mounts = subs.optionalFontMounts(manifest, {
+      codePage, isAvailable: subs.fetchedAvailability(listing) });
+    if (!mounts.length) return;
+    await this.loadFiles(mounts.map(mount => ({
+      url: 'fonts/' + mount.file,
+      vfsPath: mount.vfsPath,
+    })), { required: false });
   }
 
   async _decodeMountedImage(data, url) {
@@ -4031,34 +4656,34 @@ class WineAssembly {
                 if (sizedRange && (!this._manifestAssetAbort || this._manifestAssetAbort.signal.aborted)) this._manifestAssetAbort = new AbortController();
                 const lifetimeSignal = sizedRange ? this._manifestAssetAbort.signal : null;
                 const rangeOptions = {
-                  validateRange: sizedRange,
+                  partSize: WineAssembly.ASSET_PART_SIZE,
+                  partUrl: WineAssembly._assetPartUrl,
+                  signal: lifetimeSignal,
+                  openSignal: transferOpts.signal,
+                  openFetch: (source, init = {}) => {
+                    checkCancelled();
+                    return WineAssembly._fetchAssetResponse(source, init);
+                  },
                   // Only launch-time discovery belongs to this AbortSignal.
                   // The provider retains this adapter for later gameplay GETs;
                   // those must remain usable after the launch controller ends.
                   fetch: (source, init = {}) => {
-                    if (init.method === 'HEAD') {
-                      checkCancelled();
-                      return fetch(source, { ...init, signal: transferOpts.signal });
-                    }
-                    return fetch(source, sizedRange ? { ...init, signal: lifetimeSignal } : init);
+                    return WineAssembly._fetchAssetResponse(source, init);
                   },
                 };
                 // A stat-verified manifest already knows the length. Mount it
                 // synchronously without a HEAD for every asset in the tree.
-                // An httpRange entry that carries its size (lib/app-files.js
-                // default for every streamed file) mounts the same way, no
-                // HEAD -- thousands of small files would otherwise cost a
-                // HEAD each -- as long as it is not over one release part
-                // (larger files may be published as name.partNNN, which only
-                // the HEAD path discovers). Without Range support its first
-                // read takes the whole body (acceptWhole), once.
+                // Sized entries stay lazy, including split assets. The provider
+                // uses bounded byte ranges on capable hosts (Wine Ops); static
+                // deployments retain whole decoded files/parts without HEAD.
                 const sizedHttpRange = !sizedRange && item && item.httpRange === true &&
-                  Number.isSafeInteger(item.size) && item.size >= 0 &&
-                  item.size <= WineAssembly.ASSET_PART_SIZE && !item.preloadRanges;
+                  Number.isSafeInteger(item.size) && item.size >= 0;
+                const HttpProvider = window.WINE_HTTP_RANGES === true
+                  ? window.byteProvider.HttpByteRangeProvider : window.byteProvider.HttpRangeProvider;
                 const provider = sizedRange
-                  ? new window.byteProvider.HttpRangeProvider(url, item.size, rangeOptions)
+                  ? new HttpProvider(url, item.size, rangeOptions)
                   : sizedHttpRange
-                    ? new window.byteProvider.HttpRangeProvider(url, item.size, { ...rangeOptions, acceptWhole: true })
+                    ? new HttpProvider(url, item.size, rangeOptions)
                     : await WineAssembly._openRangeProvider(url, rangeOptions);
                 checkCancelled();
                 // One cache shape for every streamed file: 1MB chunks, and
@@ -4121,6 +4746,31 @@ class WineAssembly {
         const asset = await assetLoads.get(key);
         checkCancelled();
         let data = asset.data;
+        // Validate the fetched original, before registry edits, image decoding,
+        // or any VFS alias can expose it. Range-backed entries retain their
+        // existing provider contract; required manifest files are always eager.
+        if (!asset.provider && item && typeof item === 'object') {
+          if (item.size !== undefined &&
+              (!Number.isSafeInteger(item.size) || item.size < 0 || data.byteLength !== item.size)) {
+            throw new Error('Asset size mismatch: ' + url);
+          }
+          if (item.sha256 !== undefined) {
+            if (typeof item.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(item.sha256)) {
+              throw new Error('Invalid asset SHA-256: ' + url);
+            }
+            // The launcher already supports Node crypto, browser SubtleCrypto,
+            // and plain-HTTP browsers through its tested pure-JS fallback.
+            const hashing = (typeof window !== 'undefined' && window.watxLauncher) ||
+              (typeof require !== 'undefined' ? require('./lib/watx-launcher') : null);
+            if (!hashing || typeof hashing.sha256Hex !== 'function') {
+              throw new Error('Asset SHA-256 validation unavailable: ' + url);
+            }
+            if (await hashing.sha256Hex(data) !== item.sha256.toLowerCase()) {
+              throw new Error('Asset SHA-256 mismatch: ' + url);
+            }
+            checkCancelled();
+          }
+        }
         if (typeof item === 'object' && item.iniSet) {
           // Registry INI edits; test/run.js applies the same helper.
           const appFiles = typeof window !== 'undefined' ? window.appFiles : null;
@@ -4328,21 +4978,37 @@ class WineAssembly {
   // directories. The CLI answers the same question against the filesystem —
   // the yield pumps themselves are shared (lib/process-boot.js).
   // Synchronous subset of _findDllBytes: an exact VFS entry whose bytes are
-  // already resident, or a DLL this page already loaded. Anything else returns
-  // a Promise, which tells serviceLoadLibraryYieldSync to leave the yield for
-  // the async path.
+  // already resident, a DLL this page already loaded, or a known missing
+  // built-in system dependency. Unknown or lazy inputs return a Promise so
+  // serviceLoadLibraryYieldSync leaves their yield for the async path.
   _findDllBytesSync(fileName, fullName) {
     const vfs = this._helpCtx && this._helpCtx.vfs;
     if (vfs && typeof vfs._resolvePath === 'function') {
       let resolved = '';
       try { resolved = vfs._resolvePath(fullName); } catch (_) {}
       const entry = resolved && vfs.files.get(resolved);
-      if (entry && !entry._provider) {
+      if (entry && entry._provider) return Promise.resolve(null);
+      if (entry) {
         try { if (entry.data) return entry.data; } catch (_) {}
       }
     }
     if (this._loadedDllBytesByName && this._loadedDllBytesByName[fileName]) {
       return this._loadedDllBytesByName[fileName];
+    }
+    // The browser catalog is also the dynamic has_dll_file contract. If it
+    // excludes a system DLL and there are no mounted/cached bytes, dependency
+    // loading can immediately use its existing built-in import fallback. A
+    // spurious async miss here strands LoadLibrary inside synchronous WndProc
+    // callbacks (for example Winamp's visualization enumeration). Vendor DLLs
+    // and hosts without a catalog retain their normal async search.
+    const available = this._helpCtx && this._helpCtx.availableDllFiles;
+    if (available && typeof DllLoader !== 'undefined' &&
+        DllLoader.isWindowsSystemDll(fileName)) {
+      const full = String(fullName).toLowerCase().replace(/\//g, '\\');
+      const known = typeof available.has === 'function'
+        ? available.has(fileName) || available.has(full)
+        : available[fileName] || available[full];
+      if (!known) return null;
     }
     return Promise.resolve(null);
   }
@@ -4393,6 +5059,7 @@ class WineAssembly {
 
   async handleComDllLoad() {
     await ProcessBoot.handleComDllYield({
+      onDllCallbackGateWait: owner => this._advanceDllCallbackOwner(owner),
       exports: this.instance.exports,
       memoryBuffer: this.memory.buffer,
       exeBytes: this._exeBytes || null,
@@ -4400,6 +5067,7 @@ class WineAssembly {
       log: console.log,
       advanceGuestTime: ms => this._advanceGuestTickMs(ms,
         this.hostCtx && this.hostCtx.sharedAudio),
+      findDllSync: (fileName, fullName) => this._findDllBytesSync(fileName, fullName),
       findDll: (fileName, fullName) => this._findDllBytes(fileName, fullName, {
         vfsPaths: [fullName.toLowerCase(), 'c:\\' + fileName, 'c:\\plugins\\' + fileName],
       }),
@@ -4603,8 +5271,24 @@ class WineAssembly {
     if (set) set.call(main, count | 0);
   }
 
+  // Admission can precede the regular cooperative thread phase. Let the real
+  // callback owner finish through the scheduler while the requesting instance
+  // remains parked; the callback gate still owns admission and release.
+  async _advanceDllCallbackOwner(owner) {
+    if (!this.running) throw new Error('Browser stopped while waiting for DLL callback admission');
+    const manager = this.threadManager;
+    if (!manager || manager.backend !== 'cooperative') return false;
+    const stats = manager.runDllCallbackOwnerSlice(owner, this.stepsPerSlice);
+    // Service pending host I/O and browser input without advancing guest time
+    // or consuming another frozen main-step credit.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (!this.running) throw new Error('Browser stopped while waiting for DLL callback admission');
+    return !!(stats && stats.threadsRun);
+  }
+
   async handleLoadLibrary() {
     await ProcessBoot.handleLoadLibraryYield({
+      onDllCallbackGateWait: owner => this._advanceDllCallbackOwner(owner),
       exports: this.instance.exports,
       memoryBuffer: this.memory.buffer,
       resourceHost: this,
@@ -4612,6 +5296,7 @@ class WineAssembly {
       advanceGuestTime: ms => this._advanceGuestTickMs(ms,
         this.hostCtx && this.hostCtx.sharedAudio),
       findDll: (fileName, fullName) => this._findDllBytes(fileName, fullName, { exeDir: true }),
+      findDllSync: (fileName, fullName) => this._findDllBytesSync(fileName, fullName),
     });
   }
 
@@ -4626,10 +5311,11 @@ class WineAssembly {
         typeof manager.threadsAwaitingLoadLibrary !== 'function') return 0;
     const waiting = manager.threadsAwaitingLoadLibrary();
     for (const thread of waiting) {
-      const exports = thread.instance && thread.instance.exports;
-      if (!exports) continue;
+      if (!thread.instance) continue;
+      const exports = manager.cooperativeCallbackExports(thread);
       manager.adoptMainGlobals(exports);
       await ProcessBoot.handleLoadLibraryYield({
+        onDllCallbackGateWait: owner => this._advanceDllCallbackOwner(owner),
         exports,
         memoryBuffer: this.memory.buffer,
         resourceHost: this,
@@ -4637,6 +5323,7 @@ class WineAssembly {
         advanceGuestTime: ms => this._advanceGuestTickMs(ms,
           this.hostCtx && this.hostCtx.sharedAudio),
         findDll: (fileName, fullName) => this._findDllBytes(fileName, fullName, { exeDir: true }),
+        findDllSync: (fileName, fullName) => this._findDllBytesSync(fileName, fullName),
       });
       manager.publishWorkerGlobals(exports);
     }
@@ -4645,10 +5332,11 @@ class WineAssembly {
     const comWaiting = typeof manager.threadsAwaitingComDll === 'function'
       ? manager.threadsAwaitingComDll() : [];
     for (const thread of comWaiting) {
-      const exports = thread.instance && thread.instance.exports;
-      if (!exports) continue;
+      if (!thread.instance) continue;
+      const exports = manager.cooperativeCallbackExports(thread);
       manager.adoptMainGlobals(exports);
       await ProcessBoot.handleComDllYield({
+        onDllCallbackGateWait: owner => this._advanceDllCallbackOwner(owner),
         exports,
         memoryBuffer: this.memory.buffer,
         exeBytes: this._exeBytes || null,
@@ -4656,6 +5344,7 @@ class WineAssembly {
         log: console.log,
         advanceGuestTime: ms => this._advanceGuestTickMs(ms,
           this.hostCtx && this.hostCtx.sharedAudio),
+        findDllSync: (fileName, fullName) => this._findDllBytesSync(fileName, fullName),
         findDll: (fileName, fullName) => this._findDllBytes(fileName, fullName, {
           vfsPaths: [fullName.toLowerCase(), 'c:\\' + fileName, 'c:\\plugins\\' + fileName],
         }),
@@ -4706,6 +5395,58 @@ class WineAssembly {
     }
   }
 
+  _installProcessSendBroker(backend) {
+    if (!this.renderer || typeof ProcessSendBroker !== 'function') return;
+    const renderer = this.renderer;
+    const broker = renderer._processSendBroker ||
+      (renderer._processSendBroker = new ProcessSendBroker());
+    if (this._processSendEndpoint) broker.retire(this._processSendEndpoint);
+    const endpoint = broker.register(this.processId >>> 0, {
+      ownsLink: link => !backend._stopped && !link._stopped && !link._stopping &&
+        (backend._mainLink() === link || [...backend.threadLinks.values()].includes(link)),
+      resolve: async message => {
+        if (renderer.windows[message.hwnd >>> 0] !== message.windowToken || backend._stopped) return null;
+        const tid = await backend.callExport('get_window_thread', message.hwnd);
+        return backend.linkForWin32Tid(tid);
+      },
+      dispatch: async (message, context, link, admission) => {
+        const window = renderer.windows[message.hwnd >>> 0];
+        if (window !== message.windowToken || backend._stopped)
+          return {unavailable:true};
+        const tid = await backend.callExport('get_window_thread',message.hwnd);
+        if (!link || link._stopped || backend.linkForWin32Tid(tid) !== link ||
+            renderer.windows[message.hwnd >>> 0] !== message.windowToken) return {unavailable:true};
+        const reply = await backend._dispatchThreadSendToLink(link, {
+          hwnd:message.hwnd, msg:message.msg, wparam:message.wparam,
+          lparam:message.lparam, postKind:message.postKind|0, requireMessagePoint:true, admission,
+        },0,new Set(),context);
+        if (reply && typeof reply === 'object') {
+          if (reply.deferred && this._wakeStep) this._wakeStep();
+          return reply;
+        }
+        return {done:true,result:reply|0};
+      },
+    });
+    this._processSendEndpoint = endpoint;
+    backend.hasIncomingProcessSends = link => broker.hasPending(endpoint, link);
+    backend.notifyProcessSendReady = link => broker.notifyReady(endpoint, link);
+    backend.processSendWait = (context, link, token) => broker.enterWait(context, link, token);
+    backend.processRootSendWait = (link, token) => broker.enterThreadWait(endpoint, link, token);
+    backend.processLocalSend = (request, context, senderLink) => {
+      const window = renderer.windows[request.hwnd >>> 0];
+      if (!window || window.processId !== endpoint.pid)
+        return Promise.reject(Object.assign(new Error('receiver-gone'), {code:'receiver-gone'}));
+      return broker.send(endpoint, endpoint, {...request, windowToken:window}, context, senderLink);
+    };
+    backend.processSendResolver = (request, context, senderLink) => {
+      const window = renderer.windows[request.hwnd >>> 0];
+      const receiver = broker.processes.get((-request.targetTid) >>> 0);
+      if (!window || window.processId !== -request.targetTid || !receiver)
+        return Promise.reject(Object.assign(new Error('receiver-gone'), {code:'receiver-gone'}));
+      return broker.send(endpoint,receiver,{...request,windowToken:window},context,senderLink);
+    };
+  }
+
   // The one teardown. Every way an app can end -- ExitProcess, the run loop
   // finding EIP zero, the last top-level window closing out its grace period,
   // a WASM crash, the shell stopping it -- comes through here, and the order
@@ -4720,9 +5461,74 @@ class WineAssembly {
   // exists -- desktop icons hidden over a blank canvas. The two sites with no
   // repaint had the opposite fault: a crash left the dead app's last frame on
   // screen. Repainting last, once, fixes both.
+  _processHandleEntry(handle) {
+    handle >>>= 0;
+    if (handle === 0xFFFFFFFF) return { object: this._processObject, access: 0x1FFFFF };
+    if ((handle & 0xFFFF0000) === 0x00E60000) return this._processAliases.get(handle);
+    if ((handle & 0xFFFF0000) === 0x00E40000) {
+      const record = this._children?.get(handle & 0xFFFF);
+      if (record?.object) return { object: record.object, access: 0x1FFFFF };
+    }
+    if (handle === (0xE2000 | (this.processId & 0xFFF))) {
+      return { object: this._processObject, access: 0x1FFFFF };
+    }
+    return null;
+  }
+
+  _duplicateProcessHandle(stackWa) {
+    // The stdcall frame is in the caller's shared memory, including when its
+    // main thread runs in a Worker. No pointer crosses into the target memory.
+    const frame = new DataView(this.memory.buffer, stackWa >>> 0, 32);
+    const sourceProcess = this._processHandleEntry(frame.getUint32(4, true));
+    const targetProcess = this._processHandleEntry(frame.getUint32(12, true));
+    const sourceHost = sourceProcess?.object.wine;
+    const targetHost = targetProcess?.object.wine;
+    const sourceHandle = frame.getUint32(8, true);
+    const options = frame.getUint32(28, true);
+    const source = sourceHost?._processHandleEntry(sourceHandle);
+    const closeSource = () => {
+      if ((options & 1) && sourceHost && (sourceHandle & 0xFFFF0000) === 0x00E60000) {
+        sourceHost._processAliases.delete(sourceHandle);
+      }
+      if ((options & 1) && sourceHost && (sourceHandle & 0xFFFF0000) === 0x00E40000) {
+        sourceHost._children?.delete(sourceHandle & 0xFFFF);
+      }
+    };
+    // DUPLICATE_CLOSE_SOURCE closes a real alias even when duplication fails.
+    try {
+      if (!sourceHost || !source) return -6;
+      if (!(sourceProcess.access & 0x40)) return -5;
+      if (options & ~3) return -87;
+      // NULL target with CLOSE_SOURCE is a successful close-only request.
+      if (!frame.getUint32(12, true) && (options & 1)) return 1;
+      if (!targetHost) return -6;
+      if (!(targetProcess.access & 0x40)) return -5;
+      // NULL output is permitted: allocate even though the caller loses the handle.
+      const access = options & 2 ? source.access : frame.getUint32(20, true);
+      if ((access & source.access) !== access) return -5;
+      if (targetHost._nextProcessAlias > 0xFFFF) return -4;
+      const handle = 0x00E60000 | targetHost._nextProcessAlias++;
+      targetHost._processAliases.set(handle, {
+        object: source.object, access, inherit: !!frame.getUint32(24, true),
+      });
+      return handle;
+    } finally { closeSource(); }
+  }
+
   stop(options = {}) {
-    // Child processes this guest started (process_spawn) end with it.
-    if (this._stopChildren) { const stopKids = this._stopChildren; this._stopChildren = null; stopKids(); }
+    this._d3dimPublicationJoin?.retire('process-retired');
+    if (!this._processObject.exited) {
+      this._processObject.exited = true;
+      this._processObject.exitCode = (this._exitCode ?? 0) >>> 0;
+      this._processObject.wine = null;
+    }
+    this._processAliases.clear();
+    this._children?.clear();
+    if (this._processSendEndpoint && this.renderer?._processSendBroker) {
+      this.renderer._processSendBroker.retire(this._processSendEndpoint);
+      this._processSendEndpoint = null;
+    }
+    // Closing the owner table does not terminate the independently owned children.
     if (this._manifestAssetAbort) this._manifestAssetAbort.abort();
     if (this._backgroundAssetJobs) this._backgroundAssetJobs.length = 0;
     // Put the final frame on the canvas before stepping ends, then drop the
@@ -4754,6 +5560,7 @@ class WineAssembly {
     // loop that restarted itself on the second launch would be back to
     // holding a dead host forever.
     this._stopped = true;
+    this.hostCtx?.vfs?.closeAllDiskHandles?.();
     this._stopGuestRuntime();
     this._stopPerfCounterPoll();
     this._cleanupAudio();
@@ -4995,6 +5802,7 @@ class WineAssembly {
     this.instance = null;
     this.memory = null;
     this._wasmModule = null;
+    drakanBrowserOwners.delete(this);
     // `ctx` closes over `self`, and is handed to worker imports and the help
     // system, both of which outlive the run loop.
     this.hostCtx = null;
@@ -5061,6 +5869,110 @@ class WineAssembly {
     return new D3DCommandStream.WorkerConsumer(await this._createRenderWorkerEndpoint(options));
   }
 
+  async armQuake2WriterObservation(options = {}) {
+    if (this._stopped || !this.running || !this.guestWorker)
+      throw new Error('live Quake II owning Worker required');
+    const guest = this.guestWorker, memory = this.memory, processId = this.processId;
+    const binding = await guest.link.armQuake2Writer(options);
+    if (this._stopped || this.guestWorker !== guest || this.memory !== memory || this.processId !== processId)
+      throw new Error('Quake II owner changed during arm');
+    return Object.freeze({...binding, snapshot: () => {
+      if (this._stopped || !this.running || this.guestWorker !== guest || guest.link !== binding.link || this.memory !== memory || this.processId !== processId)
+        throw new Error('Quake II owner retired/replaced');
+      return binding.snapshot();
+    }});
+  }
+
+  async armD3dimPublicationObservation({ maxRecords = 256, boundaryTimeoutMs = 1000 } = {}) {
+    if (this._d3dimPublicationJoin || this._d3dimPublicationArming || this._stopped ||
+        !this.guestWorker || !this.renderer || !this.instance?.nativeInstance)
+      throw new Error('publication observation requires an idle instrumented production process');
+    const link = this.guestWorker.link;
+    const endpoint = link?._renderLegacyEndpoint;
+    if (!endpoint || endpoint.closed || !this.threadManager)
+      throw new Error('live shared legacy render endpoint required');
+    if (this.threadManager.mainInstance !== this.instance || (this.guestWorker.localMainExports &&
+        this.guestWorker.localMainExports() !== this.instance.exports))
+      throw new Error('publication observation requires the instrumented main owner');
+    if (!Number.isInteger(maxRecords) || maxRecords < 1 || maxRecords > 4096)
+      throw new Error('bounded source record limit required');
+    if (!Number.isInteger(boundaryTimeoutMs) || boundaryTimeoutMs < 1 || boundaryTimeoutMs > 5000)
+      throw new Error('bounded observation boundary timeout required');
+    const guest = this.guestWorker, threads = this.threadManager, instance = this.instance, renderer = this.renderer;
+    const memory = this.memory, processId = this.processId;
+    const epoch = new RenderWorker.WriterEpoch();
+    const journal = new RenderWorker.SurfaceVersionJournal(new SharedArrayBuffer(maxRecords * 65536),
+      new SharedArrayBuffer(4 * (16 + 2 * 1024 * 1024)));
+    const ownerScope = `process:${processId}:endpoint:${link.endpointIdentity}`;
+    // Attach every local/remote guest entry before arming the shared renderer.
+    // These checks reject a mid-flight attachment without stopping the guest.
+    // Reserve admission through the render acknowledgement. A second arm must
+    // not replace and invalidate the epoch the first request already installed.
+    this._d3dimPublicationArming = true;
+    let boundary;
+    try {
+      if (this.running) {
+        // A live process normally has an unanswered slice. Do not attach to
+        // that execution retroactively: wait for its ordinary completed-step
+        // boundary, then hold only the next scheduler continuation until the
+        // render acknowledgement. No guest entry, clock or input is changed.
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('publication observation idle boundary timed out')),
+            boundaryTimeoutMs);
+          boundary = { continuation: null, enter: (step, delayMs) => {
+            boundary.continuation = { step, delayMs };
+            clearTimeout(timer);
+            resolve();
+          } };
+          this._d3dimPublicationArmBoundary = boundary;
+        });
+      }
+      if (this._stopped || this.guestWorker !== guest || this.threadManager !== threads ||
+          this.memory !== memory || this.processId !== processId ||
+          this.instance !== instance || this.renderer !== renderer || guest.link !== link ||
+          link._renderLegacyEndpoint !== endpoint || endpoint.closed || this._d3dimHostWritesInFlight ||
+          threads.mainInstance !== instance || (guest.localMainExports && guest.localMainExports() !== instance.exports))
+        throw new Error('owner changed before publication observation boundary');
+      this.guestWorker.setWriterObservation(epoch);
+      this.threadManager.setWriterObservation(epoch);
+      this._d3dimWriterObservation = epoch;
+      const sourceOwner = await endpoint.producerObservation('arm', { ownerGeneration: ownerScope,
+        maxRecords, writerEpochBuffer: epoch.buffer, surfaceVersionBuffer: journal.buffer,
+        retainedSurfaceBuffer: journal.retainedBuffer });
+      if (this._stopped || this.guestWorker !== guest || this.threadManager !== threads ||
+          this.memory !== memory || this.processId !== processId ||
+          this.instance !== instance || this.renderer !== renderer || guest.link !== link ||
+          link._renderLegacyEndpoint !== endpoint || endpoint.closed || threads.mainInstance !== instance ||
+          (guest.localMainExports && guest.localMainExports() !== instance.exports) ||
+          !epoch.snapshot() || sourceOwner?.owner?.scope !== ownerScope ||
+          sourceOwner.owner.endpointId !== endpoint.id || !Number.isSafeInteger(sourceOwner.owner.generation) ||
+          !Number.isSafeInteger(sourceOwner.generation)) throw new Error('owner changed while arming publication observation');
+      const join = new RenderWorker.SurfacePublicationJoin({ epoch, journal, memory,
+        ownerScope, renderer: this.renderer, workerSlot: link.slot, endpointId: endpoint.id,
+        owner: sourceOwner.owner, observationGeneration: sourceOwner.generation });
+      this._d3dimPublicationJoin = join;
+      endpoint.addEventListener('message', event => {
+        if (event.data.t === 'legacy-producer-completed') join.receipt(event.data);
+      });
+      endpoint.addEventListener('error', () => join.retire('render-owner-retired'));
+      link.onRetiring(() => join.retire('guest-owner-retired'));
+      return join;
+    } catch (error) {
+      epoch.invalidate();
+      throw error;
+    } finally {
+      this._d3dimPublicationArming = false;
+      if (boundary && this._d3dimPublicationArmBoundary === boundary) {
+        this._d3dimPublicationArmBoundary = null;
+        const next = boundary.continuation;
+        if (next && this.running && !this._stopped && this.guestWorker === guest &&
+            this.memory === memory && this.processId === processId &&
+            this.threadManager === threads && this.instance === instance && this.renderer === renderer &&
+            guest.link === link) this._scheduleStep(next.step, next.delayMs);
+      }
+    }
+  }
+
   // A cooperative main thread parked on a lazy ReadFile (io_wait, yield 12):
   // true while it must stay parked. lib/main-io-wait.js runs the fill in the
   // background so worker threads, timers and the audio refill keep going while
@@ -5111,7 +6023,8 @@ class WineAssembly {
   // after launch -- the lobby opens when the guest first asks for a room --
   // so this is asked at the moment it matters rather than latched at boot.
   _isNetworked() {
-    return !!(this.vlanWire || (this.hostCtx && this.hostCtx.vlanWire));
+    const wire = this.vlanWire || (this.hostCtx && this.hostCtx.vlanWire);
+    return !!wire && !wire.localOnly;
   }
 
   // Is anything audible in flight? SUPERSET of _isAudioHot(), and the two must
@@ -5196,6 +6109,7 @@ class WineAssembly {
         !self._rendererInputPendingPublisher) {
       self._rendererInputPendingPublisher = (depth, wake) => {
         if (wake) {
+          self._workerInputWakeEpoch = (self._workerInputWakeEpoch || 0) + 1;
           self._workerInputBurstSlices = Math.max(
             self._workerInputBurstSlices | 0,
             Math.min(12, Math.max(0, depth | 0) + 4)
@@ -5245,16 +6159,13 @@ class WineAssembly {
         ? window.WinePerf : null;
       if (perf) perf.stepBegin();
       try {
-        // A CreateThread from the preceding slice may still need its WASM
-        // instance. Finish that setup before resuming the creating thread:
-        // otherwise its timer/readiness deadline runs during worker startup.
-        if (self.threadManager && self.threadManager._pendingThreads?.length) {
-          await self.threadManager.spawnPending();
-          if (!self.running) return;
-        }
+        // DLL_THREAD_ATTACH may need a lock held by the creating guest. Start
+        // bootstrap without joining it so the creator can release that lock.
+        if (self.threadManager) self.threadManager.startPendingWorkers();
         self._beginGuestTickBatch();
         await self._pumpWaveCallbacksAtBoundary();
         if(!self.running) return;
+        const inputWakeEpoch = self._workerInputWakeEpoch;
         if (self.guestWorker.broker) {
           // The guest's message-wait resume runs inside the worker and needs to
           // know whether the renderer has input queued — that queue is here, so
@@ -5473,6 +6384,9 @@ class WineAssembly {
           self._workerIdleMs = left > 0 ? Math.min(left, WORKER_MAIN_ASLEEP_HOLD_MS) : 2;
         }
         self._workerFocusHwnd = r.focusHwnd | 0;
+        if (self._processSendEndpoint) {
+          self.renderer._processSendBroker.notifyReady(self._processSendEndpoint);
+        }
         if (self.threadManager) self.threadManager.publishWorkerThunkState(r);
         if (!self.running) return;
         if (self.threadManager && self.threadManager.netWaitPending) {
@@ -5586,10 +6500,19 @@ class WineAssembly {
           // none. Park until the guest's next WM_TIMER, capped; input cancels
           // the park through _wakeStep. Runnable guest threads bound it the
           // same way they do there.
-          self._workerParkMain(Number.isFinite(r.timerDue) && r.timerDue >= 0
-            ? r.timerDue : WineAssembly.MAX_PARK_SLEEP_MS, perfSliceDoneAt);
+          // Input may have arrived after this slice started but before its
+          // message-wait reply reached the page. Its wake hook had no timer
+          // to cancel then; do not install a stale park after that wake. A
+          // generation (rather than queue depth) also avoids hot polling on
+          // input queued for another process sharing the renderer.
+          if (inputWakeEpoch === self._workerInputWakeEpoch) {
+            self._workerParkMain(Number.isFinite(r.timerDue) && r.timerDue >= 0
+              ? r.timerDue : WineAssembly.MAX_PARK_SLEEP_MS, perfSliceDoneAt);
+          }
         } else if (r.yield === 3) {
           await self._handleComDllLoadThreaded();
+        } else if (r.yield === 18) {
+          throw new Error('Worker NE guest lifecycle is not implemented');
         } else if (r.yield === 5) {
           await self._handleLoadLibraryThreaded();
         } else if (r.yield === 9) {
@@ -5620,8 +6543,9 @@ class WineAssembly {
           // clears 17 (ThreadManager yield-10 branch); with none parked any
           // more, the message call just runs again.
           const tm = self.threadManager;
-          if (!(tm && tm.hasDeferredMainSends && tm.hasDeferredMainSends())) {
-            await self.guestWorker.callExport('clear_yield');
+          if (!(tm && tm.hasDeferredMainSends && tm.hasDeferredMainSends()) &&
+              !self.guestWorker.hasIncomingProcessSends?.(self.guestWorker.link)) {
+            await self.guestWorker.releaseMainMessagePoint();
           }
         } else if (r.yield === 8) {
           await self.guestWorker.callExport('clear_yield');
@@ -5784,6 +6708,11 @@ class WineAssembly {
   // and being told "no" every time. The cap is deliberate — a wake source we
   // forgot to hook up degrades to 20Hz polling, never to a hang.
   _scheduleStep(step, delayMs = 0) {
+    if (this._d3dimPublicationArmBoundary) {
+      this._cancelDelayedStep();
+      this._d3dimPublicationArmBoundary.enter(step, delayMs);
+      return;
+    }
     // Every completed step of both drive loops passes through here exactly
     // once, which makes this the only honest "did the guest run" counter the
     // page has. `_runSliceCount` is not one: it is bumped only on the branch
@@ -5941,6 +6870,14 @@ class WineAssembly {
     const next = !!on;
     this._frozenTickMs = Number.isFinite(this._frozenTickMs) ? this._frozenTickMs : frozenBus.tickMs;
     if (this._frozen === next) return this.frozenStatus();
+    // Latch the continuous clock before freezing. Audio and deadline waits
+    // may have observed time beyond the last executed batch.
+    const st = this._guestTickState(this.hostCtx && this.hostCtx.sharedAudio);
+    if (next) {
+      const guestMs = Math.max(this._guestContinuousMs(this.hostCtx && this.hostCtx.sharedAudio),
+        this._guestAudioClockMs(this.hostCtx && this.hostCtx.sharedAudio));
+      st.batchMs = st.lastReturnedMs = Math.ceil(guestMs);
+    }
     this._frozen = next;
     if (next) {
       this._frozenBudget = 0;
@@ -5959,7 +6896,7 @@ class WineAssembly {
       // Live again. Slide the wall-clock origin forward by the time the guest
       // did not experience, or it gets the whole frozen interval as one jump:
       // every timer instantly overdue, every timeGetTime delta enormous.
-      const st = this._guestTickState(this.hostCtx && this.hostCtx.sharedAudio);
+      st.batchMs = Math.max(st.batchMs, st.lastReturnedMs);
       // batchMs is guest time; a startup clock maps raw wall time onto it.
       const rawMs = this._startupClock ? this._startupClock.unmap(st ? st.batchMs | 0 : 0) : null;
       if (st) st.wallStartMs = this._audioSchedulerNow() - (rawMs === null ? (st.batchMs | 0) : rawMs);
@@ -6101,6 +7038,11 @@ class WineAssembly {
   // Where every run loop used to present: the end of a completed slice.
   _presentAtBoundary(perf) {
     if (typeof requestAnimationFrame !== 'function') {
+      const r = this.renderer;
+      if (r && r._workerPublicationHeld && r._workerPublicationHeld()) {
+        this._dxLockDeferred = true;
+        return;
+      }
       const t0 = perf ? performance.now() : 0;
       if (this._presentDxIfDirty) this._presentDxIfDirty();
       if (this.renderer && this.renderer.flushRepaint) this.renderer.flushRepaint(true);
@@ -6118,7 +7060,18 @@ class WineAssembly {
       // guest stops the chain: its due frame moves nothing. A surface still
       // locked mid-write keeps it going, as the rAF path does, so the retry
       // lands in the next slice rather than the one after.
-      if (this._presentNow() || this._dxLockDeferred) this._queuePresentFrame();
+      let uploaded;
+      try {
+        uploaded = this._presentNow();
+      } catch (error) {
+        // This is a scheduled display callback deferred by a Worker slice.
+        // A failed display must not turn into a fatal guest-loop failure just
+        // because rAF landed mid-slice. The failed frame is consumed; later
+        // ordinary damage can schedule another, as on the rAF path below.
+        console.error('[present] deferred frame failed:', error);
+        return;
+      }
+      if (uploaded || this._dxLockDeferred) this._queuePresentFrame();
       return;
     }
     if (this._presentWanted()) this._queuePresentFrame();
@@ -6165,6 +7118,17 @@ class WineAssembly {
     this._presentFrameDue = false;
   }
 
+  requestImmutableCapture(options) {
+    if (!this.renderer) throw new Error('Immutable capture requires a renderer');
+    // The renderer owns the natural publication transaction. Do not force an
+    // upload, release a Worker hold, or label it an engine/actor completion.
+    // A scoped request derives ownership from this host, never from caller
+    // supplied process/engine identity. The renderer pins the live window.
+    return this.renderer.requestImmutableCapture(options === undefined ? undefined : {
+      hwnd: options.hwnd, processId: this.processId, instance: this.instance,
+    });
+  }
+
   // Upload the newest guest frame and composite, now. Called from the rAF,
   // from a step boundary when a frame fell due mid-slice, and wherever
   // stepping comes to rest (frozen park, recording tap, stop) so the last
@@ -6173,11 +7137,21 @@ class WineAssembly {
   _presentNow() {
     this._cancelPresentFrame();
     this._dxLockDeferred = false;
+    const r = this.renderer;
+    // The boundary can be idle for the main slice while a separately owned
+    // command/render writer is still active. Do not decode first and only
+    // then ask the compositor to defer: that loses the immutable source and
+    // can read a surface midway through a write. Preserve damage and retry
+    // through the existing deferred-frame path after the writer drains.
+    if (r && r._workerPublicationHeld && r._workerPublicationHeld()) {
+      this._dxLockDeferred = true;
+      this._dropRendererFrame();
+      return 0;
+    }
     const perf = (typeof window !== 'undefined' && window.WinePerf && window.WinePerf.enabled)
       ? window.WinePerf : null;
     const t0 = perf ? performance.now() : 0;
     const dx = this._presentDxIfDirty ? this._presentDxIfDirty(true) : 0;
-    const r = this.renderer;
     let composited = 0;
     if (r && r.flushRepaint) {
       const held = r._workerPublicationHeld && r._workerPublicationHeld();
@@ -6484,7 +7458,7 @@ class WineAssembly {
     const pausedMs = Math.max(0, this._audioSchedulerNow() - (this._hiddenPausedAt || 0));
     if (pausedMs > 0) {
       const st = this._guestTickState(this.hostCtx && this.hostCtx.sharedAudio);
-      if (st && Number.isFinite(st.wallStartMs) && st.wallStartMs > 0) {
+      if (st && Number.isFinite(st.wallStartMs)) {
         st.wallStartMs += pausedMs;
       }
     }
@@ -6533,6 +7507,9 @@ class WineAssembly {
   }
 
   _runCooperativeSlice(maxBlocks) {
+    if (this.threadManager?.workerBackend?._localSendFrames?.length) {
+      return { blocks: 0, hitDeadline: false, elapsedMs: 0, threadSendPending: true };
+    }
     const ex = this.instance.exports;
     const now = () => this._audioSchedulerNow();
     const start = now();
@@ -6589,6 +7566,9 @@ class WineAssembly {
   }
 
   run(stepsPerSlice = 100000) {
+    if (this._watAppRequested && (this._stopped || !this._watApp)) {
+      throw new Error('Applet is not ready to run');
+    }
     this.stepsPerSlice = stepsPerSlice;
     if (this.guestWorker) return this._runThreaded(stepsPerSlice);
     this.running = true;
@@ -6604,6 +7584,19 @@ class WineAssembly {
       // visibilitychange calls _resumeFromHidden with this same closure.
       if (self._hiddenPaused || self._maybePauseForHidden()) {
         self._pausedStep = step;
+        return;
+      }
+      if (self._watApp) {
+        try {
+          const alive = self.instance.exports.wat_app_pump();
+          if (self.renderer) self.renderer.repaint();
+          if (!alive) { self.stop(); return; }
+          // Input wakeups can interrupt this bounded idle wait.
+          self._scheduleStep(step, 50);
+        } catch (error) {
+          console.error('[watApp] pump failed:', error);
+          self.stop();
+        }
         return;
       }
       // Debug-mode HUD seam (lib/perf-hud.js). Null unless the HUD is on, so
@@ -6838,6 +7831,14 @@ class WineAssembly {
           if (self.running) { self._scheduleStep(step); }
           return;
         }
+        if (yieldReason === 18) {
+          ProcessBoot.serviceLoadLibraryYieldSync({
+            exports: self.instance.exports, memoryBuffer: self.memory.buffer,
+            resourceHost: self, findDllSync: (file, full) => self._findDllBytesSync(file, full),
+          });
+          if (self.running) { self._scheduleStep(step); }
+          return;
+        }
         if (yieldReason === 5) {
           await self.handleLoadLibrary();
           if (self.running) { self._scheduleStep(step); }
@@ -6989,6 +7990,24 @@ class WineAssembly {
   }
 }
 
+// These drivers write staging/loader storage directly as well as invoking
+// guest exports. Cover the asynchronous owner, including its JS writes, rather
+// than assuming an individual exported call spans an awaited loader callback.
+for (const name of ['_loadWin16Dlls', '_stageWin16Module', 'loadDlls', 'handleComDllLoad',
+  'handleLoadLibrary', 'handleCooperativeThreadLoadLibraries']) {
+  const original = WineAssembly.prototype[name];
+  WineAssembly.prototype[name] = function (...args) {
+    this._d3dimHostWritesInFlight = (this._d3dimHostWritesInFlight || 0) + 1;
+    const epoch = this._d3dimWriterObservation;
+    const finish = () => { this._d3dimHostWritesInFlight--; };
+    try {
+      const result = epoch ? RenderWorker.observeHostWrite(epoch, original, this, args) : original.apply(this, args);
+      if (result && typeof result.then === 'function') return result.finally(finish);
+      finish(); return result;
+    } catch (error) { finish(); throw error; }
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseShellLaunchCommand, resolveShellLaunchPath };
+  module.exports = { parseShellLaunchCommand, resolveShellLaunchPath, createWinExecReadiness };
 }

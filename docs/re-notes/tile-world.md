@@ -1,5 +1,17 @@
 # Tile World
 
+## October 30 original CLI gameplay replay
+
+Run `20261030T2242Z-tworld-input` used the registered original assets and
+retained module `7e8d3194fd189a8e0089b41ee5972b08b67fd5650d6dfbe2a2fbb9d3c323a327`
+(compiled source revision unknown). At 100,000-block batches, ordinary focus,
+four Down presses and Enter opened `intro-ms.dac` / Level 1, KEYS AND CHIPS.
+Root inspected `board.png` showing six chips/time 200 and `final.png` showing
+the scrolled board, three remaining chips/time 138 after a Right hold.
+Exit 0 after 650 batches, 16,673 API calls and 1.215 seconds; input hashes,
+exact command, captures and log are retained. This is bounded CLI gameplay on
+SDL's GDI route, not full-level completion, browser replay or GL rendering.
+
 Registry/candidate `tworld`; active lane NEW-GAME-TWORLD-20261004. Live public desktop exclusion and all16 registered files verified in scratch/new-game-tworld-20261004/preparation-receipt.json. No gameplay qualified yet.
 
 Historical run scratch/runs/20261003-tworld-gameplay-restored4 uses d2c module: readable SDL set picker, then black client after Enter/click/Enter. Only3.5seconds observed after final selection; actual selected set, input-consumer focus and owner PC were not captured. No specific trap or missing DLL proven.

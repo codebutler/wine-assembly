@@ -1,11 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { withCliFailureCleanup } = require('../lib/cli-failure-cleanup');
 const { createHostImports } = require('../lib/host-imports');
 const frameIntervals = require('../lib/frame-intervals');
+const { createRenderWaitAttribution } = require('../lib/render-wait-attribution');
 const { loadDlls, callDllMain, detectRequiredDlls, shouldReportNtForDlls, loadWin16Dlls } = require('../lib/dll-loader');
 const { inputEventHwnd } = require('../lib/host-window');
 const { SYSTEM_DATA_FILES, STOCK_ICON_FILES, resolveDllGraph, mountLoadedDllFiles, mountSystemDataFiles,
+  applyStartupShow, startupShowArgs,
   stageAndLoadPe, applyVirtualAllocTop, setExeName, setExeDrive, setExtraCmdline,
   setEnvironmentVariable, handleLoadLibraryYield, serviceLoadLibraryYieldSync,
   handleComDllYield, findVfsDllBytes } = require('../lib/process-boot');
@@ -20,18 +23,19 @@ const {
 } = require('../lib/worker-imports');
 const { seedExeImage, win16FileCandidates, residentWin16Module } = require('../lib/vfs-seed');
 const { expandIncludePatterns, guestPathInTree } = require('../lib/vfs-host-files');
-const { saveVfsToHost, mergeVfsTreeBack } = require('../lib/vfs-export');
+const { saveVfsToHost, saveCompletedChildState, mergeCompletedChildState } = require('../lib/vfs-export');
 
 // A --spawn-processes child has ended: its C:\ and registry replace what it
 // was started with (see spawnVfsChild).
-function mergeChildState(vfs, storage, before, outDir, regOut) {
-  const { written, deleted } = mergeVfsTreeBack(vfs, before, outDir);
-  let keys = 0;
-  if (fs.existsSync(regOut)) {
-    storage.clearStore();
-    keys = storage.importStore(JSON.parse(fs.readFileSync(regOut, 'utf8')));
+function mergeChildState(vfs, storage, before, outDir, regOut, completion, token) {
+  const result = mergeCompletedChildState(vfs, storage, before, outDir, regOut, completion, token);
+  if (!result.merged) {
+    console.log(`[spawn] child state not merged: ${result.reason}`);
+    return result;
   }
+  const { written, deleted, keys } = result;
   console.log(`[spawn] child state merged: ${written} file(s) written, ${deleted} deleted, ${keys} registry/INI key(s)`);
+  return result;
 }
 const {
   decodeMfcCString,
@@ -41,14 +45,15 @@ const {
   formatFrames,
 } = require('../lib/mem-utils');
 const { formatCall: fmtApiCall, formatRet: fmtApiRet, formatOutParams: fmtApiOutParams, walkFrames } = require('../lib/api-format');
-const { fontMounts, BUNDLED_BITMAP_FONTS } = require('../lib/font-substitutions');
+const { fontMounts, optionalFontMounts, BUNDLED_BITMAP_FONTS } = require('../lib/font-substitutions');
 const { APPS, resolveCopySuperops } = require('../lib/apps');
 const { CliVideoRecorder } = require('../lib/cli-recorder');
 const { renderTinySynthNotes } = require('../lib/tinysynth-offline');
-const { createBatchClock } = require('../lib/batch-clock');
+const { createBatchClock, createServiceClock } = require('../lib/batch-clock');
 const { createGuestClockSource } = require('../lib/guest-clock');
+const { createInputConsumptionTrace } = require('./input-consumption-trace');
 const { createStartupClock } = require('../lib/startup-clock');
-const { parseShellLaunchCommand, resolveShellLaunchPath } = require('../host.js');
+const { parseShellLaunchCommand, resolveShellLaunchPath, createWinExecReadiness } = require('../host.js');
 // Fixed memory-map addresses, from the map declared in src/00-regions.wat.
 const RegionMap = require('../lib/region-map.generated.js');
 let PNG;
@@ -294,8 +299,9 @@ const TRACE_API_FILTER = (TRACE_API_RAW && TRACE_API_RAW.includes('='))
   ? new Set(TRACE_API_RAW.split('=')[1].split(',').map(s => s.trim()).filter(Boolean))
   : null;
 // --trace-api-paused (with --quiet-api): install the --trace-api logging but keep
-// the WAT API log OFF until a control command {"action":"trace-api","on":true}
-// turns it on. Any --trace-api switches every Win32 call to three host calls
+// the WAT API log OFF when no other consumer needs it, until a control command
+// {"action":"trace-api","on":true} turns tracing on. Any --trace-api switches
+// every Win32 call to three host calls
 // (log, log_i32, log_api_exit), which slowed Black & White 2 about 4x and moved
 // a route's timing out from under its inputs; paused, the run is full speed up
 // to the moment worth tracing. {"on":false} pauses it again.
@@ -303,7 +309,7 @@ const TRACE_API_PAUSED = hasFlag('trace-api-paused');
 const TRACE_API_DEDUP = hasFlag('trace-api-dedup'); // --trace-api-dedup: collapse N consecutive identical lines into "(xN)"
 const TRACE_API_COUNTS = hasFlag('trace-api-counts'); // --trace-api-counts: print histogram of API call names at end
 const TRACE_MOUSE_STATE = hasFlag('trace-mouse-state'); // --trace-mouse-state: log renderer mouse state changes seen by host imports
-const TRACE_INPUT_DISPATCH = hasFlag('trace-input-dispatch'); // --trace-input-dispatch: log mouse/key MSGs entering DispatchMessage
+const TRACE_INPUT_DISPATCH = hasFlag('trace-input-dispatch'); // bounded schedule/dequeue/route/DispatchMessage timing
 // --trace-stack[=N|=Name1,Name2|=Name:N,...]: walk EBP chain on matched API calls
 const TRACE_STACK_RAW = args.find(a => a === '--trace-stack' || a.startsWith('--trace-stack='));
 const TRACE_STACK = !!TRACE_STACK_RAW;
@@ -491,6 +497,7 @@ if (TRACE_GL_RAW) {
 }
 const TRACE_DX_RAW = hasFlag('trace-dx-raw'); // --trace-dx-raw: on each Execute, walk+hexdump the full instruction stream
 const TRACE_FS = hasFlag('trace-fs');     // --trace-fs: log filesystem CreateFile hits/misses
+const QUIET_FS = hasFlag('quiet-fs');     // --quiet-fs: omit ReadFile diagnostics implied by --trace-api; explicit --trace-fs wins
 // --lazy-ranges[=MS]: mount a registry entry's lazy files (`loadMode: 'lazy'`
 // or `'background'`, and legacy `httpRange` not marked `loadMode: 'required'`)
 // the way the page does -- provider-backed, async-only, MS of latency per
@@ -519,6 +526,10 @@ const TRACE_SEH = hasFlag('trace-seh');   // --trace-seh: log SEH chain operatio
 // exist are invisible to the CLI without these.
 const REG_IMPORT = getArg('reg-import', '');
 const REG_EXPORT = getArg('reg-export', '');
+// Private per-launch completion handshake for spawnVfsChild, independent of
+// guest/host exit codes and the earlier child-exit IPC notification.
+const CHILD_STATE_COMPLETION = getArg('child-state-completion', '');
+const CHILD_STATE_TOKEN = getArg('child-state-token', '');
 // --import-saves=FILE / --export-saves=FILE: the same state as a *save bundle*
 // (lib/save-bundle.js) — the app's persistFiles matches plus the registry/INI
 // store, in one zip. --reg-export carries only the second half, so a game whose
@@ -582,6 +593,10 @@ const SPAWN_PROCESSES_FLAG = hasFlag('spawn-processes');
 // --spawned-child: this process is such a child (set by the parent, not by
 // hand): report the guest's exit code to the parent over IPC.
 const SPAWNED_CHILD = hasFlag('spawned-child');
+// Child IPC also covers redirected-pipe children and externally forked callers.
+// Once a launch is attempted, pending children/siblings cannot be enumerated
+// by this process-local ThreadManager. Keep failure conservative until exit.
+let threadSnapshotSystemIncomplete = !!(SPAWNED_CHILD || PIPE_STD || process.send);
 // A blocking socket call parks the guest; if it never wakes, stop instead of
 // spinning forever. Each wait is one macrotask, so this is a real bound.
 const VLAN_MAX_WAITS = parseInt(getArg('vlan-max-waits', '20000'), 10);
@@ -1157,6 +1172,16 @@ const APP_ENTRY = (() => {
     Object.keys(APPS).sort().join(' '));
   process.exit(1);
 })();
+// The process ANSI code page: --codepage=<cp> wins, else the registry
+// entry's `ansiCodePage` (the browser host's precedence); 0 = the CP1252
+// default. Parsed once: the optional code-page font mounts and the WAT
+// setter read it, and CreateProcess children inherit the page actually in
+// effect (it is a system-wide setting on Windows, never per process).
+const ANSI_CODE_PAGE = (() => {
+  const flag = getArg('codepage', null);
+  if (flag !== null) return parseInt(flag, 10) || 0;
+  return APP_ENTRY && Number.isFinite(APP_ENTRY.ansiCodePage) ? APP_ENTRY.ansiCodePage : 0;
+})();
 // An explicit --fault-null wins; otherwise an app registered with
 // `nullPageFaults: true` takes Win98's NULL-guard-page rule (mode 4), the
 // same as the browser does.
@@ -1287,6 +1312,16 @@ const besideExeGuestPath = (hostPath, name) => {
   if (path.resolve(path.dirname(hostPath)) !== path.resolve(path.dirname(EXE_PATH))) return null;
   return path.win32.join(path.win32.dirname(EXE_GUEST_PATH), name);
 };
+// Seed the child from the exact exported guest identity already assigned by
+// the parent's loader. A same-named DLL elsewhere in the VFS is not a match.
+const childDllSeedPath = (hostPath, written) => {
+  const guestPath = capturedGuestPath(hostPath) ||
+    besideExeGuestPath(hostPath, path.basename(hostPath));
+  if (!guestPath) return hostPath;
+  const row = written.find(row => !row.collision &&
+    String(row.guestPath).toLowerCase() === guestPath.toLowerCase());
+  return row && fs.existsSync(row.outputPath) ? row.outputPath : hostPath;
+};
 // A --media-exe launch (tools/run-media.js) is a guest path too, and reports
 // its directory the way host.js does for imported media: NFS II's InstallShield
 // finds _SETUP.DLL beside D:\SETUP\ENGLISH\SETUP.EXE, not in D:\.
@@ -1332,6 +1367,15 @@ const getAssetFiles = entry => {
     throw new Error(`${ASSET_ENTRY_ID || APP_ID || 'app'}: invalid local media manifest`);
   }
   const manifestDir = path.dirname(entry.localFileManifest);
+  if (entry.localManifestIntegrity) {
+    const verified = require('../lib/app-files').validateLocalManifestSync(entry, manifest, {
+      resolve: url => path.join(manifestDir, url),
+      read: url => fs.readFileSync(appAsset(url)),
+      sha256: bytes => require('crypto').createHash('sha256').update(bytes).digest('hex'),
+    });
+    Object.defineProperty(verified.files, 'verifiedMedia', { value: verified });
+    return verified.files;
+  }
   const local = manifest.files.filter(file => file && file.url)
     .map(file => ({ ...file, url: path.join(manifestDir, file.url) }));
   return require('../lib/app-files').mergeLocalManifestFiles(files, local);
@@ -1694,6 +1738,13 @@ function buildHandlerNameList() {
 }
 
 async function main() {
+  return withCliFailureCleanup(async onFailure => {
+  // Fail closed before compilation, PE loading or any VFS mutation.
+  const verifiedAssetFiles = ASSET_ENTRY && ASSET_ENTRY.localManifestIntegrity
+    ? getAssetFiles(ASSET_ENTRY) : null;
+  const verifiedBytesByPath = new Map(verifiedAssetFiles
+    ? [...verifiedAssetFiles.verifiedMedia.byUrl].map(([url, bytes]) => [canonicalPath(appAsset(url)), bytes]) : []);
+  const readAssetBytes = hostPath => verifiedBytesByPath.get(canonicalPath(hostPath)) || fs.readFileSync(hostPath);
   let wasmBytes;
   // A PIN THAT CANNOT BE HONOURED IS FATAL. This used to fall through to the
   // `else` and compile from src/, so `--wasm=/typo/path.wasm` (or a stale
@@ -1729,7 +1780,7 @@ async function main() {
     const { layoutHash, appendSection } = require('../tools/region-layout-hash.js');
     wasmBytes = appendSection(Buffer.from(r.wasmBinary), layoutHash(r.regions.regions));
   }
-  const exeBytes = fs.readFileSync(EXE_PATH);
+  const exeBytes = verifiedAssetFiles ? verifiedAssetFiles.verifiedMedia.exeBytes : readAssetBytes(EXE_PATH);
 
   // Where a DLL the guest asks for at run time comes from: what the app mounted
   // in the VFS first, then the directories this process can see. The browser
@@ -1747,12 +1798,18 @@ async function main() {
       path.join(path.dirname(EXE_PATH), 'plugins'),
     ]) {
       const sp = findHostFileCi(dir, fileName);
-      if (sp) return new Uint8Array(fs.readFileSync(sp));
+      if (sp) return new Uint8Array(readAssetBytes(sp));
     }
     return null;
   };
 
   const logs = [];
+  // Bounded output at process exit only; no allocation/hooks/output by default.
+  const callbackLifecycleTrace = hasFlag('trace-callback-lifecycle')
+    ? require('../lib/callback-lifecycle-trace').createCallbackLifecycleTrace() : null;
+  if (callbackLifecycleTrace) process.once('exit', () => {
+    console.log('[callback-lifecycle] ' + JSON.stringify(callbackLifecycleTrace.snapshot()));
+  });
   // Drain by walking forward, never with shift(). shift() moves the whole
   // backing store down one slot, so draining N buffered lines costs O(N^2) --
   // and N is not small: every Win32 call buffers an [API] line unless
@@ -1766,6 +1823,10 @@ async function main() {
     for (let i = 0; i < logs.length; i++) console.log(logs[i]);
     logs.length = 0;
   };
+  onFailure(() => {
+    traceGateBatch = -1; // failure diagnostics are never hidden by a trace window
+    flushLogs();
+  });
   let stopped = false;
   let hostExitRequested = false;
   // Batches actually executed. Not the same as MAX_BATCHES once --max-seconds
@@ -1779,6 +1840,8 @@ async function main() {
   // calls ($api_calls) and h.log sees only non-API log lines, so the total
   // is the sum -- the same number the per-call log used to produce.
   let apiLogOff = false;
+  // User trace visibility is independent of dispatch hooks needed by observers.
+  let traceApiOn = TRACE_API && !TRACE_API_PAUSED;
   // The WAT counter ($api_calls) runs only while the log is off. apiWatSeen is
   // the part of it already folded into apiCount when --trace-api-paused
   // switched the log on, so toggling never counts a call twice.
@@ -1789,6 +1852,7 @@ async function main() {
   let lastApiName = null;  // track last API name for return value correlation
   let lastApiEntry = null; // typed metadata for last API (for return formatting)
   let lastApiArgs = null;  // raw dword args captured at entry, used for out-param dump on return
+  let lastApiTraced = false; // selected entry, independent of --esp-delta correlation
   let lastTreeItemTrace = null;
   let lastApiEsp = 0;      // ESP at API entry, for --esp-delta audit
   let pendingComApiId = -1; // COM api_id from 0xC0DE0000 marker emitted just BEFORE the '<ord>' name log
@@ -1806,6 +1870,7 @@ async function main() {
     if (dedupLast && dedupLast.count > 1) logs.push(`  (x${dedupLast.count})`);
     dedupLast = null;
   };
+  onFailure(flushDedup);
   const pushApi = line => {
     if (!TRACE_API_DEDUP) { logs.push(line); return; }
     if (dedupLast && dedupLast.line === line) { dedupLast.count++; return; }
@@ -2094,6 +2159,10 @@ async function main() {
         scheduledInput.push({ batch, action: 'toolbar-click', cmd: parseInt(parts[2]), label: parts[3] || '' });
       } else if (kind === 'menu-dump') {
         scheduledInput.push({ batch, action: 'menu-dump', label: parts[2] || '' });
+      } else if (kind === 'menu-shortcuts') {
+        // B:menu-shortcuts[:label] — the open dropdown's label and shortcut
+        // column (the text after '\t'), raw bytes as hex plus latin1.
+        scheduledInput.push({ batch, action: 'menu-shortcuts', label: parts[2] || '' });
       } else if (kind === 'dlg-paint') {
         scheduledInput.push({ batch, action: 'dlg-paint' });
       } else if (kind === 'dlg-png') {
@@ -2745,7 +2814,7 @@ async function main() {
     // A getter because the manager is built long after ctx is.
     get threadManager() { return threadManager; },
     verbose: VERBOSE,
-    _debugReadFile: TRACE_API,
+    _debugReadFile: TRACE_API && !QUIET_FS,
     _debugFindFile: TRACE_API,
     // Appended to every traced ReadFile (--trace-fs): the batch and the MAIN
     // thread's synchronous-message depth. A read made while that depth is
@@ -2755,7 +2824,7 @@ async function main() {
     // the fetch. That is what decides which ranges a lazy mount must preload.
     ioTraceTag: () => `b=${traceGateBatch} mainDepth=${
       instance.exports.get_sync_msg_depth ? instance.exports.get_sync_msg_depth() | 0 : 0}`,
-    onExit: (code) => { stopped = true; },
+    onExit: (code) => { ctx.processDesktop?.retire(); stopped = true; },
     trace: traceCategories,
     traceHost: traceHostNames,
     hostCensus: HOST_CENSUS,
@@ -2780,6 +2849,7 @@ async function main() {
     // One counter for the whole process: guest threads write the same file.
     _audioOutCount: AUDIO_OUT ? { max: AUDIO_OUT_MAX, bytes: 0 } : undefined,
     sharedAudio: {},  // shared waveOut state across threads
+    callbackLifecycleTrace,
     audioTap: () => (videoRecorder && videoRecorder.active ? videoRecorder : null),
     registerAudioTapPump: fn => { if (typeof fn === 'function') audioTapPumps.add(fn); },
     renderMidiForTap: (smf, options) => renderTinySynthNotes(smf, options),
@@ -2830,6 +2900,15 @@ async function main() {
       return bytes.length;
     },
   };
+  const waveCallbackRouting = require('./cli-wave-callback-owner').createCliWaveCallbackRouting({
+    getMainExports: () => ctx.exports,
+    getThreadManager: () => threadManager,
+    getBackend: () => guestThreadHost,
+  });
+  Object.defineProperty(ctx, 'waveCallbackOwner', {
+    get: () => waveCallbackRouting.owner(ctx.exports),
+  });
+  ctx.offerWaveCallback = waveCallbackRouting.offer;
   const base = createHostImports(ctx);
   closeD3DRender = () => {
     ctx.closeGlide();
@@ -2865,6 +2944,25 @@ async function main() {
       ctx.vfs.files.set(mount.vfsPath, {
         data: new Uint8Array(fs.readFileSync(file)), attrs: 0x20,
       });
+    }
+    // Optional code-page faces built by tools/fetch-fonts.js (never
+    // committed): only for an app under that ANSI page, only if present.
+    const fontCodePage = ANSI_CODE_PAGE;
+    const optionalMounts = optionalFontMounts(substitutions, {
+      codePage: fontCodePage,
+      isAvailable: rel => fs.existsSync(path.join(ROOT, 'fonts', rel)),
+    });
+    for (const mount of optionalMounts) {
+      ctx.vfs.files.set(mount.vfsPath, {
+        data: new Uint8Array(fs.readFileSync(path.join(ROOT, 'fonts', mount.file))),
+        attrs: 0x20,
+      });
+      console.log(`[run] CP${fontCodePage} font: fonts/${mount.file} -> ${mount.vfsPath}`);
+    }
+    if (fontCodePage && !optionalMounts.length &&
+        (substitutions.optional || []).some(g => g.ansiCodePage === fontCodePage)) {
+      console.log(`[run] CP${fontCodePage} fonts absent (node tools/fetch-fonts.js); ` +
+        'using the default faces');
     }
   }
   const { readStr } = base;
@@ -2927,6 +3025,11 @@ async function main() {
     } catch (_) { return null; }
   };
   const h = base.host;
+  const { ProcessDesktop } = require('../lib/process-desktop');
+  const processDesktop = new ProcessDesktop();
+  ctx.processDesktop = processDesktop;
+  ctx.processId = processDesktop.processId;
+  onFailure(() => processDesktop.close());
   // --latency-stats: how long an injected event takes to reach pixels. The
   // blit is the moment GDI hands a dirty rect to the presentation surface,
   // so wrap that import and close out whatever input is still outstanding.
@@ -3280,6 +3383,7 @@ async function main() {
   for (const name of profileHostNames) wrapProfileHost(h, name);
 
   // --- Override logging ---
+  let morrowindNameObserver = null;
   let criticalTracePending = null;
   // Decoded API names, keyed by the guest pointer they were read from. This
   // runs on EVERY api call -- 904,207 of them in a 55s Black & White 2 window --
@@ -3298,10 +3402,14 @@ async function main() {
   // one Heroes III run. The count survives in WAT ($api_calls, apiTotal()).
   // The list is every reader of an API name or exit below, plus --esp-audit,
   // which wraps a worker's log. --quiet-api-fast is now an alias of this.
-  apiLogOff = QUIET_API &&
-    (!TRACE_API || TRACE_API_PAUSED) && !TRACE_API_COUNTS && !TRACE_CRITICAL &&
-    !TRACE_INPUT_DISPATCH && !ESP_DELTA && !ESP_AUDIT && !breakApis.length &&
-    !TRACE_API_MEM.length;
+  const apiLogRequired = traceOn => !QUIET_API || traceOn ||
+    TRACE_API_COUNTS || TRACE_CRITICAL || TRACE_INPUT_DISPATCH || ESP_DELTA ||
+    ESP_AUDIT || breakApis.length || hasFlag('observe-morrowind-name') ||
+    // Memory dumps accompany a paused API trace; they must not force its
+    // dispatch logger on before the explicit trace-api control command.
+    // Without --trace-api, memory-only tracing retains its existing behavior.
+    (TRACE_API_MEM.length && (!TRACE_API || traceOn));
+  apiLogOff = !apiLogRequired(traceApiOn);
   h.log = (ptr, len) => {
     let t = apiNameCache.get(ptr);
     if (t === undefined) {
@@ -3324,8 +3432,17 @@ async function main() {
       comOrdRaw = true;
       pendingComApiId = -1;
     }
+    if (morrowindNameObserver) morrowindNameObserver.apiEnter(t);
     apiCount++;
     if (apiCounts) apiCounts.set(t, (apiCounts.get(t) || 0) + 1);
+    if (TRACE_API) {
+      // A filtered/new call must never inherit an earlier call's metadata.
+      lastApiTraced = false;
+      lastApiName = null;
+      lastApiEntry = null;
+      lastApiArgs = null;
+      lastTreeItemTrace = null;
+    }
 
     if (TRACE_CRITICAL && (t === 'EnterCriticalSection' || t === 'LeaveCriticalSection')) {
       try {
@@ -3365,12 +3482,12 @@ async function main() {
         if ((msgMsg >= 0x0100 && msgMsg <= 0x0108) ||
             (msgMsg >= 0x0200 && msgMsg <= 0x020D) ||
             (msgMsg >= 0x00A0 && msgMsg <= 0x00AD)) {
-          logs.push(`[dispatch-input] ${t} hwnd=0x${msgHwnd.toString(16)} msg=0x${msgMsg.toString(16)} wParam=0x${msgWP.toString(16)} lParam=0x${(msgLP >>> 0).toString(16)}`);
+          inputConsumptionTrace.dispatch(t, msgHwnd, msgMsg, msgWP, msgLP);
         }
       } catch (_) {}
     }
 
-    for (const spec of TRACE_API_MEM) {
+    for (const spec of (!TRACE_API || traceApiOn) ? TRACE_API_MEM : []) {
       if (t !== spec.name) continue;
       try {
         const e = instance.exports;
@@ -3437,7 +3554,7 @@ async function main() {
       lastApiEsp = instance.exports.get_esp();
     }
 
-    if (TRACE_API && (!TRACE_API_FILTER || TRACE_API_FILTER.has(t))) {
+    if (traceApiOn && (!TRACE_API_FILTER || TRACE_API_FILTER.has(t))) {
       const e = instance.exports;
       const esp = e.get_esp();
       const imageBase = e.get_image_base();
@@ -3446,6 +3563,7 @@ async function main() {
       const fmtCtx = { dv, g2w, memory: memory.buffer, readStr, hex };
 
       const entry = apiByName.get(t);
+      lastApiTraced = true;
       lastApiName = t;
       lastApiEntry = entry || null;
       // Snapshot arg dwords at entry so out-param decoding survives stack churn
@@ -3853,17 +3971,15 @@ async function main() {
       const delta = (espAfter - lastApiEsp) | 0;
       logs.push(`[ESP] ${lastApiName}: ${hex(lastApiEsp)} -> ${hex(espAfter)} delta=${delta >= 0 ? '+' : ''}${delta}`);
     }
-    if (TRACE_API && lastApiName) {
+    if (traceApiOn && lastApiTraced) {
       if (!lastApiEntry || !lastApiEntry.ret) {
-        // Legacy untyped path. Typed entries are formatted in log_api_exit
-        // using EAX, which is authoritative — skip here to avoid duplicate lines.
+        // An arbitrary integer diagnostic is not a final API return. Keep it
+        // visible, but leave correlation for log_api_exit's authoritative EAX.
+        // Typed entries still skip this diagnostic as before.
         flushDedup();
-        logs.push(`  => ${hex(val)}`);
-        lastApiName = null;
-        lastApiEntry = null;
-        lastApiArgs = null;
+        logs.push('[i32] ' + hex(val));
       }
-    } else {
+    } else if (!TRACE_API || traceApiOn) {
       logs.push('[i32] ' + hex(val));
     }
   };
@@ -3908,8 +4024,9 @@ async function main() {
     };
   }
 
-  if (ESP_DELTA || TRACE_API || TRACE_CRITICAL) {
+  if (ESP_DELTA || TRACE_API || TRACE_CRITICAL || hasFlag('observe-morrowind-name')) {
     h.log_api_exit = () => {
+      if (morrowindNameObserver) morrowindNameObserver.apiExit();
       if (criticalTracePending) {
         try {
           const after = criticalTracePending.state();
@@ -3923,18 +4040,19 @@ async function main() {
         const delta = (espAfter - lastApiEsp) | 0;
         logs.push(`[ESP] ${lastApiName}: ${hex(lastApiEsp)} -> ${hex(espAfter)} delta=${delta >= 0 ? '+' : ''}${delta}`);
       }
-      if (TRACE_API && lastApiEntry) {
+      if (traceApiOn && lastApiTraced) {
         const dv = new DataView(memory.buffer);
         const imageBase = instance.exports.get_image_base();
         const fmtCtx = { dv, g2w: addr => translateGuest(addr, imageBase, memory.buffer), memory: memory.buffer, readStr, hex };
         const eax = instance.exports.get_eax();
-        const typedRet = fmtApiRet(lastApiEntry, eax, fmtCtx);
+        const typedRet = fmtApiRet(lastApiEntry, eax, fmtCtx) ||
+          `=> ${hex(eax)} (raw EAX; ${lastApiName})`;
         const outInfo = lastApiArgs ? fmtApiOutParams(lastApiEntry, lastApiArgs, fmtCtx) : '';
         if (typedRet || outInfo) flushDedup();
         if (typedRet) logs.push(`  ${typedRet.trim()}`);
         if (outInfo) logs.push(outInfo);
       }
-      if (TRACE_API && lastApiName === 'SendMessageA' && lastTreeItemTrace) {
+      if (traceApiOn && lastApiName === 'SendMessageA' && lastTreeItemTrace) {
         try {
           const imageBase = instance.exports.get_image_base();
           const textValue = readStr(RegionMap.g2w(lastTreeItemTrace.textGuest, imageBase),
@@ -3946,11 +4064,13 @@ async function main() {
       lastApiName = null;
       lastApiEntry = null;
       lastApiArgs = null;
+      lastApiTraced = false;
     };
   }
 
   // --- Override exit to also log ---
   h.exit = code => {
+    processDesktop.retire();
     hostExitRequested = true;
     logs.push('[Exit] code=' + code); stopped = true;
     // A child process_spawn started: its parent's GetExitCodeProcess and
@@ -3977,22 +4097,50 @@ async function main() {
   };
 
   let capturedLaunch = null;
+  const winexecReadiness = createWinExecReadiness({
+    onEvent: event => console.log('[winexec-startup] ' + JSON.stringify(event)),
+  });
+  let startupNotified = false;
   const baseShellExecute = h.shell_execute;
   h.shell_execute = (hwnd, opWa, fileWa, paramsWa, dirWa, nShow) => {
+    threadSnapshotSystemIncomplete = true;
     const file = fileWa ? readStr(fileWa) : '';
-    const params = paramsWa ? readStr(paramsWa) : '';
+    const hostParams = paramsWa ? readStr(paramsWa) : '';
     const operation = opWa ? readStr(opWa) : 'open';
-    const directory = dirWa ? readStr(dirWa) : '';
+    const hostDirectory = dirWa ? readStr(dirWa) : '';
+    const isWinExec = /^winexec$/i.test(operation);
+    const params = isWinExec ? '' : hostParams;
+    const directory = isWinExec ? '' : hostDirectory;
+    const search = { applicationPath: hostDirectory || EXE_GUEST_PATH, path: isWinExec ? hostParams : '' };
     const result = baseShellExecute(hwnd, opWa, fileWa, paramsWa, dirWa, nShow);
+    // Capture is a separate handoff: never launch while taking its snapshot.
+    if (!CAPTURE_LAUNCH && ctx.vfs &&
+        (SPAWN_PROCESSES_FLAG || (APP_ENTRY && APP_ENTRY.spawnProcesses)) &&
+        /^(?:winexec|open)?$/i.test(operation)) {
+      const parsed = parseShellLaunchCommand(file, params, operation, ctx.vfs, search);
+      const executable = resolveShellLaunchPath(parsed.file.trim(), ctx.vfs, parsed.isWinExec, search);
+      if (!executable) return 2; // ERROR_FILE_NOT_FOUND
+      // Keep ShellExecute's separate arguments and WinExec's selected image;
+      // the transport accepts a quoted command line, not a shell expression.
+      const command = `"${executable}"${parsed.params ? ' ' + parsed.params : ''}`;
+      try {
+        // A transport PID is private to process_ctl, not a ShellExecute handle.
+        const pid = spawnVfsChild(command, directory, false, nShow);
+        return pid ? (parsed.isWinExec ? winexecReadiness.issue(pipeChildByPid.get(pid)) : 33) : 2;
+      } catch (e) {
+        logs.push(`[spawn] ShellExecute "${file}" failed: ${e.message}`);
+        return 0; // launch resources/transport unavailable; never fake success
+      }
+    }
     if (!CAPTURE_LAUNCH || !ctx.vfs || capturedLaunch) return result;
 
     // Inno and InstallShield both put command lines in lpFile, but disagree
     // about whether the closing quote follows argv[0] or the final argument.
     // Use the browser's parser so capture/replay sees exactly what a live
     // ShellExecute handoff sees.
-    const parsedCommand = parseShellLaunchCommand(file, params, operation);
+    const parsedCommand = parseShellLaunchCommand(file, params, operation, ctx.vfs, search);
     const executable = resolveShellLaunchPath(
-      parsedCommand.file.trim(), ctx.vfs, parsedCommand.isWinExec);
+      parsedCommand.file.trim(), ctx.vfs, parsedCommand.isWinExec, search);
     const inlineArgs = parsedCommand.params.trim();
     const guestExe = ctx.vfs._resolvePath ? ctx.vfs._resolvePath(executable)
       : (ctx.vfs._normPath ? ctx.vfs._normPath(executable) : executable.toLowerCase());
@@ -4026,16 +4174,34 @@ async function main() {
   // guest falls back to its old CreateProcess path.
   const pipeChildren = [];
   const pipeChildByPid = new Map();
-  // op 0: exit code (259 STILL_ACTIVE while running); op 1: terminate.
+  const livePipeChildren = new Set();
+  // Browser aliases require a target-owned table; CLI IPC is unsupported.
+  // E4 validity and lifetime are independent of every possible DWORD exit code.
   const processCtl = (op, pid, arg) => {
-    const rec = pipeChildByPid.get(pid & 0xFFFF);
-    if (!rec) return -1;
-    if (op === 0) return rec.exitCode >>> 0;
-    if (op === 1) {
-      if (rec.exitCode === 259) {
-        rec.exitCode = arg >>> 0;
-        rec.child.kill();
+    if (op === 9 || op === 10 || op === 12) return winexecReadiness.control(op, pid, arg);
+    if (op === 11) {
+      processDesktop.publish();
+      if (!startupNotified) {
+        startupNotified = true;
+        if (process.send && process.connected) process.send({ t: 'process-input-ready' }, () => {});
       }
+      return 1;
+    }
+    if (op === 3) return -50;
+    const kind = (pid >>> 0) & 0xFFFF0000;
+    if (op >= 4 && op <= 8 && kind !== 0x00E40000) return op === 8 ? -1 : -6;
+    const rec = pipeChildByPid.get(pid & 0xFFFF);
+    if (!rec) return op >= 4 && op <= 7 ? -6 : -1;
+    if (op === 2) return 1;
+    if (op === 0 || op === 4) return rec.exitCode >>> 0;
+    if (op === 6) return (0x1FFFFF & arg) === arg ? 1 : -5;
+    if (op === 7) { pipeChildByPid.delete(pid & 0xFFFF); return 1; }
+    if (op === 8) return rec.exited ? 0 : 0x102;
+    if (op === 1 || op === 5) {
+      if (rec.exited) return -5;
+      rec.exitCode = arg >>> 0;
+      rec.exited = true;
+      rec.child.kill();
       return 1;
     }
     return -1;
@@ -4043,10 +4209,7 @@ async function main() {
   h.process_ctl = processCtl;
   ctx.processCtl = processCtl;
   const nextChildPid = () => (0x4000 + (pipeChildren.length + 1) * 4) & 0xFFFF;
-  ctx.hasLiveChildren = () => {
-    for (const rec of pipeChildByPid.values()) if (rec.exitCode === 259) return true;
-    return false;
-  };
+  ctx.hasLiveChildren = () => livePipeChildren.size > 0;
   const relayChild = (child, tag) => {
     for (const stream of [child.stdout, child.stderr]) {
       let pending = '';
@@ -4066,9 +4229,9 @@ async function main() {
   // registry it left are merged back here, and only then does its exit code
   // stop reading STILL_ACTIVE, so a parent's WaitForSingleObject +
   // GetExitCodeProcess sees the child's work done.
-  const spawnVfsChild = (cmd, dirArg) => {
+  const spawnVfsChild = (cmd, dirArg, forceSpawn = false, showCmd) => {
     const vfs = ctx.vfs;
-    if (!vfs || !(SPAWN_PROCESSES_FLAG || (APP_ENTRY && APP_ENTRY.spawnProcesses))) return 0;
+    if (!vfs || !(forceSpawn || SPAWN_PROCESSES_FLAG || (APP_ENTRY && APP_ENTRY.spawnProcesses))) return 0;
     const parsed = parseShellLaunchCommand(cmd, '', 'open');
     const name = parsed.file.trim();
     if (!name) return 0;
@@ -4096,63 +4259,81 @@ async function main() {
     const os = require('os');
     const storage = require('../lib/storage');
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-child-'));
-    const inDir = path.join(tmp, 'in');
-    const outDir = path.join(tmp, 'out');
-    const regIn = path.join(tmp, 'reg-in.json');
-    const regOut = path.join(tmp, 'reg-out.json');
-    const written = saveVfsToHost(vfs, inDir);
-    const before = new Map(written.map(row => [String(row.guestPath).toLowerCase(), row.outputPath]));
-    const exeRow = written.find(row => String(row.guestPath).toLowerCase() === guestExe);
-    if (!exeRow) {
-      fs.rmSync(tmp, { recursive: true, force: true });
-      console.log(`[spawn] CreateProcess "${cmd}": ${guestExe} could not be exported`);
-      return 0;
-    }
-    fs.writeFileSync(regIn, JSON.stringify(storage.exportStore()));
-    // An app-local DLL loads as a real PE only when seeded (the app's `dlls`
-    // or --dll-seed); the child has no app entry, so hand it the parent's.
-    // Rollcage's setup relaunches its own exe as the front end, which then
-    // imports QMIXER.DLL from beside it and crashed on the unresolved import.
-    const childDllSeeds = [...((ASSET_ENTRY && ASSET_ENTRY.dlls) || []), ...DLL_SEED]
-      .map(appAsset).filter(p => fs.existsSync(p));
-    const args = [
-      `--exe=${exeRow.outputPath}`, `--vfs-tree=${inDir}`, `--exe-guest-path=${guestExe}`,
-      `--cwd=${cwd}`, `--args=${parsed.params.trim()}`,
-      '--no-build', `--wasm=${WASM_PATH}`, '--quiet-api', '--quiet-blocks',
-      '--stuck-after=0', '--max-batches=1000000000', `--max-seconds=${MAX_SECONDS || 600}`,
-      '--spawned-child', '--spawn-processes',
-      `--save-vfs=${outDir}`, `--reg-import=${regIn}`, `--reg-export=${regOut}`,
-      ...(childDllSeeds.length ? [`--dll-seed=${childDllSeeds.join(',')}`] : []),
-      ...PIPE_CHILD_ARGS,
-      // and on down the tree: instmsi's msiexec is a grandchild.
-      ...(PIPE_CHILD_ARGS.length ? [`--pipe-child-args=${PIPE_CHILD_ARGS.join(' ')}`] : []),
-    ];
-    const { fork } = require('child_process');
-    const child = fork(__filename, args, { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
-    const pid = nextChildPid();
-    relayChild(child, `[child ${pid.toString(16)} ${path.win32.basename(guestExe)}]`);
-    pipeChildren.push(child);
-    const rec = { child, exitCode: 259 };
-    pipeChildByPid.set(pid, rec);
-    let guestCode = null;
-    child.on('message', msg => { if (msg && msg.t === 'child-exit') guestCode = msg.code >>> 0; });
-    child.on('exit', code => {
-      try {
-        mergeChildState(vfs, storage, before, outDir, regOut);
-      } catch (e) {
-        console.log(`[spawn] merging ${path.win32.basename(guestExe)}'s files back failed: ${e.message}`);
+    try {
+      const inDir = path.join(tmp, 'in');
+      const outDir = path.join(tmp, 'out');
+      const regIn = path.join(tmp, 'reg-in.json');
+      const regOut = path.join(tmp, 'reg-out.json');
+      const completion = path.join(tmp, 'complete.json');
+      const token = require('crypto').randomBytes(32).toString('hex');
+      const written = saveVfsToHost(vfs, inDir);
+      const before = new Map(written.map(row => [String(row.guestPath).toLowerCase(), row.outputPath]));
+      const exeRow = written.find(row => String(row.guestPath).toLowerCase() === guestExe);
+      if (!exeRow) {
+        fs.rmSync(tmp, { recursive: true, force: true });
+        console.log(`[spawn] CreateProcess "${cmd}": ${guestExe} could not be exported`);
+        return 0;
       }
+      fs.writeFileSync(regIn, JSON.stringify(storage.exportStore()));
+      // An app-local DLL loads as a real PE only when seeded (the app's `dlls`
+      // or --dll-seed); the child has no app entry, so hand it the parent's.
+      // Rollcage's setup relaunches its own exe as the front end, which then
+      // imports QMIXER.DLL from beside it and crashed on the unresolved import.
+      const childDllSeeds = [...((ASSET_ENTRY && ASSET_ENTRY.dlls) || []), ...DLL_SEED]
+        .map(appAsset).filter(p => fs.existsSync(p))
+        .map(p => childDllSeedPath(p, written));
+      const args = [
+        `--exe=${exeRow.outputPath}`, `--vfs-tree=${inDir}`, `--exe-guest-path=${guestExe}`,
+        `--cwd=${cwd}`, `--args=${parsed.params.trim()}`,
+        '--no-build', `--wasm=${WASM_PATH}`, '--quiet-api', '--quiet-blocks',
+        '--stuck-after=0', '--max-batches=1000000000', `--max-seconds=${MAX_SECONDS || 600}`,
+        '--spawned-child', '--spawn-processes',
+        `--save-vfs=${outDir}`, `--reg-import=${regIn}`, `--reg-export=${regOut}`,
+        `--child-state-completion=${completion}`, `--child-state-token=${token}`,
+        ...(childDllSeeds.length ? [`--dll-seed=${childDllSeeds.join(',')}`] : []),
+        ...childCodePageArgs(),
+        ...PIPE_CHILD_ARGS,
+        ...startupShowArgs(showCmd),
+        // and on down the tree: instmsi's msiexec is a grandchild.
+        ...(PIPE_CHILD_ARGS.length ? [`--pipe-child-args=${PIPE_CHILD_ARGS.join(' ')}`] : []),
+      ];
+      const { fork } = require('child_process');
+      const child = fork(__filename, args, { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: processDesktop.environment(ThreadManager.namedEventEnvironment()) });
+      const pid = nextChildPid();
+      relayChild(child, `[child ${pid.toString(16)} ${path.win32.basename(guestExe)}]`);
+      pipeChildren.push(child);
+      const rec = { child, ready: false, exited: false, exitCode: 259 };
+      livePipeChildren.add(rec);
+      pipeChildByPid.set(pid, rec);
+      let guestCode = null;
+      child.on('message', msg => {
+        if (msg && msg.t === 'process-input-ready') rec.ready = true;
+        if (msg && msg.t === 'child-exit') guestCode = msg.code >>> 0;
+      });
+      child.on('exit', code => {
+        try {
+          mergeChildState(vfs, storage, before, outDir, regOut, completion, token);
+        } catch (e) {
+          console.log(`[spawn] merging ${path.win32.basename(guestExe)}'s files back failed: ${e.message}`);
+        }
+        fs.rmSync(tmp, { recursive: true, force: true });
+        if (!rec.exited) rec.exitCode = (guestCode != null ? guestCode : (code == null ? 1 : code)) >>> 0;
+        rec.exited = true;
+        livePipeChildren.delete(rec);
+      });
+      if (pipeChildren.length === 1) process.on('exit', () => { for (const c of pipeChildren) c.kill(); });
+      console.log(`[spawn] CreateProcess "${cmd}" -> ${guestExe} (pid ${pid.toString(16)}, cwd ${cwd})`);
+      return pid;
+    } catch (e) {
       fs.rmSync(tmp, { recursive: true, force: true });
-      if (rec.exitCode === 259) rec.exitCode = (guestCode != null ? guestCode : (code == null ? 1 : code)) >>> 0;
-    });
-    if (pipeChildren.length === 1) process.on('exit', () => { for (const c of pipeChildren) c.kill(); });
-    console.log(`[spawn] CreateProcess "${cmd}" -> ${guestExe} (pid ${pid.toString(16)}, cwd ${cwd})`);
-    return pid;
+      throw e;
+    }
   };
-  h.process_spawn = (cmdWa, dirWa, childIp, specWa, count) => {
+  h.process_spawn = (cmdWa, dirWa, childIp, specWa, count, forceSpawn, showCmd) => {
+    threadSnapshotSystemIncomplete = true;
     const cmd = cmdWa ? readStr(cmdWa) : '';
     if (!cmd) return 0;
-    if (!count) return spawnVfsChild(cmd, dirWa ? readStr(dirWa) : '');
+    if (!count) return spawnVfsChild(cmd, dirWa ? readStr(dirWa) : '', !!forceSpawn, showCmd);
     if (!EXE_PATH) return 0;
     const { ParentHub } = require('../lib/vlan-wire');
     if (ctx.vlanWire && !(ctx.vlanWire instanceof ParentHub)) {
@@ -4189,10 +4370,12 @@ async function main() {
       // The child's side of a wire question is half the answer.
       // (never --verbose: its per-batch output, relayed here, is unbounded)
       ...(TRACE_NET ? ['--trace-net'] : []),
+      ...childCodePageArgs(),
       ...PIPE_CHILD_ARGS,
+      ...startupShowArgs(showCmd),
     ];
     const { fork } = require('child_process');
-    const child = fork(__filename, args, { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const child = fork(__filename, args, { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: processDesktop.environment(ThreadManager.namedEventEnvironment()) });
     const tag = `[child ${ipText} ${hostExe}]`;
     for (const stream of [child.stdout, child.stderr]) {
       let pending = '';
@@ -4213,14 +4396,22 @@ async function main() {
     ctx.vlanWire.addChild(child, ip);
     pipeChildren.push(child);
     const pid = (0x4000 + pipeChildren.length * 4) & 0xFFFF;
-    const rec = { child, exitCode: 259 };
+    const rec = { child, exited: false, exitCode: 259 };
+    livePipeChildren.add(rec);
     pipeChildByPid.set(pid, rec);
     child.on('message', msg => {
-      if (msg && msg.t === 'child-exit' && rec.exitCode === 259) rec.exitCode = msg.code >>> 0;
+      if (msg && msg.t === 'child-exit' && !rec.exited) {
+        rec.exitCode = msg.code >>> 0;
+        rec.exited = true;
+      }
     });
     // An emulator that ends without a guest ExitProcess (a crash, a
     // --max-seconds stop) still ends the child process: report it as exited.
-    child.on('exit', code => { if (rec.exitCode === 259) rec.exitCode = (code == null ? 1 : code) >>> 0; });
+    child.on('exit', code => {
+      if (!rec.exited) rec.exitCode = (code == null ? 1 : code) >>> 0;
+      rec.exited = true;
+      livePipeChildren.delete(rec);
+    });
     if (pipeChildren.length === 1) process.on('exit', () => { for (const c of pipeChildren) c.kill(); });
     console.log(`[pipe] CreateProcess "${cmd}" -> ${hostExe} at ${ipText}, std ${spec.join(' ')}`);
     return pid;
@@ -4346,7 +4537,14 @@ async function main() {
   // headless slices. Batch transitions add a larger jump (~200ms) to keep
   // the overall simulated pace realistic.
   const tickCallStepMs = Math.max(1, parseInt(process.env.TICK_CALL_STEP_MS || '1', 10) || 1);
-  const batchClock = createBatchClock(TICK_MS_PER_BATCH, tickCallStepMs);
+  // Explicit legacy flags/registry settings retain their batch contract.
+  const clockMode = getArg('clock', args.some(a => a.startsWith('--tick-ms-per-batch=')) ||
+    Number.isFinite(APP_ENTRY?.cliTickMsPerBatch) ? 'batch' : 'service');
+  if (!['batch', 'service'].includes(clockMode)) throw new Error('Unknown --clock mode');
+  const serviceClock = !REAL_TICKS && clockMode === 'service';
+  const batchClock = serviceClock
+    ? createServiceClock(Number(getArg('cpu-blocks-per-second', '5000')))
+    : createBatchClock(TICK_MS_PER_BATCH, tickCallStepMs);
   const tickState = batchClock.state;
   if (gameplayBench) {
     const ticks = batchClock.getTicks, peek = batchClock.batchTicks;
@@ -4357,6 +4555,8 @@ async function main() {
   // so guest calls, worker threads, sleeps, audio and vblank all see one clock.
   // The raw batch reading is kept for ending it at the right raw instant.
   const startupClock = createStartupClock(STARTUP_CLOCK_CFG);
+  if (serviceClock && (startupClock.active || gameplayBench))
+    throw new Error('Scripted clock mappings require --clock=batch');
   ctx.startupClock = startupClock;
   if (startupClock.active && !REAL_TICKS) {
     const ticks = batchClock.getTicks, peek = batchClock.batchTicks;
@@ -4369,7 +4569,6 @@ async function main() {
   // before this line but only ever fires during the batch loop, long after it.
   DX_LOCK_PAUSE.clock = batchClock;
   VBLANK.clock = batchClock;
-  ctx.sharedAudio.audioClockMs = () => batchClock.batchTicks();
   // --real-ticks hands the guest the wall clock instead. Two emulator
   // processes in one room CANNOT share a batch-driven clock: a batch is not a
   // unit of time and each process runs them at its own rate, so an idle Hearts
@@ -4390,6 +4589,10 @@ async function main() {
     clockOrigin: CLOCK_ORIGIN,
     mapElapsed: startupClock.active && REAL_TICKS ? raw => startupClock.map(raw) : null,
   });
+  // Device consumption and completion eligibility use the same selected time
+  // as guest threads. Binding the raw batch clock here made --real-ticks audio
+  // race ahead at host publication speed while GetTickCount used wall time.
+  ctx.sharedAudio.audioClockMs = () => guestClock.publish();
   if (startupClock.active && REAL_TICKS) {
     ctx.startupClockRawNow = () => (Date.now() - CLOCK_ORIGIN) * TIME_SCALE;
   }
@@ -4404,7 +4607,19 @@ async function main() {
         `guest ${Math.round(startupClock.map(raw))} ms`);
     };
   }
-  h.get_ticks = guestClock.ticks;
+  // Resolve the reader at call time so the optional observer below sees the
+  // same mapped return as GetTickCount/timeGetTime/QueryPerformanceCounter.
+  h.get_ticks = () => guestClock.ticks();
+  // Independent of --trace-input-dispatch; no initialization or hooks by default.
+  const mainSchedulerObserver = hasFlag('trace-main-scheduler')
+    ? require('./main-scheduler-observer').createMainSchedulerObserver({ logs, isOpen: traceWindowOpen }) : null;
+  const inputConsumptionTrace = createInputConsumptionTrace({
+    enabled: TRACE_INPUT_DISPATCH, logs,
+    snapshot: () => ({ batch: tickState.batch, guestMs: guestClock.publish(),
+      clock: guestClock.realTicks ? 'real' : 'batch',
+      lastGuestTick: inputConsumptionTrace.lastGuestTick }),
+  });
+  guestClock.ticks = inputConsumptionTrace.observeTicks(guestClock.ticks);
   // Every OTHER import table in this process is built from `ctx` — one per
   // guest thread, in makeWorkerImports — and createHostImports derives its
   // get_ticks from ctx.guestNowMs. Overriding only `h` above therefore left
@@ -4450,13 +4665,18 @@ async function main() {
   // --- Override input for test injection ---
   let lastInputEvent = null;
   h.check_input = () => {
+    if (mainSchedulerObserver) mainSchedulerObserver.hostInput();
     let evt = null;
+    let source;
     if (inputEvent) {
+      source = 'pending';
       evt = inputEvent;
       inputEvent = null;
     } else if (crossThreadMsgs.length > 0) {
+      source = 'cross-thread';
       evt = crossThreadMsgs.shift();
     } else if (inputQueue && inputQueue.length > 0) {
+      source = 'button-queue';
       // Delay button clicks while on "Installing Files" page (let extraction thread work)
       if (installingFiles) return 0;
       const id = inputQueue.shift();
@@ -4466,10 +4686,12 @@ async function main() {
       // menu commands because the edit child's wndproc is WNDPROC_BUILTIN.
       else evt = { msg: 0x0111, wParam: id, lParam: 0, hwnd: 0 };
     } else if (renderer) {
+      source = 'renderer';
       evt = renderer.checkInput();
     }
     if (!evt) return 0;
     lastInputEvent = evt;
+    inputConsumptionTrace.dequeue(evt, source);
     const packed = (evt.wParam << 16) | (evt.msg & 0xFFFF);
     logs.push(`[check_input] msg=0x${evt.msg.toString(16)} wParam=0x${evt.wParam.toString(16)} lParam=0x${(evt.lParam >>> 0).toString(16)} packed=0x${packed.toString(16)}`);
     return packed;
@@ -4484,9 +4706,13 @@ async function main() {
   // won the input FIFO (Moorhuhn's WinSock thread, whenever the main thread
   // sat in a present-cap sleep) was told the key was the main window's and
   // routed it, while the browser told it 0 and it kept the key.
-  h.check_input_hwnd = (focusHwnd) => inputEventHwnd(lastInputEvent,
-    { get_focus_hwnd: () => focusHwnd | 0 },
-    (why) => logs.push(`[check_input_hwnd] ${why}`));
+  h.check_input_hwnd = (focusHwnd) => {
+    const hwnd = inputEventHwnd(lastInputEvent,
+      { get_focus_hwnd: () => focusHwnd | 0 },
+      (why) => logs.push(`[check_input_hwnd] ${why}`));
+    inputConsumptionTrace.route(focusHwnd, hwnd);
+    return hwnd;
+  };
   h.check_input_lparam = () => (lastInputEvent ? (lastInputEvent.lParam || 0) : 0);
   h.check_input_wparam = () => (lastInputEvent ? (lastInputEvent.wParam || 0) : 0);
   let lastMouseTracePos = -1;
@@ -4584,6 +4810,7 @@ async function main() {
   // ThreadManager setup (lazy — created after instance)
   const { ThreadManager } = require('../lib/thread-manager');
   let threadManager = null;
+  onFailure(() => threadManager?.closeNamedEventAuthority());
 
   // Wire thread/event imports to ThreadManager
   h.create_thread = (startAddr, param, stackSize, creationFlags, threadIdWa, creatorTid) =>
@@ -4594,6 +4821,8 @@ async function main() {
   h.thread_apc_target = (handle, tid) => threadManager.threadApcTarget(handle, tid);
   h.thread_alert = (tid) => threadManager.alertThread(tid);
   h.get_thread_priority = (handle, tid) => threadManager.getThreadPriority(handle, tid);
+  h.snapshot_threads = (out, capacity, pid, priorityClass) =>
+    threadManager.snapshotThreads(out, capacity, pid, priorityClass);
   h.set_thread_priority = (handle, priority, tid) => threadManager.setThreadPriority(handle, priority, tid);
   h.get_thread_locale = (tid) => threadManager.getThreadLocale(tid);
   h.set_thread_locale = (locale, tid) => threadManager.setThreadLocale(locale, tid);
@@ -4604,15 +4833,21 @@ async function main() {
   h.get_exit_code_thread = (handle) => threadManager.getExitCodeThread(handle);
   h.terminate_thread = (handle, exitCode) => threadManager.terminateThread(handle, exitCode);
   const win32ThreadId = () => threadManager.currentWin32ThreadId();
+  // Opt in here, keeping browser imports and standalone local managers local.
+  // The manager itself is assigned after instantiation, so enable lazily.
+  const namedEventManager = () => {
+    threadManager.enableNamedEventAuthority();
+    return threadManager;
+  };
   h.create_event = (manualReset, initialState, nameWa, wide) => {
     const name = readSyncObjectName(memory, nameWa, wide);
     return (wide & 2)
       ? threadManager.createMutex(initialState, name, win32ThreadId())
-      : threadManager.createEvent(manualReset, initialState, name);
+      : namedEventManager().createEvent(manualReset, initialState, name);
   };
   h.open_event = (nameWa, wide) => {
     const name = readSyncObjectName(memory, nameWa, wide);
-    return (wide & 2) ? threadManager.openMutex(name) : threadManager.openEvent(name);
+    return (wide & 2) ? threadManager.openMutex(name) : namedEventManager().openEvent(name);
   };
   h.set_event = (handle) => ((handle >>> 0) & 0x80000000)
     ? threadManager.releaseMutex((handle >>> 0) & 0x7fffffff, win32ThreadId())
@@ -4625,9 +4860,11 @@ async function main() {
   // does in the browser.
   const nestedSyncMessage = () =>
     !!(ctx.exports && ctx.exports.get_sync_msg_depth && (ctx.exports.get_sync_msg_depth() | 0));
-  h.wait_single = (handle, timeout) => nestedSyncMessage()
-    ? threadManager.waitSingleCooperative(handle, timeout, win32ThreadId())
-    : threadManager.waitSingle(handle, timeout, win32ThreadId());
+  h.wait_single = (handle, timeout, entry = threadManager.captureNamedWaitEntry()) => {
+    return nestedSyncMessage()
+      ? threadManager.waitSingleCooperative(handle, timeout, win32ThreadId())
+      : threadManager.waitSingle(handle, timeout, win32ThreadId(), entry);
+  };
   h.wait_multiple = (nCount, handlesWA, bWaitAll, timeout) => nestedSyncMessage()
     ? threadManager.waitMultipleCooperative(nCount, handlesWA, bWaitAll, timeout, win32ThreadId())
     : threadManager.waitMultiple(nCount, handlesWA, bWaitAll, timeout, win32ThreadId());
@@ -4740,6 +4977,7 @@ async function main() {
     }
   }
 
+  processDesktop.attach(ctx, h);
   const imports = { host: h };
 
   // A CORRUPT PINNED ARTIFACT MUST NOT READ AS A PASS. The rejection from
@@ -4791,23 +5029,56 @@ async function main() {
     }
   }
 
-  const instance = await WebAssembly.instantiate(wasmModule, imports);
+  // MORROWIND_NAME_IMPORT_BEGIN: before instantiation captures import references.
+  if (hasFlag('observe-morrowind-name')) {
+    const legacyEip = h.log_eip;
+    h.log_eip = pc => {
+      if (morrowindNameObserver) morrowindNameObserver.onEip(pc);
+      if (legacyEip) legacyEip(pc);
+    };
+  }
+  // MORROWIND_NAME_IMPORT_END
+  if (serviceClock) batchClock.wrapImports(imports.host);
+  const nativeInstance = await WebAssembly.instantiate(wasmModule, imports);
+  const instance = serviceClock ? batchClock.wrapInstance(nativeInstance) : nativeInstance;
   ctx.exports = instance.exports;
+  instance.exports.set_hwnd_base(processDesktop.hwndBase);
   // Quiet runs silence the per-call API log from the first instruction, DLL
   // initialization included. Applied only after DllMain ran, the early calls
   // were logged (and so counted twice, by h.log and by $api_calls) and a
   // --trace-api-paused run printed them before it was switched on.
   if (apiLogOff && instance.exports.set_api_log) instance.exports.set_api_log(0);
-  // An app whose game loop runs on a worker thread opts into the worker-heavy
-  // page-index split (lib/apps.js `workerHeavyCodeCache`), before anything is
-  // decoded and before any thread instance is created. --worker-heavy-code-cache
-  // forces it for any exe, --no-worker-heavy-code-cache turns the app's off.
+  // Process ANSI code page (ANSI_CODE_PAGE above), applied before the PE
+  // is staged below. The WAT setter validates the page; pages without
+  // conversion tables keep the historical identity conversion, so this is
+  // observable only for CP950 today.
+  if (ANSI_CODE_PAGE && instance.exports.set_ansi_code_page) {
+    instance.exports.set_ansi_code_page(ANSI_CODE_PAGE);
+    console.log(`[run] ANSI code page: ${ANSI_CODE_PAGE}`);
+  }
+  // CreateProcess children run under the page this process actually has
+  // (the WAT may have refused an unsupported one); the CP1252 default
+  // needs no flag, so a Western child's command line is unchanged.
+  const childCodePageArgs = () => {
+    const cp = instance.exports.get_ansi_code_page ? instance.exports.get_ansi_code_page() | 0 : 0;
+    return cp && cp !== 1252 ? [`--codepage=${cp}`] : [];
+  };
+  // Apply the app's page-index layout before decoding or creating threads.
+  // Positive CLI flags override app defaults (expanded wins if both are set).
+  // Each --no-* flag disables that app default; an explicit positive wins
+  // over its matching negative, as with the existing worker-heavy option.
   {
+    const forceHeavy = hasFlag('worker-heavy-code-cache');
+    const wantExpanded = hasFlag('expanded-worker-code-cache')
+      || (!forceHeavy && !hasFlag('no-expanded-worker-code-cache') &&
+        APP_ENTRY && APP_ENTRY.expandedWorkerCodeCache === true);
     const wantHeavy = hasFlag('worker-heavy-code-cache')
       || (!hasFlag('no-worker-heavy-code-cache') && APP_ENTRY && APP_ENTRY.workerHeavyCodeCache === true);
-    if (wantHeavy && instance.exports.set_page_index_layout) {
-      instance.exports.set_page_index_layout(1);
-      console.log('[cache] worker-heavy page-index layout: main 256 slots, workers 32');
+    if ((wantExpanded || wantHeavy) && instance.exports.set_page_index_layout) {
+      instance.exports.set_page_index_layout(wantExpanded ? 2 : 1);
+      console.log(wantExpanded
+        ? '[cache] expanded-worker page-index layout: main 512 slots, workers 32 (624KiB code)'
+        : '[cache] worker-heavy page-index layout: main 256 slots, workers 32');
     }
   }
   if (D3D_WORKER) {
@@ -4815,7 +5086,9 @@ async function main() {
     const {Encoder} = require('../lib/d3d-command-stream');
     const sigs = JSON.parse(fs.readFileSync(path.join(ROOT, 'lib', 'host-import-sigs.generated.json'), 'utf8')).sigs;
     ctx.d3dCommands = new Encoder({
-      memory, module: wasmModule, sigs,
+      memory, module: wasmModule, sigs, strictReady: true,
+      // An attached worker must finish startup before the first guest draw;
+      // otherwise startup timing can send that draw down the local fallback.
       // The Encoder speaks the Web Worker surface; adapt a worker_thread to it.
       workerFactory: () => {
         const worker = new Worker(path.join(ROOT, 'lib', 'd3d-render-worker.js'));
@@ -5051,10 +5324,14 @@ async function main() {
       traceHost: traceHostNames,
       hostCensus: HOST_CENSUS,
       exports: workerExportsProxy,
-      _debugReadFile: TRACE_API,
+      offerWaveCallback: waveCallbackRouting.offer,
+      _debugReadFile: TRACE_API && !QUIET_FS,
       ioTraceTag: ctx.ioTraceTag,
       sharedGdi: base.gdi,  // the live GDI table, not the copy in ctx
       g2w: (addr) => translateGuest(addr, instance.exports.get_image_base(), memory.buffer),
+    });
+    Object.defineProperty(workerCtx, 'waveCallbackOwner', {
+      get: () => waveCallbackRouting.owner(workerInstance?.exports, tid, WORKER_THREADS),
     });
     const workerBase = createHostImports(workerCtx);
     const wh = workerBase.host;
@@ -5063,10 +5340,25 @@ async function main() {
     // list is shared, and adopting a name the main table does not implement
     // throws rather than leaving the return-0 stub in place.
     adoptThreadPrimitives(wh, h);
+    // An ordinary broker call runs outside runSlice's _runningThreadHandle
+    // scope. Charge a parked single wait to its actual guest thread, not main.
+    // Nested real Workers reject named waits locally in guest-rpc; cooperative
+    // instances still need the recursive-frame guard here.
+    wh.wait_single = (handle, timeout, entry) => {
+      if (workerInstance) entry = threadManager.captureNamedWaitEntry();
+      if (!threadManager._issuedAuthorityEvents.has((handle >>> 0) & 0x7fffffff)) {
+        return h.wait_single(handle, timeout); // preserve existing local routing
+      }
+      const e = workerInstance && workerInstance.exports;
+      return e && e.get_sync_msg_depth && e.get_sync_msg_depth()
+        ? threadManager.waitSingleCooperative(handle, timeout, (tid | 0) + 1)
+        : threadManager.waitSingle(handle, timeout, (tid | 0) + 1, entry || { error: 'EWAITPROTOCOL' });
+    };
     // A console reader may live on a guest worker (telnet does). Its low-level
     // input buffer is process-scoped, so it must drain the same host event and
     // metadata latch as the main instance.
-    wh.check_input = h.check_input;
+    wh.check_input = mainSchedulerObserver
+      ? () => mainSchedulerObserver.workerInput(tid, h.check_input) : h.check_input;
     wh.check_input_lparam = h.check_input_lparam;
     wh.check_input_wparam = h.check_input_wparam;
     wh.check_input_hwnd = h.check_input_hwnd;
@@ -5151,9 +5443,10 @@ async function main() {
         return entry && entry.id === id ? entry.name : null;
       },
       shouldLog: (name) => workerApiShouldLog(
-        { traceApi: TRACE_API, quietApi: QUIET_API, filter: TRACE_API_FILTER }, name),
+        { traceApi: traceApiOn, quietApi: QUIET_API, filter: TRACE_API_FILTER }, name),
       formatValue: hex,
-      emit: (line) => logs.push(line),
+      // A return may arrive after a pause between this worker's entry/exit.
+      emit: (line) => { if (traceApiOn) logs.push(line); },
     });
     wh.log = workerApiLog.log;
     wh.log_i32 = workerApiLog.log_i32;
@@ -5207,7 +5500,9 @@ async function main() {
     }
     wh.exit = () => {};
     wh.has_dll_file = h.has_dll_file;
+    processDesktop.attach(workerCtx, wh);
     const workerImports = { host: wh };
+    if (serviceClock) batchClock.wrapImports(wh);
     workerImports.__setInstance = value => { workerInstance = value; };
     return workerImports;
   };
@@ -5243,6 +5538,7 @@ async function main() {
     const sigs = JSON.parse(fs.readFileSync(
       path.join(ROOT, 'lib', 'host-import-sigs.generated.json'), 'utf8')).sigs;
     guestThreadHost = new GuestThreadHost({
+      cpuService: batchClock.service,
       findDll: findRuntimeDllBytes,
       onDllMapped: record => {
         require('../lib/process-boot').registerMappedDll(ctx, instance.exports, memory.buffer, record, console.log);
@@ -5302,8 +5598,16 @@ async function main() {
     console.log('[threads] guest threads will use the cooperative scheduler (--no-threads)');
   }
 
-  const resolveThreadSendExternalYield = async (link, r) => {
+  const resolveThreadSendExternalYield = async (link, r, captured, inspectNames) => {
     if (!guestThreadHost || (r.yield !== 3 && r.yield !== 5)) return false;
+    if (captured) {
+      const prepared = await require('../lib/process-boot').prepareScopedLibrary(
+        captured, findRuntimeDllBytes, new Uint8Array(exeBytes), inspectNames);
+      prepared.publish = result => {
+        require('../lib/process-boot').publishScopedDlls(ctx, instance.exports, memory.buffer, result, console.log);
+      };
+      return prepared;
+    }
     // In CLI threaded mode slot 0 remains a local instance. Use the shared
     // process-boot pumps there; Worker links use the worker-side loader commands
     // below so all EIP/ESP mutations stay with the instance they belong to.
@@ -5316,6 +5620,7 @@ async function main() {
           resourceHost: ctx,
           log: console.log,
           findDll: findRuntimeDllBytes,
+          findDllSync: findRuntimeDllBytes,
         });
       } else {
         await handleLoadLibraryYield({
@@ -5324,6 +5629,7 @@ async function main() {
           resourceHost: ctx,
           log: console.log,
           findDll: findRuntimeDllBytes,
+          findDllSync: findRuntimeDllBytes,
         });
       }
       return true;
@@ -5371,10 +5677,16 @@ async function main() {
   else if (Number.isFinite(SPIN_PARK_K)) inheritWasm('set_spin_park_k', SPIN_PARK_K);
 
   threadManager = new ThreadManager(wasmModule, memory, instance, makeWorkerImports, {
+    strictServiceTime: serviceClock,
+    instantiateCooperative: serviceClock ? (module, imports) =>
+      batchClock.wrapInstance(new WebAssembly.Instance(module, imports)) : undefined,
+    hwndBase: () => processDesktop.hwndBase,
+    threadSnapshotSystemComplete: () => !threadSnapshotSystemIncomplete,
     workerBackend: guestThreadHost,
     serialSlices: THREADS_SERIAL,
     csStealAfter: CS_STEAL_AFTER,
     traceThread: TRACE_THREAD,
+    callbackLifecycleTrace,
     traceYield: TRACE_YIELD,
     breakThreadFilter: breakThreadFilter,
     traceCallstack: TRACE_CALLSTACK,
@@ -5407,9 +5719,11 @@ async function main() {
     // The per-app thread-exit fixups the browser host has always run — Winamp's
     // visualizer bookkeeping — now run headless too, so a browser-only symptom
     // is reproducible from the CLI.
-    onThreadExit: (info) => profileThreadExit(
-      path.basename(EXE_PATH), info, instance.exports, memory.buffer,
-      { log: (m) => console.log(m) }),
+    onThreadExit: (info) => {
+      winexecReadiness.retire((info.tid | 0) + 1);
+      profileThreadExit(path.basename(EXE_PATH), info, instance.exports, memory.buffer,
+        { log: (m) => console.log(m) });
+    },
   });
   // Waits on a child process's handle (src/09d7-pipes.wat) ask the host
   // that started it.
@@ -5427,7 +5741,29 @@ async function main() {
     setExtraCmdline(instance.exports, memory.buffer, EXTRA_ARGS);
   }
 
+  applyStartupShow(instance.exports, getArg('startup-show', undefined));
   const { entry } = stageAndLoadPe(instance.exports, memory.buffer, exeBytes, console.log);
+  // MORROWIND_NAME_ATTACH_BEGIN: loaded image, before any guest initializer.
+  if (hasFlag('observe-morrowind-name')) {
+    morrowindNameObserver = require('../lib/morrowind-name-observer').install({
+      enabled: true, exeBytes, exports: instance.exports,
+      parallel: hasFlag('threads'), traceConflict: !!TRACE_EIP_RANGE,
+      read: (address, length) => {
+        if (!Number.isInteger(address) || address <= 0 || address + length > 0x100000000)
+          throw Error('invalid guest span');
+        const bytes = Buffer.alloc(length);
+        for (let i = 0; i < length; i++) {
+          const offset = translateGuest(address + i, instance.exports.get_image_base(), memory.buffer);
+          if (offset === 0xf0 || offset < 0 || offset >= memory.buffer.byteLength)
+            throw Error('unmapped guest span');
+          bytes[i] = new Uint8Array(memory.buffer)[offset];
+        }
+        return bytes;
+      },
+      emit: record => logs.push('[morrowind-name] ' + JSON.stringify(record)),
+    });
+  }
+  // MORROWIND_NAME_ATTACH_END
   applyVirtualAllocTop(instance.exports, VIRTUAL_ALLOC_TOP_ARG !== null
     ? Number(VIRTUAL_ALLOC_TOP_ARG) : (APP_ENTRY && APP_ENTRY.virtualAllocTop));
   if (CS_STEAL_AFTER && instance.exports.set_cs_steal_after) {
@@ -5504,7 +5840,7 @@ async function main() {
   if (dllArg) {
     dlls = dllArg.split(',').map(p => ({
       name: path.basename(p.trim()),
-      bytes: fs.readFileSync(p.trim()),
+      bytes: readAssetBytes(p.trim()),
     }));
   } else {
     // Auto-detect: scan EXE imports, load any DLLs found in test/binaries/dlls/
@@ -5562,7 +5898,7 @@ async function main() {
               ? appAsset(appFileByName.get(name.toLowerCase())) : null));
         return (p && fs.existsSync(p)) ? {
           name,
-          bytes: fs.readFileSync(p),
+          bytes: readAssetBytes(p),
           path: capturedGuestPath(p) || besideExeGuestPath(p, name) || undefined,
         } : null;
       },
@@ -5583,7 +5919,7 @@ async function main() {
   // C:\Modules for Myth's network modules. Mount the same manifest here first;
   // the full mount below re-adds each path idempotently.
   if (ctx.vfs && ASSET_ENTRY) {
-    for (const item of getAssetFiles(ASSET_ENTRY)) {
+    for (const item of (verifiedAssetFiles || getAssetFiles(ASSET_ENTRY))) {
       const url = typeof item === 'string' ? item : (item && item.url);
       if (!url) continue;
       const hostPath = appAsset(url);
@@ -5597,7 +5933,7 @@ async function main() {
         if (ctx.vfs.files.has(vfsPath)) continue;
         ctx.vfs.ensureParentDirs(vfsPath);
         ctx.vfs.setLazyFile(vfsPath.slice(0, vfsPath.lastIndexOf('\\') + 1) + String(raw).replace(/^.*[\\/]/, ''), { attrs: 0x20, size,
-          load: () => new Uint8Array(fs.readFileSync(hostPath)) });
+          load: () => new Uint8Array(item.bytes || fs.readFileSync(hostPath)) });
       }
     }
   }
@@ -5658,7 +5994,7 @@ async function main() {
       return ctx.vfs.setLazyFile(vfsPath.slice(0, vfsPath.lastIndexOf('\\') + 1) + String(rawPath).replace(/^.*[\\/]/, ''), {
         attrs: 0x20,
         size,
-        load: () => new Uint8Array(fs.readFileSync(hostPath)),
+        load: () => new Uint8Array(readAssetBytes(hostPath)),
       });
     };
     const addFontAlias = (name, hostPath, size) => {
@@ -5704,7 +6040,7 @@ async function main() {
       // files and sizes. Its lazy entries mount provider-backed under
       // --lazy-ranges -- the audit of what the browser streams -- and stay
       // ordinary eager mounts otherwise.
-      const policy = require('../lib/app-files').normalizeLazyFiles(ASSET_ENTRY, getAssetFiles(ASSET_ENTRY), {
+      const policy = require('../lib/app-files').normalizeLazyFiles(ASSET_ENTRY, verifiedAssetFiles || getAssetFiles(ASSET_ENTRY), {
         isWin16: !!(instance.exports.is_win16 && instance.exports.is_win16()),
         // Only the sizes the page has too (an entry's own `size`): a stat()
         // size here made the CLI decide differently from the browser and
@@ -6598,8 +6934,10 @@ async function main() {
       const addr = parseInt(cmd.slice(1).trim(), 16);
       if (!isNaN(addr) && addr) {
         watchAddr = addr;
-        instance.exports.set_watchpoint(addr);
-        watchPrevVal = instance.exports.get_watch_val();
+        // An explicit debugger command arms immediately, including when the
+        // command-line watch was disabled (address 0) or delayed. Preserve its
+        // byte/word/dword size and establish the baseline before continuing.
+        activateWatchpoint();
         console.log(`  Watchpoint set: ${hex(addr)} (current: ${hex(watchPrevVal)})`);
       } else if (cmd === 'w') {
         if (watchAddr) console.log(`  Watchpoint: ${hex(watchAddr)} = ${hex(instance.exports.get_watch_val())}`);
@@ -6686,16 +7024,32 @@ async function main() {
   // callback: Heroes II hung ten batches after its main menu this way. host.js
   // has always made this exemption (_isMainExecutionSuspended); the CLI has to
   // agree or the browser and the harness run different schedulers.
+  // --trace-render-wait: opt in to bounded software-D3D wait attribution.
+  // Legacy render-park waits/counters remain active without this diagnostic.
+  const renderWaitAttribution = hasFlag('trace-render-wait') ? createRenderWaitAttribution() : null;
+  if (renderWaitAttribution) ctx.renderWaitAttribution = renderWaitAttribution.stats;
   let mainRenderWait = null;
-  const mainExecutionSuspended = () => {
+  const mainExecutionSuspended = (path = 'probe') => {
+    const observation = mainSchedulerObserver?.begin(path, tickState.batch);
+    const finish = (value, reason) => observation ? observation.finish(value, reason) : value;
     const ex = instance.exports;
-    if (ex.get_yield_reason() === 16) {
+    if (threadManager.isMainNamedEventWaiting()) return finish(true, 'named-event');
+    let yieldReason = ex.get_yield_reason();
+    if (observation) observation.yield(yieldReason);
+    if (serviceClock && (yieldReason === 13 || yieldReason === 14)) {
+      const deadline = yieldReason === 13 ? ex.get_vblank_deadline_ms() : ex.get_spin_deadline_ms();
+      if (batchClock.batchTicks() <= (deadline >>> 0)) return finish(true, 'clock-deadline');
+      ex.clear_yield();
+      yieldReason = 0;
+    }
+    if (yieldReason === 16) {
       const token = ex.get_d3d_render_token() | 0;
       if (!mainRenderWait || mainRenderWait.token !== token) {
         const wait = {token,done:false,polls:0,since:tickState.batch|0}; mainRenderWait = wait;
+        renderWaitAttribution?.begin(wait, ctx.d3d9Bridge?.requests.get(token));
         wait.promise = Promise.resolve().then(() => ctx.waitD3DRender(token))
-          .catch(error => console.error('[render]',error))
-          .then(() => { wait.done = true; });
+          .catch(error => { renderWaitAttribution?.reject(wait); console.error('[render]',error); })
+          .then(() => { wait.done = true; renderWaitAttribution?.settle(wait); });
       }
       if (!mainRenderWait.done) {
         // A request the bridge already calls done should release main within
@@ -6706,13 +7060,15 @@ async function main() {
         if (++mainRenderWait.polls === 1000 && record && record.done)
           console.log(`[render] main parked on completed request ${token} for 1000 checks ` +
             `(since batch ${mainRenderWait.since}); the wait never observed it`);
-        return true;
+        return finish(true, 'render');
       }
       mainRenderWait = null; ex.clear_yield();
     }
-    if (threadManager._renderSendTargets.has(ex)) return true;
-    if (ex.get_yield_reason() === 10 && (threadManager.backend === 'worker' ||
-        !threadManager.resolveCooperativeThreadSend(ex))) return true;
+    if (threadManager._renderSendTargets.has(ex)) return finish(true, 'render-send');
+    yieldReason = ex.get_yield_reason();
+    if (observation) observation.yield(yieldReason);
+    if (yieldReason === 10 && (threadManager.backend === 'worker' ||
+        !threadManager.resolveCooperativeThreadSend(ex))) return finish(true, 'thread-send');
     // Sleep(n) on the main thread. checkMainYield records the deadline after
     // the batch that slept; host.js parks the main instance until it passes,
     // and so must this loop, or Sleep(1001) lasts one batch of guest time.
@@ -6728,12 +7084,15 @@ async function main() {
     // A Sleep main made earlier in this batch (between thread slices) has not
     // been through checkMainYield yet; record its deadline now.
     threadManager.noteMainSleep();
-    if (!REAL_TICK_SLEEPS && threadManager.isMainSleeping() && !threadManager.hasLiveThreads()) {
+    if (!serviceClock && !REAL_TICK_SLEEPS && threadManager.isMainSleeping(observation?.sleep) &&
+        !(observation ? observation.live(threadManager.hasLiveThreads()) : threadManager.hasLiveThreads())) {
+      if (observation) observation.fastForward();
       tickState.pausedMs += threadManager.mainSleepRemaining();
     }
-    if (threadManager.isMainSleeping()) return true;
-    if (!threadManager.isMainThreadSuspended()) return false;
-    return !(ex.is_mm_timer_callback_active && (ex.is_mm_timer_callback_active() | 0));
+    if (threadManager.isMainSleeping(observation?.sleep)) return finish(true, 'sleep');
+    if (!threadManager.isMainThreadSuspended()) return finish(false, 'runnable');
+    return finish(!(ex.is_mm_timer_callback_active && (ex.is_mm_timer_callback_active() | 0)),
+      'suspend-count-or-mm-timer');
   };
 
   // A main thread parked on a software D3D request (yield 16) used to cost a
@@ -6760,11 +7119,16 @@ async function main() {
     const wait = mainRenderWait;
     if (!wait || wait.done) return;
     const started = Date.now();
+    renderWaitAttribution?.parkStart(wait, started);
+    let renderParkDeadline = false;
     while (!wait.done && !stopped) {
       await Promise.race([wait.promise, new Promise(r => setTimeout(r, 100))]);
-      if (deadlineMs && Date.now() > deadlineMs) break;
+      if (deadlineMs && Date.now() > deadlineMs) { renderParkDeadline = true; break; }
     }
-    renderParkStats.waits++; renderParkStats.wallMs += Date.now() - started;
+    const renderParkEnded = Date.now();
+    renderParkStats.waits++; renderParkStats.wallMs += renderParkEnded - started;
+    renderWaitAttribution?.parkEnd(wait, renderParkEnded,
+      stopped ? 'stopped' : (renderParkDeadline ? 'deadline' : 'pending'));
   };
 
   let lastSchedSig = null;
@@ -7000,6 +7364,16 @@ async function main() {
     }
   };
   let deadlineMs = MAX_SECONDS ? Date.now() + MAX_SECONDS * 1000 : 0;
+  const onDllCallbackGateWait = WORKER_THREADS ? undefined : async owner => {
+    if (stopped || (deadlineMs && Date.now() >= deadlineMs))
+      throw new Error('CLI stopped while waiting for DLL callback admission');
+    const stats = threadManager.runDllCallbackOwnerSlice(owner, BATCH_SIZE);
+    if (stats && stats.steps) workerStepsTotal += stats.steps;
+    // Give pending host I/O and independent control requests their usual turn.
+    // No guest clock or frozen step credit is manufactured for admission.
+    await new Promise(resolve => setImmediate(resolve));
+    return !!(stats && stats.threadsRun);
+  };
   // --control: live agent command channel (docs/design-agent-control.md).
   // Commands arrive over HTTP between batches. Input entries go through the
   // same parseInputEntries the --input schedule uses and drain through the
@@ -7113,8 +7487,54 @@ async function main() {
     fs.writeFileSync(filename, buf);
     return { batch: tickState.batch | 0, frozen: controlFrozen, path: filename, bytes: buf.length };
   };
+  const nativeFault = require('../lib/native-fault-latch').createNativeFaultLatch({
+    meta: () => ({ batch: tickState.batch | 0, credits: controlRunCredits,
+      previousRan: controlPreviousBatchRan }),
+    threads: () => [...threadManager.threads].map(([handle, t]) => ({ handle, schedulerSlot: t.tid, nativeThreadId: t.instance?.exports.get_current_thread_id() >>> 0,
+      state: t.state, eip: t.instance?.exports.get_eip() >>> 0 })),
+    read: (e, address, length) => {
+      const bytes = new Uint8Array(memory.buffer), out = Buffer.alloc(length);
+      for (let i = 0; i < length; i++) {
+        const wa = e.guest_to_wasm(address + i) >>> 0;
+        if (wa < 0x1000 || wa >= bytes.length) throw new Error('unreadable fault capture span');
+        out[i] = bytes[wa];
+      }
+      return out;
+    },
+    releaseInput: () => {
+      const state = { renderer, inputQueue, inputEvent, scheduledInput, crossThreadMsgs };
+      const result = require('../lib/cli-fault-input').releaseFaultInput(state);
+      inputEvent = state.inputEvent;
+      return result;
+    },
+    persist: require('../lib/native-fault-latch').persistNativeFault,
+  });
+  threadManager.nativeFaultLatch = nativeFault;
+  const terminateNativeFault = cmd => {
+    const result = nativeFault.terminate(cmd);
+    stopped = true;
+    process.exitCode = 1;
+    // A failed run consumed no completed batch credit. Its caller sees failure.
+    if (controlStepWaiter) {
+      const waiter = controlStepWaiter;
+      controlStepWaiter = null;
+      waiter.reject(nativeFault.error());
+    }
+    wakeControlLoop();
+    return result;
+  };
   const handleControlCommand = (cmdIn) => {
     const cmd = typeof cmdIn === 'string' ? { cmd: cmdIn } : (cmdIn || {});
+    if (cmd.action === 'fault-status') return nativeFault.status();
+    if (cmd.action === 'fault-arm') {
+      if (!controlFrozen || workerThreadHost || threadManager.workerBackend)
+        throw new Error('fault retention requires frozen cooperative control');
+      return nativeFault.arm(cmd);
+    }
+    if (cmd.action === 'fault-inspect') return nativeFault.inspect(cmd);
+    if (cmd.action === 'fault-terminate') return terminateNativeFault(cmd);
+    if (nativeFault.isHeld() && !['ping', 'snapshot'].includes(cmd.action))
+      throw new Error('native fault retained; read-only inspection or fault-terminate required');
     const native = String(cmd.cmd || '').trim();
     let match;
     if (!cmd.action && /^(pause|resume)$/.test(native)) {
@@ -7141,17 +7561,28 @@ async function main() {
       };
     }
     if (cmd.action === 'snapshot') return controlSnapshot();
+    if (cmd.action === 'input-state') return inputConsumptionTrace.frozenState(cmd,
+      { frozen: controlFrozen, credits: controlRunCredits, batch: tickState.batch | 0 },
+      () => ({ scheduledInput, inputEvent, crossThreadMsgs, inputQueue, renderer,
+        threadManager, exports: instance.exports }));
     if (cmd.action === 'trace-api') {
       if (!TRACE_API || !TRACE_API_PAUSED) throw new Error('trace-api needs --trace-api[=NAMES] --trace-api-paused');
       const on = cmd.on !== false;
+      const logOn = !!apiLogRequired(on);
       const watNow = instance.exports.get_api_calls ? instance.exports.get_api_calls() >>> 0 : 0;
-      if (on && apiLogOff) { apiCount += watNow - apiWatSeen; apiWatSeen = watNow; }
-      if (!on && !apiLogOff) apiWatSeen = watNow;
-      apiLogOff = !on;
-      const setLog = exports => { if (exports && exports.set_api_log) exports.set_api_log(on ? 1 : 0); };
+      if (logOn && apiLogOff) { apiCount += watNow - apiWatSeen; apiWatSeen = watNow; }
+      if (!logOn && !apiLogOff) apiWatSeen = watNow;
+      apiLogOff = !logOn;
+      if (!on) {
+        flushDedup();
+        lastApiTraced = false;
+        lastTreeItemTrace = null;
+      }
+      traceApiOn = on;
+      const setLog = exports => { if (exports && exports.set_api_log) exports.set_api_log(logOn ? 1 : 0); };
       setLog(instance.exports);
       if (threadManager) for (const [, t] of threadManager.threads) setLog(t.instance && t.instance.exports);
-      inheritWasm('set_api_log', on ? 1 : 0);
+      inheritWasm('set_api_log', logOn ? 1 : 0);
       logs.push(`[trace-api] ${on ? 'on' : 'paused'} at batch ${tickState.batch | 0}`);
       return { traceApi: on, batch: tickState.batch | 0 };
     }
@@ -7311,8 +7742,9 @@ async function main() {
           // was sitting on the profile dialog. A control command must never be
           // able to take the run down with it.
           stdinCommands = stdinCommands.then(() => new Promise(r => r(handleControlCommand(one))).then(
-            value => console.log(`[ctl] ${JSON.stringify({ ok: true, id: one.id, value })}`),
-            error => console.log(`[ctl] ${JSON.stringify({ ok: false, id: one.id, error: String(error && error.message || error) })}`)));
+            // Replies are protocol output, independent of diagnostic trace windows.
+            value => process.stdout.write(`[ctl] ${JSON.stringify({ ok: true, id: one.id, value })}\n`),
+            error => process.stdout.write(`[ctl] ${JSON.stringify({ ok: false, id: one.id, error: String(error && error.message || error) })}\n`)));
         }
       });
       // EOF just ends the stream — the pipe's producer finishing must not
@@ -7328,6 +7760,17 @@ async function main() {
     }
     return { close() { if (server) server.close(); } };
   })() : null;
+
+  // A rejected async loader/yield bypasses the normal end-of-loop close.
+  // Retire the control channel before propagating the original failure.
+  let controlClosed = false;
+  const closeControl = () => {
+    if (control && !controlClosed) {
+      control.close();
+      controlClosed = true;
+    }
+  };
+  onFailure(closeControl);
 
   const cpuProf = CPU_PROF_WINDOW ? {
     session: null, startedAt: 0,
@@ -7359,8 +7802,10 @@ async function main() {
     console.log(`[trace-window] tracing batches`
       + ` ${TRACE_FROM >= 0 ? TRACE_FROM : 0}..${TRACE_TO >= 0 ? TRACE_TO : 'end'}`);
   }
+  let diagnosticActionSequence = 0;
   const executionStartedAt = performance.now();
   for (let batch = 0; batch < MAX_BATCHES && !stopped; batch++) {
+    processDesktop.poll();
     traceGateBatch = batch;
     if (deadlineMs && Date.now() >= deadlineMs) {
       traceGateBatch = -1; // why the run stopped is not per-batch trace output
@@ -7421,11 +7866,14 @@ async function main() {
         lastSchedAt = batch;
       }
     }
+    const serviceAtBatchStart = serviceClock ? batchClock.retiredBlocks() : null;
     tickState.batch = batch;
     if (gameplayBench && batch === 0) gameplayBench.init(instance.exports, memory);
     tickStateRef.batch = batch;
     tickState.callsInBatch = 0;
+    waveCallbackRouting.restoreMainWait();
     if (ctx.pumpAudioCompletions) ctx.pumpAudioCompletions();
+    if (ctx.pumpWaveCallbacks) await ctx.pumpWaveCallbacks();
     // --control: give the event loop a turn every batch so the control
     // server's socket callbacks fire and settled replies flush. Without this
     // the loop is synchronous end to end — the same mechanism that keeps
@@ -7448,6 +7896,8 @@ async function main() {
     // Inject scheduled input events at the right batch
     while (scheduledInput.length && scheduledInput[0].batch <= batch) {
       const ev = scheduledInput.shift();
+      diagnosticActionSequence++;
+      inputConsumptionTrace.schedule(ev);
       injectedInputThisBatch = true;
       // Start the input->blit clock on events a user would perform. The
       // wrapped gdi_surface_upload stops it at the first blit that follows.
@@ -8325,7 +8775,11 @@ async function main() {
         // flagged isDialog there, so ask WAT first.
         if (we.modal_dialog_hwnd) dlg = we.modal_dialog_hwnd() | 0;
         if (dlg) {
-          we.send_message(dlg, 0x0111, ev.cmdId, 0);
+          const diagnosticSend = globalThis[Symbol.for('wine.shadow-null.selected-send.v1')];
+          if (diagnosticSend) diagnosticSend({instance, pid:process.pid, runner:__filename,
+            action:ev.action, actionSequence:diagnosticActionSequence, batch, cmdId:ev.cmdId,
+            hwnd:dlg >>> 0, resolution:'modal'}, () => we.send_message(dlg, 0x0111, ev.cmdId, 0));
+          else we.send_message(dlg, 0x0111, ev.cmdId, 0);
           logs.push(`[input] dlg-cmd: cmd=${ev.cmdId} modal hwnd=0x${dlg.toString(16)} at batch ${batch}`);
           continue;
         }
@@ -8356,7 +8810,11 @@ async function main() {
           }
         }
         if (dlg) {
-          we.send_message(dlg, 0x0111, ev.cmdId, 0);
+          const diagnosticSend = globalThis[Symbol.for('wine.shadow-null.selected-send.v1')];
+          if (diagnosticSend) diagnosticSend({instance, pid:process.pid, runner:__filename,
+            action:ev.action, actionSequence:diagnosticActionSequence, batch, cmdId:ev.cmdId,
+            hwnd:dlg >>> 0, resolution:'resolved-dialog'}, () => we.send_message(dlg, 0x0111, ev.cmdId, 0));
+          else we.send_message(dlg, 0x0111, ev.cmdId, 0);
           logs.push(`[input] dlg-cmd: cmd=${ev.cmdId} hwnd=0x${dlg.toString(16)} at batch ${batch}`);
         } else {
           logs.push(`[input] dlg-cmd: cmd=${ev.cmdId} NO DIALOG at batch ${batch}`);
@@ -8871,6 +9329,22 @@ async function main() {
           ? `${parentUpdLt & 0xffff},${parentUpdLt >> 16},${parentUpdRb & 0xffff},${parentUpdRb >> 16}`
           : 'none';
         logs.push(`[input] dump-children${ev.label ? ':' + ev.label : ''}: parent=0x${parent.toString(16)} nc=0x${parentNc.toString(16)} dirty=${parentDirty} upd=${parentUpd} ${children.length ? children.join(' | ') : '(none)'}`);
+      } else if (ev.action === 'menu-shortcuts') {
+        const we = instance.exports;
+        const label = ev.label ? ':' + ev.label : '';
+        const hwnd = we.menu_open_hwnd ? (we.menu_open_hwnd() >>> 0) : 0;
+        const top = we.menu_open_top ? (we.menu_open_top() | 0) : -1;
+        const count = hwnd && we.menu_child_count ? (we.menu_child_count(hwnd, top) | 0) : 0;
+        const bytesAt = (ptr, len) => (ptr && len > 0
+          ? Buffer.from(new Uint8Array(memory.buffer, ptr, len)) : Buffer.alloc(0));
+        if (!count) logs.push(`[input] menu-shortcuts${label}: (no open dropdown) at batch ${batch}`);
+        for (let i = 0; i < count; i++) {
+          const lab = bytesAt(we.menu_child_label_ptr(hwnd, top, i) >>> 0,
+            we.menu_child_label_len(hwnd, top, i) | 0);
+          const sc = we.menu_child_shortcut_ptr ? bytesAt(we.menu_child_shortcut_ptr(hwnd, top, i) >>> 0,
+            we.menu_child_shortcut_len(hwnd, top, i) | 0) : Buffer.alloc(0);
+          logs.push(`[input] menu-shortcuts${label} #${i} label=${lab.toString('hex')} sc=${JSON.stringify(sc.toString('latin1'))} at batch ${batch}`);
+        }
       } else if (ev.action === 'menu-dump') {
         const we = instance.exports;
         const hwnd = we.menu_open_hwnd ? (we.menu_open_hwnd() >>> 0) : 0;
@@ -10113,10 +10587,12 @@ async function main() {
         // the run idle with its control channel unanswered.
         logs.push(`[input] ${ev.action} dropped at batch ${batch}: no renderer`);
       } else if (renderer) {
-        renderer.inputQueue.push({ type: 'key', hwnd: 0, msg: ev.msg, wParam: ev.wParam, lParam: ev.lParam });
+        renderer.inputQueue.push(inputConsumptionTrace.enqueue(
+          { type: 'key', hwnd: 0, msg: ev.msg, wParam: ev.wParam, lParam: ev.lParam }, ev));
         logs.push(`[input] injected msg=0x${ev.msg.toString(16)} wParam=0x${ev.wParam.toString(16)} at batch ${batch}`);
       } else {
-        inputEvent = { msg: ev.msg, wParam: ev.wParam, lParam: ev.lParam, hwnd: 0 };
+        inputEvent = inputConsumptionTrace.enqueue(
+          { msg: ev.msg, wParam: ev.wParam, lParam: ev.lParam, hwnd: 0 }, ev);
         logs.push(`[input] injected msg=0x${ev.msg.toString(16)} wParam=0x${ev.wParam.toString(16)} at batch ${batch}`);
       }
     }
@@ -10244,6 +10720,12 @@ async function main() {
         if (ms > 0) await new Promise(r => setTimeout(r, ms));
       }
       await awaitMainRenderPark();
+      // An external event can change only while real time passes. Park the
+      // host asynchronously between probes; runnable guest siblings still
+      // receive their ordinary slices below, and main's guest frame stays put.
+      if (threadManager.isMainNamedEventWaiting()) {
+        await new Promise(resolve => setTimeout(resolve, 4));
+      }
       // A main thread parked in GetMessage is otherwise resumed only by the
       // checkMainYield() after run(), so the input this batch just injected
       // was taken at the batch's END and everything it led to ran in the next
@@ -10258,7 +10740,17 @@ async function main() {
       if (instance.exports.get_yield_reason && instance.exports.get_yield_reason() === 7) {
         threadManager.checkMainYield();
       }
-      if (!mainExecutionSuspended()) instance.exports.run(BATCH_SIZE);
+      if (!mainExecutionSuspended('ordinary')) {
+        try {
+        if (mainSchedulerObserver) mainSchedulerObserver.run('ordinary', () => instance.exports.run(BATCH_SIZE));
+        else instance.exports.run(BATCH_SIZE);
+        } catch (error) {
+          if (!nativeFault.capture(error, instance.exports,
+            { schedulerSlot: 0, main: true }, 'ordinary')) throw error;
+        }
+        await nativeFault.wait();
+        if (stopped) break;
+      }
       else if (instance.exports.get_yield_reason() === 16) renderParkStats.skippedBatches++;
     } catch (e) {
       flushLogs();
@@ -10495,12 +10987,14 @@ async function main() {
     // is ours.
     if (instance.exports.get_yield_reason() === 3) {
       await handleComDllYield({
+        onDllCallbackGateWait,
         exports: instance.exports,
         memoryBuffer: memory.buffer,
         exeBytes: new Uint8Array(exeBytes),
         resourceHost: ctx,
         log: console.log,
         findDll: findRuntimeDllBytes,
+        findDllSync: findRuntimeDllBytes,
       });
     }
 
@@ -10530,7 +11024,7 @@ async function main() {
     // parked with its stdcall frame intact and EIP on the thunk, so advancing
     // the clock past the boundary and clearing the yield re-enters the same
     // call, which then finds the vblank has happened and returns DD_OK.
-    if (instance.exports.get_yield_reason() === 13) {
+    if (!serviceClock && instance.exports.get_yield_reason() === 13) {
       const deadline = instance.exports.get_vblank_deadline_ms
         ? instance.exports.get_vblank_deadline_ms() >>> 0 : 0;
       // Charge against the batch BASE, not the last value handed out: the
@@ -10572,7 +11066,9 @@ async function main() {
     // (--tick-ms-per-batch=0), where nothing else would ever move the clock.
     {
       const spinYield = instance.exports.get_yield_reason();
-      if (spinYield === 14 || spinYield === 15) {
+      // An empty PeekMessage has no clock deadline. Re-enter it under both
+      // clocks so newly queued input can reach the handler.
+      if (spinYield === 15 || (!serviceClock && spinYield === 14)) {
         const deadline = (spinYield === 14 && instance.exports.get_spin_deadline_ms)
           ? instance.exports.get_spin_deadline_ms() >>> 0 : 0;
         let owed = 0;
@@ -10643,6 +11139,10 @@ async function main() {
       }
     }
 
+    if (instance.exports.get_yield_reason() === 18) {
+      serviceLoadLibraryYieldSync({ exports: instance.exports, memoryBuffer: memory.buffer,
+        resourceHost: ctx, findDllSync: findRuntimeDllBytes });
+    }
     // Handle LoadLibraryA yield (yield_reason=5)
     if (instance.exports.get_yield_reason() === 5) {
       if (TRACE_YIELD) {
@@ -10650,12 +11150,14 @@ async function main() {
           `esp=${hex(instance.exports.get_esp())} syncDepth=${instance.exports.get_sync_msg_depth ? instance.exports.get_sync_msg_depth() : 0}`);
       }
       await handleLoadLibraryYield({
+        onDllCallbackGateWait,
         exports: instance.exports,
         memoryBuffer: memory.buffer,
         resourceHost: ctx,
         log: console.log,
         trace: TRACE_YIELD ? console.log : null,
         findDll: findRuntimeDllBytes,
+        findDllSync: findRuntimeDllBytes,
         // CLI-only bookkeeping: `module+0xVA` probes need this module's base
         // before the app can reach any code in it, so the breakpoint and
         // counter slots are re-armed here rather than at the next batch.
@@ -10717,10 +11219,20 @@ async function main() {
         // --threads-serial means nothing runs beside a guest thread, main
         // included, or the switch would not answer the question it exists for.
         if (THREADS_SERIAL) await workerSlices;
-        else if (s < THREAD_SLICES - 1 && !stopped && !mainExecutionSuspended()) {
+        else if (s < THREAD_SLICES - 1 && !stopped && !mainExecutionSuspended('worker-interleaved')) {
           // Main keeps running WHILE they do — the CLI's version of host.js
           // awaiting the main slice and the thread slices together.
-          try { instance.exports.run(BATCH_SIZE); } catch (e) { /* reported below */ }
+          try {
+            try {
+            if (mainSchedulerObserver) mainSchedulerObserver.run('worker-interleaved', () => instance.exports.run(BATCH_SIZE));
+            else instance.exports.run(BATCH_SIZE);
+            } catch (error) {
+              if (!nativeFault.capture(error, instance.exports,
+                { schedulerSlot: 0, main: true }, 'worker-interleaved')) throw error;
+            }
+            await nativeFault.wait();
+            if (stopped) break;
+          } catch (e) { /* reported below */ }
         }
         ran = await workerSlices;
         if (!ran || stopped || !threadManager.hasActiveThreads()) break;
@@ -10758,54 +11270,71 @@ async function main() {
       const workerStartMs = TRACE_BATCH_TIMING ? Date.now() : 0;
       for (let s = 0; s < slices; s++) {
         const sliceStats = threadManager.runSlice(BATCH_SIZE);
+        await nativeFault.wait();
+        if (stopped) break;
         if (sliceStats && sliceStats.steps) workerStepsTotal += sliceStats.steps;
         // Re-run main between live worker slices so producer/consumer pairs
         // progress together. Once the last worker exits, return to the outer
         // loop; repeatedly re-entering the main message pump here can drain
         // creation-time paints before an app has finished its first layout.
         if (s < slices - 1 && !stopped && threadManager.hasActiveThreads() &&
-            !mainExecutionSuspended()) {
-          try { instance.exports.run(BATCH_SIZE); } catch (e) { break; }
+            !mainExecutionSuspended('cooperative-interleaved')) {
+          try {
+            try {
+            if (mainSchedulerObserver) mainSchedulerObserver.run('cooperative-interleaved', () => instance.exports.run(BATCH_SIZE));
+            else instance.exports.run(BATCH_SIZE);
+            } catch (error) {
+              if (!nativeFault.capture(error, instance.exports,
+                { schedulerSlot: 0, main: true }, 'cooperative-interleaved')) throw error;
+            }
+            await nativeFault.wait();
+            if (stopped) break;
+          } catch (e) { break; }
         }
       }
       if (TRACE_BATCH_TIMING) {
         console.log(`[batch-timing] batch=${batch} worker=${Date.now() - workerStartMs}ms slices=${slices}`);
       }
+      if (nativeFault.isHeld()) break;
       // Same story for a worker that called LoadLibraryA: the WAT handler has
       // parked it on yield 5 and only the host can finish the load, which is
       // asynchronous. Serve it here, then hand the loader's cursors back to
       // main, because the next slice copies them the other way.
       for (const thread of threadManager.threadsAwaitingLoadLibrary()) {
-        const e = thread.instance.exports;
+        const e = threadManager.cooperativeCallbackExports(thread);
         threadManager.adoptMainGlobals(e);
         if (TRACE_YIELD) {
           console.log(`[yield] T${thread.tid} reason=5 (load_library) eip=${hex(e.get_eip())} esp=${hex(e.get_esp())}`);
         }
         await handleLoadLibraryYield({
+          onDllCallbackGateWait,
           exports: e,
           memoryBuffer: memory.buffer,
           resourceHost: ctx,
           log: console.log,
           trace: TRACE_YIELD ? console.log : null,
           findDll: findRuntimeDllBytes,
+          findDllSync: findRuntimeDllBytes,
         });
         threadManager.publishWorkerGlobals(e);
       }
       // And a worker whose CoCreateInstance needs an in-proc server: clearing
       // the yield re-enters its handler, which then finds the class loaded.
       for (const thread of threadManager.threadsAwaitingComDll()) {
-        const e = thread.instance.exports;
+        const e = threadManager.cooperativeCallbackExports(thread);
         threadManager.adoptMainGlobals(e);
         if (TRACE_YIELD) {
           console.log(`[yield] T${thread.tid} reason=3 (com_load_dll) eip=${hex(e.get_eip())} esp=${hex(e.get_esp())}`);
         }
         await handleComDllYield({
+          onDllCallbackGateWait,
           exports: e,
           memoryBuffer: memory.buffer,
           exeBytes: new Uint8Array(exeBytes),
           resourceHost: ctx,
           log: console.log,
           findDll: findRuntimeDllBytes,
+          findDllSync: findRuntimeDllBytes,
         });
         threadManager.publishWorkerGlobals(e);
       }
@@ -10852,6 +11381,24 @@ async function main() {
         console.log(`\n*** BREAKPOINT (POST-THREADS) hit at ${hex(eipPostThreads)} (batch ${batch}, eipBefore=${hex(eipBefore)})`);
         if (instance.exports.get_dbg_prev_eip) console.log('  dbg_prev_eip=' + hex(instance.exports.get_dbg_prev_eip()));
         if (instance.exports.get_bp_first_caller) console.log('  bp_first_caller=' + hex(instance.exports.get_bp_first_caller()));
+      }
+    }
+    // Advance only after every admitted sibling has had its turn and the
+    // scheduler has observed the waits. Require a no-work pass so a signal
+    // sent after a sibling was polled gets another scheduler turn first.
+    // Never consume a semaphore to ask
+    // whether the process is idle. Audio still decides completion by cursor.
+    if (serviceClock && batchClock.retiredBlocks() === serviceAtBatchStart) {
+      threadManager.checkMainYield();
+      const delay = threadManager.serviceIdleDelay();
+      if (delay > 0) {
+        const now = batchClock.batchTicks();
+        let until = now + delay;
+        for (const item of ctx.sharedAudio.waveDoneQueue || [])
+          if (item.dueMs > now) until = Math.min(until, Math.ceil(item.dueMs));
+        if (Number.isFinite(until)) batchClock.advanceIdle(until - now);
+        if (instance.exports.get_yield_reason() === 15) instance.exports.clear_yield();
+        if (ctx.pumpAudioCompletions) ctx.pumpAudioCompletions();
       }
     }
     // Check if main thread is waiting on an event
@@ -10962,6 +11509,9 @@ if (VERBOSE) {
         prevApiCount = apiNow;
         prevRegFp = regFp;
         stuckCount = 0;
+      } else if (threadManager.isMainNamedEventWaiting()) {
+        // An owned finite authority continuation is intentional inactivity.
+        stuckCount = 0;
       } else if (ex.get_yield_reason() === 16 && ctx.d3d9Bridge &&
           ctx.d3d9Bridge.requests.has(ex.get_d3d_render_token() | 0)) {
         // The render worker owns a live continuation. An unchanged guest CPU
@@ -11030,7 +11580,7 @@ if (VERBOSE) {
   }
   // The control server would otherwise hold the process open; unref lets a
   // reply resolved in the final batch still flush while the exit path prints.
-  if (control) control.close();
+  closeControl();
   if (cpuProf && cpuProf.session) await cpuProf.stop(MAX_BATCHES);
   if (ctx.d3dCommands && D3DIM_GPU) {
     const d = ctx.d3dCommands.snapshot();
@@ -11380,6 +11930,8 @@ if (VERBOSE) {
   if (renderParkStats.waits || renderParkStats.skippedBatches)
     console.log(`render park: main waited on ${renderParkStats.waits} software D3D requests `
       + `(${renderParkStats.wallMs}ms wall), ${renderParkStats.skippedBatches} batches skipped while parked`);
+  renderWaitAttribution?.close(deadlineMs && Date.now() > deadlineMs ? 'deadline' : 'stopped');
+  if (renderWaitAttribution?.stats.requests) console.log(renderWaitAttribution.summary());
   if (PRESENT_CAP && instance.exports.get_present_paced_count) {
     console.log(`present pacing (main instance): cap ${PRESENT_CAP}/s ${PRESENT_PACE_MODE ? 'smooth' : 'deadline'}, `
       + `${instance.exports.get_present_paced_count()} frames slept `
@@ -11396,7 +11948,7 @@ if (VERBOSE) {
   // --reg-export writes what the run left in the registry/INI store, which is
   // what a browser tab would have kept in localStorage. Feed it back with
   // --reg-import to make the next run a *second* launch.
-  if (REG_EXPORT) {
+  if (REG_EXPORT && !CHILD_STATE_COMPLETION) {
     const { exportStore } = require('../lib/storage');
     const snap = exportStore();
     fs.writeFileSync(REG_EXPORT, JSON.stringify(snap, null, 2));
@@ -11847,7 +12399,12 @@ if (VERBOSE) {
     for (const error of vfsOverlay.errors) console.log(`[overlay] ${error.message}`);
   }
 
-  if (SAVE_VFS && ctx.vfs) {
+  if (CHILD_STATE_COMPLETION) {
+    if (!SPAWNED_CHILD || !SAVE_VFS || !REG_EXPORT || !ctx.vfs || !CHILD_STATE_TOKEN)
+      throw new Error('incomplete child state export configuration');
+    saveCompletedChildState(ctx.vfs, require('../lib/storage'), SAVE_VFS, REG_EXPORT,
+      CHILD_STATE_COMPLETION, CHILD_STATE_TOKEN);
+  } else if (SAVE_VFS && ctx.vfs) {
     saveVfsToHost(ctx.vfs, SAVE_VFS, {
       suffix: SAVE_VFS_SUFFIX,
       prefix: SAVE_VFS_PREFIX,
@@ -11945,7 +12502,7 @@ if (VERBOSE) {
     const dv = new DataView(memory.buffer);
     const DX_BASE = RegionMap.BASE.DX_OBJECTS;
     const DX_SLOTS = 16384; // matches $DX_MAX in src/09a8-handlers-directx.wat
-    const DX_SURF_PAL = RegionMap.BASE.DX_SURF_PAL; // per-surface palette data addr
+    const DX_SURF_PAL = RegionMap.BASE.DX_SURF_PAL; // per-surface owned palette COM pointer
     let paletteWa = 0;
     for (let slot = 0; slot < DX_SLOTS; slot++) {
       const entry = DX_BASE + slot * 32;
@@ -11976,7 +12533,10 @@ if (VERBOSE) {
       // A surface that had its own palette attached (an 8bpp texture, say)
       // must be decoded with that one, not with whichever palette happened to
       // be allocated first.
-      const ownPal = dv.getUint32(DX_SURF_PAL + slot * 4, true);
+      const palObject = dv.getUint32(DX_SURF_PAL + slot * 4, true);
+      const palInfo = dxLookupThis(palObject, dv, g2w);
+      const ownPal = palInfo && palInfo.type === 3
+        ? dv.getUint32(DX_BASE + palInfo.slot * 32 + 20, true) : 0;
       surfaces.push({ slot, entry, flags, w, h, bpp, pitch, dib, firstNonZero, checksum,
         paletteWa: ownPal || paletteWa });
     }
@@ -12095,22 +12655,9 @@ if (VERBOSE) {
       return bestOffscreen ? bestOffscreen.surface : null;
     }
 
-    // An offscreen surface may only stand in for a primary that has content
-    // when it is the same size — that is a back buffer the app composes into
-    // and then presents, so it is the frame a moment early. A differently
-    // sized offscreen is a texture, and a texture atlas routinely carries more
-    // colours than the frame drawn with it: every Organic Art screensaver
-    // captured its leaf/marble sheet under the old colour-diversity rule and
-    // read as "renders a texture, never a scene" when the primary in fact held
-    // the rendered geometry. The browser presents the primary; so does this.
-    if (bestOffscreen &&
-        bestOffscreen.surface.w === bestPrimary.surface.w &&
-        bestOffscreen.surface.h === bestPrimary.surface.h &&
-        bestOffscreen.score.colors >= 16 &&
-        bestOffscreen.score.colors >= Math.max(bestPrimary.score.colors + 8, bestPrimary.score.colors * 4)) {
-      return bestOffscreen.surface;
-    }
-
+    // Matching dimensions and greater color diversity do not make an
+    // offscreen surface the displayed frame: a depth buffer can satisfy both.
+    // Keep a populated primary authoritative, as the live presenter does.
     return bestPrimary.surface;
   };
 
@@ -12451,17 +12998,26 @@ if (VERBOSE) {
 
   if (workerThreadHost) workerThreadHost.stop();
   if (closeD3DRender) await closeD3DRender();
+  threadManager?.closeNamedEventAuthority();
+  processDesktop.retire();
+  // The launcher guest can exit while real child hosts still use its desktop.
+  // Keep the authority until those OS processes close their transports.
+  await Promise.all(pipeChildren.filter(c => c.exitCode === null && c.signalCode === null)
+    .map(c => new Promise(resolve => c.once('exit', resolve))));
+  await processDesktop.close();
   // A --vlan-wire run is a forked child, and an open IPC channel keeps node
   // alive after everything else has finished: the run printed its Stats, hit
   // --max-seconds, and then sat resident forever with its 512 MiB guest until
   // the parent killed it. Every two-process test used to kill its seats for
   // exactly this reason. The run is over, so hang up the wire.
   if (VLAN_WIRE && process.connected) process.disconnect();
+  });
 }
 
 main().catch(async e => {
+  process.exitCode = process.exitCode || 1;
   console.error(e);
-  // Exit code deliberately unchanged; the threads have to be stopped either way
+  // The threads have to be stopped either way
   // or node waits on them forever and the error above never gets read.
   if (workerThreadHost) workerThreadHost.stop();
   if (closeD3DRender) {

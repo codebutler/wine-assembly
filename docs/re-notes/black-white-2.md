@@ -1,5 +1,19 @@
 # Black & White 2 demo
 
+## Plain-keyboard IME property query (2026-10-19)
+
+User's Safari 26.4 report on build `02b41f090dacdb461ea0b59a77260d6c17432e9d3993d4cc8878cb76a865a33d`
+traps at missing `ImmGetProperty`, EIP `0x00b52fb4`, return `0x00af355a`,
+stack arguments HKL `0x04090409`, index `4` (`IGP_PROPERTY`). This export was
+absent from the API table. The machine has no installed IME, so the query
+returns zero capabilities/version through the existing no-IME result path.
+See [Microsoft's contract](https://learn.microsoft.com/en-us/windows/win32/api/imm/nf-imm-immgetproperty).
+`test/test-imm-get-property.js` exercises dynamic lookup and actual thunk
+dispatch for all seven query indices, invalid indices and unknown HKLs,
+checking the two-argument stdcall cleanup and consistency with the keyboard
+layout and `ImmIsIME`. This verifies the reported API boundary; it does not
+requalify Safari or gameplay on the full demo.
+
 ## Plain-keyboard IME description query (2026-10-13)
 
 User's Safari 26.4 Boat run trapped at `ImmGetDescriptionA`, EIP `0x00b52fc0`,
@@ -433,6 +447,23 @@ slow animation from a new enormous-delta catch-up. Keyboard hwnd0 is the rendere
 normal key-event route, not evidence of an input-routing fault; this intro does
 not check Escape. A fresh long run is needed to establish progression after the
 FILETIME fix; no menu/gameplay acceptance yet.
+
+## Intro skip input recheck (2026-10-19)
+
+Re-disassembled the original installed BW2Demo.exe, including the complete
+per-frame routine 00526cf0–00529453 and outer loop 005260e0. USER32 import
+index19 at imageBase00400000 + IAT RVA00812370 + 19*4 resolves00c123bc
+to GetAsyncKeyState. The frame routine polls PageUp, PageDown, Left, Right,
+Up, Down, and left mouse button (twice); none of these calls polls Escape,
+Space, or Enter. The apparent `push 0x1b` at00527f13 is a D3D device
+SetRenderState call (vtable+e4), not an Escape query. The final mouse poll
+at005293d5 leads to drawing helper00526b70, not a completion return.
+The frame routine's only true return follows the finish-frame comparison
+at0052943b; its other return is false. The outer loop tests that result
+at005261d8. This supports the frame-count explanation specifically for
+the Lionhead particle intro, not an assertion about every later movie/menu.
+This was static inspection, not a new Safari input-delivery test; it does
+not establish that all browser keyboard events currently reach the guest.
 
 ## Software-worker launch integration (2026-09-10)
 
@@ -8763,3 +8794,296 @@ A script camera owns the view.
 So the camera works with our DirectInput mouse. The earlier "camera never moves" runs tested inside the intro, and some ran before 009c8ff11, when the wheel did not exist.
 
 Cursor note: the game cursor (`0x1d733e8+0xc4/+0xc8`) reads (311,345) while the hand is drawn at about (258,295) in the 640x480 capture, a scale of about 1.2 for the 800x600 back buffer.
+
+## 2026-10-23: current main reaches the objective, the camera answers, 0.146 fps
+
+Run `scratch/runs/20261023T0422Z-black_white_2_demo-claude739-camera` (boat bx_vug3ywn9, main bb9c496ed, wasm sha256 ccd5b0a8…, software D3D9, `--real-ticks`).
+
+**What passed** (8000 s, 0 failed render commands, no crash or unimplemented API):
+- Boot → profile → Land3 intro → the "Click on the Gold Scroll" objective. The objective is up in the 5703 s capture and was absent at 5403 s. That is ~1200 s later than the Oct 11 runs because the world renders slower here (below).
+- **Wheel zoom is player input.** Land-region diff (`tools/png-diff.js --tolerance=24 --region=0,60,330,320`):
+  - with no input, the 5703 s capture → `w0` over 3+ minutes: **1.09%** of pixels change;
+  - across `di-wheel:-360`, `w0` → `w1`: **28.8%**, and the view zooms out.
+- **World interaction works.** A left click selected the Storehouse (Food/Wood/Ore desire and stock panels). Another selected the Field (info panel, "Productivity 162"), with villagers walking.
+- **Frame rate.** The probe's `_submit` wrapper counts completed PRESENTs, sampled every 5 s into `presents.ndjson`. With the objective up, the view fixed and no input (5709–5894 s): **27 presents in 185 s = 0.146 fps, ~641 draws/present**.
+
+| window (s) | scene | fps | draws/present |
+|---|---|---|---|
+| 901–1497 | island flyover | 0.171 | 617 |
+| 3000–3596 | intro, village/advisors | 0.128 | 740 |
+| 4903–5598 | intro, Town Center close | 0.131 | 633 |
+| 5709–5894 | objective, idle | 0.146 | 641 |
+
+The render worker thread is CPU-bound: 75 min of CPU in 82 min of wall time on a 4-vCPU boat.
+
+**What did not pass, and is open:**
+- **The drags are not isolated.** After the first input the view keeps moving with **no** input: 22.6% between two idle frames 90 s apart, and 22.0% again ten minutes later. It creeps steadily toward the Town Center. So the middle drag (m0→m1, 21.1%) and the left drag (l0→l1, 24.8%) cannot be told apart from that motion.
+  - A live read at ~7840 s rules out stuck input. The wheel accumulator `[0x19a30e0]`, the pending button bits `[0x1d73544]` and the manager wheel `[0x1d734f4]` are all 0. The locks `[0x18ed55c]`/`[0x18ed558]` are 0. The poll gate `[0x17792d4]` is 1.
+  - Leading guess, unverified: camera momentum from the left drag, played out over very slow frames.
+  - To isolate a drag, wait for a static idle pair (≤ ~2%) first, then send one input.
+- **The Gold Scroll was not consumed.** The view moved between aiming and clicking, so both clicks landed on the storehouse and the field. The objective was still up when the 8000 s budget ended. The Field tutorial and later free play were not reached in this run.
+  - Next time, take the scroll before any camera input, while the view is still static. In `w0` the hand is at about (265,290) and the scroll sparkle at about (415,240), both in capture pixels. At ~0.65 capture px per relmousemove unit in x and 1:1 in y, that is about `relmousemove:230:-50`.
+- **A harness-triggered raster latch.** Four earlier attempts (same boat) used HTTP `--control` with `ctl.js` png/eval, captures every 120 s and shorter boot-input gaps. Each latched `D3D9 software: native raster execution failed (-1)` at ~787 s, on the first land draws.
+  - The same thing happened on **0304a8549**, so it is not a regression in 0304a8549..bb9c496ed. tr3's Oct 12 run of that build on the parent boat, with a stdin feed and 300 s captures, was clean to 900 s.
+  - The failing draw was captured through a `_retire` hook (`failures/*.json`): ps_1_1 + vs_1_1, SHORT4 position, stride 8, sampling RGB565 render target 65 into RGB565 RT 78 / D24X8.
+  - Replayed alone it draws cleanly, both with `tools/d3d9-replay-payload.js` and with a variant that keeps the real attachments and the RT texture (`scripts/bw2-replay-attach.js`). So the -1 depends on live render-worker state, probably its WAT heap, and on timing.
+  - The tr3-style stdin FIFO harness (`scripts/bw2-fifo-start.sh`) avoids it.
+
+### 2026-10-23 (static): why the Gold Scroll click was not consumed
+
+This is static work only: the retained run (`scratch/runs/20261023T0422Z-black_white_2_demo-claude739-camera`, `camera/camera.log` and the PNGs) plus `tools/disasm_fn.js` on `BW2Demo.exe`. Nothing here has been checked against a live run.
+
+**Hypothesis: the click reached the game and was used; it was picked against the wrong object.** The likely cause is aim plus drift, not a broken input path.
+
+Evidence that the click is delivered and consumed:
+- The Oct 11 runs consumed the scroll with exactly this recipe: `di-mousedown:1`, ~3 s, then `di-mouseup:1`.
+- In this same run, that recipe selected the Storehouse at `s1` and the Field at `t`/`u`. So a left press goes poll → `[0x1d73544]` bit 1 → action 1 → a world pick → a selection.
+- `s1.png` shows the pick marker (small green cross) at about **(405,195)** capture px. The scroll sparkle's base is at about (415,230). The Oct 11 hit point was (405,225). So the hand sat **~30 px above** the scroll, over the sparkle column in front of the Storehouse, and the Storehouse won the pick.
+
+Why the aim was off:
+1. **The offset was computed from `w0`, but the cursor had moved since then.** `scripts/bw2-scroll.sh` sent `relmousemove:223:-60`, meant to be relative to the `w0` hand at (265,290). Between `w0` and `s0`, the camera test also sent `relmousemove:150:0:5` inside the middle drag and `relmousemove:0:-120:5` inside the left drag. That is +150/-120 units the aim did not count.
+2. **The y scale is suspect.** The Oct 11 note gives 0.65 capture px/unit in x but 1:1 in y. The game draws an 800x600 back buffer into 520x390, which is 0.65 on both axes. An aim that mixes the two scales lands vertically wrong.
+3. **The land keeps moving under the hand.** Idle frames 90 s apart differ by ~22% (the creep toward the Town Center). At 0.146 fps, one frame takes ~7 s.
+
+**The consumer runs at most one action per frame, and a refused press is dropped in that same frame** (`0x60ed90`, called with `ecx` = the input manager):
+
+| addr | what |
+|---|---|
+| `0x60ed90` | entry. `test [0x1d73678], byte [0xd0ae4c]` → `jnz 0x60ef3c` (return): a whole-consumer gate, not yet read live |
+| `0x60eda4` | bit 1 (left press) → `0x611fa0(0,0,1)`; on return 1, `0x60edc3` clears the bit and **returns** |
+| `0x60edcc` | bit 2 (right press) → action 5, cleared at `0x60edeb` |
+| `0x60edf4` | bit 0x40 (middle press) → action 2, cleared at `0x60ee13` |
+| `0x60ee1c` | wheel `[0x1d734f4]`: negative → action 4 (`0x60ee43`), positive → action 3 (`0x60ee6b`) |
+| `0x60ee7d` | only when nothing above fired: `0x56d480(this=0x18ed574)`, then the binding tests `0x64d7f0`/`0x64e2a0`/`0x64d830`/`0x64d740`/`0x64e190`/`0x64d780`, each calling a `0x60ec70`..`0x60ed10` helper. Probably the hold/drag/gesture path; unverified |
+| `0x60ef35` | `mov byte [0x1d73544], 0`: **every pending bit is cleared** |
+
+- The consumer does not test the release bits (4/8/0x80) itself.
+- If `0x611fa0` returns ≠ 1, the next press type is tried. If none is accepted, the path ends at `0x60ef35`, which clears the whole word.
+- So the game sees a left press in exactly one frame. At 0.146 fps that frame can start up to ~7 s after the press was queued, while the land creeps. This is another way to pick the Storehouse instead of the scroll.
+
+**`0x611830(binding)` returns 0 (press dropped) when:**
+- the active controller is busy: `0x5f8050()` → `[+0xc8]` indexes `[+0x98]`, and vcall `[+0x54]` ≠ 0 → `0x611efd`;
+- or the binding has no case: bindings `0x13..0x1f` go through jump table `0x611f08`, and `0xd..0x26` through byte map `0x611f7c` / table `0x611f3c`.
+
+**Other readers and clearers of `[0x1d73544]`** (`tools/xrefs.js`, 62 hits):
+- the gesture object at `0x18ed574` (`0x56d51e`..`0x56d5fd`, clear at `0x56da89`);
+- a full per-bit consumer at `0x64c525`..`0x64c60a`;
+- `0x61249d` / `0x6131d0` (bits 1|2);
+- `0x514600` (bit 0x10, double click);
+- **`0x70c815`**, a widget-style consumer. It stores the click into `[esi+0x30]` and `[esi+0x34]` and clears bits 1/2. It is a candidate for 2D/UI clicks, including the objective panel.
+
+Which of these runs before `0x60ed90` in a frame is not established. Whichever runs first wins the press.
+
+**The dispatcher `0x611fa0(a, b, action)`** (on the click path, `a` = `b` = 0):
+- It calls `0x718840` first, then goes to `0x611fff`.
+- `[0x18ed55c] != 0` → return 0.
+- Otherwise the binding is looked up with `0x64c250(action)` on `[[0x19504a8]+0x4e190c]`; -1 → return 0.
+- Otherwise it runs `0x611830(binding)` with `ecx` = the caller's object, and returns its result.
+- The world pick, i.e. what "the thing under the hand" is, happens below `0x611830`. That has not been read yet; it is the next static target.
+
+What our side delivers: buffered `GetDeviceData` records with guest-tick `dwTimeStamp`. A press and a release 3 s apart can both land in the same 7 s frame. The poll `0x9b0880` turns them into bits 1 and 4 together. That did not stop the Storehouse/Field selections, so it is probably harmless. Still, the test below checks it.
+
+**Runtime test plan (next boat, FIFO harness `scripts/bw2-fifo-start.sh`, not HTTP `--control`):**
+1. Boot to the objective with **no camera input at all**. Wait for a static idle pair: two PNGs 90 s apart, `tools/png-diff.js --tolerance=24 --region=0,60,330,320` ≤ ~2%.
+2. **Aim from the game's own cursor, not from pixels.**
+   - Read the cursor with `eval` `guest_read32(0x1d733e8+0xc4)` / `+0xc8`. It is in 800x600 back-buffer coordinates.
+   - Target = scroll capture px / 0.65. The sparkle base is (415,230) in `w0` and `s0`; re-measure it on the idle pair.
+   - Also read `[0x17792c0]` (the poll's motion scale) and convert the difference into `relmousemove` units.
+   - Send the move, re-read the cursor, and correct until it is within ~5 back-buffer px. This also settles the x/y scale question.
+3. Arm counters with `exports.set_count`:
+   - `0x60eda4` (consumer saw the left press);
+   - `0x60edc3` (left press accepted);
+   - `0x612032` (dispatcher refused);
+   - `0x611830` (binding run);
+   - `0x611efd` (binding refused);
+   - `0x70c81d` (widget took the left press);
+   - `0x64c55a` (per-bit consumer took it);
+   - `0x56d51e` (gesture object read it).
+4. Send `di-mousedown:1`, wait **≥ 2 frames (~15 s)**, then `di-mouseup:1`. Capture PNGs at +15 s, +120 s and +240 s.
+   - Expect: `0x60edc3` = 1, then the scroll consumed, the objective box gone, and the scripted pan over field and storehouse (as on Oct 11).
+5. If the counters show accepted but the objective stays up, the pick is the problem:
+   - disassemble `0x611830` for action 1 to find the hovered-object read;
+   - read that object live with the hand on the scroll and with it on the storehouse.
+6. If `0x60eda4` never fires, read the `0x60ed90` gate `[0x1d73678]` / `[0xd0ae4c]` live.
+7. As a timing control, repeat once with press and release 3 s apart (inside one frame), to rule out the same-frame press+release case.
+
+## 2026-10-23: the -1 raster latch was a lock shared by two threads (fixed f5329feb1)
+
+The "harness-triggered raster latch" above (`native raster execution failed (-1)` at ~787 s) is fixed. It was not the harness and not the draw: the harness only shifted thread timing.
+
+How it was found (boat bx_pfbppnmu):
+- The captured failing draw replays cleanly on its own, so the cause was live state.
+- A boat-only diagnostic in the backend's failure path named the route: the setup phase of a split draw, after clipping, then `$d3d_software_compact` → `$heap_shrink` refused.
+- The draw context was a live 852 KB large block in its own heap arena. `HEAP_ARENAS` record 891 was published with `live` = 872448, but **no `VIRTUAL_MAP_TABLE` record covered it**, so `$w2g(ctx)` returned 0.
+- Ruled out with targeted probes:
+  - cross-instance arena release (that was a real, separate bug, fixed in 32c0b9bcf with a two-instance test, but the latch remained);
+  - a guest `VirtualFree` of heap memory (0 refusals);
+  - `$virtual_map_release_one` removing an overlapping record (0 hits).
+
+Cause: `$lock_acquire` is recursive by owner id, and the owner id is `$current_thread_id`. The render worker runs only `d3dim_worker_init`, never `init_thread`, so it kept the default id 1. That is also the main guest thread's id (tid 0 + 1). So the worker "re-entered" `LOCK_VIRTUAL_MAP` while the guest held it, and the two threads edited the virtual-map table at the same time. The table removes records by swapping the last one into the freed slot, so a concurrent edit can drop a live record.
+
+Fix: `d3dim_worker_init` sets `$lock_identity = 0x40000000`, and `$lock_owner_id` ORs it in, as it already does the shadow bridge's bit. `test/test-render-worker-lock-identity.js` fails before the fix ("share lock owner id 1") and passes after.
+
+A/B, using the same HTTP-control harness on main:
+- before the fix: latched in 6 of 6 untraced runs (bb9c496ed, 0304a8549, 9e284393e plus the arena fix);
+- after the fix: 2 of 2 runs clean, 1200 s and 1157 s, 0 failed commands, land rendering.
+
+Tests and build:
+- Full build PASS, wasm 43375d0f.
+- Heap/virtual/render suite: 55 pass. The three failures (two need puppeteer, plus `test-d3d-render-wait-scheduler`) also fail without the fix.
+- Lock/thread/worker suite: 44 pass. Of the six failures, four fail identically on the unfixed build and two lack fixtures on the boat (puppeteer, a screensaver binary).
+
+## 2026-10-23: the Gold Scroll is consumed on current main (runtime check of the static plan)
+
+Run `scratch/runs/20261023T1030Z-black_white_2_demo-claudea7d5-goldscroll` (boat bx_6f7u7wm3, main aa09d05dc, wasm sha256 43375d0f…, software D3D9, `--real-ticks`, Node v20.20.2). Harness: the FIFO `bw2-fifo-start.sh` from the previous run, with `--seconds=10000`. Requests went in through `scripts/ctl.sh`, and `scripts/state.js` is the live state read.
+
+**What passed:**
+- 10000 s with 0 failed render commands and no raster latch. This is the first long run after f5329feb1.
+- The objective was absent at 8101 s and at about 8400 s, and present at 9088 s (`frames/w125325.png`). That is ~3400 s later than on bb9c496ed (below).
+- **The scroll was consumed** by the sixth left click:
+  - `f1`: the scroll box is gone and only the sparkle remains;
+  - `f2`: the gold beam over it has gone;
+  - `g1`: the objective box has gone, and a Field panel reads "Food in Field 660, Workers 0/…";
+  - `g3`–`g5` and `final-10000`: the scripted camera pans to the storehouse and field, as on Oct 11.
+- The budget ended ~600 s later. **Free play and the isolated drag were not reached.** On Oct 11 free play came ~2000 s after the scroll, so the next run needs about `--seconds=12500`.
+
+**Aim from the game's cursor.** `[0x1d733e8+0xc4/+0xc8]` holds the cursor as integers.
+- It moves **~0.93 per `relmousemove` unit on both axes** (244:-77 gave +228/-72). So there is no x/y split.
+- The poll scale `[0x17792c0]` is the float 0.75 after the intro (1.0 at boot).
+- From the cursor reading to a 640x480 capture pixel is about (x-52, y-55). The drawn hand is a 3D object on the pick point, so it is a poor reference.
+
+**Where the clicks went.** Six clicks were sent:
+
+| clicks | cursor | hover feedback | result |
+|---|---|---|---|
+| 1 (held 15 s), 2 (15 s), 3 (3 s), two `k` clicks (3–5 s) | (470,293) and (472,281) | tooltip "Starving villagers"; a Field hover panel follows | not consumed |
+| 6 (3 s) | (495,284), where `aim1` drew the game's mouse-button hint icon beside the hand | hint icon | consumed |
+
+Leading explanation: the clickable is to the right of where the tooltip appears, and the mouse-button hint icon marks it. A timing gate is not excluded, because there is only one success.
+
+**The click path, measured with hit counters** (`click*.out`). This corrects the static plan:
+- The poll `0x9b0880` and the consumer `0x60ed90` run once per frame.
+- On every press the consumer saw bit 1 (`0x60edad`), and the dispatcher `0x611fa0` ran action 1 → binding index 1. The binding table at `[[0x19504a8]+0x4e190c]` holds records of stride 0x30c, with the action at +0x208; the live map is {0:5, 1:1, 2:4, 3:3, 12:2}.
+- `0x611830(1)` then went `0x611897` → `0x6118c4` (controller not busy) → `0x6118f1` → `0x611aa7` → `0x611efd`. That is: binding 1 has **no case** in either jump table, so it returns 0 **by design**.
+  - `0x60edc3` ("accepted") is therefore 0 for every left click, and is not a test of anything.
+  - `0x611efd` is the shared return-0 epilogue, not a "busy controller" exit.
+- The press is really consumed by `0x64c510(record)`. For action 1 it jumps to `0x64c551`, which tests and clears bit 1 and returns 1. Its callers are the binding tests `0x64e190` (`0x64e1b7`) and `0x64e2a0` (`0x64e2c3`), which `0x60ed90` reaches through its fall-through path at `0x60ee7d`. They lead to `0x60ed10` / `0x60ec70` → `0x5f8e60(4/1)` → `0x661fb0`, the hand-controller command.
+- `0x60ed40` runs just before the consumer each frame (from `0x5f95c3`).
+- So the input path delivers every press. What the click does is decided by the world pick inside the controller command.
+
+**Frame rate: lower than on bb9c496ed; cause unknown.** PRESENT is `completed[12]` in `samples.ndjson.gz`.
+
+| window (s) | scene | fps | draws/present | draws/s |
+|---|---|---|---|---|
+| 4903–5598 | intro, still before the Town Center close | 0.081 | 741 | 60 |
+| 6000–6900 | intro, influence ring | 0.102 | 655 | 67 |
+| 8101–9080 | intro, Town Center close, fixed view | 0.090 | 629 | 57 |
+| 9090–9790 | objective up (clicks) | 0.092 | 635 | 58 |
+| 9810–10000 | scripted pan after the scroll | 0.089 | 573 | 51 |
+
+On bb9c496ed the comparable scenes ran at 0.13–0.15 fps, ~83–95 draws/s. In both runs the render worker thread is saturated: here one thread used 105 min of CPU in 116 min of wall time and the main thread 14 min.
+
+So draw throughput is ~35% lower. Candidate causes, none measured:
+- **Node v20.20.2 here vs v24.18.1 there.** That is a different V8, and the likeliest confounder.
+- A different boat host (this one is a Ryzen 9 9950X; the earlier boat's CPU was not recorded).
+- **Real lock contention:** since f5329feb1 the render worker excludes on shared-table locks instead of re-entering them.
+
+To separate them, rerun the same scene on one host with both Node versions, and with and without f5329feb1, and profile the worker for lock-spin time.
+
+## 2026-10-23: the lock-identity fix costs no frame rate; the per-draw heap does
+
+Run `scratch/runs/20261023T1350Z-black_white_2_demo-claude263-lockperf-ab` (boat bx_2bxb3m3w, 4 vCPU Ryzen 9 9950X). This answers the open question above: does f5329feb1, which makes the render worker exclude on shared-table locks, cost frame rate?
+
+**Method:**
+- Two clean worktrees on one boat:
+  - parent: 32c0b9bcf = f5329feb1^, wasm 4b7c42d8;
+  - fix: f5329feb1, wasm 43375d0f, which is main's code (later main commits are docs only).
+- Both full builds pass.
+- The same FIFO route as the Gold Scroll run. Arms run as concurrent pairs, on the same Node (v20.20.2).
+- Metric: render-worker CPU per completed draw (`/proc` thread utime+stime), over the same probe-time windows. Draws are `completed[5]`, presents `completed[12]`.
+- One pair ran with `--cpu-prof` on the CLI child, so both arms carry the same profiler overhead.
+
+**Render-worker ms per draw, parent vs fix:**
+
+| window | rep 1 | rep 2 (profiled) | rep 4 |
+|---|---|---|---|
+| 600–900 s (land load) | 126.45 / 125.98 | 100.54 / 99.35 | 108.35 / 105.34 |
+| 900–1200 s | parent latched | 14.51 / 14.12 | parent latched |
+| 1200–1500 s (Land3 intro, ~545 draws/present) | — | 11.93 / 12.01 | — |
+
+In rep 2's 1200–1500 s window:
+- 75.87 vs 75.39 draws/s;
+- 0.140 vs 0.136 fps;
+- the same frame in both arms (`frames/r2-*-1500/1504`).
+
+**Profile (render worker, 1190–1490 s, both arms):** `$lock_acquire` is **0.01%** inclusive (0.03 s of 300 s), `$lock_release` <0.01% and `$w2g_sparse` 0.16%. The worker does not wait on the guest's locks. The fix is free.
+
+**The parent arm still latches:** the -1 raster latch hit 2 of 3 unprofiled parent runs (first failed draw ~1125 s in rep 1, inside 900–1200 s in rep 4). That is why the heavy scene has only one parent sample.
+
+**Node v24.18.1 vs v20.20.2** (fix build, rep 3, concurrent pair):
+- v24 loads the land faster.
+- v24 spends ~10–15% less worker CPU per draw in the intro: 12.25 / 12.72 ms vs 13.73 / 14.56 ms.
+
+So part of the 0.146 vs 0.09 fps gap between the two earlier runs is Node. The rest is scene (draws per present vary 545–740 across the intro) and host/load; here two runs shared 4 vCPUs.
+
+**Where the worker's time does go** (same in both arms, 1190–1490 s):
+- `$d3d_software_step` and the shader VM, as expected for a rasterizer.
+- But **`$heap_alloc` is 23.5% inclusive** and `$heap_free` 7.7%. **`$heap_arena_find` is the top self-time function at 17.5%.**
+- The chain: `$d3d_software_create_mode` allocates each draw's ~852 KB context. It is a large block, so every draw gets a fresh arena:
+  - `$heap_large_alloc` → `$virtual_reserve_down` → `$virtual_reserve_place` → **`$virtual_range_edge_locked` 13.3%**, a linear scan for free address space;
+  - then `$heap_arena_register` → `$heap_arena_release_free` → `$heap_free_list_purge` → `$heap_arena_find` 7%;
+  - `$heap_free` of the context, plus `$d3d_shader_vm_free`, through `$heap_arena_find`.
+- So roughly 30% of the render worker reserves and releases address space for one context per draw. This is not caused by f5329feb1.
+
+**Lead (not implemented):** keep the draw context, or one free large arena, across draws instead of reserving a fresh range each time. Alternatively, index the reserve/arena lookups. On this profile that would buy up to ~1.4x on the heavy scene's draws/s. Check it with the same paired, profiled run.
+
+Function indices for reading the profiles (same in both builds; `node tools/func-index.js N`):
+
+| index | function |
+|---|---|
+| 10625 | `$lock_acquire` |
+| 10641 | `$virtual_range_edge_locked` |
+| 10675 | `$heap_arena_find` |
+| 10700 | `$heap_alloc` |
+| 10686 | `$heap_large_alloc` |
+| 10703 | `$heap_free` |
+| 7630 | `$d3d_software_create_mode` |
+| 7659 | `$d3d_software_step` |
+
+## 2026-10-23: the per-draw context arena, fixed (render worker −27–36% CPU per draw)
+
+Run `scratch/runs/20261023T1720Z-black_white_2_demo-claude84e-drawctx-reuse` (boat bx_qv9vszay, 4 vCPU, Node v20.20.2). This follows the lead in the previous section.
+
+**Cause.** `$heap_large_alloc` already has a reuse list: a freed whole-arena block goes on `$heap_large_free` and best-fit serves the next same-size request. Draw contexts never got there. Once setup finishes, `$d3d_software_compact` calls `$heap_shrink` on every context, trimming 288 + 768·1134 bytes down to about a seventh. On an ~852 KB block, which is its own large arena, that split the arena:
+- the freed context went to the small free list, not the large one;
+- the next draw's context reserved a fresh range (`$virtual_range_edge_locked`, a linear scan of both tables per step);
+- the split arenas were never one-block again, so `$heap_arena_release_free` could not hand them back until the render handoff coalesced them;
+- with the 1024-slot arena table full, every registration ran that release scan.
+
+**Fix.** `$heap_shrink` leaves a block alone when it is its whole `$heap_large_alloc` arena (the same test `$heap_free_impl` uses for the large list). The tail it used to free could only ever serve this instance's small allocations. The context's retained-bytes accounting (`+196`, `$d3d_software_retained_bound`) is unchanged. `test/test-d3d-software-ctx-arena-reuse.js` fails without it (block split 872448 → 120008) and passes with it. It also checks that three 768-index draws reuse one context block and render the same pixels.
+
+**A/B.** Control is f5329feb1 (wasm 43375d0f, the same code as main). The fix arm is that plus the patch (wasm 0570658b). Concurrent pairs, same route as the previous section. Render-worker ms per completed draw, control → fix:
+
+| window | rep 1 | rep 2 (both profiled) |
+|---|---|---|
+| 600–900 s (land load) | 102.72 → 103.35 | 90.90 → 81.51 |
+| 900–1200 s | 14.67 → 9.93 | 9.89 → 6.31 |
+| 1200–1500 s (Land3 intro) | 10.68 → 7.37 | 11.44 → 8.34 |
+
+- In the heavy windows draws/s go 85.9 → 119.4 (rep 1, 1200–1500 s) and 86.5 → 129.9 (rep 2, 900–1200 s). fps goes 0.156 → 0.203 (rep 1, 1200–1500 s).
+- 0 failed draws in all four runs.
+- The 600 s and 900 s captures are byte-identical between arms in rep 1. Later captures differ only because the fixed arm is further into the real-time intro; both show the same Land3 camera pan.
+
+**Profile** (render worker, rep 2, 1190–1490 s, inclusive, control → fix):
+
+| function | control | fix |
+|---|---|---|
+| `$virtual_range_edge_locked` | 13.5% | not sampled |
+| `$heap_large_alloc` | 22.8% | 1.7% |
+| `$d3d_software_create_mode` | 23.5% | 3.3% |
+| `$heap_arena_find` | 17.6% | 5.7% |
+| `$d3d_software_step` (the rasterizer) | 39.2% | 59.2% |
+
+What remains of the allocator is `$heap_free` (4.8%) plus `$heap_arena_find` validation. The worker is now mostly rasterizing.
+
+`test/test-d3d-software-compaction.js` fails identically on the control (main's code) and the fix, at line 91. When a context constructor is made to fail mid-draw (`failAt`), the multi-batch draw has already written pixels, so `readPixels()` differs from `before`. That failure is already on main, not caused by this change.

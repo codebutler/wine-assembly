@@ -184,6 +184,7 @@
         (return)))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $op))
+    (call $pending_push (local.get $target) (local.get $op) (i32.load offset=16 (global.get $reg_base)))
     (global.set $eip (local.get $target)))
   (func $th_jmp_r (param $op i32)
     (local $target i32) (local $ret_addr i32)
@@ -652,18 +653,25 @@
   ;; semantics.
   ;;
   ;; op: src in bits 0..3, base in bits 4..7, count in bits 8..31.
-  ;; word: signed starting displacement.
+  ;; Words: signed starting displacement, then the first original successor PC.
   (func $th_store32_base_span (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $src i32) (local $base i32) (local $n i32) (local $disp i32)
     (local $ga i32) (local $wa i32)
-    (local $len i32) (local $v i32) (local $i i32)
+    (local $first_pc i32) (local $len i32) (local $v i32) (local $i i32)
     (local.set $src (i32.and (local.get $op) (i32.const 0xF)))
     (local.set $base (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $n (i32.shr_u (local.get $op) (i32.const 8)))
     (local.set $disp (read-thread-word))
+    (local.set $first_pc (read-thread-word))
     (local.set $ga (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $base) (i32.const 2)))) (local.get $disp)))
     (local.set $v (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src) (i32.const 2)))))
     (local.set $len (i32.shl (local.get $n) (i32.const 2)))
+    (if (call $store_span_touches_code (local.get $ga) (local.get $len))
+      (then
+        (call $gs32 (local.get $ga) (local.get $v))
+        (global.set $store_fused_resume_pc (local.get $first_pc))
+        (dispatch-next)))
+
 
     ;; memory.fill repeats a byte, so only zero has dword-store semantics here.
     ;; $g2w_affine_span rejects wrapped ends, holes, and mapping boundaries;
@@ -715,7 +723,7 @@
   ;; lazy-flag globals are byte-for-byte what the unfused pair produced, so
   ;; PUSHFD, SETcc or a second branch after the group still see the truth.
   ;;
-  ;; op: bits 0-3 base reg, 8-11 the ALU op, 12-15 the condition code.
+  ;; op: bits 0-3 base reg, 8-11 ALU op, 12-15 condition, 16+ Jcc byte length.
   ;; Words: disp, imm32, fall-through EIP, branch target — the 131 payload with
   ;; the ordinary Jcc payload appended, so the emitter is unchanged apart from
   ;; which opcode it writes.
@@ -732,6 +740,12 @@
     (if (i32.ne (local.get $alu) (i32.const 7)) (then (call $gs32 (local.get $addr) (local.get $val))))
     (local.set $fall (read-thread-word))
     (local.set $target (read-thread-word))
+    ;; The store may rewrite the fused Jcc itself. Its byte length is carried
+    ;; above the condition bits, so resume at its original instruction start.
+    (if (call $store_continuation_invalid
+          (i32.sub (local.get $fall) (i32.shr_u (local.get $op) (i32.const 16))))
+      (then (return_call $th_block_retired
+        (i32.sub (local.get $fall) (i32.shr_u (local.get $op) (i32.const 16))))))
     (if (call $eval_cc (local.get $cc))
       (then (global.set $eip (local.get $target)))
       (else (global.set $eip (local.get $fall))))
@@ -779,14 +793,15 @@
   ;; have performed them, using the same helpers, so the lazy-flag state left
   ;; behind is the ALU op's — whatever $do_alu32 publishes — exactly as in the
   ;; unfused pair. op: bits 0-3 base reg, 4-7 the unary op, 8-11 the ALU op.
-  ;; Words: the displacement, then the immediate.
+  ;; Words: displacement, immediate, then the first original successor PC.
   (func $th_unary_alu_m32_ro (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $addr i32) (local $uop i32) (local $alu i32)
-    (local $old i32) (local $r i32) (local $imm i32)
+    (local $first_pc i32) (local $old i32) (local $r i32) (local $imm i32)
     (local.set $addr (i32.add
       (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))))
       (read-thread-word)))
     (local.set $imm (read-thread-word))
+    (local.set $first_pc (read-thread-word))
     (local.set $uop (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $alu (i32.and (i32.shr_u (local.get $op) (i32.const 8)) (i32.const 0xF)))
     (local.set $old (call $gl32 (local.get $addr)))
@@ -802,6 +817,10 @@
       (then (local.set $r (i32.sub (i32.const 0) (local.get $old)))
             (call $set_flags_sub (i32.const 0) (local.get $old) (local.get $r))))
     (call $gs32 (local.get $addr) (local.get $r))
+    (if (call $store_span_touches_code (local.get $addr) (i32.const 4))
+      (then
+        (global.set $store_fused_resume_pc (local.get $first_pc))
+        (dispatch-next)))
     (local.set $r (call $do_alu32 (local.get $alu) (local.get $r) (local.get $imm)))
     (if (i32.ne (local.get $alu) (i32.const 7))
       (then (call $gs32 (local.get $addr) (local.get $r))))
@@ -873,6 +892,8 @@
     (call $gs8 (local.get $op) (local.get $r))
     (local.set $fall (read-thread-word))
     (local.set $target (read-thread-word))
+    (if (call $store_continuation_invalid (i32.sub (local.get $fall) (i32.const 2)))
+      (then (return_call $th_block_retired (i32.sub (local.get $fall) (i32.const 2)))))
     (if (global.get $handler_hist_enabled)
       (then (call $branch_hist_record_jcc (i32.const 5))))
     (if (local.get $r)
@@ -920,13 +941,9 @@
     (global.set $flag_sign_shift (i32.const 7))
     (dispatch-next))
 
-  ;; Minimal PC port state used by Win9x applications that legitimately issue
-  ;; user-mode IN/OUT. Channel 0 is latched through port 0x43 and returned low
-  ;; byte then high byte from 0x40, matching the 8254 access Fallout uses for
-  ;; its random/timer seed. Port 0x3DA alternates vertical-retrace status so a
-  ;; legacy VGA polling loop cannot deadlock. Other ports float high.
-  (global $io_pit_latch (mut i32) (i32.const 0))
-  (global $io_pit_phase (mut i32) (i32.const 0))
+  ;; PIT/CMOS device state lives in the process host, shared with cooperative
+  ;; instances and synchronous Worker RPC. Port 0x3DA alternates retrace status
+  ;; so a legacy VGA polling loop cannot deadlock. Other ports float high.
   (global $io_vga_status (mut i32) (i32.const 0))
 
   ;; PCI configuration mechanism #1: a dword written to 0xCF8 selects
@@ -968,7 +985,7 @@
   ;; the x86 opcode, 8..15 hold an immediate port, and bit 16 records 66h.
   (func $th_port_io (param $op i32)
      (local $nx_fn i32) (local $nx_op i32) (local $opcode i32) (local $port i32) (local $value i32)
-    (local $wide i32) (local $word i32) (local $is_in i32)
+    (local $wide i32) (local $word i32) (local $is_in i32) (local $io_width i32)
     (local.set $opcode (i32.and (local.get $op) (i32.const 0xFF)))
     (local.set $port
       (if (result i32) (i32.lt_u (local.get $opcode) (i32.const 0xEC))
@@ -987,22 +1004,20 @@
           (i32.or
             (i32.eq (local.get $opcode) (i32.const 0xEC))
             (i32.eq (local.get $opcode) (i32.const 0xED))))))
+    (local.set $io_width
+      (if (result i32) (i32.eqz (local.get $wide)) (then (i32.const 1))
+        (else (if (result i32) (local.get $word) (then (i32.const 2)) (else (i32.const 4))))))
 
     (if (local.get $is_in)
       (then
         (local.set $value (i32.const -1))
-        (if (i32.eq (local.get $port) (i32.const 0x40))
-          (then
-            (if (i32.eqz (global.get $io_pit_phase))
-              (then
-                (local.set $value (i32.and (global.get $io_pit_latch) (i32.const 0xFF)))
-                (global.set $io_pit_phase (i32.const 1)))
-              (else
-                (local.set $value
-                  (i32.and (i32.shr_u (global.get $io_pit_latch) (i32.const 8)) (i32.const 0xFF)))
-                (global.set $io_pit_phase (i32.const 0))))))
-        (if (i32.eq (local.get $port) (i32.const 0x61))
-          (then (local.set $value (i32.const 0))))
+        (if (i32.and (i32.eqz (local.get $wide))
+              (i32.eq (i32.and (local.get $port) (i32.const 0xFFFE)) (i32.const 0x70)))
+          (then (local.set $value (call $host_cmos_io (local.get $port) (i32.const 0) (i32.const 0)))))
+        (if (i32.or (i32.eq (local.get $port) (i32.const 0x61))
+              (i32.eq (i32.and (local.get $port) (i32.const 0xFFFC)) (i32.const 0x40)))
+          (then (local.set $value (call $host_pit_io
+            (local.get $port) (i32.const 0) (i32.const 0) (local.get $io_width)))))
         (if (i32.eq (local.get $port) (i32.const 0x3DA))
           (then
             (global.set $io_vga_status
@@ -1033,22 +1048,18 @@
               (if (result i32) (local.get $word)
                 (then (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
                 (else (i32.load offset=0 (global.get $reg_base)))))))
+        (if (i32.and (i32.eqz (local.get $wide))
+              (i32.eq (i32.and (local.get $port) (i32.const 0xFFFE)) (i32.const 0x70)))
+          (then (drop (call $host_cmos_io (local.get $port) (local.get $value) (i32.const 1)))))
+        (if (i32.or (i32.eq (local.get $port) (i32.const 0x61))
+              (i32.eq (i32.and (local.get $port) (i32.const 0xFFFC)) (i32.const 0x40)))
+          (then (drop (call $host_pit_io
+            (local.get $port) (local.get $value) (i32.const 1) (local.get $io_width)))))
         ;; Only a dword write reaches the mechanism #1 address register; a byte
         ;; write to 0xCF8 is mechanism #2's enable register, which is absent.
         (if (i32.and (i32.eq (local.get $port) (i32.const 0xCF8))
                      (i32.and (local.get $wide) (i32.eqz (local.get $word))))
-          (then (global.set $io_pci_addr (i32.and (local.get $value) (i32.const 0x80FFFFFC)))))
-        (if (i32.and
-              (i32.eq (local.get $port) (i32.const 0x43))
-              (i32.eqz (i32.and (local.get $value) (i32.const 0xC0))))
-          (then
-            (global.set $io_pit_latch
-              (i32.and
-                (i32.sub
-                  (i32.const 0)
-                  (i32.mul (call $host_get_ticks) (i32.const 1193)))
-                (i32.const 0xFFFF)))
-            (global.set $io_pit_phase (i32.const 0))))))
+          (then (global.set $io_pci_addr (i32.and (local.get $value) (i32.const 0x80FFFFFC)))))))
     (dispatch-next))
 
   ;; Helper: compute EA from operand encoding (alu_op<<8 | reg<<4 | base)
@@ -1196,6 +1207,10 @@
     (local.set $count (i32.and (local.get $info) (i32.const 0xFF)))
     (if (i32.eq (local.get $count) (i32.const 0xFF)) (then (local.set $count (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 31)))))
     (local.set $val (call $gl32 (local.get $addr)))
+    ;; The read may have selected an SEH handler or terminated the guest.
+    ;; Preserve that architectural state: neither update flags nor attempt
+    ;; the write half of this instruction against the already-unwound chain.
+    (if (global.get $eip_redirected) (then (return)))
     (call $gs32 (local.get $addr) (call $do_shift32 (local.get $stype) (local.get $val) (local.get $count)))
     (dispatch-next))
   ;; 140: call [base+disp]. op=ret_addr, w1=base, w2=disp.
@@ -1215,6 +1230,7 @@
         (return)))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $op))
+    (call $pending_push (local.get $target) (local.get $op) (i32.load offset=16 (global.get $reg_base)))
     (call $cs_push (local.get $op))
     (global.set $eip (local.get $target)))
   ;; 141: jmp [base+disp]. op=0, w1=base, w2=disp.
